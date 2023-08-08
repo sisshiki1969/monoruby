@@ -1149,7 +1149,7 @@ impl Proc {
         Proc(Value::new_proc(block))
     }
 
-    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+    pub(crate) fn from(outer_lfp: LFP, func_data: FuncData) -> Self {
         Proc(Value::new_proc(ProcInner::from(outer_lfp, func_data)))
     }
 }
@@ -1157,29 +1157,18 @@ impl Proc {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ProcInner {
-    outer_lfp: Option<LFP>,
+    outer_lfp: LFP,
     func_data: FuncData,
-}
-
-impl std::default::Default for ProcInner {
-    fn default() -> Self {
-        Self {
-            outer_lfp: None,
-            func_data: FuncData::default(),
-        }
-    }
 }
 
 impl alloc::GC<RValue> for ProcInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(outer) = self.outer_lfp {
-            outer.mark(alloc)
-        }
+        self.outer_lfp.mark(alloc)
     }
 }
 
 impl ProcInner {
-    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+    pub(crate) fn from(outer_lfp: LFP, func_data: FuncData) -> Self {
         Self {
             outer_lfp,
             func_data,

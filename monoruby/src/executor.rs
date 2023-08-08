@@ -34,6 +34,9 @@ const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
+pub const EXECUTOR_RSP_SAVE: i64 = 16;
+pub const EXECUTOR_PARENT_FIBER: i64 = 24;
+
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct BlockHandler(pub Value);
@@ -215,7 +218,7 @@ impl Executor {
         self.cfp().method_func_id()
     }
 
-    fn within_stack(&self, lfp: LFP) -> bool {
+    pub fn within_stack(&self, lfp: LFP) -> bool {
         self.lfp_top.unwrap() >= lfp && lfp > self.cfp.unwrap()
     }
 

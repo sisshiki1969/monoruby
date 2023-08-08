@@ -65,10 +65,10 @@ impl Executor {
             "",
         )?;
         let func_data = globals.compile_on_demand(func_id).clone();
-        let outer_lfp = self.cfp().lfp();
-        let heap_lfp = self.move_frame_to_heap(outer_lfp);
-        let proc = Proc::from(Some(heap_lfp), func_data);
-        let e = Value::new_enumerator(outer_lfp.self_val(), method, proc);
+        let outer_lfp = self.move_frame_to_heap(self.cfp().lfp());
+        let proc = Proc::from(outer_lfp, func_data);
+        let self_val = outer_lfp.self_val();
+        let e = Value::new_enumerator(self_val, method, proc);
         Ok(e)
     }
 

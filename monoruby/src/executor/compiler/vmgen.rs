@@ -403,7 +403,6 @@ impl Codegen {
         self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
-        // fiber invoker.
         self.fiber_invoker =
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
@@ -419,9 +418,9 @@ impl Codegen {
             pushq r12;
             pushq rbx;
             pushq rbp;
-            movq [rdi + 16], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [rcx + 16]; // rsp <- [child_vm.rsp_save]
-            movq [rcx + 24], rdi; // [child_vm.parent_fiber] <- vm
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rcx + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rcx + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
             movq rbx, rcx;
             movq r12, rsi;
         }
@@ -429,9 +428,9 @@ impl Codegen {
         self.gen_invoker_prep(true);
         self.gen_invoker_call();
         monoasm! { &mut self.jit,
-            movq [rbx + 16], (-1); // [vm.rsp_save] <- -1 (terminated)
-            movq rbx, [rbx + 24]; // rbx <- [vm.parent_fiber]
-            movq rsp, [rbx + 16]; // rsp <- [parent.rsp_save]
+            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
+            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
+            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
             popq rbp;
             popq rbx;
             popq r12;
@@ -456,10 +455,14 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Frame preparation.
+    ///
+    /// ### in
+    /// - `rcx`: `self` (if *specify_self* is true)
+    /// - `rdx`: &FuncData (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
+    ///
     fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
-        // rdx: (method) &FuncData
-        // rdx: (block)  &BlockData
-        // rcx: self: Value
         if invoke_block {
             monoasm! { &mut self.jit,
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp

@@ -176,7 +176,7 @@ impl Globals {
                 cfp = cfp.prev().unwrap();
             }
             let func_data = self.compile_on_demand(func_id).clone();
-            ProcInner::from(Some(cfp.lfp()), func_data)
+            ProcInner::from(cfp.lfp(), func_data)
         } else {
             bh.as_proc().clone()
         }
@@ -642,12 +642,12 @@ impl Globals {
             );
         }
         eprintln!();
-        eprintln!("method cache stats");
+        eprintln!("method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("--------------------------------------------------------------");
         let mut v: Vec<_> = self.method_cache_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v {
+        for ((class_id, name), count) in v.into_iter().take(20) {
             eprintln!(
                 "{:30} {:30} {:10}",
                 name.to_string(),

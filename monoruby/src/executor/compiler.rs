@@ -179,6 +179,17 @@ pub struct Codegen {
     pub(super) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
     pub(crate) block_invoker_with_self: BlockInvoker,
+    ///
+    /// Fiber invoker.
+    ///
+    /// ### in
+    /// - `rdi`: &mut Executor
+    /// - `rsi`: &mut Globals
+    /// - `rdx`: &ProcInner
+    /// - `rcx`: *mut Executor of child Fiber.
+    /// - `r8`:  *args: *const Value
+    /// - `r9`:  len: usize
+    ///
     pub(crate) fiber_invoker: FiberInvoker,
 }
 
