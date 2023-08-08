@@ -1178,4 +1178,8 @@ impl ProcInner {
     pub fn func_id(&self) -> FuncId {
         self.func_data.func_id()
     }
+
+    pub fn self_val(&self) -> Value {
+        self.outer_lfp.self_val()
+    }
 }

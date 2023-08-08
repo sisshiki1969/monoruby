@@ -69,6 +69,12 @@ impl Executor {
         let proc = Proc::from(outer_lfp, func_data);
         let self_val = outer_lfp.self_val();
         let e = Value::new_enumerator(self_val, method, proc);
+        //eprintln!(
+        //    "gen {:016x} self: {:?} obj: {:?}",
+        //    e.get(),
+        //    globals.to_s(proc.self_val()),
+        //    globals.to_s(self_val)
+        //);
         Ok(e)
     }
 
