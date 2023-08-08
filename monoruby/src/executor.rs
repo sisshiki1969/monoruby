@@ -649,6 +649,80 @@ impl Executor {
     }
 }
 
+impl Executor {
+    pub fn generate_proc(&mut self, globals: &mut Globals, bh: BlockHandler) -> Result<Proc> {
+        if bh.try_proxy().is_some() {
+            let outer_lfp = self.cfp().prev().unwrap().lfp();
+            self.move_frame_to_heap(outer_lfp);
+            let proc = Proc::new(globals.get_block_data(self.cfp(), bh));
+            Ok(proc)
+        } else if bh.try_proc() {
+            Ok(bh.0.into())
+        } else {
+            unimplemented!()
+        }
+    }
+
+    ///
+    /// Generate a proc object for Enumerator.
+    ///
+    /// this method use current `self` for the `obj` field for the Enumerator.
+    ///
+    /// ### args
+    /// - *method*: the method name to generate a proc.
+    ///
+    /// ### return
+    /// - the generated proc object.
+    ///
+    pub fn generate_enumerator(&mut self, globals: &mut Globals, method: IdentId) -> Result<Value> {
+        let func_id = globals.compile_script(
+            format!(
+                r#"
+            self.{} do |*x|
+              __enum_yield *x
+            end
+        "#,
+                method
+            ),
+            "",
+        )?;
+        let func_data = globals.compile_on_demand(func_id).clone();
+        let outer_lfp = self.move_frame_to_heap(self.cfp().lfp());
+        let proc = Proc::from(outer_lfp, func_data);
+        let self_val = outer_lfp.self_val();
+        let e = Value::new_enumerator(self_val, method, proc);
+        Ok(e)
+    }
+
+    /// Move the frame to heap.
+    ///
+    /// If the frame is already on the heap, do nothing.
+    ///
+    /// ### args
+    /// - *lfp*: the address of the frame to move.
+    ///
+    /// ### return
+    /// - the frame moved to the heap.
+    ///
+    pub fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
+        if self.within_stack(lfp) {
+            unsafe {
+                let mut cfp = lfp.cfp();
+                let mut heap_lfp = lfp.move_to_heap();
+                cfp.set_lfp(heap_lfp);
+                if let Some(outer) = heap_lfp.outer() {
+                    let outer_lfp = outer.lfp();
+                    let outer = self.move_frame_to_heap(outer_lfp).outer_address();
+                    heap_lfp.set_outer(Some(outer));
+                }
+                heap_lfp
+            }
+        } else {
+            lfp
+        }
+    }
+}
+
 // Handling special variables.
 
 impl Executor {

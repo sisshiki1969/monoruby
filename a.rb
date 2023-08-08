@@ -1,23 +1,10 @@
-fib = Enumerator.new do |y|
-    a = b = 1
-    loop do 
-        y << a
-        a, b = a + b, a
+class CPU
+    def add_mappings(addr)
+        addr.each do |x|
+            puts x
+        end
     end
 end
 
-#fib.with_index.each do |(num, idx2), idx1|
-#    puts "#{idx1} #{idx2} #{num} "
-#    if num > 1000
-#        break
-#    end
-#end
-
-e = fib.with_index.with_index.with_index.with_index.with_index.with_index
-puts e
-puts "#{e.next}"
-puts "#{e.next}"
-puts "#{e.next}"
-puts "#{e.next}"
-puts "#{e.next}"
-puts "#{e.next}"
+@cpu = CPU.new
+@cpu.add_mappings(0x2000.step(0x3fff, 8))

@@ -540,7 +540,6 @@ impl Globals {
         );
         self.codegen.jit.select_page(0);
         let dump = self.codegen.jit.dump_code().unwrap();
-        //eprintln!("{}", dump);
         let dump: Vec<(usize, String)> = dump
             .split('\n')
             .filter(|s| s.len() >= 29)

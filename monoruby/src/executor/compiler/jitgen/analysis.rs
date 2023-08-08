@@ -41,7 +41,6 @@ impl JitContext {
         let backedge = self.loop_backedges.get(&begin).unwrap();
         let last = BasicBlockId(func.bb_info.len() - 1);
         let exit = self.analyse_loop(func, begin, last).1;
-        //eprintln!("{:?} {:?}", func.bb_info[entry_bb].begin, exit);
 
         (backedge.get_loop_used_as_float(), exit.get_unused())
     }
