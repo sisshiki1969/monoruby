@@ -24,6 +24,7 @@ emit-tir = []
 log-jit = []
 gc-debug = []
 gc-stress = []
+profile = []
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
@@ -35,10 +36,13 @@ ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
 monoruby-attr = { path = "../monoruby_attr" }
 num = "0.4.0"
 fxhash = "0.2.1"
-tempfile ="3.3.0"
+tempfile = "3.3.0"
 dtoa = "1.0"
 chrono = "0.4.19"
-smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = ["const_generics", "union"] }
+smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
+  "const_generics",
+  "union",
+] }
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.8.5"

@@ -153,7 +153,7 @@ impl Globals {
         let mut executor = Executor::init(self);
         let res = executor.eval_script(self, code.to_string(), path);
         self.flush_stdout();
-        #[cfg(feature = "log-jit")]
+        #[cfg(feature = "profile")]
         self.show_stats();
         res
     }
@@ -622,7 +622,7 @@ impl Globals {
         eprintln!();
     }
 
-    #[cfg(feature = "log-jit")]
+    #[cfg(feature = "profile")]
     pub(crate) fn show_stats(&self) {
         eprintln!();
         eprintln!("deoptimization stats");

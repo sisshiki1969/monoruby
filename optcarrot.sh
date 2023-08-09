@@ -1,2 +1,1 @@
-cargo install --features emit-bc --features log-jit --path monoruby
-monoruby ../optcarrot/bin/optcarrot-bench
+cargo run --features log-jit --features gc-debug -- ../optcarrot/bin/optcarrot-bench
