@@ -669,10 +669,15 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_enumerator(obj: Value, method: IdentId, proc: Proc) -> Self {
+    pub(super) fn new_enumerator(
+        obj: Value,
+        method: IdentId,
+        proc: Proc,
+        args: Vec<Value>,
+    ) -> Self {
         RValue {
             header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
-            kind: ObjKind::enumerator(obj, method, proc),
+            kind: ObjKind::enumerator(obj, method, proc, args),
             var_table: None,
         }
     }
@@ -1128,9 +1133,9 @@ impl ObjKind {
         }
     }
 
-    fn enumerator(obj: Value, method: IdentId, proc: Proc) -> Self {
+    fn enumerator(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
         Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new(obj, method, proc)),
+            enumerator: ManuallyDrop::new(EnumeratorInner::new(obj, method, proc, args)),
         }
     }
 

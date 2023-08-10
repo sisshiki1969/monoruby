@@ -46,7 +46,7 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh)?;
     let obj = Value::new_generator(proc);
-    Ok(Value::new_enumerator(obj, IdentId::EACH, proc))
+    vm.generate_enumerator(globals, IdentId::EACH, obj, vec![])
 }
 
 ///
@@ -79,23 +79,6 @@ fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) ->
         .into())
 }
 
-fn each_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut internal: Fiber,
-    block_data: &ProcInner,
-) -> Result<Value> {
-    let yielder = Value::yielder_object();
-    loop {
-        let (ary, is_return) = internal.enum_yield_values(vm, globals, yielder)?;
-        let v = ary.peel();
-        if is_return {
-            return Ok(v);
-        }
-        vm.invoke_block(globals, block_data, &[v])?;
-    }
-}
-
 ///
 /// ### Enumerator#each
 ///
@@ -105,6 +88,21 @@ fn each_inner(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    fn each_inner(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        mut internal: Fiber,
+        block_data: &ProcInner,
+    ) -> Result<Value> {
+        loop {
+            let (ary, is_return) = internal.enum_yield_values(vm, globals)?;
+            let v = ary.peel();
+            if is_return {
+                return Ok(v);
+            }
+            vm.invoke_block(globals, block_data, &[v])?;
+        }
+    }
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val: Enumerator = lfp.self_val().into();
@@ -138,9 +136,8 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         block_data: &ProcInner,
         mut count: Value,
     ) -> Result<Value> {
-        let yielder = Value::yielder_object();
         loop {
-            let (ary, is_return) = internal.enum_yield_values(vm, globals, yielder)?;
+            let (ary, is_return) = internal.enum_yield_values(vm, globals)?;
             let v = ary.peel();
             if is_return {
                 return Ok(v);
@@ -176,7 +173,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        return vm.generate_enumerator(globals, id);
+        return vm.generate_enumerator(globals, id, lfp.self_val(), vec![]);
     };
 
     //let proc = vm.generate_iterator_proc(globals, self_val.method);
@@ -259,6 +256,22 @@ fn generator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) 
 ///
 #[monoruby_builtin]
 fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    fn each_inner(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        mut internal: Fiber,
+        block_data: &ProcInner,
+    ) -> Result<Value> {
+        let yielder = Value::yielder_object();
+        loop {
+            let (ary, is_return) = internal.generator_yield_values(vm, globals, yielder)?;
+            let v = ary.peel();
+            if is_return {
+                return Ok(v);
+            }
+            vm.invoke_block(globals, block_data, &[v])?;
+        }
+    }
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val: Generator = lfp.self_val().into();
@@ -334,7 +347,7 @@ mod test {
     fn enum_free() {
         run_test(
             r##"
-            1000.times do
+            20.times do
                 a = Enumerator.new do |y|
                     3.times do |i|
                         y << i

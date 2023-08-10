@@ -66,8 +66,8 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
-fn to_enum(vm: &mut Executor, globals: &mut Globals, _: LFP, _arg: Arg) -> Result<Value> {
-    vm.generate_enumerator(globals, IdentId::EACH)
+fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
 }
 
 ///

@@ -1,10 +1,9 @@
-class CPU
-    def add_mappings(addr)
-        addr.each do |x|
-            puts x
+100000.times do    
+    a = Enumerator.new do |y|
+        3.times do |i|
+            y << i
         end
     end
+    puts a.next
+    puts a.next
 end
-
-@cpu = CPU.new
-@cpu.add_mappings(0x2000.step(0x3fff, 8))

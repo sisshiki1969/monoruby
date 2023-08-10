@@ -670,7 +670,13 @@ impl Executor {
     /// ### return
     /// - the generated proc object.
     ///
-    pub fn generate_enumerator(&mut self, globals: &mut Globals, method: IdentId) -> Result<Value> {
+    pub fn generate_enumerator(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+    ) -> Result<Value> {
         let func_id = globals.compile_script(
             format!(
                 r#"
@@ -683,10 +689,9 @@ impl Executor {
             "",
         )?;
         let func_data = globals.compile_on_demand(func_id).clone();
-        let outer_lfp = self.cfp().lfp().move_frame_to_heap();
+        let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
         let proc = Proc::from(outer_lfp, func_data);
-        let self_val = outer_lfp.self_val();
-        let e = Value::new_enumerator(self_val, method, proc);
+        let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }
 }

@@ -98,7 +98,7 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("step");
-            return vm.generate_enumerator(globals, id);
+            return vm.generate_enumerator(globals, id, lfp.self_val(), lfp.iter().collect());
         }
         Some(block) => block,
     };

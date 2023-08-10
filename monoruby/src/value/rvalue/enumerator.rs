@@ -9,6 +9,7 @@ pub struct EnumeratorInner {
     pub method: IdentId,
     internal: Option<Fiber>,
     pub proc: Proc,
+    pub args: Box<Vec<Value>>,
     buffer: Option<Array>,
 }
 
@@ -26,12 +27,13 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new(obj: Value, method: IdentId, proc: Proc) -> Self {
+    pub(crate) fn new(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
         Self {
             obj,
             method,
-            proc,
             internal: None,
+            proc,
+            args: Box::new(args),
             buffer: None,
         }
     }
@@ -82,10 +84,7 @@ impl EnumeratorInner {
         if self.internal.is_none() {
             self.rewind();
         }
-        let (ary, is_return) =
-            self.internal
-                .unwrap()
-                .enum_yield_values(vm, globals, Value::yielder_object())?;
+        let (ary, is_return) = self.internal.unwrap().enum_yield_values(vm, globals)?;
         if is_return {
             Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
