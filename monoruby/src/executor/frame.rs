@@ -162,13 +162,36 @@ impl LFP {
         unsafe { self.as_ptr().sub(count as usize) }
     }
 
+    /// Move the frame to heap.
     ///
-    /// Move local frame on the stack to the heap.
+    /// If the frame is already on the heap, do nothing.
     ///
-    pub fn move_to_heap(&self) -> Self {
-        let len = self.len_in_bytes();
-        let v = self.registers().to_vec().into_boxed_slice();
-        unsafe { LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _) }
+    /// ### args
+    /// - *lfp*: the address of the frame to move.
+    ///
+    /// ### return
+    /// - the frame moved to the heap.
+    ///
+    pub fn move_frame_to_heap(self) -> Self {
+        if self.on_stack() {
+            unsafe {
+                let mut cfp = self.cfp();
+                let len = self.frame_bytes();
+                let v = self.frame_ref().to_vec().into_boxed_slice();
+                let mut heap_lfp = LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+                heap_lfp.meta_mut().set_on_heap();
+                cfp.set_lfp(heap_lfp);
+                if let Some(outer) = heap_lfp.outer() {
+                    let outer_lfp = outer.lfp();
+                    let outer = outer_lfp.move_frame_to_heap().outer_address();
+                    heap_lfp.set_outer(Some(outer));
+                }
+                assert!(!heap_lfp.on_stack());
+                heap_lfp
+            }
+        } else {
+            self
+        }
     }
 
     ///
@@ -202,8 +225,16 @@ impl LFP {
     ///
     /// Get Meta.
     ///
-    pub(in crate::executor) fn meta(&self) -> Meta {
-        Meta::from(unsafe { *(self.sub(LBP_META) as *const u64) })
+    pub(in crate::executor) fn meta(&self) -> &Meta {
+        unsafe { &*(self.sub(LBP_META) as *const Meta) }
+    }
+
+    fn meta_mut(&mut self) -> &mut Meta {
+        unsafe { &mut *(self.sub(LBP_META) as *mut Meta) }
+    }
+
+    fn on_stack(&self) -> bool {
+        self.meta().on_stack()
     }
 
     ///
@@ -257,12 +288,12 @@ impl LFP {
         *(self.sub(LBP_SELF + 8 * index as i64) as *mut Value) = val;
     }
 
-    fn len_in_bytes(&self) -> usize {
+    fn frame_bytes(&self) -> usize {
         LBP_SELF as usize + 8 * self.meta().reg_num as usize
     }
 
-    fn registers(&self) -> &[u8] {
-        let len = self.len_in_bytes();
+    fn frame_ref(&self) -> &[u8] {
+        let len = self.frame_bytes();
         unsafe {
             std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
         }

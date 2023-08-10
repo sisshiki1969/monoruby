@@ -218,10 +218,6 @@ impl Executor {
         self.cfp().method_func_id()
     }
 
-    pub fn within_stack(&self, lfp: LFP) -> bool {
-        self.lfp_top.unwrap() >= lfp && lfp > self.cfp.unwrap()
-    }
-
     pub fn temp_len(&self) -> usize {
         self.temp_stack.len()
     }
@@ -653,7 +649,7 @@ impl Executor {
     pub fn generate_proc(&mut self, globals: &mut Globals, bh: BlockHandler) -> Result<Proc> {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
-            self.move_frame_to_heap(outer_lfp);
+            outer_lfp.move_frame_to_heap();
             let proc = Proc::new(globals.get_block_data(self.cfp(), bh));
             Ok(proc)
         } else if bh.try_proc() {
@@ -687,39 +683,11 @@ impl Executor {
             "",
         )?;
         let func_data = globals.compile_on_demand(func_id).clone();
-        let outer_lfp = self.move_frame_to_heap(self.cfp().lfp());
+        let outer_lfp = self.cfp().lfp().move_frame_to_heap();
         let proc = Proc::from(outer_lfp, func_data);
         let self_val = outer_lfp.self_val();
         let e = Value::new_enumerator(self_val, method, proc);
         Ok(e)
-    }
-
-    /// Move the frame to heap.
-    ///
-    /// If the frame is already on the heap, do nothing.
-    ///
-    /// ### args
-    /// - *lfp*: the address of the frame to move.
-    ///
-    /// ### return
-    /// - the frame moved to the heap.
-    ///
-    pub fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
-        if self.within_stack(lfp) {
-            unsafe {
-                let mut cfp = lfp.cfp();
-                let mut heap_lfp = lfp.move_to_heap();
-                cfp.set_lfp(heap_lfp);
-                if let Some(outer) = heap_lfp.outer() {
-                    let outer_lfp = outer.lfp();
-                    let outer = self.move_frame_to_heap(outer_lfp).outer_address();
-                    heap_lfp.set_outer(Some(outer));
-                }
-                heap_lfp
-            }
-        } else {
-            lfp
-        }
     }
 }
 
@@ -1623,7 +1591,9 @@ impl Visibility {
 struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
-    /// interpreter:0 JIT code:1 native:2
+    ///bit 7:  0:on_stack 1:on_heap
+    ///bit 1:  0:Ruby 1:native
+    ///bit 0:
     kind: u8,
     /// bit 2-1: public:0 private:1 protected:2
     /// bit 0: method:0 class_def:1
@@ -1634,11 +1604,11 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "kind:{} mode:{} {:?} regs:{}",
+            "on_stack:{:?} kind:{} mode:{} {:?} regs:{}",
+            self.on_stack(),
             match self.kind() {
-                0 => "VM",
-                1 => "JIT",
-                2 => "NATIVE",
+                0 => "Ruby",
+                1 => "NATIVE",
                 _ => "INVALID",
             },
             if self.is_class_def() {
@@ -1660,10 +1630,6 @@ impl Meta {
             kind,
             mode: is_class_def as u8,
         }
-    }
-
-    fn from(meta: u64) -> Self {
-        unsafe { std::mem::transmute(meta) }
     }
 
     fn get(&self) -> u64 {
@@ -1696,25 +1662,26 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
-    /// interpreter:0 JIT code: 1 native:2
+    /// 0:Ruby 1:native
     fn kind(&self) -> u8 {
-        self.kind
+        (self.kind & 0b10) >> 1
     }
 
     fn is_native(&self) -> bool {
-        self.kind == 2
+        self.kind() == 1
+    }
+
+    fn on_stack(&self) -> bool {
+        self.kind & 0b1000_0000 == 0
+    }
+
+    fn set_on_heap(&mut self) {
+        self.kind |= 0b1000_0000;
     }
 
     /// method:0 class_def:1
     fn is_class_def(&self) -> bool {
         (self.mode & 0b1) == 1
-    }
-
-    ///
-    /// Set JIT flag in Meta.
-    ///
-    fn set_jit(&mut self) {
-        self.kind = 1;
     }
 
     ///
@@ -1825,7 +1792,6 @@ mod test {
         let mut meta = Meta::vm_classdef(FuncId::new(12), 42);
         assert_eq!(true, meta.is_class_def());
         meta.set_reg_num(12);
-        meta.set_jit();
         assert_eq!(true, meta.is_class_def());
         assert_eq!(8, std::mem::size_of::<i64>());
         assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());

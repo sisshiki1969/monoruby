@@ -1027,7 +1027,6 @@ impl Globals {
         self_value: Value,
         entry_label: DestLabel,
     ) {
-        self[func_id].data.meta.set_jit();
         self.exec_jit_compile(func_id, self_value, None, entry_label)
     }
 }
