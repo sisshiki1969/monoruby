@@ -467,10 +467,8 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
                 lea  rdx, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- &FuncData
-                // set outer
-                lea  rsi, [rax - (LBP_OUTER)];
-                movq [rsp - (16 + LBP_OUTER)], rsi;
             };
+            self.set_block_outer();
             if !specify_self {
                 monoasm! { &mut self.jit,
                     // set self

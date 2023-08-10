@@ -99,6 +99,12 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 self.0.mark(alloc)
             }
         }
+
+        impl #base {
+            pub fn as_ptr(self) -> *mut RValue {
+                self.0.get() as _
+            }
+        }
     };
 
     gen.into()
