@@ -37,7 +37,9 @@ impl EnumeratorInner {
             buffer: None,
         }
     }
+}
 
+impl Enumerator {
     pub fn rewind(&mut self) {
         self.internal = Some(Fiber::new(self.proc));
         self.buffer = None;

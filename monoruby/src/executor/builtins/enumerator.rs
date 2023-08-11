@@ -59,7 +59,8 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    lfp.self_val().as_enumerator_mut().next(vm, globals)
+    let mut e: Enumerator = lfp.self_val().into();
+    e.next(vm, globals)
 }
 
 ///
@@ -72,11 +73,8 @@ fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    Ok(lfp
-        .self_val()
-        .as_enumerator_mut()
-        .next_values(vm, globals)?
-        .into())
+    let mut e: Enumerator = lfp.self_val().into();
+    Ok(e.next_values(vm, globals)?.into())
 }
 
 ///
@@ -196,7 +194,8 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    lfp.self_val().as_enumerator_mut().peek(vm, globals)
+    let mut e: Enumerator = lfp.self_val().into();
+    e.peek(vm, globals)
 }
 
 ///
@@ -209,8 +208,9 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    lfp.self_val().as_enumerator_mut().rewind();
-    Ok(lfp.self_val())
+    let mut e: Enumerator = lfp.self_val().into();
+    e.rewind();
+    Ok(e.into())
 }
 
 ///
