@@ -79,22 +79,22 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 fn inline_class_new(
     gen: &mut Codegen,
     ctx: &mut BBContext,
-    method_info: &MethodInfo,
+    callsite: &CallSiteInfo,
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
-    let MethodInfo {
+    let CallSiteInfo {
         recv,
         args,
         len,
         ret,
         ..
-    } = method_info;
-    ctx.dealloc_xmm(*ret);
-    gen.fetch_range(ctx, *args, *len);
+    } = *callsite;
+    ctx.dealloc_xmm(ret);
+    gen.fetch_range(ctx, args, len);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
-    gen.load_rdi(*recv);
+    gen.load_rdi(recv);
     let cached_version = gen.jit.const_i32(-1);
     let cached_funcdata = gen.jit.const_i64(-1);
     let class_version = gen.class_version;
@@ -118,8 +118,8 @@ fn inline_class_new(
         movq rsi, r12;
         movq rdx, rax;
         movq rcx, r15;
-        lea r8, [r14 - (conv(*args))];
-        movl r9, (*len);
+        lea r8, [r14 - (conv(args))];
+        movl r9, (len);
         subq rsp, 16;
         movq [rsp], 0;
         movq rax, (gen.method_invoker2);
@@ -130,7 +130,7 @@ fn inline_class_new(
     gen.xmm_restore(&using);
     //gen.jit_handle_error(ctx, pc);
     if !ret.is_zero() {
-        gen.store_r15(*ret);
+        gen.store_r15(ret);
     }
 
     gen.jit.select_page(1);
@@ -152,19 +152,19 @@ fn conv(reg: SlotId) -> i64 {
     reg.0 as i64 * 8 + LBP_SELF
 }
 
-fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo) {
-    let MethodInfo {
+fn analysis_class_new(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    let CallSiteInfo {
         recv,
         args,
         len,
         ret,
         ..
-    } = method_info;
-    info.use_non_float(*recv);
+    } = *callsite;
+    info.use_non_float(recv);
     for r in args.0..args.0 + len {
         info.use_non_float(SlotId(r));
     }
-    info.def_as(*ret, false);
+    info.def_as(ret, false);
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

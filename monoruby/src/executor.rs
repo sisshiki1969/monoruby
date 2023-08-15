@@ -1250,17 +1250,17 @@ impl BcPc {
             }
             TraceIr::InlineCall {
                 inline_id,
-                info,
+                callsite,
                 class,
                 ..
             } => {
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = globals.store[callsite];
                 let name = &globals.store.get_inline_info(inline_id).2;
                 let op1 = if len == 0 {
                     format!("{} = {:?}.inline {name}()", ret.ret_str(), recv,)

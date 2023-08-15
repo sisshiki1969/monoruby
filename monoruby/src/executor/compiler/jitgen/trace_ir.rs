@@ -156,7 +156,7 @@ pub(crate) enum TraceIr {
     },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
-        info: MethodInfo,
+        callsite: CallSiteId,
         #[allow(dead_code)]
         class: ClassId,
         #[allow(dead_code)]
@@ -339,7 +339,7 @@ impl TraceIr {
                             {
                                 return Self::InlineCall {
                                     inline_id,
-                                    info,
+                                    callsite: op2.into(),
                                     class,
                                     version,
                                 };

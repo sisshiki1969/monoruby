@@ -1144,11 +1144,13 @@ impl Codegen {
                     }
                 }
                 TraceIr::InlineCall {
-                    inline_id, info, ..
+                    inline_id,
+                    callsite,
+                    ..
                 } => {
-                    self.fetch_slot(&mut ctx, info.recv);
+                    self.fetch_slot(&mut ctx, store[callsite].recv);
                     let gen = store.get_inline_info(inline_id).0;
-                    self.gen_inlinable(&mut ctx, &info, gen, pc);
+                    self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
                 TraceIr::Yield {
                     ret,

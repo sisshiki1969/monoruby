@@ -4,7 +4,7 @@ impl Codegen {
     pub(super) fn gen_inlinable(
         &mut self,
         ctx: &mut BBContext,
-        method_info: &MethodInfo,
+        callsite: &CallSiteInfo,
         inline_gen: InlineGen,
         pc: BcPc,
     ) {
@@ -13,7 +13,7 @@ impl Codegen {
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         self.guard_version(version, deopt);
-        inline_gen(self, ctx, method_info, pc, deopt);
+        inline_gen(self, ctx, callsite, pc, deopt);
     }
 
     pub(super) fn gen_call(

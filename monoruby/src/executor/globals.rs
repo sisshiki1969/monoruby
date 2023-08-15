@@ -16,8 +16,8 @@ use prng::*;
 pub use store::*;
 
 pub(in crate::executor) type InlineGen =
-    fn(&mut Codegen, &mut jitgen::BBContext, &MethodInfo, BcPc, DestLabel);
-pub(in crate::executor) type InlineAnalysis = fn(&mut jitgen::analysis::SlotInfo, &MethodInfo);
+    fn(&mut Codegen, &mut jitgen::BBContext, &CallSiteInfo, BcPc, DestLabel);
+pub(in crate::executor) type InlineAnalysis = fn(&mut jitgen::analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct MethodTableEntry {
