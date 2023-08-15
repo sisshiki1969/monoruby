@@ -28,7 +28,7 @@ impl Codegen {
     ) {
         let cached = InlineCached::new(pc);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
-            self.gen_call_not_cached(store, ctx, callid, block, pc, has_splat);
+            self.gen_call_not_cached(ctx, &store[callid], block, pc, has_splat);
         } else {
             self.gen_call_cached(store, ctx, callid, func_data, block, cached, pc, has_splat);
         }
@@ -132,14 +132,13 @@ impl Codegen {
     ///
     fn gen_call_not_cached(
         &mut self,
-        store: &Store,
         ctx: &BBContext,
-        callid: CallSiteId,
+        callsite: &CallSiteInfo,
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
-        let CallSiteInfo { recv, ret, .. } = store[callid];
+        let CallSiteInfo { id, recv, ret, .. } = *callsite;
         // argument registers:
         //   rdi: args len
         //
@@ -180,7 +179,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(block, has_splat, &store[callid]);
+        self.set_self_and_args(block, has_splat, callsite);
 
         monoasm! { &mut self.jit,
             // set meta.
@@ -196,7 +195,7 @@ impl Codegen {
 
         monoasm! { &mut self.jit,
             movq rcx, r15;
-            movl rdx, (callid.get()); // CallSiteId
+            movl rdx, (id.get()); // CallSiteId
         }
         self.handle_arguments();
         monoasm!( &mut self.jit,
@@ -228,9 +227,8 @@ impl Codegen {
         slow_path:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, (callid.get()); // CallSiteId
+            movq rdx, (id.get()); // CallSiteId
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
-            movw r8, (recv.0);
             movq rax, (runtime::find_method);
             call rax;
             // absolute address was returned to rax.

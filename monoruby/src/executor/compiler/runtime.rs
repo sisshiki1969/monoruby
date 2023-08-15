@@ -14,17 +14,16 @@ pub(super) extern "C" fn find_method(
     globals: &mut Globals,
     callid: CallSiteId,
     receiver: Value,
-    // register id of *self*
-    recv_reg: u16,
 ) -> Option<FuncDataPtr> {
     let func_name = globals.store[callid].name.unwrap();
-    let func_id = match globals.find_method(receiver, func_name, recv_reg == 0) {
-        Ok(id) => id,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    };
+    let func_id =
+        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
+            Ok(id) => id,
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        };
     let func_data = globals.compile_on_demand(func_id);
     Some(func_data.as_ptr())
 }

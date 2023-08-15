@@ -1154,19 +1154,18 @@ impl BcPc {
             TraceIr::MethodCall {
                 callid,
                 has_splat,
-                info,
                 class,
                 ..
             } => {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}){}",
@@ -1189,19 +1188,18 @@ impl BcPc {
             TraceIr::MethodCallBlock {
                 callid,
                 has_splat,
-                info,
                 class,
                 ..
             } => {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{} &{:?}){}",
@@ -1222,14 +1220,9 @@ impl BcPc {
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
-            TraceIr::Super {
-                callid,
-                class,
-                info,
-                ..
-            } => {
+            TraceIr::Super { callid, class, .. } => {
                 let callsite = &globals.store[callid];
-                let MethodInfo { args, len, ret, .. } = info;
+                let CallSiteInfo { args, len, ret, .. } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = super({}{}){}",

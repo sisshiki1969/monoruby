@@ -56,7 +56,6 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, [r13 - 16];  // CallSiteId
             movq rcx, [rsp]; // receiver:Value
-            movzxw r8, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
         );

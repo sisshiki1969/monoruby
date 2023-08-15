@@ -239,8 +239,9 @@ impl Store {
         recv: SlotId,
         ret: SlotId,
     ) -> CallSiteId {
-        let id = self.callsite_info.len();
+        let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
+            id,
             name,
             pos_num,
             kw_pos,
@@ -253,7 +254,7 @@ impl Store {
             recv,
             ret,
         });
-        CallSiteId(id as u32)
+        id
     }
 
     pub(crate) fn add_constsite(
@@ -318,6 +319,7 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub(crate) struct CallSiteInfo {
+    pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Number of positional arguments.
