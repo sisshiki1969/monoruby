@@ -20,25 +20,17 @@ impl Codegen {
         &mut self,
         store: &Store,
         ctx: &BBContext,
-        info: MethodInfo,
+        func_data: &FuncData,
         callid: CallSiteId,
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo {
-            func_data, recv, ..
-        } = info;
-        if func_data.is_some() {
-            let cached = InlineCached::new(pc);
-            if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(store, ctx, info, callid, block, pc, has_splat);
-            } else {
-                self.gen_call_cached(store, ctx, callid, info, block, cached, pc, has_splat);
-            }
+        let cached = InlineCached::new(pc);
+        if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
+            self.gen_call_not_cached(store, ctx, callid, block, pc, has_splat);
         } else {
-            unreachable!();
-            //self.gen_call_not_cached(ctx, info, callid, block, ret, pc, has_splat);
+            self.gen_call_cached(store, ctx, callid, func_data, block, cached, pc, has_splat);
         }
     }
 
@@ -50,19 +42,19 @@ impl Codegen {
         store: &Store,
         ctx: &BBContext,
         callid: CallSiteId,
-        method_info: MethodInfo,
+        func_data: &FuncData,
         block: Option<SlotId>,
         cached: InlineCached,
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo {
+        let CallSiteInfo {
             recv,
+            args,
             len,
-            func_data,
             ret,
             ..
-        } = method_info;
+        } = store[callid];
         let deopt = self.gen_side_deopt(pc - 1, ctx);
         let mut self_in_rdi_flag = false;
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -73,7 +65,7 @@ impl Codegen {
             self.guard_class(cached.class_id, deopt);
         }
         self.guard_version(cached.version, deopt);
-        let func_id = func_data.unwrap().meta.func_id();
+        let func_id = func_data.meta.func_id();
         match store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
@@ -104,14 +96,14 @@ impl Codegen {
                     self.load_rdi(recv);
                 }
                 let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
-                self.attr_writer(ctx, ivar_name, ivar_id, ret, method_info.args, pc);
+                self.attr_writer(ctx, ivar_name, ivar_id, ret, args, pc);
             }
             FuncKind::Builtin { .. } => {
                 self.method_call_cached(
                     ctx,
                     store,
                     callid,
-                    method_info,
+                    func_data,
                     block,
                     pc,
                     has_splat,
@@ -124,7 +116,7 @@ impl Codegen {
                     ctx,
                     store,
                     callid,
-                    method_info,
+                    func_data,
                     block,
                     pc,
                     has_splat,
@@ -142,13 +134,12 @@ impl Codegen {
         &mut self,
         store: &Store,
         ctx: &BBContext,
-        method_info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo { recv, ret, .. } = method_info;
+        let CallSiteInfo { recv, ret, .. } = store[callid];
         // argument registers:
         //   rdi: args len
         //
@@ -189,7 +180,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &store[callid]);
+        self.set_self_and_args(block, has_splat, &store[callid]);
 
         monoasm! { &mut self.jit,
             // set meta.
@@ -425,20 +416,19 @@ impl Codegen {
         ctx: &BBContext,
         store: &Store,
         callid: CallSiteId,
-        method_info: MethodInfo,
+        func_data: &FuncData,
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
         recv_classid: ClassId,
         native: bool,
     ) {
-        let func_data = method_info.func_data.unwrap();
         let xmm_using = ctx.get_xmm_using();
-        let ret = method_info.ret;
+        let ret = store[callid].ret;
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &store[callid]);
+        self.set_self_and_args(block, has_splat, &store[callid]);
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
@@ -622,14 +612,19 @@ impl Codegen {
     /// - caller save registers
     fn set_self_and_args(
         &mut self,
-        method_info: MethodInfo,
         block: Option<SlotId>,
         has_splat: bool,
         callsite: &CallSiteInfo,
     ) {
-        let MethodInfo {
-            recv, args, len, ..
-        } = method_info;
+        let CallSiteInfo {
+            mut args,
+            len,
+            recv,
+            ..
+        } = *callsite;
+        if block.is_some() {
+            args = args + 1;
+        }
         // set self, len
         self.load_rax(recv);
         monoasm!( &mut self.jit,

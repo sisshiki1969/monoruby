@@ -249,7 +249,7 @@ impl Store {
             hash_splat_pos,
             block_func_id,
             args,
-            len,
+            len: len as u16,
             recv,
             ret,
         });
@@ -333,7 +333,7 @@ pub(crate) struct CallSiteInfo {
     /// *FuncId* of passed block.
     pub block_func_id: Option<FuncId>,
     pub args: SlotId,
-    pub len: usize,
+    pub len: u16,
     pub recv: SlotId,
     pub ret: SlotId,
 }
