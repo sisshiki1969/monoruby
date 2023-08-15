@@ -44,7 +44,9 @@ impl Enumerator {
         self.internal = Some(Fiber::new(self.proc));
         self.buffer = None;
     }
+}
 
+impl Enumerator {
     ///
     /// Peek next yield value from the enumerator.
     ///

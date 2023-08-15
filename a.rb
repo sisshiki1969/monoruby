@@ -1,9 +1,4 @@
-100000.times do    
-    a = Enumerator.new do |y|
-        3.times do |i|
-            y << i
-        end
-    end
-    puts a.next
-    puts a.next
+e = [1,2,3,4,5].each
+e.each do |x|
+    puts x
 end

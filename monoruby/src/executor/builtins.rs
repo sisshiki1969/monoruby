@@ -2,7 +2,7 @@ use super::*;
 
 mod array;
 mod class;
-mod enumerator;
+pub(crate) mod enumerator;
 mod exception;
 mod fiber;
 mod file;
