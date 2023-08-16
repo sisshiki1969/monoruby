@@ -388,19 +388,14 @@ impl JitContext {
                     }
                     info.def_as(ret, false);
                 }
-                TraceIr::MethodCall {
-                    info: method_info, ..
-                }
-                | TraceIr::Super {
-                    info: method_info, ..
-                } => {
-                    let MethodInfo {
+                TraceIr::MethodCall { callid, .. } | TraceIr::Super { callid, .. } => {
+                    let CallSiteInfo {
                         recv,
                         args,
                         len,
                         ret,
                         ..
-                    } = method_info;
+                    } = store[callid];
                     info.use_non_float(recv);
                     for i in 0..len {
                         info.use_non_float(args + i);
@@ -408,16 +403,14 @@ impl JitContext {
                     //reg_info.unlink_locals(func);
                     info.def_as(ret, false);
                 }
-                TraceIr::MethodCallBlock {
-                    info: method_info, ..
-                } => {
-                    let MethodInfo {
+                TraceIr::MethodCallBlock { callid, .. } => {
+                    let CallSiteInfo {
                         recv,
                         args,
                         len,
                         ret,
                         ..
-                    } = method_info;
+                    } = store[callid];
                     info.use_non_float(recv);
                     for i in 0..len + 1 {
                         info.use_non_float(args + i);
@@ -428,10 +421,10 @@ impl JitContext {
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
                     inline_id,
-                    info: method_info,
+                    callsite,
                     ..
                 } => {
-                    store.get_inline_info(inline_id).1(&mut info, &method_info);
+                    store.get_inline_info(inline_id).1(&mut info, &store[callsite]);
                 }
                 TraceIr::Ret(src)
                 | TraceIr::MethodRet(src)

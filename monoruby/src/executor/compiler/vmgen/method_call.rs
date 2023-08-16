@@ -56,7 +56,6 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, [r13 - 16];  // CallSiteId
             movq rcx, [rsp]; // receiver:Value
-            movzxw r8, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
         );
@@ -178,7 +177,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set meta
             movq r15, [r13 + 8];
-            movq rdi, [r15 + (FUNCDATA_OFFSET_META)];
+            movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rdi, [r13 + 0];  // rdi <- len
             movzxw rcx, [r13 + 2]; // rcx <- args
@@ -189,7 +188,7 @@ impl Codegen {
         };
         self.set_frame(with_block, has_splat);
         monoasm! { &mut self.jit,
-            movq rsi, [r15 + (FUNCDATA_OFFSET_PC)];
+            movq rsi, [r15 + (FUNCDATA_PC)];
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
@@ -209,9 +208,9 @@ impl Codegen {
             //
             movq rdx, rdi;
             movq r13, [r13 + 8];
-            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+            movq r13, [r13 + (FUNCDATA_PC)];    // r13: BcPc
         };
         self.call_rax();
         monoasm! { &mut self.jit,
@@ -266,14 +265,14 @@ impl Codegen {
             pushq r13; // push pc
             movq r15, rdx;
             // set meta
-            movq rsi, [r15 + (FUNCDATA_OFFSET_META)];
+            movq rsi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rsi;
             movl r8, [r13 - 8];    // CallSiteId
         };
         self.set_block_self_outer();
         self.set_frame(false, true);
         monoasm! { &mut self.jit,
-            movq rsi, [r15 + (FUNCDATA_OFFSET_PC)];
+            movq rsi, [r15 + (FUNCDATA_PC)];
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
@@ -293,9 +292,9 @@ impl Codegen {
             //
             movq rdx, rdi;
             // set codeptr
-            movq rax, [r15 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r15 + (FUNCDATA_OFFSET_PC)];
+            movq r13, [r15 + (FUNCDATA_PC)];
         };
         self.call_rax();
         monoasm! { &mut self.jit,

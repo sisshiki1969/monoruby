@@ -23,19 +23,88 @@ pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;
-const LBP_OUTER: i64 = 24;
+const LFP_OFFSET: i64 = 24;
+const LBP_OUTER: i64 = 0 + LFP_OFFSET;
 /// Meta 8bytes
-const LBP_META: i64 = 32;
+const LBP_META: i64 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
 const LBP_META_REGNUM: i64 = LBP_META - 4;
 /// Meta::FuncId 4bytes
 const LBP_META_FUNCID: i64 = LBP_META;
-const LBP_BLOCK: i64 = 40;
-const LBP_SELF: i64 = 48;
+const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
+const LBP_SELF: i64 = 24 + LFP_OFFSET;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
-pub const EXECUTOR_RSP_SAVE: i64 = 16;
-pub const EXECUTOR_PARENT_FIBER: i64 = 24;
+const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
+const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
+const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
+
+const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
+const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
+const FUNCDATA_REGNUM: u64 = FUNCDATA_META + std::mem::offset_of!(Meta, reg_num) as u64;
+const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
+
+///
+/// Bytecode interpreter.
+///
+#[derive(Debug)]
+#[repr(C)]
+pub struct Executor {
+    /// control frame pointer.
+    cfp: Option<CFP>,
+    /// rsp save area.
+    ///
+    /// - 0: created
+    /// - -1: terminated
+    /// - other: suspended
+    rsp_save: Option<std::ptr::NonNull<u8>>,
+    parent_fiber: Option<std::ptr::NonNull<Executor>>,
+    lexical_class: Vec<Vec<Cref>>,
+    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
+    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
+    temp_stack: Vec<Value>,
+    /// error information.
+    exception: Option<MonorubyErr>,
+}
+
+impl std::default::Default for Executor {
+    fn default() -> Self {
+        Self {
+            cfp: None,
+            rsp_save: None,
+            parent_fiber: None,
+            lexical_class: vec![vec![]],
+            sp_last_match: None,
+            sp_post_match: None,
+            sp_matches: vec![],
+            temp_stack: vec![],
+            exception: None,
+        }
+    }
+}
+
+impl alloc::GC<RValue> for Executor {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.sp_matches.iter().for_each(|v| {
+            if let Some(v) = v {
+                v.mark(alloc)
+            }
+        });
+        if let Some(v) = self.sp_last_match {
+            v.mark(alloc)
+        };
+        if let Some(v) = self.sp_post_match {
+            v.mark(alloc)
+        };
+        self.temp_stack.iter().for_each(|v| v.mark(alloc));
+        let mut cfp = self.cfp;
+        while let Some(inner_cfp) = cfp {
+            inner_cfp.lfp().mark(alloc);
+            cfp = inner_cfp.prev();
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
@@ -119,74 +188,6 @@ impl Cref {
     }
 }
 
-///
-/// Bytecode interpreter.
-///
-#[derive(Debug)]
-#[repr(C)]
-pub struct Executor {
-    /// control frame pointer.
-    /// #### [[rbx]]
-    cfp: Option<CFP>,
-    /// the top of local frame pointer.
-    /// #### [[rbx + 8]]                                  
-    lfp_top: Option<LFP>,
-    /// rsp save area.
-    ///
-    /// - 0: created
-    /// - -1: terminated
-    /// - other: suspended
-    /// #### [[rbx + 16]]  
-    rsp_save: Option<std::ptr::NonNull<u8>>,
-    parent_fiber: Option<std::ptr::NonNull<Executor>>, // [rbx + 24]
-    lexical_class: Vec<Vec<Cref>>,
-    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
-    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
-    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
-    temp_stack: Vec<Value>,
-    /// error information.
-    exception: Option<MonorubyErr>,
-}
-
-impl std::default::Default for Executor {
-    fn default() -> Self {
-        Self {
-            cfp: None,
-            lfp_top: None,
-            rsp_save: None,
-            parent_fiber: None,
-            lexical_class: vec![vec![]],
-            sp_last_match: None,
-            sp_post_match: None,
-            sp_matches: vec![],
-            temp_stack: vec![],
-            exception: None,
-        }
-    }
-}
-
-impl alloc::GC<RValue> for Executor {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.sp_matches.iter().for_each(|v| {
-            if let Some(v) = v {
-                v.mark(alloc)
-            }
-        });
-        if let Some(v) = self.sp_last_match {
-            v.mark(alloc)
-        };
-        if let Some(v) = self.sp_post_match {
-            v.mark(alloc)
-        };
-        self.temp_stack.iter().for_each(|v| v.mark(alloc));
-        let mut cfp = self.cfp;
-        while let Some(inner_cfp) = cfp {
-            inner_cfp.lfp().mark(alloc);
-            cfp = inner_cfp.prev();
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum FiberState {
     Created,
@@ -257,38 +258,11 @@ impl Executor {
         self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
     }
 
-    fn yield_fiber(&mut self, val: Value) -> Result<Value> {
-        match yield_fiber(self as _, val) {
+    fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
+        match (globals.codegen.yield_fiber)(self as _, val) {
             Some(res) => Ok(res),
             None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
         }
-    }
-}
-
-#[cfg(not(tarpaulin_include))]
-#[naked]
-extern "C" fn yield_fiber(vm: *mut Executor, val: Value) -> Option<Value> {
-    unsafe {
-        std::arch::asm!(
-            "push r15",
-            "push r14",
-            "push r13",
-            "push r12",
-            "push rbx",
-            "push rbp",
-            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
-            "mov  rdi, [rdi + 24]", // rdi <- [vm.parent_fiber]
-            "mov  rsp, [rdi + 16]", // rsp <- [parent.rsp_save]
-            "pop  rbp",
-            "pop  rbx",
-            "pop  r12",
-            "pop  r13",
-            "pop  r14",
-            "pop  r15",
-            "mov  rax, rsi",
-            "ret",
-            options(noreturn)
-        );
     }
 }
 
@@ -1159,19 +1133,18 @@ impl BcPc {
             TraceIr::MethodCall {
                 callid,
                 has_splat,
-                info,
                 class,
                 ..
             } => {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}){}",
@@ -1194,19 +1167,18 @@ impl BcPc {
             TraceIr::MethodCallBlock {
                 callid,
                 has_splat,
-                info,
                 class,
                 ..
             } => {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{} &{:?}){}",
@@ -1227,14 +1199,9 @@ impl BcPc {
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
-            TraceIr::Super {
-                callid,
-                class,
-                info,
-                ..
-            } => {
+            TraceIr::Super { callid, class, .. } => {
                 let callsite = &globals.store[callid];
-                let MethodInfo { args, len, ret, .. } = info;
+                let CallSiteInfo { args, len, ret, .. } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = super({}{}){}",
@@ -1255,17 +1222,17 @@ impl BcPc {
             }
             TraceIr::InlineCall {
                 inline_id,
-                info,
+                callsite,
                 class,
                 ..
             } => {
-                let MethodInfo {
+                let CallSiteInfo {
                     recv,
                     args,
                     len,
                     ret,
                     ..
-                } = info;
+                } = globals.store[callsite];
                 let name = &globals.store.get_inline_info(inline_id).2;
                 let op1 = if len == 0 {
                     format!("{} = {:?}.inline {name}()", ret.ret_str(), recv,)
@@ -1700,7 +1667,6 @@ impl Meta {
 type FuncDataPtr = std::ptr::NonNull<FuncData>;
 
 #[derive(Debug, Clone, PartialEq, Default)]
-#[repr(C)]
 pub(crate) struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,

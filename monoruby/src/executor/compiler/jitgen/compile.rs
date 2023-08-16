@@ -385,15 +385,15 @@ impl Codegen {
             call rax; // rax <- &FuncData
 
             movq r8, rax;
-            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
+            movq rdi, [r8 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq [rsp - (16 + LBP_BLOCK)], 0;
             movq [rsp - (16 + LBP_SELF)], r15;
         }
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
-            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq r13 , [r8 + (FUNCDATA_PC)];
+            movq rax, [r8 + (FUNCDATA_CODEPTR)];
             xorq rdx, rdx;
         }
         self.call_rax();

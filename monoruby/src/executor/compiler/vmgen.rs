@@ -408,20 +408,19 @@ impl Codegen {
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
-        // rcx: *mut Executor
+        // rcx:
         // r8:  *args: *const Value
         // r9:  len: usize
+        // [rsp + 8]: *mut Executor
         monoasm! { &mut self.jit,
-            pushq r15;
-            pushq r14;
-            pushq r13;
-            pushq r12;
-            pushq rbx;
-            pushq rbp;
+            movq r10, [rsp + 8];
+        };
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [rcx + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [rcx + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, rcx;
+            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            movq rbx, r10;
             movq r12, rsi;
         }
         self.gen_invoker_frame_setup(true, false);
@@ -431,13 +430,93 @@ impl Codegen {
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
             movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            ret;
+        };
+
+        self.fiber_invoker_with_self =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        // rdi: &mut Executor
+        // rsi: &mut Globals
+        // rdx: &BlockkData
+        // rcx: Value
+        // r8:  *args: *const Value
+        // r9:  len: usize
+        // [rsp + 8]: *mut Executor
+        monoasm! { &mut self.jit,
+            movq r10, [rsp + 8];
+        };
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            movq rbx, r10;
+            movq r12, rsi;
+        }
+        self.gen_invoker_frame_setup(true, true);
+        self.gen_invoker_prep(true);
+        self.gen_invoker_call();
+        monoasm! { &mut self.jit,
+            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
+            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
+            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            ret;
+        };
+
+        // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
+        self.resume_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rsi + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rdx;
+            ret;
+        };
+
+        // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
+        self.yield_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
+            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rsi;
+            ret;
+        };
+    }
+
+    fn push_callee_save(&mut self) {
+        monoasm! { &mut self.jit,
+            pushq r15;
+            pushq r14;
+            pushq r13;
+            pushq r12;
+            pushq rbx;
+            pushq rbp;
+        };
+    }
+
+    fn pop_callee_save(&mut self) {
+        monoasm! { &mut self.jit,
             popq rbp;
             popq rbx;
             popq r12;
             popq r13;
             popq r14;
             popq r15;
-            ret;
         };
     }
 
@@ -482,7 +561,7 @@ impl Codegen {
             // set self
             movq [rsp - (16 + LBP_SELF)], rcx;
             // set meta
-            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq rdi, [rdx + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq r13, rdx;  // r13 <- &FuncData
         };
@@ -506,12 +585,12 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // r13 : &FuncData
             // set codeptr
-            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
+            movq r13, [r13 + (FUNCDATA_PC)];
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx], rdi;
+            movq [rbx + (EXECUTOR_CFP)], rdi;
         };
     }
 
@@ -1548,15 +1627,15 @@ impl Codegen {
             call rax; // rax <- &FuncData
 
             movq r8, rax;
-            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
+            movq rdi, [r8 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq [rsp - (16 + LBP_BLOCK)], 0;
             movq [rsp - (16 + LBP_SELF)], r15;
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
-            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq r13 , [r8 + (FUNCDATA_PC)];
+            movq rax, [r8 + (FUNCDATA_CODEPTR)];
             xorq rdx, rdx;
         };
         self.call_rax();

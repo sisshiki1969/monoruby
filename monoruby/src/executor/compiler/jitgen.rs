@@ -1071,77 +1071,86 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let MethodInfo {
+                    let CallSiteInfo {
                         args,
                         len,
                         recv,
                         ret,
                         ..
-                    } = info;
+                    } = store[callid];
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_args(&mut ctx, args, len, &store[callid]);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
-                    if info.func_data.is_none() {
+                    if let Some(func_data) = info.func_data {
+                        self.gen_call(store, &mut ctx, func_data, callid, None, pc + 1, has_splat);
+                    } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
-                    } else {
-                        self.gen_call(store, &mut ctx, info, callid, None, pc + 1, has_splat);
                     }
                 }
                 TraceIr::MethodCallBlock {
                     callid,
                     has_splat,
-                    mut info,
+                    info,
                     ..
                 } => {
-                    let MethodInfo {
+                    let CallSiteInfo {
                         args,
                         len,
                         recv,
                         ret,
                         ..
-                    } = info;
+                    } = store[callid];
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_args(&mut ctx, args, len + 1, &store[callid]);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
-                    if info.func_data.is_none() {
+                    if let Some(func_data) = info.func_data {
+                        self.gen_call(
+                            store,
+                            &mut ctx,
+                            func_data,
+                            callid,
+                            Some(args),
+                            pc + 1,
+                            has_splat,
+                        );
+                    } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
-                    } else {
-                        info.args = args + 1;
-                        self.gen_call(store, &mut ctx, info, callid, Some(args), pc + 1, has_splat);
                     }
                 }
                 TraceIr::Super { callid, info, .. } => {
-                    let MethodInfo {
+                    let CallSiteInfo {
                         args,
                         len,
                         recv,
                         ret,
                         ..
-                    } = info;
+                    } = store[callid];
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
-                    if info.func_data.is_none() {
+                    if let Some(func_data) = info.func_data {
+                        self.gen_call(store, &mut ctx, func_data, callid, None, pc + 1, false);
+                    } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
-                    } else {
-                        self.gen_call(store, &mut ctx, info, callid, None, pc + 1, false);
                     }
                 }
                 TraceIr::InlineCall {
-                    inline_id, info, ..
+                    inline_id,
+                    callsite,
+                    ..
                 } => {
-                    self.fetch_slot(&mut ctx, info.recv);
+                    self.fetch_slot(&mut ctx, store[callsite].recv);
                     let gen = store.get_inline_info(inline_id).0;
-                    self.gen_inlinable(&mut ctx, &info, gen, pc);
+                    self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
                 TraceIr::Yield {
                     ret,

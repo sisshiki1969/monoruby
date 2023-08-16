@@ -10,21 +10,27 @@ impl BytecodeGen {
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
-        let recv_kind = match receiver {
+        let (ret, ret_pop_flag) = if ret.is_some() {
+            (ret, false)
+        } else if use_mode.use_val() {
+            (Some(self.next_reg().into()), true)
+        } else {
+            (None, false)
+        };
+        let old_temp = self.temp;
+        let recv = match receiver {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {
-                    RecvKind::SelfValue
+                    BcReg::Self_
                 } else if self.is_refer_block_arg(&receiver) {
-                    self.push_expr(receiver)?;
-                    RecvKind::Temp
+                    self.push_expr(receiver)?.into()
                 } else if let Some(local) = self.is_refer_local(&receiver) {
-                    RecvKind::Local(local.into())
+                    local.into()
                 } else {
-                    self.push_expr(receiver)?;
-                    RecvKind::Temp
+                    self.push_expr(receiver)?.into()
                 }
             }
-            None => RecvKind::SelfValue,
+            None => BcReg::Self_,
         };
 
         if arglist.delegate {
@@ -37,20 +43,12 @@ impl BytecodeGen {
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
 
-        let (callid, args, len) = self.handle_arguments(arglist, method, loc)?;
+        let (callid, args, len) = self.handle_arguments(arglist, method, recv, ret, loc)?;
 
-        let recv = match recv_kind {
-            RecvKind::SelfValue => BcReg::Self_,
-            RecvKind::Local(reg) => reg,
-            RecvKind::Temp => self.pop().into(),
-        };
-        let ret = if ret.is_some() {
-            ret
-        } else if use_mode.use_val() {
-            Some(self.push().into())
-        } else {
-            None
-        };
+        self.temp = old_temp;
+        if ret_pop_flag {
+            self.push();
+        }
         self.emit_call(recv, callid, ret, args, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
@@ -65,13 +63,20 @@ impl BytecodeGen {
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
+        let (ret, ret_push_flag) = if ret.is_some() {
+            (ret, false)
+        } else if use_mode.use_val() {
+            (Some(self.next_reg().into()), true)
+        } else {
+            (None, false)
+        };
         let (callid, args, len) = if let Some(arglist) = arglist {
             assert!(!arglist.delegate);
-            self.handle_arguments(arglist, None, loc)?
+            self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
         } else {
             let (_, mother_args, outer) = self.mother.clone();
             let old = self.temp;
-            let arg_num = mother_args.pos_num;
+            let len = mother_args.pos_num;
             let kw_list = &mother_args.keyword_names;
             let kw = if kw_list.len() == 0 {
                 None
@@ -98,7 +103,7 @@ impl BytecodeGen {
                 BcLocal(0).into()
             } else {
                 let args = self.next_reg().into();
-                for i in 0..arg_num {
+                for i in 0..len {
                     let ret = self.push().into();
                     let src = BcLocal(i as _).into();
                     self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
@@ -106,15 +111,12 @@ impl BytecodeGen {
                 args
             };
             self.temp = old;
-            let callid = self.add_callsite(None, arg_num, kw, vec![], None);
-            (callid, args, arg_num)
+            let callid =
+                self.add_callsite(None, len, kw, vec![], None, args, len, BcReg::Self_, ret);
+            (callid, args, len)
         };
-        let ret = if ret.is_some() {
-            ret
-        } else if use_mode.use_val() {
-            Some(self.push().into())
-        } else {
-            None
+        if ret_push_flag {
+            self.push();
         };
         self.emit_super(callid, ret, args, len, loc);
         if use_mode.is_ret() {
@@ -171,7 +173,17 @@ impl BytecodeGen {
         } else {
             None
         };
-        let callid = self.add_callsite(IdentId::EACH, 0, None, vec![], Some(block_func_id));
+        let callid = self.add_callsite(
+            IdentId::EACH,
+            0,
+            None,
+            vec![],
+            Some(block_func_id),
+            arg.into(),
+            0,
+            recv,
+            ret,
+        );
         self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
@@ -204,7 +216,7 @@ impl BytecodeGen {
         }
 
         let (callid, args, len) =
-            self.handle_arguments(arglist, IdentId::get_id("<block>"), loc)?;
+            self.handle_arguments(arglist, IdentId::get_id("<block>"), BcReg::Self_, ret, loc)?;
 
         self.emit(
             BcIr::Yield {
@@ -236,10 +248,12 @@ impl BytecodeGen {
         &mut self,
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
+        recv: BcReg,
+        ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
-        let (args, arg_len, splat_pos, block_func_id) =
+        let (args, len, splat_pos, block_func_id) =
             self.handle_positional_arguments(&mut arglist, loc)?;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let hash_splat = std::mem::take(&mut arglist.hash_splat);
@@ -265,8 +279,18 @@ impl BytecodeGen {
         };
 
         self.temp = old_temp;
-        let callid = self.add_callsite(method, arg_len, kw, splat_pos, block_func_id);
-        Ok((callid, args, arg_len))
+        let callid = self.add_callsite(
+            method,
+            len,
+            kw,
+            splat_pos,
+            block_func_id,
+            args,
+            len,
+            recv,
+            ret,
+        );
+        Ok((callid, args, len))
     }
 
     fn handle_positional_arguments(

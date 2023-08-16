@@ -219,6 +219,10 @@ struct CallSite {
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
     block_func_id: Option<FuncId>,
+    args: BcReg,
+    len: usize,
+    recv: BcReg,
+    ret: Option<BcReg>,
 }
 
 ///
@@ -439,6 +443,10 @@ impl BytecodeGen {
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
         block_func_id: Option<FuncId>,
+        args: BcReg,
+        len: usize,
+        recv: BcReg,
+        ret: Option<BcReg>,
     ) -> CallSiteId {
         let name = name.into();
         let id = self.callsite_offset + self.callsites.len();
@@ -448,6 +456,10 @@ impl BytecodeGen {
             kw,
             splat_pos,
             block_func_id,
+            args,
+            len,
+            recv,
+            ret,
         });
         CallSiteId(id as u32)
     }
@@ -943,13 +955,23 @@ impl BytecodeGen {
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
-                let callid = self.add_callsite(IdentId::_INDEX_ASSIGN, 3, None, vec![], None);
+                let callid = self.add_callsite(
+                    IdentId::_INDEX_ASSIGN,
+                    3,
+                    None,
+                    vec![],
+                    None,
+                    index1.into(),
+                    3,
+                    base,
+                    None,
+                );
                 self.emit_mov((index1 + 2).into(), src);
                 self.emit(BcIr::MethodCall(None, callid, false), loc);
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = self.add_callsite(method, 1, None, vec![], None);
+                let callid = self.add_callsite(method, 1, None, vec![], None, src, 1, recv, None);
                 self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::LocalVar { dst } => {

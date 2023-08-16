@@ -234,9 +234,14 @@ impl Store {
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
         block_func_id: Option<FuncId>,
+        args: SlotId,
+        len: usize,
+        recv: SlotId,
+        ret: SlotId,
     ) -> CallSiteId {
-        let id = self.callsite_info.len();
+        let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
+            id,
             name,
             pos_num,
             kw_pos,
@@ -244,8 +249,12 @@ impl Store {
             splat_pos,
             hash_splat_pos,
             block_func_id,
+            args,
+            len: len as u16,
+            recv,
+            ret,
         });
-        CallSiteId(id as u32)
+        id
     }
 
     pub(crate) fn add_constsite(
@@ -309,21 +318,31 @@ pub struct ConstSiteId(pub u32);
 
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
-pub struct CallSiteInfo {
+pub(crate) struct CallSiteInfo {
+    /// ID
+    pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Number of positional arguments.
     pub pos_num: usize,
     /// Postion of keyword arguments.
-    pub(crate) kw_pos: SlotId,
+    pub kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
     /// Positions of splat arguments.
     pub splat_pos: Vec<usize>,
     /// Position of hash splat arguments.
-    pub(crate) hash_splat_pos: Vec<SlotId>,
+    pub hash_splat_pos: Vec<SlotId>,
     /// *FuncId* of passed block.
     pub block_func_id: Option<FuncId>,
+    /// Position of the first argument.
+    pub args: SlotId,
+    /// Number of arguments.
+    pub len: u16,
+    /// Position of the receiver.
+    pub recv: SlotId,
+    /// Position where the result is to be stored to.
+    pub ret: SlotId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

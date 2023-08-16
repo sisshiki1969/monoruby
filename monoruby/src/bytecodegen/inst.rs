@@ -162,28 +162,12 @@ impl Bc {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MethodInfo {
-    pub recv: SlotId,
-    pub ret: SlotId,
-    pub args: SlotId,
-    pub len: u16,
     pub func_data: Option<&'static FuncData>,
 }
 
 impl MethodInfo {
-    pub fn new(
-        recv: SlotId,
-        ret: SlotId,
-        args: SlotId,
-        len: u16,
-        func_data: Option<&'static FuncData>,
-    ) -> Self {
-        MethodInfo {
-            recv,
-            ret,
-            args,
-            len,
-            func_data,
-        }
+    pub fn new(func_data: Option<&'static FuncData>) -> Self {
+        MethodInfo { func_data }
     }
 }
 

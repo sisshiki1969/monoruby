@@ -75,7 +75,7 @@ impl FiberInner {
                 } else {
                     Value::array_from_iter(lfp.iter())
                 };
-                self.resume_fiber(vm, val)
+                self.resume_fiber(vm, globals, val)
             }
         }
     }
@@ -115,7 +115,7 @@ impl FiberInner {
                 let arg = Arg::from(&yielder);
                 self.invoke_fiber(vm, globals, arg, 1)?
             }
-            FiberState::Suspended => self.resume_fiber(vm, yielder)?,
+            FiberState::Suspended => self.resume_fiber(vm, globals, yielder)?,
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
@@ -159,17 +159,52 @@ impl FiberInner {
             vm,
             globals,
             &self.proc,
-            &mut self.handle as _,
+            Value::nil(),
             arg.as_ptr(),
             len,
+            &mut self.handle as _,
         ) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
         }
     }
 
-    pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
-        match resume_fiber(vm, &mut self.handle as _, val) {
+    ///
+    /// Initialize and invoke the fiber with *self*.
+    ///
+    /// - the fiber must be FiberState::Created.
+    ///
+    pub(super) fn invoke_fiber_with_self(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg: Arg,
+        len: usize,
+        self_val: Value,
+    ) -> Result<Value> {
+        assert_eq!(FiberState::Created, self.state());
+        self.initialize();
+        match (globals.codegen.fiber_invoker_with_self)(
+            vm,
+            globals,
+            &self.proc,
+            self_val,
+            arg.as_ptr(),
+            len,
+            &mut self.handle as _,
+        ) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error()),
+        }
+    }
+
+    pub(super) fn resume_fiber(
+        &mut self,
+        vm: &mut Executor,
+        globals: &Globals,
+        val: Value,
+    ) -> Result<Value> {
+        match (globals.codegen.resume_fiber)(vm, &mut self.handle as _, val) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
         }
@@ -180,7 +215,7 @@ impl FiberInner {
     }
 }
 
-#[cfg(not(tarpaulin_include))]
+/*#[cfg(not(tarpaulin_include))]
 #[naked]
 extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value> {
     unsafe {
@@ -205,4 +240,4 @@ extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) 
             options(noreturn)
         );
     }
-}
+}*/

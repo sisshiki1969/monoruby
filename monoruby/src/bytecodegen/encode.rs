@@ -22,9 +22,20 @@ impl BytecodeGen {
             kw,
             splat_pos,
             block_func_id,
+            args,
+            len,
+            recv,
+            ret,
         } in std::mem::take(&mut self.callsites)
         {
-            if let Some(KeywordArgs {
+            let args = self.get_index(&args);
+            let recv = self.get_index(&recv);
+            let ret = if let Some(slot) = ret {
+                self.get_index(&slot)
+            } else {
+                SlotId(0)
+            };
+            let (kw_pos, kw_args, hash_splat_pos) = if let Some(KeywordArgs {
                 kw_pos,
                 kw_args,
                 hash_splat_pos,
@@ -35,26 +46,23 @@ impl BytecodeGen {
                     .into_iter()
                     .map(|r| self.get_index(&r))
                     .collect();
-                store.add_callsite(
-                    name,
-                    pos_num,
-                    kw_pos,
-                    kw_args,
-                    splat_pos,
-                    hash_splat_pos,
-                    block_func_id,
-                );
+                (kw_pos, kw_args, hash_splat_pos)
             } else {
-                store.add_callsite(
-                    name,
-                    pos_num,
-                    SlotId(0),
-                    HashMap::default(),
-                    splat_pos,
-                    vec![],
-                    block_func_id,
-                );
-            }
+                (SlotId(0), HashMap::default(), vec![])
+            };
+            store.add_callsite(
+                name,
+                pos_num,
+                kw_pos,
+                kw_args,
+                splat_pos,
+                hash_splat_pos,
+                block_func_id,
+                args,
+                len,
+                recv,
+                ret,
+            );
         }
         for f in std::mem::take(&mut self.functions) {
             let sourceinfo = self.sourceinfo.clone();
