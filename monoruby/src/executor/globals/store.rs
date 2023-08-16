@@ -319,6 +319,7 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub(crate) struct CallSiteInfo {
+    /// ID
     pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
@@ -334,9 +335,13 @@ pub(crate) struct CallSiteInfo {
     pub hash_splat_pos: Vec<SlotId>,
     /// *FuncId* of passed block.
     pub block_func_id: Option<FuncId>,
+    /// Position of the first argument.
     pub args: SlotId,
+    /// Number of arguments.
     pub len: u16,
+    /// Position of the receiver.
     pub recv: SlotId,
+    /// Position where the result is to be stored to.
     pub ret: SlotId,
 }
 

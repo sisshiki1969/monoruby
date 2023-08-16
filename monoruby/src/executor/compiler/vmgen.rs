@@ -439,6 +439,28 @@ impl Codegen {
             popq r15;
             ret;
         };
+
+        // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
+        self.resume_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        monoasm! { &mut self.jit,
+            pushq r15;
+            pushq r14;
+            pushq r13;
+            pushq r12;
+            pushq rbx;
+            pushq rbp;
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rsi + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            popq rbp;
+            popq rbx;
+            popq r12;
+            popq r13;
+            popq r14;
+            popq r15;
+            movq rax, rdx;
+            ret;
+        };
     }
 
     fn gen_invoker_prologue(&mut self) {
@@ -482,7 +504,7 @@ impl Codegen {
             // set self
             movq [rsp - (16 + LBP_SELF)], rcx;
             // set meta
-            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq rdi, [rdx + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq r13, rdx;  // r13 <- &FuncData
         };
@@ -506,12 +528,12 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // r13 : &FuncData
             // set codeptr
-            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
+            movq r13, [r13 + (FUNCDATA_PC)];
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx], rdi;
+            movq [rbx + (EXECUTOR_CFP)], rdi;
         };
     }
 
@@ -1548,15 +1570,15 @@ impl Codegen {
             call rax; // rax <- &FuncData
 
             movq r8, rax;
-            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
+            movq rdi, [r8 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq [rsp - (16 + LBP_BLOCK)], 0;
             movq [rsp - (16 + LBP_SELF)], r15;
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
-            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq r13 , [r8 + (FUNCDATA_PC)];
+            movq rax, [r8 + (FUNCDATA_CODEPTR)];
             xorq rdx, rdx;
         };
         self.call_rax();

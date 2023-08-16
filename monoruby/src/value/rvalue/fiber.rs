@@ -75,7 +75,7 @@ impl FiberInner {
                 } else {
                     Value::array_from_iter(lfp.iter())
                 };
-                self.resume_fiber(vm, val)
+                self.resume_fiber(vm, globals, val)
             }
         }
     }
@@ -91,7 +91,7 @@ impl FiberInner {
                 let arg = Arg::from(&yielder);
                 self.invoke_fiber(vm, globals, arg, 1)?
             }
-            FiberState::Suspended => self.resume_fiber(vm, yielder)?,
+            FiberState::Suspended => self.resume_fiber(vm, globals, yielder)?,
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
@@ -144,8 +144,13 @@ impl FiberInner {
         }
     }
 
-    pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
-        match resume_fiber(vm, &mut self.handle as _, val) {
+    pub(super) fn resume_fiber(
+        &mut self,
+        vm: &mut Executor,
+        globals: &Globals,
+        val: Value,
+    ) -> Result<Value> {
+        match (globals.codegen.resume_fiber)(vm, &mut self.handle as _, val) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
         }
@@ -156,7 +161,7 @@ impl FiberInner {
     }
 }
 
-#[cfg(not(tarpaulin_include))]
+/*#[cfg(not(tarpaulin_include))]
 #[naked]
 extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value> {
     unsafe {
@@ -181,4 +186,4 @@ extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) 
             options(noreturn)
         );
     }
-}
+}*/

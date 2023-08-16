@@ -191,6 +191,8 @@ pub struct Codegen {
     /// - `r9`:  len: usize
     ///
     pub(crate) fiber_invoker: FiberInvoker,
+    pub(crate) resume_fiber:
+        extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>,
 }
 
 impl Codegen {
@@ -281,6 +283,7 @@ impl Codegen {
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
@@ -312,20 +315,20 @@ impl Codegen {
             movq r12, rsi;  // rsi: &mut Globals
             movq r13, rdx;
             // set meta func_id
-            movq rax, [r13 + (FUNCDATA_OFFSET_META)];  // r13: *const FuncData
+            movq rax, [r13 + (FUNCDATA_META)];  // r13: *const FuncData
             movq [r14 - (LBP_META)], rax;
             // set block
             movq [r14 - (LBP_BLOCK)], 0;
             movq [r14 - (LBP_OUTER)], 0;
             movq [r14 - (BP_PREV_CFP)], 0;
             lea  rax, [r14 - (BP_PREV_CFP)];
-            movq [rbx], rax;
+            movq [rbx + (EXECUTOR_CFP)], rax;
         };
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         monoasm! { &mut self.jit,
             lea  rax, [r14 - (LBP_ARG0)];
-            movzxw rdi, [r13 + (FUNCDATA_OFFSET_REGNUM)];
+            movzxw rdi, [r13 + (FUNCDATA_REGNUM)];
         l1:
             subq rdi, 1;
             je   l2;
@@ -335,7 +338,7 @@ impl Codegen {
         l2:
         };
         monoasm! { &mut self.jit,
-            movq [rbx + 8], r14;
+            movq [rbx + (EXECUTOR_LFP_TOP)], r14;
             //
             //       +-------------+
             //  0x00 |             | <- rsp
@@ -357,14 +360,14 @@ impl Codegen {
             // set self
             movq rax, (main_object.get());
             movq [r14 - (LBP_SELF)], rax;
-            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
+            movq r13, [r13 + (FUNCDATA_PC)];
             // set arg len
             xorq rdx, rdx;
             call rax;
             // pop frame
-            movq [rbx], 0;
+            movq [rbx + (EXECUTOR_CFP)], 0;
             addq rsp, 8;
             popq rbp;
             popq r15;
@@ -414,10 +417,10 @@ impl Codegen {
     fn push_frame(&mut self) {
         monoasm!( &mut self.jit,
             // push cfp
-            movq rdi, [rbx];
+            movq rdi, [rbx + (EXECUTOR_CFP)];
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
             movq [rsi], rdi;
-            movq [rbx], rsi;
+            movq [rbx + (EXECUTOR_CFP)], rsi;
         );
     }
 
@@ -466,7 +469,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             // pop cfp
             lea  r14, [rbp - (BP_PREV_CFP)];
-            movq [rbx], r14;
+            movq [rbx + (EXECUTOR_CFP)], r14;
             // restore lfp
             movq r14, [rbp - (BP_LFP)];
         );
@@ -608,7 +611,7 @@ impl Codegen {
     ///
     fn block_break(&mut self) {
         monoasm! { &mut self.jit,
-            movq rdi, [rbx];
+            movq rdi, [rbx + (EXECUTOR_CFP)];
             movq rdi, [rdi];    // rdi <- caller's cfp
             lea  rbp, [rdi + (BP_PREV_CFP)];
         };
