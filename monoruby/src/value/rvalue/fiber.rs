@@ -135,9 +135,39 @@ impl FiberInner {
             vm,
             globals,
             &self.proc,
-            &mut self.handle as _,
+            Value::nil(),
             arg.as_ptr(),
             len,
+            &mut self.handle as _,
+        ) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error()),
+        }
+    }
+
+    ///
+    /// Initialize and invoke the fiber with *self*.
+    ///
+    /// - the fiber must be FiberState::Created.
+    ///
+    pub(super) fn invoke_fiber_with_self(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg: Arg,
+        len: usize,
+        self_val: Value,
+    ) -> Result<Value> {
+        assert_eq!(FiberState::Created, self.state());
+        self.initialize();
+        match (globals.codegen.fiber_invoker_with_self)(
+            vm,
+            globals,
+            &self.proc,
+            self_val,
+            arg.as_ptr(),
+            len,
+            &mut self.handle as _,
         ) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),

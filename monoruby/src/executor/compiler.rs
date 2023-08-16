@@ -44,9 +44,10 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &ProcInner,
-    &mut Executor,
+    Value,
     *const Value,
     usize,
+    &mut Executor,
 ) -> Option<Value>;
 
 macro_rules! cmp_main {
@@ -186,11 +187,13 @@ pub struct Codegen {
     /// - `rdi`: &mut Executor
     /// - `rsi`: &mut Globals
     /// - `rdx`: &ProcInner
-    /// - `rcx`: *mut Executor of child Fiber.
+    /// - `rcx`: (dummy)
     /// - `r8`:  *args: *const Value
     /// - `r9`:  len: usize
+    /// - `[rsp + 8]`: *mut Executor of child Fiber.
     ///
     pub(crate) fiber_invoker: FiberInvoker,
+    pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
 }
@@ -283,6 +286,7 @@ impl Codegen {
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
