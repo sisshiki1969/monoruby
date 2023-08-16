@@ -27,9 +27,9 @@ struct CommandLineArgs {
     #[arg(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
-    #[arg(num_args = 0..)]
+    #[arg(num_args = 1)]
     file: Option<String>,
-    #[arg(last(true))]
+    #[arg(num_args = 0..)]
     argv: Vec<String>,
 }
 

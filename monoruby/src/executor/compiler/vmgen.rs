@@ -350,9 +350,9 @@ impl Codegen {
             movq r11, [rsp + 8];
         }
         self.gen_invoker_prologue();
-        self.gen_invoker_frame_setup(false, true);
-        self.gen_invoker_prep(false);
-        self.gen_invoker_call();
+        self.invoker_frame_setup(false, true);
+        self.invoker_prep();
+        self.invoker_call();
         self.gen_invoker_epilogue();
 
         // method invoker.
@@ -369,9 +369,9 @@ impl Codegen {
             movq r11, [rsp + 8];
         }
         self.gen_invoker_prologue();
-        self.gen_invoker_frame_setup(false, true);
+        self.invoker_frame_setup(false, true);
         self.gen_invoker_prep2();
-        self.gen_invoker_call();
+        self.invoker_call();
         self.gen_invoker_epilogue();
 
         // block invoker.
@@ -384,9 +384,9 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         self.gen_invoker_prologue();
-        self.gen_invoker_frame_setup(true, false);
-        self.gen_invoker_prep(true);
-        self.gen_invoker_call();
+        self.invoker_frame_setup(true, false);
+        self.invoker_prep();
+        self.invoker_call();
         self.gen_invoker_epilogue();
 
         self.block_invoker_with_self =
@@ -398,9 +398,9 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         self.gen_invoker_prologue();
-        self.gen_invoker_frame_setup(true, true);
-        self.gen_invoker_prep(true);
-        self.gen_invoker_call();
+        self.invoker_frame_setup(true, true);
+        self.invoker_prep();
+        self.invoker_call();
         self.gen_invoker_epilogue();
 
         self.fiber_invoker =
@@ -423,9 +423,9 @@ impl Codegen {
             movq rbx, r10;
             movq r12, rsi;
         }
-        self.gen_invoker_frame_setup(true, false);
-        self.gen_invoker_prep(true);
-        self.gen_invoker_call();
+        self.invoker_frame_setup(true, false);
+        self.invoker_prep();
+        self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
@@ -456,9 +456,9 @@ impl Codegen {
             movq rbx, r10;
             movq r12, rsi;
         }
-        self.gen_invoker_frame_setup(true, true);
-        self.gen_invoker_prep(true);
-        self.gen_invoker_call();
+        self.invoker_frame_setup(true, true);
+        self.invoker_prep();
+        self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
@@ -541,9 +541,10 @@ impl Codegen {
     /// - `rcx`: `self` (if *specify_self* is true)
     /// - `rdx`: &FuncData (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
     ///
-    fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
+    fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
             monoasm! { &mut self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], 0;
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
                 lea  rdx, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- &FuncData
             };
@@ -555,6 +556,10 @@ impl Codegen {
                 };
             }
         } else {
+            monoasm! { &mut self.jit,
+                // set block
+                movq [rsp - (16 + LBP_BLOCK)], r11;
+            };
             self.set_method_outer()
         }
         monoasm! { &mut self.jit,
@@ -567,7 +572,7 @@ impl Codegen {
         };
     }
 
-    fn gen_invoker_call(&mut self) {
+    fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
             movq rsi, [rsp - (16 + LBP_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
@@ -605,20 +610,9 @@ impl Codegen {
         };
     }
 
-    fn gen_invoker_prep(&mut self, invoke_block: bool) {
+    fn invoker_prep(&mut self) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
-        if invoke_block {
-            monoasm! { &mut self.jit,
-                // set block
-                movq [rsp - (16 + LBP_BLOCK)], 0;
-            };
-        } else {
-            monoasm! { &mut self.jit,
-                // set block
-                movq [rsp - (16 + LBP_BLOCK)], r11;
-            };
-        }
         monoasm! { &mut self.jit,
             // r8 : *args
             // r9 : len
