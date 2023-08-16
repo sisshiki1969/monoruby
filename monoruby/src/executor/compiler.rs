@@ -191,8 +191,8 @@ pub struct Codegen {
     /// - `r9`:  len: usize
     ///
     pub(crate) fiber_invoker: FiberInvoker,
-    pub(crate) resume_fiber:
-        extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>,
+    pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
+    pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
 }
 
 impl Codegen {
@@ -284,6 +284,7 @@ impl Codegen {
             block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
@@ -338,7 +339,6 @@ impl Codegen {
         l2:
         };
         monoasm! { &mut self.jit,
-            movq [rbx + (EXECUTOR_LFP_TOP)], r14;
             //
             //       +-------------+
             //  0x00 |             | <- rsp

@@ -461,6 +461,28 @@ impl Codegen {
             movq rax, rdx;
             ret;
         };
+
+        // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
+        self.yield_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        monoasm! { &mut self.jit,
+            pushq r15;
+            pushq r14;
+            pushq r13;
+            pushq r12;
+            pushq rbx;
+            pushq rbp;
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
+            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+            popq rbp;
+            popq rbx;
+            popq r12;
+            popq r13;
+            popq r14;
+            popq r15;
+            movq rax, rsi;
+            ret;
+        };
     }
 
     fn gen_invoker_prologue(&mut self) {

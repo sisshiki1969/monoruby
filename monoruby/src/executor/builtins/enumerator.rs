@@ -223,10 +223,10 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
-fn yielder_push(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn yielder_push(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
-    vm.yield_fiber(Value::array1(arg[0]))
+    vm.yield_fiber(globals, Value::array1(arg[0]))
 }
 
 ///
@@ -236,8 +236,8 @@ fn yielder_push(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/yield.html]
 #[monoruby_builtin]
-fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    vm.yield_fiber(Value::array_from_iter(lfp.iter()))
+fn yielder_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    vm.yield_fiber(globals, Value::array_from_iter(lfp.iter()))
 }
 
 ///

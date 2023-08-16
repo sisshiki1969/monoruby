@@ -36,7 +36,6 @@ const LBP_SELF: i64 = 24 + LFP_OFFSET;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
 const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
-const EXECUTOR_LFP_TOP: i64 = std::mem::offset_of!(Executor, lfp_top) as _;
 const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
 const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 
@@ -53,8 +52,6 @@ const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 pub struct Executor {
     /// control frame pointer.
     cfp: Option<CFP>,
-    /// the top of local frame pointer.
-    lfp_top: Option<LFP>,
     /// rsp save area.
     ///
     /// - 0: created
@@ -75,7 +72,6 @@ impl std::default::Default for Executor {
     fn default() -> Self {
         Self {
             cfp: None,
-            lfp_top: None,
             rsp_save: None,
             parent_fiber: None,
             lexical_class: vec![vec![]],
@@ -262,38 +258,11 @@ impl Executor {
         self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
     }
 
-    fn yield_fiber(&mut self, val: Value) -> Result<Value> {
-        match yield_fiber(self as _, val) {
+    fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
+        match (globals.codegen.yield_fiber)(self as _, val) {
             Some(res) => Ok(res),
             None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
         }
-    }
-}
-
-#[cfg(not(tarpaulin_include))]
-#[naked]
-extern "C" fn yield_fiber(vm: *mut Executor, val: Value) -> Option<Value> {
-    unsafe {
-        std::arch::asm!(
-            "push r15",
-            "push r14",
-            "push r13",
-            "push r12",
-            "push rbx",
-            "push rbp",
-            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
-            "mov  rdi, [rdi + 24]", // rdi <- [vm.parent_fiber]
-            "mov  rsp, [rdi + 16]", // rsp <- [parent.rsp_save]
-            "pop  rbp",
-            "pop  rbx",
-            "pop  r12",
-            "pop  r13",
-            "pop  r14",
-            "pop  r15",
-            "mov  rax, rsi",
-            "ret",
-            options(noreturn)
-        );
     }
 }
 
