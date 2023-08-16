@@ -620,8 +620,6 @@ impl Codegen {
             };
         }
         monoasm! { &mut self.jit,
-            // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
             // r8 : *args
             // r9 : len
             movq rdi, r9;

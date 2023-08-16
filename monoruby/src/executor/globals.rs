@@ -461,7 +461,7 @@ impl Globals {
     }
 
     fn fiber_tos(&self, val: Value) -> String {
-        let fiber = val.as_fiber();
+        let fiber: Fiber = val.into();
         let state = match fiber.state() {
             FiberState::Created => "created",
             FiberState::Terminated => "terminated",

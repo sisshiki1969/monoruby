@@ -91,9 +91,10 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         globals: &mut Globals,
         mut internal: Fiber,
         block_data: &ProcInner,
+        self_val: Enumerator,
     ) -> Result<Value> {
         loop {
-            let (ary, is_return) = internal.enum_yield_values(vm, globals)?;
+            let (ary, is_return) = internal.enum_yield_values(vm, globals, self_val)?;
             let v = ary.peel();
             if is_return {
                 return Ok(v);
@@ -113,7 +114,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let internal = Fiber::new(self_val.proc);
     let len = vm.temp_len();
     vm.temp_push(internal.into());
-    let res = each_inner(vm, globals, internal, &data);
+    let res = each_inner(vm, globals, internal, &data, self_val.into());
     vm.temp_clear(len);
     res
 }
@@ -133,9 +134,10 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         mut internal: Fiber,
         block_data: &ProcInner,
         mut count: Value,
+        self_val: Enumerator,
     ) -> Result<Value> {
         loop {
-            let (ary, is_return) = internal.enum_yield_values(vm, globals)?;
+            let (ary, is_return) = internal.enum_yield_values(vm, globals, self_val)?;
             let v = ary.peel();
             if is_return {
                 return Ok(v);
@@ -174,11 +176,10 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         return vm.generate_enumerator(globals, id, lfp.self_val(), vec![]);
     };
 
-    //let proc = vm.generate_iterator_proc(globals, self_val.method);
     let internal = Fiber::new(self_val.proc);
     let len = vm.temp_len();
     vm.temp_push(internal.into());
-    let res = with_index_inner(vm, globals, internal, &data, count);
+    let res = with_index_inner(vm, globals, internal, &data, count, self_val);
     vm.temp_clear(len);
 
     res

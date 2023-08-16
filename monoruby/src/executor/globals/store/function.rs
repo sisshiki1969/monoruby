@@ -45,11 +45,44 @@ impl std::default::Default for Funcs {
     fn default() -> Self {
         let mut info = Vec::with_capacity(1024);
         info.push(FuncInfo::default());
+        info.push(FuncInfo::new_native(
+            FuncId::new(1),
+            "".to_string(),
+            enum_yielder,
+            -1,
+        ));
+        info.push(FuncInfo::new_native(
+            FuncId::new(2),
+            "".to_string(),
+            yielder,
+            -1,
+        ));
         Self {
             info,
             compile_info: Vec::with_capacity(1024),
         }
     }
+}
+
+#[monoruby_builtin]
+fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let e: Enumerator = lfp.self_val().into();
+    let receiver = e.obj;
+    let method = e.method;
+    let args = &*e.args;
+    vm.invoke_method_inner(
+        globals,
+        method,
+        receiver,
+        args,
+        Some(BlockHandler::from(FuncId::new(2))),
+    )
+}
+
+#[monoruby_builtin]
+fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let v = Value::array_from_iter(lfp.iter());
+    vm.yield_fiber(globals, v)
 }
 
 impl alloc::GC<RValue> for Funcs {

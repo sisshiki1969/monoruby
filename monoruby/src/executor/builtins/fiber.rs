@@ -56,8 +56,8 @@ fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/resume.html]
 #[monoruby_builtin]
 fn resume(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut self_val = lfp.self_val();
-    self_val.as_fiber_mut().resume(vm, globals, lfp)
+    let mut self_val: Fiber = lfp.self_val().into();
+    self_val.resume(vm, globals, lfp)
 }
 
 #[cfg(test)]

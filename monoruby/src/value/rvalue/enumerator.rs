@@ -88,7 +88,10 @@ impl Enumerator {
         if self.internal.is_none() {
             self.rewind();
         }
-        let (ary, is_return) = self.internal.unwrap().enum_yield_values(vm, globals)?;
+        let (ary, is_return) = self
+            .internal
+            .unwrap()
+            .enum_yield_values(vm, globals, *self)?;
         if is_return {
             Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),

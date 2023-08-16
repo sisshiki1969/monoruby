@@ -51,7 +51,9 @@ impl FiberInner {
             stack: None,
         }
     }
+}
 
+impl Fiber {
     pub fn state(&self) -> FiberState {
         self.handle.fiber_state()
     }
@@ -84,13 +86,14 @@ impl FiberInner {
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
+        self_val: Enumerator,
     ) -> Result<(Array, bool)> {
         let v = match self.state() {
             FiberState::Created => {
                 let arg = Arg::from(&Value::nil());
-                self.invoke_fiber(vm, globals, arg, 0)?
+                self.invoke_fiber_with_self(vm, globals, arg, 0, self_val.into())?
             }
-            FiberState::Suspended => self.resume_fiber(vm, Value::nil())?,
+            FiberState::Suspended => self.resume_fiber(vm, globals, Value::nil())?,
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
@@ -155,14 +158,16 @@ impl FiberInner {
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
         self.initialize();
+        let proc = self.proc;
+        let handle = &mut self.handle;
         match (globals.codegen.fiber_invoker)(
             vm,
             globals,
-            &self.proc,
+            &proc,
             Value::nil(),
             arg.as_ptr(),
             len,
-            &mut self.handle as _,
+            handle,
         ) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
@@ -184,14 +189,16 @@ impl FiberInner {
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
         self.initialize();
+        let proc = self.proc;
+        let handle = &mut self.handle;
         match (globals.codegen.fiber_invoker_with_self)(
             vm,
             globals,
-            &self.proc,
+            &proc,
             self_val,
             arg.as_ptr(),
             len,
-            &mut self.handle as _,
+            handle,
         ) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
@@ -214,30 +221,3 @@ impl FiberInner {
         self.handle.take_error()
     }
 }
-
-/*#[cfg(not(tarpaulin_include))]
-#[naked]
-extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value> {
-    unsafe {
-        std::arch::asm!(
-            "push r15",
-            "push r14",
-            "push r13",
-            "push r12",
-            "push rbx",
-            "push rbp",
-            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
-            "mov  rsp, [rsi + 16]", // rsp <- [child_vm.rsp_save]
-            "mov  [rsi + 24], rdi", // [child_vm.parent_fiber] <- vm
-            "pop  rbp",
-            "pop  rbx",
-            "pop  r12",
-            "pop  r13",
-            "pop  r14",
-            "pop  r15",
-            "mov  rax, rdx",
-            "ret",
-            options(noreturn)
-        );
-    }
-}*/

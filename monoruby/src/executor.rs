@@ -106,9 +106,21 @@ impl alloc::GC<RValue> for Executor {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct BlockHandler(pub Value);
+
+impl std::fmt::Debug for BlockHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((fid, outer)) = self.try_proxy() {
+            write!(f, "fn:{:?} outer:{outer}", fid)
+        } else if let Some(proc) = self.try_proc() {
+            write!(f, "proc:{:?}", proc)
+        } else {
+            write!(f, "unknown handler")
+        }
+    }
+}
 
 impl BlockHandler {
     pub fn new(val: Value) -> Self {
@@ -137,8 +149,8 @@ impl BlockHandler {
         }
     }
 
-    pub fn try_proc(&self) -> bool {
-        self.0.is_proc().is_some()
+    pub fn try_proc(&self) -> Option<&ProcInner> {
+        self.0.is_proc()
     }
 
     pub(crate) fn as_proc(&self) -> &ProcInner {
@@ -626,7 +638,7 @@ impl Executor {
             outer_lfp.move_frame_to_heap();
             let proc = Proc::new(globals.get_block_data(self.cfp(), bh));
             Ok(proc)
-        } else if bh.try_proc() {
+        } else if bh.try_proc().is_some() {
             Ok(bh.0.into())
         } else {
             unimplemented!()
@@ -651,18 +663,7 @@ impl Executor {
         obj: Value,
         args: Vec<Value>,
     ) -> Result<Value> {
-        let func_id = globals.compile_script(
-            format!(
-                r#"
-            self.{} do |*x|
-              __enum_yield *x
-            end
-        "#,
-                method
-            ),
-            "",
-        )?;
-        let func_data = globals.compile_on_demand(func_id).clone();
+        let func_data = globals.compile_on_demand(FuncId::new(1)).clone();
         let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
         let proc = Proc::from(outer_lfp, func_data);
         let e = Value::new_enumerator(obj, method, proc, args);
