@@ -411,13 +411,8 @@ impl Codegen {
         // rcx: *mut Executor
         // r8:  *args: *const Value
         // r9:  len: usize
+        self.push_callee_save();
         monoasm! { &mut self.jit,
-            pushq r15;
-            pushq r14;
-            pushq r13;
-            pushq r12;
-            pushq rbx;
-            pushq rbp;
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
             movq rsp, [rcx + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
             movq [rcx + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
@@ -431,39 +426,42 @@ impl Codegen {
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
             movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
-            popq rbp;
-            popq rbx;
-            popq r12;
-            popq r13;
-            popq r14;
-            popq r15;
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
             ret;
         };
 
         // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
         self.resume_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.push_callee_save();
         monoasm! { &mut self.jit,
-            pushq r15;
-            pushq r14;
-            pushq r13;
-            pushq r12;
-            pushq rbx;
-            pushq rbp;
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
             movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
             movq [rsi + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            popq rbp;
-            popq rbx;
-            popq r12;
-            popq r13;
-            popq r14;
-            popq r15;
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
             movq rax, rdx;
             ret;
         };
 
         // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
         self.yield_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
+            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rsi;
+            ret;
+        };
+    }
+
+    fn push_callee_save(&mut self) {
         monoasm! { &mut self.jit,
             pushq r15;
             pushq r14;
@@ -471,17 +469,17 @@ impl Codegen {
             pushq r12;
             pushq rbx;
             pushq rbp;
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
-            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        };
+    }
+
+    fn pop_callee_save(&mut self) {
+        monoasm! { &mut self.jit,
             popq rbp;
             popq rbx;
             popq r12;
             popq r13;
             popq r14;
             popq r15;
-            movq rax, rsi;
-            ret;
         };
     }
 
