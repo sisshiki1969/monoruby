@@ -790,8 +790,17 @@ pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals
 
 // error handling
 
-pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
-    panic!("unimplemented inst. {opcode:016x}");
+pub(super) extern "C" fn unimplemented_inst(
+    vm: &mut Executor,
+    _: &mut Globals,
+    opcode: u16,
+) -> Option<Value> {
+    vm.set_error(MonorubyErr::runtimeerr(format!(
+        "unimplemented instruction. {:04x}",
+        opcode
+    )));
+    None
+    //panic!("unimplemented inst. {opcode:016x}");
 }
 
 pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {

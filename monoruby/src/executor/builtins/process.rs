@@ -117,6 +117,7 @@ mod test {
 
     #[test]
     fn process() {
+        run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC, :nanosecond");
         run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC");
         run_test_no_result_check("Process.times");
     }

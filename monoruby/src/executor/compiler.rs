@@ -255,7 +255,7 @@ impl Codegen {
         monoasm! { &mut jit,
                 movq rdi, rbx;
                 movq rsi, r12;
-                movq rdx, [r13 - 16];
+                movzxw rdx, [r13 - 10];
                 movq rax, (runtime::unimplemented_inst);
                 call rax;
                 leave;
