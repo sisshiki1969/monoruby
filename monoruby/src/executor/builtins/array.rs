@@ -15,17 +15,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "==", eq, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
     globals.define_builtin_func(ARRAY_CLASS, "shift", shift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "unshift", unshift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "prepend", unshift, -1);
-    globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
-    globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
-    globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "first", first, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "last", last, -1);
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
@@ -250,6 +253,28 @@ fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 }
 
 ///
+/// ### Array#==
+///
+/// - self == other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3d=3d.html]
+#[monoruby_builtin]
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let lhs: Array = lfp.self_val().into();
+    let rhs: Array = lfp.arg(0).into();
+    if lhs.len() != rhs.len() {
+        return Ok(Value::bool(false));
+    }
+    for i in 0..lhs.len() {
+        if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::bool(true))
+}
+
+///
 /// ### Array#[]
 ///
 /// - self[nth] -> object | nil
@@ -395,6 +420,62 @@ fn array_join(globals: &Globals, res: &mut String, aref: Array, sep: &str) {
             *res += sep;
             *res += &s;
         }
+    }
+}
+
+///
+/// ### Array#first
+///
+/// - first -> object | nil
+/// - first(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/first.html]
+#[monoruby_builtin]
+fn first(_: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let ary: Array = lfp.self_val().into();
+    if len == 0 {
+        Ok(ary.first().cloned().unwrap_or_default())
+    } else {
+        let n = lfp.arg(0).coerce_to_i64(globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("must be positive."));
+        }
+        let n = if n as usize > ary.len() {
+            ary.len()
+        } else {
+            n as usize
+        };
+        Ok(Value::array_from_iter(ary[0..n].iter().cloned()))
+    }
+}
+
+///
+/// ### Array#last
+///
+/// - last -> object | nil
+/// - last(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/last.html]
+#[monoruby_builtin]
+fn last(_: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let ary: Array = lfp.self_val().into();
+    if len == 0 {
+        Ok(ary.last().cloned().unwrap_or_default())
+    } else {
+        let n = lfp.arg(0).coerce_to_i64(globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("must be positive."));
+        }
+        let n = if n as usize > ary.len() {
+            0
+        } else {
+            ary.len() - n as usize
+        };
+        Ok(Value::array_from_iter(ary[n..].iter().cloned()))
     }
 }
 
@@ -605,7 +686,7 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Res
     let ary: Array = lfp.self_val().into();
     let rhs = arg[0];
     for lhs in ary.iter().cloned() {
-        if vm.cmp_eq_values_bool(globals, lhs, rhs)? {
+        if vm.eq_values_bool(globals, lhs, rhs)? {
             return Ok(Value::bool(true));
         };
     }
@@ -981,6 +1062,13 @@ mod test {
     }
 
     #[test]
+    fn eq() {
+        run_test(r##"["a","c"] == ["a","c",7]"##);
+        run_test(r##"["a","c",7] == ["a","c",7]"##);
+        run_test(r##"["a","c",7] == ["a","c","7"]"##);
+    }
+
+    #[test]
     fn index() {
         run_test(
             r##"
@@ -1092,6 +1180,24 @@ mod test {
     fn join() {
         run_test(r##"[2, 3, 4, 5].join"##);
         run_test(r##"[2, 3, 4, 5].join("-")"##);
+    }
+
+    #[test]
+    fn first() {
+        run_test(r##"[[0,1,2,3].first, [].first]"##);
+        run_test(
+            r##"
+        a = [0,1,2]
+        [a.first(0), a.first(1), a.first(2), a.first(3), a.first(4)]
+        "##,
+        );
+        run_test(r##"[[0,1,2,3].last, [].last]"##);
+        run_test(
+            r##"
+        a = [0,1,2]
+        [a.last(0), a.last(1), a.last(2), a.last(3), a.last(4)]
+        "##,
+        );
     }
 
     #[test]

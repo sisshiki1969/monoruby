@@ -331,8 +331,53 @@ cmp_values!(
     (lt, IdentId::_LT)
 );
 
+impl Executor {
+    pub(super) fn eq_values_bool(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<bool> {
+        let b = match (lhs.unpack(), rhs.unpack()) {
+            (RV::Nil, RV::Nil) => true,
+            (RV::Nil, _) => false,
+            (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
+            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(&rhs),
+            (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+            (RV::Fixnum(_), _) => false,
+            (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(&rhs),
+            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+            (RV::BigInt(_), _) => false,
+            (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+            (RV::Float(_), _) => false,
+            (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
+            (RV::Bool(_), _) => false,
+            (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
+            (RV::Symbol(_), _) => false,
+            (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
+            (RV::String(_), _) => false,
+            _ => self
+                .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None)?
+                .as_bool(),
+        };
+        Ok(b)
+    }
+
+    pub(super) fn ne_values_bool(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<bool> {
+        Ok(!self.eq_values_bool(globals, lhs, rhs)?)
+    }
+}
+
 macro_rules! eq_values {
-    (($op:ident, $op_str:expr)) => {
+    ($op:ident) => {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _values>](
                 vm: &mut Executor,
@@ -340,7 +385,7 @@ macro_rules! eq_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                match vm.[<cmp_ $op _values_bool>](globals, lhs, rhs) {
+                match vm.[<$op _values_bool>](globals, lhs, rhs) {
                     Ok(b) => Some(Value::bool(b)),
                     Err(err) => {
                         vm.set_error(err);
@@ -348,52 +393,15 @@ macro_rules! eq_values {
                     }
                 }
             }
-
-            impl Executor {
-                #[allow(unused)]
-                pub(super) fn [<cmp_ $op _values_bool>](
-                    &mut self,
-                    globals: &mut Globals,
-                    lhs: Value,
-                    rhs: Value
-                ) -> Result<bool> {
-                    let b = match (lhs.unpack(), rhs.unpack()) {
-                        (RV::Nil, RV::Nil) => true.$op(&true),
-                        (RV::Nil, _) => false.$op(&true),
-                        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.$op(&rhs),
-                        (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
-                        (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
-                        (RV::Fixnum(lhs), _) => false.$op(&true),
-                        (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.$op(&BigInt::from(rhs)),
-                        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
-                        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
-                        (RV::BigInt(lhs), _) => false.$op(&true),
-                        (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.$op(&(rhs as f64)),
-                        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
-                        (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                        (RV::Float(lhs), _) => false.$op(&true),
-                        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
-                        (RV::Bool(lhs), _) => false.$op(&true),
-                        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.$op(&rhs),
-                        (RV::Symbol(lhs), _) => false.$op(&true),
-                        (RV::String(lhs), RV::String(rhs)) => lhs.$op(rhs),
-                        (RV::String(lhs), _) => false.$op(&true),
-                        _ => {
-                            self.invoke_method_inner(globals, $op_str, lhs, &[rhs], None)?.as_bool()
-                        }
-                    };
-                    Ok(b)
-                }
-            }
         }
     };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        eq_values!(($op1, $op_str1));
-        eq_values!($(($op2, $op_str2)),+);
+    ($op1:ident, $($op2:ident),+) => {
+        eq_values!($op1);
+        eq_values!($($op2),+);
     };
 }
 
-eq_values!((eq, IdentId::_EQ), (ne, IdentId::_NEQ));
+eq_values!(eq, ne);
 
 #[test]
 fn cmp_values() {
@@ -429,11 +437,11 @@ fn cmp_values() {
     for (lhs, rhs, ans) in pairs {
         assert_eq!(
             ans,
-            Executor::cmp_eq_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+            Executor::eq_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
         );
         assert_eq!(
             ans,
-            !Executor::cmp_ne_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+            !Executor::ne_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
         );
     }
 }
