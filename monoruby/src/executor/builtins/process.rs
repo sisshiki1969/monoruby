@@ -1,3 +1,5 @@
+use num::ToPrimitive;
+
 use crate::*;
 
 use self::clock_gettime::TimeSpec;
@@ -74,11 +76,39 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
+fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 1..=2)?;
+    let unit = if lfp.arg_len() == 1 {
+        IdentId::FLOAT_SECOND
+    } else {
+        match lfp.arg(1).try_symbol() {
+            Some(id) => id,
+            None => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unexpected unit: {}",
+                    globals.to_s(lfp.arg(1))
+                )))
+            }
+        }
+    };
     let mut tp = TimeSpec::default();
-    let clk_id = arg[0].coerce_to_i64(globals)? as i32;
+    let clk_id = lfp.arg(0).coerce_to_i64(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
-    Ok(Value::float(tp.to_f64()))
+    Ok(match unit {
+        IdentId::FLOAT_SECOND => Value::float(tp.sec().to_f64().unwrap()),
+        IdentId::FLOAT_MILLISECOND => Value::float(tp.millisec().to_f64().unwrap()),
+        IdentId::FLOAT_MICROSECOND => Value::float(tp.microsec().to_f64().unwrap()),
+        IdentId::SECOND => Value::integer(tp.sec()),
+        IdentId::MILLISECOND => Value::integer(tp.millisec()),
+        IdentId::MICROSECOND => Value::integer(tp.microsec()),
+        IdentId::NANOSECOND => Value::integer(tp.nanosec()),
+        _ => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "unexpected unit: {}",
+                globals.to_s(lfp.arg(1))
+            )))
+        }
+    })
 }
 
 #[cfg(test)]

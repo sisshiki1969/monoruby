@@ -1,19 +1,28 @@
-use num::ToPrimitive;
-
 #[derive(Debug, Clone, Default)]
-#[repr(C)]
-pub struct TimeSpec {
+pub(super) struct TimeSpec {
     pub tv_sec: i64,
     pub tv_nsec: i64,
 }
 
 impl TimeSpec {
-    pub fn to_f64(&self) -> f64 {
-        self.tv_sec.to_f64().unwrap() + self.tv_nsec.to_f64().unwrap() / 1e9
+    pub fn sec(&self) -> i64 {
+        self.tv_sec + self.tv_nsec / 1000_000_000
+    }
+
+    pub fn millisec(&self) -> i64 {
+        self.tv_sec * 1000 + self.tv_nsec / 1000_000
+    }
+
+    pub fn microsec(&self) -> i64 {
+        self.tv_sec * 1000_000 + self.tv_nsec / 1000
+    }
+
+    pub fn nanosec(&self) -> i64 {
+        self.tv_sec * 1000_000_000 + self.tv_nsec
     }
 }
 
-pub fn clock_gettime(clk_id: i32, tp: &mut TimeSpec) {
+pub(super) fn clock_gettime(clk_id: i32, tp: &mut TimeSpec) {
     unsafe {
         let res = libc::clock_gettime(clk_id, tp as *mut _ as *mut libc::timespec);
         assert!(res == 0);

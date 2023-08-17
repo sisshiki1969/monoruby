@@ -73,7 +73,7 @@ impl Value {
             FLOAT_CLASS
         } else if let Some(rv) = self.try_rvalue() {
             rv.class()
-        } else if self.is_packed_symbol() {
+        } else if self.is_symbol() {
             SYMBOL_CLASS
         } else {
             match self.0.get() {
@@ -403,8 +403,8 @@ impl Value {
             RV::None
         } else if let Some(rv) = self.try_rvalue() {
             rv.unpack()
-        } else if self.is_packed_symbol() {
-            RV::Symbol(self.as_packed_symbol())
+        } else if self.is_symbol() {
+            RV::Symbol(self.as_symbol())
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,
@@ -424,27 +424,52 @@ pub struct F2 {
 }
 
 impl Value {
-    pub(crate) fn is_packed_value(&self) -> bool {
+    pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
-    }
-
-    pub(crate) fn as_fixnum(&self) -> i64 {
-        (self.0.get() as i64) >> 1
     }
 
     pub(crate) fn is_fixnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 
-    pub(crate) fn is_flonum(&self) -> bool {
-        self.0.get() & 0b11 == 2
+    pub(crate) fn as_fixnum(&self) -> i64 {
+        (self.0.get() as i64) >> 1
     }
 
-    pub(crate) fn try_fixnum(&self) -> Option<i64> {
+    pub fn try_fixnum(&self) -> Option<i64> {
         if self.is_fixnum() {
             Some(self.as_fixnum())
         } else {
             None
+        }
+    }
+
+    fn is_flonum(&self) -> bool {
+        self.0.get() & 0b11 == 2
+    }
+
+    fn as_flonum(&self) -> f64 {
+        let u = self.0.get();
+        if u == FLOAT_ZERO {
+            return 0.0;
+        }
+        let bit = 0b10 - ((u >> 63) & 0b1);
+        let num = ((u & !3) | bit).rotate_right(3);
+        f64::from_bits(num)
+    }
+
+    fn try_flonum(&self) -> Option<f64> {
+        if self.is_flonum() {
+            Some(self.as_flonum())
+        } else {
+            None
+        }
+    }
+
+    pub fn try_float(&self) -> Option<f64> {
+        match self.unpack() {
+            RV::Float(f) => Some(f),
+            _ => None,
         }
     }
 
@@ -455,7 +480,7 @@ impl Value {
     /// - if `self` is a Float, return it as i64.
     /// - if `self` is a Bignum, return RangeError.
     ///
-    pub(crate) fn coerce_to_i64(&self, globals: &mut Globals) -> Result<i64> {
+    pub fn coerce_to_i64(&self, globals: &mut Globals) -> Result<i64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i),
             RV::Float(f) => {
@@ -476,38 +501,20 @@ impl Value {
         }
     }
 
-    fn as_flonum(&self) -> f64 {
-        let u = self.0.get();
-        if u == FLOAT_ZERO {
-            return 0.0;
-        }
-        let bit = 0b10 - ((u >> 63) & 0b1);
-        let num = ((u & !3) | bit).rotate_right(3);
-        f64::from_bits(num)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn try_float(&self) -> Option<f64> {
-        match self.unpack() {
-            RV::Float(f) => Some(f),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn try_flonum(&self) -> Option<f64> {
-        if self.is_flonum() {
-            Some(self.as_flonum())
-        } else {
-            None
-        }
-    }
-
-    fn is_packed_symbol(&self) -> bool {
+    fn is_symbol(&self) -> bool {
         self.get() & 0xff == TAG_SYMBOL
     }
 
-    fn as_packed_symbol(&self) -> IdentId {
+    fn as_symbol(&self) -> IdentId {
         IdentId::from((self.get() >> 32) as u32)
+    }
+
+    pub fn try_symbol(&self) -> Option<IdentId> {
+        if self.is_symbol() {
+            Some(self.as_symbol())
+        } else {
+            None
+        }
     }
 
     /// Get reference of RValue from `self`.
@@ -538,13 +545,6 @@ impl Value {
 
     pub(crate) fn rvalue_mut(&mut self) -> &mut RValue {
         unsafe { &mut *(self.get() as *mut RValue) }
-    }
-
-    pub(crate) fn as_symbol(&self) -> IdentId {
-        match self.unpack() {
-            RV::Symbol(sym) => sym,
-            _ => unreachable!(),
-        }
     }
 
     pub(crate) fn as_array(&self) -> &ArrayInner {

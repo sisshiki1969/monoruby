@@ -38,6 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "intern", to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
 }
 
@@ -1019,6 +1020,21 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
     Ok(Value::string_from_vec(s.into_bytes()))
 }
 
+//
+/// ### String#downcase
+///
+/// - downcase([NOT SUPPORTED]*options) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
+#[monoruby_builtin]
+fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let self_val = lfp.self_val();
+    let s = self_val.as_str().as_ref().to_lowercase();
+    Ok(Value::string_from_vec(s.into_bytes()))
+}
+
 ///
 /// ### String#tr
 ///
@@ -1317,6 +1333,7 @@ mod test {
 
     #[test]
     fn upcase() {
-        run_test(r"'AkrFju35]['.upcase");
+        run_test(r"'AkrFj妖精u35]['.upcase");
+        run_test(r"'AkrFj妖精u35]['.downcase");
     }
 }

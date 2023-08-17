@@ -94,6 +94,13 @@ impl IdentId {
     pub const _BAND: IdentId = id!(33);
     pub const _BXOR: IdentId = id!(34);
     pub const _UMINUS: IdentId = id!(35);
+    pub const FLOAT_SECOND: IdentId = id!(36);
+    pub const SECOND: IdentId = id!(37);
+    pub const FLOAT_MILLISECOND: IdentId = id!(38);
+    pub const MILLISECOND: IdentId = id!(39);
+    pub const FLOAT_MICROSECOND: IdentId = id!(40);
+    pub const MICROSECOND: IdentId = id!(41);
+    pub const NANOSECOND: IdentId = id!(42);
 }
 
 impl IdentId {
@@ -181,47 +188,54 @@ impl IdentifierTable {
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
-            table: vec![String::new(); 40],
+            table: vec![String::new(); 50],
         };
-        table.set_ident_id("initialize", IdentId::INITIALIZE);
-        table.set_ident_id("Object", IdentId::OBJECT);
-        table.set_ident_id("new", IdentId::NEW);
-        table.set_ident_id("name", IdentId::NAME);
-        table.set_ident_id("+", IdentId::_ADD);
-        table.set_ident_id("-", IdentId::_SUB);
-        table.set_ident_id("*", IdentId::_MUL);
-        table.set_ident_id("**", IdentId::_POW);
-        table.set_ident_id("<<", IdentId::_SHL);
-        table.set_ident_id("%", IdentId::_REM);
-        table.set_ident_id("==", IdentId::_EQ);
-        table.set_ident_id("!=", IdentId::_NEQ);
-        table.set_ident_id(">", IdentId::_GT);
-        table.set_ident_id(">=", IdentId::_GE);
-        table.set_ident_id("/", IdentId::_DIV);
-        table.set_ident_id("<", IdentId::_LT);
-        table.set_ident_id("<=", IdentId::_LE);
-        table.set_ident_id("<=>", IdentId::_CMP);
-        table.set_ident_id("===", IdentId::_TEQ);
-        table.set_ident_id("/enum", IdentId::_ENUM_FUNC);
-        table.set_ident_id("[]", IdentId::_INDEX);
-        table.set_ident_id("[]=", IdentId::_INDEX_ASSIGN);
-        table.set_ident_id("to_s", IdentId::TO_S);
-        table.set_ident_id(">>", IdentId::_SHR);
-        table.set_ident_id("/alias_method", IdentId::_ALIAS_METHOD);
-        table.set_ident_id("method_missing", IdentId::_METHOD_MISSING);
-        table.set_ident_id("each", IdentId::EACH);
-        table.set_ident_id("map", IdentId::MAP);
-        table.set_ident_id("/name", IdentId::_NAME);
-        table.set_ident_id("...", IdentId::_DOT3);
-        table.set_ident_id("/main", IdentId::_MAIN);
-        table.set_ident_id("|", IdentId::_BOR);
-        table.set_ident_id("&", IdentId::_BAND);
-        table.set_ident_id("^", IdentId::_BXOR);
-        table.set_ident_id("-@", IdentId::_UMINUS);
+        table.set_id("initialize", IdentId::INITIALIZE);
+        table.set_id("Object", IdentId::OBJECT);
+        table.set_id("new", IdentId::NEW);
+        table.set_id("name", IdentId::NAME);
+        table.set_id("+", IdentId::_ADD);
+        table.set_id("-", IdentId::_SUB);
+        table.set_id("*", IdentId::_MUL);
+        table.set_id("**", IdentId::_POW);
+        table.set_id("<<", IdentId::_SHL);
+        table.set_id("%", IdentId::_REM);
+        table.set_id("==", IdentId::_EQ);
+        table.set_id("!=", IdentId::_NEQ);
+        table.set_id(">", IdentId::_GT);
+        table.set_id(">=", IdentId::_GE);
+        table.set_id("/", IdentId::_DIV);
+        table.set_id("<", IdentId::_LT);
+        table.set_id("<=", IdentId::_LE);
+        table.set_id("<=>", IdentId::_CMP);
+        table.set_id("===", IdentId::_TEQ);
+        table.set_id("/enum", IdentId::_ENUM_FUNC);
+        table.set_id("[]", IdentId::_INDEX);
+        table.set_id("[]=", IdentId::_INDEX_ASSIGN);
+        table.set_id("to_s", IdentId::TO_S);
+        table.set_id(">>", IdentId::_SHR);
+        table.set_id("/alias_method", IdentId::_ALIAS_METHOD);
+        table.set_id("method_missing", IdentId::_METHOD_MISSING);
+        table.set_id("each", IdentId::EACH);
+        table.set_id("map", IdentId::MAP);
+        table.set_id("/name", IdentId::_NAME);
+        table.set_id("...", IdentId::_DOT3);
+        table.set_id("/main", IdentId::_MAIN);
+        table.set_id("|", IdentId::_BOR);
+        table.set_id("&", IdentId::_BAND);
+        table.set_id("^", IdentId::_BXOR);
+        table.set_id("-@", IdentId::_UMINUS);
+        table.set_id("float_second", IdentId::FLOAT_SECOND);
+        table.set_id("second", IdentId::SECOND);
+        table.set_id("float_millisecond", IdentId::FLOAT_MILLISECOND);
+        table.set_id("millisecond", IdentId::MILLISECOND);
+        table.set_id("float_microsecond", IdentId::FLOAT_MICROSECOND);
+        table.set_id("microsecond", IdentId::MICROSECOND);
+        table.set_id("nanosecond", IdentId::NANOSECOND);
         table
     }
 
-    fn set_ident_id(&mut self, name: &str, id: IdentId) {
+    fn set_id(&mut self, name: &str, id: IdentId) {
         self.rev_table.insert(name.to_string(), id);
         self.table[id.to_usize() - 1] = name.to_string();
     }

@@ -65,7 +65,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
     for (i, val) in lfp.iter().enumerate() {
-        let id = members[i].as_symbol();
+        let id = members[i].try_symbol().unwrap();
         let ivar_name = IdentId::add_ivar_prefix(id);
         globals.set_ivar(self_val, ivar_name, val)?;
     }
@@ -90,7 +90,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 
     if name.len() != 0 {
         for x in name.iter() {
-            let name = x.as_symbol();
+            let name = x.try_symbol().unwrap();
             let ivar_name = IdentId::add_ivar_prefix(name);
             let val = match globals.get_ivar(self_val, ivar_name) {
                 Some(v) => globals.inspect(v),

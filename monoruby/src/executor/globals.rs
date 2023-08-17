@@ -129,11 +129,8 @@ impl Globals {
             .unwrap()
             .node;
 
-        let mut lib: Vec<String> = Value::from_ast2(&nodes)
-            .as_array()
-            .iter()
-            .map(|v| v.as_string())
-            .collect();
+        let lib: Array = Value::from_ast2(&nodes).into();
+        let mut lib: Vec<String> = lib.iter().map(|v| v.as_string()).collect();
         globals.lib_directories.append(&mut lib);
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
