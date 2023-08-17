@@ -95,9 +95,9 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
     let clk_id = lfp.arg(0).coerce_to_i64(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
     Ok(match unit {
-        IdentId::FLOAT_SECOND => Value::float(tp.sec().to_f64().unwrap()),
-        IdentId::FLOAT_MILLISECOND => Value::float(tp.millisec().to_f64().unwrap()),
-        IdentId::FLOAT_MICROSECOND => Value::float(tp.microsec().to_f64().unwrap()),
+        IdentId::FLOAT_SECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000_000_000.0),
+        IdentId::FLOAT_MILLISECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000_000.0),
+        IdentId::FLOAT_MICROSECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000.0),
         IdentId::SECOND => Value::integer(tp.sec()),
         IdentId::MILLISECOND => Value::integer(tp.millisec()),
         IdentId::MICROSECOND => Value::integer(tp.microsec()),
