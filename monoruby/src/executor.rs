@@ -570,7 +570,7 @@ impl Executor {
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func(globals, func_id, receiver, args, len, bh)
+            self.invoke_func2(globals, func_id, receiver, args, len, bh)
         } else {
             Ok(Value::nil())
         }
@@ -579,7 +579,7 @@ impl Executor {
     ///
     /// Invoke func with *args*: Args.
     ///
-    fn invoke_func(
+    fn invoke_func2(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
@@ -592,6 +592,30 @@ impl Executor {
         let bh = bh.map(|bh| bh.delegate());
         (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, bh)
             .ok_or_else(|| self.take_error())
+    }
+
+    ///
+    /// Invoke func with *args*: Args.
+    ///
+    fn invoke_func(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Option<Value> {
+        let data = globals.compile_on_demand(func_id).clone();
+        let bh = bh.map(|bh| bh.delegate());
+        (globals.codegen.method_invoker)(
+            self,
+            globals,
+            &data,
+            receiver,
+            args.as_ptr(),
+            args.len(),
+            bh,
+        )
     }
 
     fn define_class(
@@ -924,7 +948,8 @@ impl BcPc {
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.inspect(val))
             }
-            TraceIr::Array { ret, args, len } => {
+            TraceIr::Array { ret, callid } => {
+                let CallSiteInfo { args, len, .. } = globals.store[callid];
                 format!("{:?} = array[{:?}; {}]", ret, args, len)
             }
             TraceIr::Hash { ret, args, len } => {

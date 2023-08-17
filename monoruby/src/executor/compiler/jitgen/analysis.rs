@@ -222,7 +222,8 @@ impl JitContext {
                         info.def_as(dst, false);
                     }
                 }
-                TraceIr::Array { ret, args, len } => {
+                TraceIr::Array { ret, callid } => {
+                    let CallSiteInfo { args, len, .. } = store[callid];
                     for r in args.0..args.0 + len {
                         info.use_non_float(SlotId(r));
                     }

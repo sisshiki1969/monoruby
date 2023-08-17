@@ -729,7 +729,7 @@ impl BytecodeGen {
         if use_mode.use_val() {
             let ret = self.push().into();
             if ret_val.is_none() {
-                self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
+                self.emit_array(ret, rhs_reg.into(), mrhs_len, vec![], loc);
             }
         }
         if use_mode.is_ret() {
@@ -759,9 +759,9 @@ impl BytecodeGen {
     }
 
     fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
-        let (src, len, _) = self.gen_args(nodes)?;
+        let (src, len, splat) = self.gen_args(nodes)?;
         self.popn(len);
-        self.emit_array(ret, src, len, loc);
+        self.emit_array(ret, src, len, splat, loc);
         Ok(())
     }
 

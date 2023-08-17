@@ -211,7 +211,7 @@ pub(super) enum BcIr {
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
-    Array(BcReg, BcReg, u16),
+    Array(BcReg, CallSiteId),
     Hash {
         ret: BcReg,
         args: BcReg,

@@ -232,6 +232,7 @@ impl Codegen {
         self.dispatch[32] = self.vm_method_call(true, true);
         self.dispatch[33] = self.vm_method_call(true, false);
         self.dispatch[34] = self.vm_super();
+        self.dispatch[35] = self.vm_array();
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
@@ -248,7 +249,6 @@ impl Codegen {
         self.dispatch[127] = self.vm_bitnot();
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
-        self.dispatch[131] = self.vm_array();
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
 
@@ -1120,12 +1120,13 @@ impl Codegen {
 
     fn vm_array(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
+        self.fetch2();
         self.vm_get_addr_r15();
-        self.vm_get_addr_rdi();
         monoasm! { &mut self.jit,
-            // src: *const Value
-            movzxw rsi, rsi;  // len: usize
+            movl rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rcx, [r14 - (LBP_SELF)];
             movq rax, (runtime::gen_array);
             call rax;
         };

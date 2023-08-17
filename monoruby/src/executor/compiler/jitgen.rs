@@ -611,12 +611,15 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                TraceIr::Array { ret, args, len } => {
+                TraceIr::Array { ret, callid } => {
+                    let CallSiteInfo { args, len, .. } = store[callid];
                     self.fetch_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
                     monoasm!( &mut self.jit,
-                        lea  rdi, [r14 - (conv(args))];
-                        movq rsi, (len);
+                        movl rdx, (callid.get());
+                        lea  rcx, [r14 - (LBP_SELF)];
+                        movq rdi, rbx;
+                        movq rsi, r12;
                         movq rax, (runtime::gen_array);
                         call rax;
                     );

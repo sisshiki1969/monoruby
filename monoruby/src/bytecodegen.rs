@@ -752,8 +752,19 @@ impl BytecodeGen {
         self.emit_literal(dst, Value::string(s));
     }
 
-    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
-        self.emit(BcIr::Array(ret, src, len as u16), loc);
+    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
+        let id = self.add_callsite(
+            None,
+            len,
+            None,
+            splat,
+            None,
+            src,
+            len,
+            BcReg::Self_,
+            Some(ret),
+        );
+        self.emit(BcIr::Array(ret, id), loc);
     }
 
     fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {

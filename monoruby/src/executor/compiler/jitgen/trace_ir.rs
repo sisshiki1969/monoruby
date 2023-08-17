@@ -24,8 +24,7 @@ pub(crate) enum TraceIr {
     Literal(SlotId, Value),
     Array {
         ret: SlotId,
-        args: SlotId,
-        len: u16,
+        callid: CallSiteId,
     },
     Hash {
         ret: SlotId,
@@ -380,6 +379,10 @@ impl TraceIr {
                         version,
                     }
                 }
+                35 => Self::Array {
+                    ret: SlotId::new(op1),
+                    callid: CallSiteId::from(op2),
+                },
                 _ => unreachable!("{:016x}", op),
             }
         } else {
@@ -428,11 +431,6 @@ impl TraceIr {
                     src: SlotId::new(op2),
                 },
                 130 => Self::MethodArgs(MethodInfo::new(pc.func_data())),
-                131 => Self::Array {
-                    ret: SlotId::new(op1),
-                    args: SlotId::new(op2),
-                    len: op3,
-                },
                 132 => Self::Index {
                     ret: SlotId::new(op1),
                     base: SlotId::new(op2),

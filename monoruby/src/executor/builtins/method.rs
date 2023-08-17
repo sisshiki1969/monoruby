@@ -28,7 +28,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
     let func_id = method.func_id();
     let receiver = method.receiver();
 
-    vm.invoke_func(globals, func_id, receiver, arg, len, lfp.block())
+    vm.invoke_func2(globals, func_id, receiver, arg, len, lfp.block())
 }
 
 #[cfg(test)]

@@ -273,6 +273,10 @@ impl BytecodeGen {
                     -1i32 as u32,
                 )
             }
+            BcIr::Array(ret, callid) => {
+                let op1 = self.get_index(ret);
+                Bc::from(enc_wl(35, op1.0, callid.get()))
+            }
             BcIr::DefinedYield { ret } => {
                 let op1 = self.get_index(ret);
                 Bc::from(enc_www(64, op1.0, 0, 0))
@@ -354,11 +358,6 @@ impl BytecodeGen {
                 let op1 = self.get_index(recv);
                 let op2 = self.get_index(args);
                 Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
-            }
-            BcIr::Array(ret, src, len) => {
-                let op1 = self.get_index(ret);
-                let op2 = self.get_index(src);
-                Bc::from(enc_www(131, op1.0, op2.0, *len))
             }
             BcIr::Index(ret, base, idx) => {
                 let op1 = self.get_index(ret);

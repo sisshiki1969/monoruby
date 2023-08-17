@@ -97,17 +97,50 @@ pub(super) extern "C" fn block_arg(
     }
 }
 
-pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
-    if len == 0 {
-        Value::array_empty()
+pub(super) extern "C" fn gen_array(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    ptr: *const Value,
+) -> Option<Value> {
+    let callsite = &globals.store[callid];
+    if callsite.len == 0 {
+        Some(Value::array_empty())
     } else {
+        let len = callsite.len as usize;
+        let src = unsafe { ptr.sub(callsite.args.0 as usize) };
         let iter = unsafe {
             std::slice::from_raw_parts(src.sub(len - 1), len)
                 .iter()
                 .rev()
                 .cloned()
         };
-        Value::array_from_iter(iter)
+        if callsite.splat_pos.is_empty() {
+            Some(Value::array_from_iter(iter))
+        } else {
+            let mut ary = Array::new();
+            let to_a = IdentId::get_id("to_a");
+            for (i, v) in iter.enumerate() {
+                if globals.store[callid].splat_pos.contains(&i) {
+                    if let Some(fid) = globals.check_method(v, to_a) {
+                        let a = vm.invoke_func(globals, fid, v, &[], None)?;
+                        if let Some(a) = a.is_array() {
+                            ary.extend_from_slice(&a);
+                        } else {
+                            vm.set_error(MonorubyErr::typeerr(
+                                "`to_a' method should return Array.",
+                            ));
+                            return None;
+                        }
+                    } else {
+                        ary.push(v);
+                    }
+                } else {
+                    ary.push(v);
+                }
+            }
+            Some(ary.into())
+        }
     }
 }
 

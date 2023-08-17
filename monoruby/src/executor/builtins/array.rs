@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
@@ -140,6 +141,17 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let b = lfp.self_val().as_array().is_empty();
     Ok(Value::bool(b))
+}
+
+///
+/// ### Array#to_a
+///
+/// - to_a -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_a.html]
+#[monoruby_builtin]
+fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 ///
