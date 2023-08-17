@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, -1);
     globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, -1);
-
+    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
@@ -105,6 +105,18 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 #[monoruby_builtin]
 fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
+}
+
+///
+/// ### Object#equal
+///
+/// - equal?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/equal=3f.html]
+#[monoruby_builtin]
+fn equal_(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    Ok(Value::bool(lfp.self_val().get() == lfp.arg(0).get()))
 }
 
 ///
@@ -451,6 +463,19 @@ mod test {
         run_test("[1,2,3].dup");
         run_test("{a:1,b:2}.dup");
         run_test("(1..3).dup");
+    }
+
+    #[test]
+    fn equal() {
+        run_test(r##"100.equal?(100)"##);
+        run_test(r##"100.equal?(100.0)"##);
+        run_test(r##""a".equal?("a")"##);
+        run_test(
+            r##"
+        a = "a"
+        b = a
+        a.equal?(b)"##,
+        );
     }
 
     #[test]

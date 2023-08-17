@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
+    globals.define_builtin_func(RANGE_CLASS, "all?", all_, -1);
     globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
     globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
     globals.define_builtin_func(RANGE_CLASS, "entries", toa, 0);
@@ -83,6 +84,43 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 }
 
 ///
+/// ### Range#all
+///
+/// - all? -> bool
+/// - all? {|item| ... } -> bool
+/// - all?(pattern) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
+#[monoruby_builtin]
+fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 0)?;
+    if let Some(bh) = lfp.block() {
+        let self_ = lfp.self_val();
+        let range = self_.as_range();
+        if range.start.is_fixnum() && range.end.is_fixnum() {
+            let start = range.start.as_fixnum();
+            let mut end = range.end.as_fixnum();
+            if !range.exclude_end() {
+                end += 1
+            }
+
+            let iter = (start..end).map(|i| Value::fixnum(i));
+            let data = globals.get_block_data(vm.cfp(), bh);
+            for val in iter {
+                if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
+                    return Ok(Value::bool(false));
+                };
+            }
+            Ok(Value::bool(true))
+        } else {
+            Err(MonorubyErr::runtimeerr("not supported"))
+        }
+    } else {
+        Ok(Value::bool(true))
+    }
+}
+
+///
 /// ### Enumerable#map
 ///
 /// - [NOT SUPPORTED]collect -> Enumerator
@@ -150,6 +188,7 @@ mod test {
         );
         run_test("(1..5).exclude_end?");
         run_test("(1...5).exclude_end?");
+        run_test("(1...5).to_a");
     }
 
     #[test]
@@ -187,6 +226,24 @@ mod test {
             r#"
         (1..5).map do |x|
             x + 100
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn all() {
+        run_test(
+            r#"
+        (1...5).all? do |x|
+            x > 0
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        (1...5).all? do |x|
+            x != 5
         end
         "#,
         );

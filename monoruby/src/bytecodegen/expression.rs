@@ -291,7 +291,7 @@ impl BytecodeGen {
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                if let Some(local) = self.is_refer_local(&lhs) {
+                if let Some(local) = self.is_assign_local(&lhs) {
                     self.gen_binop(op, lhs, rhs, Some(local.into()), loc)?;
                     self.handle_mode(use_mode, local.into());
                     return Ok(());
