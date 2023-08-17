@@ -224,9 +224,10 @@ impl ArrayInner {
     }
 
     /// Calculate array index.
+    ///
     /// if `index` is a zero or positeve integer, return `index`.
     /// Else, return `len` + `index.`
-    fn get_array_index(&self, index: i64) -> Option<usize> {
+    pub(crate) fn get_array_index(&self, index: i64) -> Option<usize> {
         if index < 0 {
             let i = self.len() as i64 + index;
             if i < 0 {
@@ -298,48 +299,4 @@ impl ArrayInner {
             Ok(val)
         }
     }
-
-    /*pub(crate) fn set_elem(&mut self, args: &[Value]) -> VMResult {
-        let val = if args.len() == 3 { args[2] } else { args[1] };
-        if args.len() == 2 {
-            self.set_elem1(args[0], args[1])
-        } else {
-            let index = args[0].coerce_to_fixnum("Index")?;
-            let index = self.get_array_index(index)?;
-            let length = args[1].coerce_to_fixnum("Length")?;
-            if length < 0 {
-                return Err(RubyError::index(format!("Negative length. {}", length)));
-            };
-            self.set_elem2(index, length as usize, val)
-        }
-    }
-
-    pub(crate) fn set_elem1(&mut self, idx: Value, val: Value) -> VMResult {
-        if let Some(index) = idx.as_fixnum() {
-            if index >= 0 {
-                self.set_elem_imm(index as usize, val);
-            } else {
-                let index = self.get_array_index(index)?;
-                self[index] = val;
-            }
-            Ok(val)
-        } else if let Some(range) = idx.as_range() {
-            let first = {
-                let i = range.start.coerce_to_fixnum("Start of the range")?;
-                self.get_array_index(i)?
-            };
-            let last = {
-                let i = range.end.coerce_to_fixnum("End of the range")?;
-                self.get_array_index(i)? + if range.exclude { 0 } else { 1 }
-            };
-            if last < first {
-                self.set_elem2(first, 0, val)
-            } else {
-                let length = last - first;
-                self.set_elem2(first, length, val)
-            }
-        } else {
-            Err(VMError::no_implicit_conv(idx, "Integer or Range"))
-        }
-    }*/
 }

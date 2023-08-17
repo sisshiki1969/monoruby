@@ -42,6 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "slice!", slice_, 0);
 }
 
 ///
@@ -761,6 +762,66 @@ fn uniq_inner(
     })
 }
 
+///
+/// ### Array#slice!
+///
+/// - slice!(nth) -> object | nil
+/// - slice!(start, len) -> Array | nil
+/// - [NOT SUPPORTED]slice!(range) -> Array | nil        
+///
+/// https://docs.ruby-lang.org/ja/latest/method/Array/i/slice=21.html
+#[monoruby_builtin]
+fn slice_(_: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
+    let aref: Array = lfp.self_val().into();
+    if len == 2 {
+        let start = match aref.get_array_index(lfp.arg(0).coerce_to_i64(globals)?) {
+            Some(i) => i,
+            None => return Ok(Value::nil()),
+        };
+        let len = lfp.arg(1).coerce_to_i64(globals)?;
+        if len < 0 {
+            return Ok(Value::nil());
+        };
+        let len = len as usize;
+        Ok(slice_inner(aref, start, len))
+    } else if let Some(range) = lfp.arg(0).is_range() {
+        let start = match aref.get_array_index(range.start.coerce_to_i64(globals)?) {
+            Some(i) => i,
+            None => return Ok(Value::nil()),
+        };
+        let end = match aref.get_array_index(range.end.coerce_to_i64(globals)?) {
+            Some(i) => i,
+            None => return Ok(Value::array_empty()),
+        };
+        if end < start {
+            return Ok(Value::array_empty());
+        }
+        let len = end - start + if range.exclude_end() { 0 } else { 1 };
+        Ok(slice_inner(aref, start, len))
+    } else {
+        unimplemented!()
+    }
+}
+
+fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
+    let ary_len = aref.len();
+    if ary_len < start {
+        return Value::nil();
+    }
+    if ary_len <= start || len == 0 {
+        return Value::array_empty();
+    }
+    let end = if ary_len < start + len {
+        ary_len
+    } else {
+        start + len
+    };
+    let iter = aref.drain(start..end);
+    Value::array_from_iter(iter)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1180,6 +1241,80 @@ mod test {
         a = [1, 3, 2, 2.0, "2", "3", 3]
         a.uniq! {|n| n.to_s }
         a
+        "#,
+        );
+    }
+
+    #[test]
+    fn slice() {
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2, 3)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(-5, 3)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(-200, 3)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2, -200)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2..3)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2...5)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(-100..3)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2..-100)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(2..1)
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
+        b = a.slice!(-100..-30)
+        [a, b]
         "#,
         );
     }
