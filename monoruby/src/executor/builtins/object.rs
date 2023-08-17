@@ -34,6 +34,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
     globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "send", send, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "__send__", send, -1);
 }
 
 ///
@@ -413,7 +415,7 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
 }
 
 ///
-/// Kernel.#`
+/// ### Kernel.#`
 ///
 /// - `command` -> String
 ///
@@ -430,6 +432,21 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> R
         }
         Err(err) => Err(MonorubyErr::runtimeerr(err)),
     }
+}
+
+///
+/// Object#send
+///
+/// - send(name, *args) -> object
+/// - send(name, *args) { .... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
+#[monoruby_builtin]
+fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_min_number_of_arguments(lfp.arg_len(), 1)?;
+    let method = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let args: Vec<_> = lfp.iter().skip(1).collect();
+    vm.invoke_method_inner(globals, method, lfp.self_val(), &args, lfp.block())
 }
 
 #[cfg(test)]
@@ -608,6 +625,27 @@ mod test {
             r#"
         e = [1,2,3,4,5].to_enum
         e.next
+        "#,
+        );
+    }
+
+    #[test]
+    fn send() {
+        run_test(
+            r#"
+        "ruby".send(:sub, /./, "R")
+        "#,
+        );
+        run_test(
+            r#"
+        class Foo
+            def foo() "foo" end
+            def bar() "bar" end
+            def baz() "baz" end
+        end
+        methods = {1 => :foo, 2 => :bar, 3 => :baz}
+        f = Foo.new
+        [f.send(methods[1]), f.send(methods[2]), f.send(methods[3])]
         "#,
         );
     }

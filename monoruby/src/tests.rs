@@ -1372,6 +1372,18 @@ mod test {
     }
 
     #[test]
+    fn logical_assign_ops() {
+        run_test("a = nil; a||=100; a");
+        run_test("a = nil; a&&=100; a");
+        run_test("a = 200; a&&=100; a");
+        run_test("a = nil; b = a||=100; [a, b]");
+        run_test("a ||= 100; a");
+        run_test("b = a ||= 100; [a, b]");
+        run_test("a &&= 100; a");
+        run_test("a = 200; b = a &&= 100; [a, b]");
+    }
+
+    #[test]
     fn test_block_call1() {
         run_test_with_prelude(
             r#"

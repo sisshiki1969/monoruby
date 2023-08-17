@@ -198,6 +198,10 @@ impl BytecodeGen {
 
     fn gen_land(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
         let exit_pos = self.new_label();
+        // Support "a &&= 100"
+        if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
+            self.is_assign_local(&lhs[0]);
+        }
         let dst = match dst {
             None => self.push().into(),
             Some(reg) => reg,
@@ -211,15 +215,30 @@ impl BytecodeGen {
 
     fn gen_lor(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
         let exit_pos = self.new_label();
-        let dst = match dst {
-            None => self.push().into(),
-            Some(reg) => reg,
-        };
-        self.gen_store_expr(dst, lhs)?;
-        self.emit_condbr(dst, exit_pos, true, false);
-        self.gen_store_expr(dst, rhs)?;
-        self.apply_label(exit_pos);
-        Ok(dst)
+        // Support "a ||= 100"
+        if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
+            self.is_assign_local(&lhs[0]);
+        }
+        match dst {
+            None => {
+                let dst = self.push().into();
+                self.gen_store_expr(dst, lhs)?;
+                self.emit_condbr(dst, exit_pos, true, false);
+                self.gen_store_expr(dst, rhs)?;
+                self.apply_label(exit_pos);
+                Ok(dst)
+            }
+            Some(dst) => {
+                let tmp = self.push().into();
+                self.gen_store_expr(tmp, lhs)?;
+                self.emit_condbr(tmp, exit_pos, true, false);
+                self.gen_store_expr(tmp, rhs)?;
+                self.apply_label(exit_pos);
+                self.pop();
+                self.emit_mov(dst, tmp);
+                Ok(dst)
+            }
+        }
     }
 
     fn gen_match(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
