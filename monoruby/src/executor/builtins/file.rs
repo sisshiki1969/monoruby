@@ -1,5 +1,8 @@
 use crate::*;
-use std::{fs::File, io::Write};
+use std::{
+    fs::File,
+    io::{Seek, SeekFrom, Write},
+};
 
 //
 // File class
@@ -15,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
         .id();
     globals.define_builtin_class_func(klass, "write", write, 2);
     globals.define_builtin_class_func(klass, "read", read, 1);
+    globals.define_builtin_class_func(klass, "binread", binread, 1);
     globals.define_builtin_class_func(klass, "join", join, -1);
     globals.define_builtin_class_func(klass, "expand_path", expand_path, -1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
@@ -55,6 +59,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Resu
 
 ///
 /// ### IO.read
+///
 /// - read(path, [NOT SUPPORTED]**opt) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
@@ -83,7 +88,59 @@ fn read(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 }
 
 ///
+/// ### IO.binread
+///
+/// - binread(path, length = nil, offset = 0) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binread.html]
+#[monoruby_builtin]
+fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments_range(len, 1..=3)?;
+    let length = if len == 1 {
+        None
+    } else {
+        Some(lfp.arg(1).coerce_to_i64(globals)?)
+    };
+    let offset = if len <= 2 {
+        None
+    } else {
+        Some(lfp.arg(2).coerce_to_i64(globals)?)
+    };
+    let filename = string_to_path(lfp.arg(0), globals)?;
+    let mut file = match File::open(&filename) {
+        Ok(file) => file,
+        Err(_) => {
+            return Err(MonorubyErr::runtimeerr(format!(
+                "Can not open file. {:?}",
+                &filename
+            )));
+        }
+    };
+    if let Some(offset) = offset {
+        match file.seek(SeekFrom::Start(offset as _)) {
+            Ok(_) => {}
+            Err(err) => return Err(MonorubyErr::cant_load(Some(err), &filename)),
+        };
+    }
+    if let Some(length) = length {
+        let mut contents = vec![0; length as usize];
+        if std::io::Read::read_exact(&mut file, &mut contents).is_err() {
+            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        };
+        Ok(Value::bytes(contents))
+    } else {
+        let mut contents = vec![];
+        if std::io::Read::read_to_end(&mut file, &mut contents).is_err() {
+            return Err(MonorubyErr::runtimeerr("Could not read the file."));
+        };
+        Ok(Value::bytes(contents))
+    }
+}
+
+///
 /// ### File.join
+///
 /// - join(*item) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
@@ -337,6 +394,9 @@ mod test {
     #[test]
     fn read() {
         run_test(r##"File.read("../LICENSE-MIT")"##);
+        run_test(r##"File.binread("../LICENSE-MIT")"##);
+        run_test(r##"File.binread("../LICENSE-MIT", 20)"##);
+        run_test(r##"File.binread("../LICENSE-MIT", 20, 10)"##);
         run_test(r##"File.exist?("../LICENSE-MIT")"##);
         run_test(r##"File.exist?("../LICENCE-MIT")"##);
     }

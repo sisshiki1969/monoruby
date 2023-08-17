@@ -141,12 +141,7 @@ impl ArrayInner {
             _ => {
                 let mut s = format!("[{}", globals.inspect(self[0]));
                 for val in self[1..].iter() {
-                    if s.len() <= 100 {
-                        s += &format!(", {}", globals.inspect(*val));
-                    }
-                }
-                if s.len() > 100 {
-                    s += " ... ";
+                    s += &format!(", {}", globals.inspect(*val));
                 }
                 s += "]";
                 s

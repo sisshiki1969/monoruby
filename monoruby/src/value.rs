@@ -276,6 +276,10 @@ impl Value {
         RValue::new_string(s).pack()
     }
 
+    pub fn bytes(s: Vec<u8>) -> Self {
+        RValue::new_bytes(s).pack()
+    }
+
     pub fn string_from_inner(s: StringInner) -> Self {
         RValue::new_string_from_inner(s).pack()
     }
