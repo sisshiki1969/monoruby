@@ -32,6 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "ljust", ljust, -1);
     globals.define_builtin_func(STRING_CLASS, "rjust", rjust, -1);
     globals.define_builtin_func(STRING_CLASS, "lines", lines, -1);
+    globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func(STRING_CLASS, "each_line", each_line, -1);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(STRING_CLASS, "to_i", to_i, -1);
@@ -897,6 +898,7 @@ fn rjust(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 
 ///
 /// ### String#lines
+///
 /// - lines(rs = $/, chomp: false) -> [String]
 /// [NOT SUPPORTED] - lines(rs = $/, chomp: false) {|line| ... } -> self
 ///
@@ -908,17 +910,37 @@ fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
     }
     let receiver = lfp.self_val();
     let string = receiver.expect_string(globals)?;
-    let ary = string
+    let iter = string
         .split_inclusive('\n')
         .map(|line| Value::string_from_str(line));
-    Ok(Value::array_from_iter(ary))
+    Ok(Value::array_from_iter(iter))
+}
+
+///
+/// ### String#bytes
+///
+/// - bytes -> [Integer]
+/// - [NOT SUPPORTED]bytes {|byte| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytes.html]
+#[monoruby_builtin]
+fn bytes(_: &mut Executor, _: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    if lfp.block().is_some() {
+        return Err(MonorubyErr::runtimeerr("block is not supported."));
+    }
+    let receiver = lfp.self_val();
+    let iter = receiver
+        .as_bytes()
+        .iter()
+        .map(|b| Value::integer(*b as i64));
+    Ok(Value::array_from_iter(iter))
 }
 
 ///
 /// ### String#each_line
 ///
 /// - each_line(rs = $/, [NOT SUPPORTED] chomp: false) {|line| ... } -> self
-/// [NOT SUPPORTED] - each_line(rs = $/, chomp: false) -> Enumerator
+/// - [NOT SUPPORTED]each_line(rs = $/, chomp: false) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_line.html]
 #[monoruby_builtin]
@@ -1263,6 +1285,11 @@ mod test {
     fn lines() {
         run_test(r##""aa\nbb\ncc\n".lines"##);
         run_test(r##""hello\nworld\n".lines"##);
+    }
+
+    #[test]
+    fn bytes() {
+        run_test(r##""aa\nbb\ncc\n".bytes"##);
     }
 
     #[test]
