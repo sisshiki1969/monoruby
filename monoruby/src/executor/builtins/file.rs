@@ -18,6 +18,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "join", join, -1);
     globals.define_builtin_class_func(klass, "expand_path", expand_path, -1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
+    globals.define_builtin_class_func(klass, "basename", basename, 1);
+    globals.define_builtin_class_func(klass, "extname", extname, 1);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
 }
 
@@ -187,12 +189,13 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) ->
 
 ///
 /// ### File.dirname
-/// - dirname(filename, level=1) -> String
+/// - dirname(filename, [NOT SUPPRTED]level=1) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
 #[monoruby_builtin]
-fn dirname(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
-    let filename = string_to_path(arg[0], globals)?;
+fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let filename = string_to_path(lfp.arg(0), globals)?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(&ostr.to_path_buf()),
         None => "".to_string(),
@@ -204,13 +207,45 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Re
 }
 
 ///
+/// ### File.basename
+/// - basename(filename, [NOT SUPPORTED]suffix = "") -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
+#[monoruby_builtin]
+fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let filename = string_to_path(lfp.arg(0), globals)?;
+    let basename = match filename.file_name() {
+        Some(ostr) => ostr.to_string_lossy().to_string(),
+        None => "".to_string(),
+    };
+    Ok(Value::string(basename))
+}
+
+///
+/// ### File.extname
+/// - extname(filename) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/extname.html]
+#[monoruby_builtin]
+fn extname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let filename = string_to_path(lfp.arg(0), globals)?;
+    let extname = match filename.extension() {
+        Some(ostr) => format!(".{}", ostr.to_string_lossy()),
+        None => "".to_string(),
+    };
+    Ok(Value::string(extname))
+}
+
+///
 /// ### File.exist?
 /// - exist?(path) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
 #[monoruby_builtin]
-fn exist(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
-    let b = string_to_canonicalized_path(globals, arg[0], "1st arg").is_ok();
+fn exist(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let b = string_to_canonicalized_path(globals, lfp.arg(0), "1st arg").is_ok();
     Ok(Value::bool(b))
 }
 
@@ -250,6 +285,7 @@ fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathB
 fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
     dir.to_string_lossy().to_string()
 }
+
 #[cfg(windows)]
 fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
     dir.to_string_lossy()
@@ -286,6 +322,16 @@ mod test {
         run_test(r##"File.dirname("dir/file.ext")"##);
         run_test(r##"File.dirname("file.ext")"##);
         run_test(r##"File.dirname("foo/bar/")"##);
+        run_test(r##"File.basename("dir/file.ext")"##);
+        run_test(r##"File.basename("file.ext")"##);
+        run_test(r##"File.basename("foo/bar/")"##);
+        run_test(r##"File.extname("foo/foo.txt")"##);
+        run_test(r##"File.extname("foo/foo.tar.gz")"##);
+        run_test(r##"File.extname("foo/bar")"##);
+        run_test(r##"File.extname("foo/.bar")"##);
+        run_test(r##"File.extname("foo.txt/bar")"##);
+        run_test(r##"File.extname(".foo")"##);
+        run_test(r##"File.extname("foo.")"##);
     }
 
     #[test]

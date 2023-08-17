@@ -237,11 +237,11 @@ impl RegexpInner {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
                     vm.invoke_block_once(globals, bh, &[matched])
                 } else {
-                    let mut ary = ArrayInner::new();
+                    let mut ary = Array::new();
                     for i in 0..captures.len() {
                         ary.push(Value::string_from_str(captures.get(i).unwrap().as_str()));
                     }
-                    Ok(Value::array(ary))
+                    Ok(ary.into())
                 }
             }
             Err(err) => Err(MonorubyErr::internalerr(format!(

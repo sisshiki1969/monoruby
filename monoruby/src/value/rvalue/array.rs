@@ -9,6 +9,10 @@ pub const ARRAY_INLINE_CAPA: usize = 5;
 pub struct Array(Value);
 
 impl Array {
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+
     pub fn peel(self) -> Value {
         if self.len() == 0 {
             Value::nil()
@@ -17,6 +21,14 @@ impl Array {
         } else {
             self.into()
         }
+    }
+
+    pub fn new() -> Self {
+        Self(Value::array_empty())
+    }
+
+    pub fn dup(inner: &ArrayInner) -> Self {
+        Self(Value::array(inner.clone()))
     }
 }
 
@@ -97,6 +109,31 @@ impl ArrayInner {
         self.0.drain(range)
     }
 
+    /// Retains only elements which f(elem) returns true.
+    ///
+    /// Returns true when one or some elements were removed.
+    pub fn retain<F>(&mut self, mut f: F) -> Result<bool>
+    where
+        F: FnMut(&Value) -> Result<bool>,
+    {
+        let len = self.len();
+        let mut del = 0;
+        {
+            let v = &mut **self;
+            for i in 0..len {
+                if !f(&v[i])? {
+                    del += 1;
+                } else if del > 0 {
+                    v.swap(i - del, i);
+                }
+            }
+        }
+        if del > 0 {
+            self.truncate(len - del);
+        }
+        Ok(del != 0)
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),
@@ -104,7 +141,12 @@ impl ArrayInner {
             _ => {
                 let mut s = format!("[{}", globals.inspect(self[0]));
                 for val in self[1..].iter() {
-                    s += &format!(", {}", globals.inspect(*val));
+                    if s.len() <= 100 {
+                        s += &format!(", {}", globals.inspect(*val));
+                    }
+                }
+                if s.len() > 100 {
+                    s += " ... ";
                 }
                 s += "]";
                 s

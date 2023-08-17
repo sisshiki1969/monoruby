@@ -40,6 +40,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
 }
 
 ///
@@ -144,7 +146,7 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
 fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let mut lhs = lfp.self_val().as_array().clone();
+    let mut lhs = Array::dup(lfp.self_val().as_array());
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
@@ -156,7 +158,7 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
         }
     };
     lhs.extend_from_slice(&*rhs);
-    Ok(Value::array(lhs))
+    Ok(lhs.into())
 }
 
 ///
@@ -676,6 +678,89 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
     Ok(res)
 }
 
+///
+/// ### Array#uniq
+///
+/// - uniq -> Array
+/// - uniq! -> self | nil
+/// - uniq {|item| ... } -> Array
+/// - uniq! {|item| ... } -> self | nil
+///
+/// https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html
+#[monoruby_builtin]
+fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 0)?;
+
+    let ary = Array::dup(lfp.self_val().as_array());
+    match lfp.block() {
+        None => uniq_noblock(ary)?,
+        Some(bh) => uniq_block(vm, globals, ary, bh)?,
+    };
+    Ok(ary.into())
+}
+
+#[monoruby_builtin]
+fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 0)?;
+
+    let ary: Array = lfp.self_val().into();
+    let deleted = match lfp.block() {
+        None => uniq_noblock(ary)?,
+        Some(bh) => uniq_block(vm, globals, ary, bh)?,
+    };
+    if deleted {
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::nil())
+    }
+}
+
+fn uniq_noblock(mut ary: Array) -> Result<bool> {
+    let mut h = HashSet::default();
+    let mut recursive = false;
+    let self_id = ary.get();
+    ary.retain(|x| {
+        if self_id == x.get() {
+            if !recursive {
+                recursive = true;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(h.insert(HashKey(*x)))
+        }
+    })
+}
+
+fn uniq_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    bh: BlockHandler,
+) -> Result<bool> {
+    let len = vm.temp_len();
+    vm.temp_push(ary.into());
+    let res = uniq_inner(vm, globals, ary, bh);
+    vm.temp_clear(len);
+    res
+}
+
+fn uniq_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut ary: Array,
+    bh: BlockHandler,
+) -> Result<bool> {
+    let mut h = HashSet::default();
+    let data = globals.get_block_data(vm.cfp(), bh);
+    ary.retain(|x| {
+        let res = vm.invoke_block(globals, &data, &[*x])?;
+        vm.temp_push(res);
+        Ok(h.insert(HashKey(res)))
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1065,5 +1150,37 @@ mod test {
         run_test(r#"[].transpose"#);
         run_test_error(r#"[1,2,3].transpose"#);
         run_test_error(r#"[[1,2],[3,4,5],[6,7]].transpose"#);
+    }
+
+    #[test]
+    fn uniq() {
+        run_test(
+            r#"
+        a = [1, 3, 2, 2.0, "2", "3", 3]
+        b = a.uniq
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [1, 3, 2, 2.0, "2", "3", 3]
+        b = a.uniq {|n| n.to_s }
+        [a, b]
+        "#,
+        );
+        run_test(
+            r#"
+        a = [1, 3, 2, 2.0, "2", "3", 3]
+        a.uniq!
+        a
+        "#,
+        );
+        run_test(
+            r#"
+        a = [1, 3, 2, 2.0, "2", "3", 3]
+        a.uniq! {|n| n.to_s }
+        a
+        "#,
+        );
     }
 }

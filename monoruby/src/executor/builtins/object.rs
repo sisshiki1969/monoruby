@@ -8,6 +8,14 @@ use std::io::Write;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
+    globals.define_builtin_inline_func(
+        OBJECT_CLASS,
+        "object_id",
+        object_id,
+        0,
+        object_object_id,
+        analysis_object_id,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
@@ -26,6 +34,35 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
     globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
+}
+
+///
+/// ### Object#object_id
+///
+/// - object_id -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/object_id.html]
+#[monoruby_builtin]
+fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    Ok(Value::integer(lfp.self_val().get() as i64))
+}
+
+fn object_object_id(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    _deopt: DestLabel,
+) {
+    let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.load_rax(recv);
+    ctx.dealloc_xmm(ret);
+    gen.store_rax(ret);
+}
+
+fn analysis_object_id(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.use_non_float(callsite.recv);
+    info.def_as(callsite.ret, false);
 }
 
 ///

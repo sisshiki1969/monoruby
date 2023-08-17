@@ -19,6 +19,7 @@ mod value;
 
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
+use fxhash::FxHashSet as HashSet;
 pub use monoruby_attr::*;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 pub type IndexSet<T> = indexmap::IndexSet<T>;

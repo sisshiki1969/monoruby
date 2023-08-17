@@ -292,7 +292,7 @@ impl Value {
         RValue::new_bytes(b).pack()
     }
 
-    pub fn array(ary: ArrayInner) -> Self {
+    fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
 
@@ -301,15 +301,15 @@ impl Value {
     }
 
     pub fn array_empty() -> Self {
-        RValue::new_array(ArrayInner::new()).pack()
+        Value::array(ArrayInner::new())
     }
 
     pub fn array_from_vec(v: Vec<Value>) -> Self {
-        RValue::new_array(ArrayInner::from_vec(v)).pack()
+        Value::array(ArrayInner::from_vec(v))
     }
 
     pub fn array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
-        RValue::new_array(ArrayInner::from_iter(iter)).pack()
+        Value::array(ArrayInner::from_iter(iter))
     }
 
     pub fn array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {

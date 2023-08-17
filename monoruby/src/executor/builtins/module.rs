@@ -127,7 +127,7 @@ fn instance_methods(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
 fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut ary = ArrayInner::new();
+    let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
@@ -135,7 +135,7 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::array(ary))
+    Ok(ary.into())
 }
 
 /// ### Module#attr_writer
@@ -144,7 +144,7 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
 fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut ary = ArrayInner::new();
+    let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
@@ -152,7 +152,7 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::array(ary))
+    Ok(ary.into())
 }
 
 /// ### Module#attr_accessor
@@ -161,7 +161,7 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
 fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut ary = ArrayInner::new();
+    let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
@@ -171,7 +171,7 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> 
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::array(ary))
+    Ok(ary.into())
 }
 
 /// ### Module#module_function
