@@ -1,1 +1,1 @@
-cargo run --features log-jit --features gc-debug -- ../optcarrot/bin/optcarrot-bench
+cargo run --release -- --no-jit ../optcarrot/bin/optcarrot-bench

@@ -10,6 +10,10 @@ use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 // Generic operations.
 //
 
+pub extern "C" fn i64_to_value(i: i64) -> Value {
+    Value::integer(i)
+}
+
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {

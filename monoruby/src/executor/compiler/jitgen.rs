@@ -154,6 +154,8 @@ impl JitContext {
     }
 
     fn new_branch(&mut self, src_idx: BcIndex, dest: BcIndex, bbctx: BBContext, entry: DestLabel) {
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_branch: {src_idx}->{dest}");
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
@@ -169,6 +171,8 @@ impl JitContext {
         bbctx: BBContext,
         entry: DestLabel,
     ) {
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_continue: {src_idx}->{dest}");
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
@@ -184,6 +188,8 @@ impl JitContext {
         dest_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_backedge: {bb_pos}");
         self.backedge_map
             .insert(bb_pos, (dest_label, bbctx.clone(), unused));
     }
@@ -262,11 +268,11 @@ impl BBContext {
             ..
         } in entries.iter()
         {
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
             merge_ctx.merge(bbctx);
         }
-        #[cfg(feature = "emit-tir")]
+        #[cfg(feature = "jit-debug")]
         eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
         merge_ctx
     }
@@ -419,6 +425,8 @@ impl Codegen {
             self.prologue(pc);
         }
 
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
         ctx.branch_map.insert(
             start_pos,
             vec![BranchEntry {
@@ -445,13 +453,20 @@ impl Codegen {
         self.gen_backedge_branches(&mut ctx, func);
 
         self.jit.finalize();
-
+        #[cfg(feature = "jit-debug")]
+        {
+            self.jit.select_page(0);
+            eprintln!("    total bytes(0):{:?}", self.jit.get_current());
+            self.jit.select_page(1);
+            eprintln!("    total bytes(1):{:?}", self.jit.get_current());
+            self.jit.select_page(0);
+        }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         {
             let elapsed = now.elapsed();
             eprintln!("<== finished compile. elapsed:{:?}", elapsed);
         }
-        #[cfg(feature = "emit-tir")]
+        #[cfg(feature = "jit-debug")]
         eprintln!("<== finished compile.");
 
         ctx.sourcemap
@@ -562,6 +577,8 @@ impl Codegen {
             if let Some(ctx) = self.gen_merging_branches(func, cc, bb_begin) {
                 ctx
             } else {
+                #[cfg(feature = "jit-debug")]
+                eprintln!("=== no entry");
                 return;
             }
         };
@@ -1394,6 +1411,8 @@ impl Codegen {
             jmp dec;
         );
         self.jit.select_page(0);
+        #[cfg(feature = "jit-debug")]
+        eprintln!(" => deopt");
     }
 }
 
@@ -1450,7 +1469,7 @@ impl Codegen {
         if v.is_empty() {
             return;
         }
-        #[cfg(feature = "emit-tir")]
+        #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", freg, v);
         let f64_to_val = self.f64_to_val;
         monoasm!( &mut self.jit,

@@ -20,7 +20,7 @@ name = "irm"
 [features]
 emit-asm = []
 emit-bc = []
-emit-tir = []
+jit-debug = []
 log-jit = []
 gc-debug = []
 gc-stress = []

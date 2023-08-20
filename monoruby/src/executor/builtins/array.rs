@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "shift", shift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "unshift", unshift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "prepend", unshift, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "concat", concat, -1);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
@@ -44,6 +45,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "rotate!", rotate_, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "rotate", rotate, -1);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "slice!", slice_, 0);
@@ -239,6 +242,7 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 
 ///
 /// ### Array#unshift
+///
 /// - unshift(*obj) -> self
 /// - prepend(*obj) -> self
 ///
@@ -249,6 +253,28 @@ fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
     let iter = lfp.iter();
     ary.insert_many(0, iter);
     Ok(ary.into())
+}
+
+///
+/// ### Array#concat
+///
+/// - concat(other) -> self
+/// - concat(*other_arrays) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/concat.html]
+#[monoruby_builtin]
+fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let mut self_ary: Array = lfp.self_val().into();
+    let mut ary: Array = Array::new();
+    for a in lfp.iter() {
+        if let Some(a) = a.is_array() {
+            ary.extend_from_slice(&a);
+        } else {
+            return Err(MonorubyErr::no_implicit_conversion(globals, a, ARRAY_CLASS));
+        }
+    }
+    self_ary.extend_from_slice(&ary);
+    Ok(self_ary.into())
 }
 
 ///
@@ -773,6 +799,60 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
 }
 
 ///
+/// ### Array#rotate!
+///
+/// - rotate!(cnt = 1) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate=21.html]
+#[monoruby_builtin]
+fn rotate_(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 0..=1)?;
+    let i = if lfp.arg_len() == 0 {
+        1
+    } else {
+        lfp.arg(0).coerce_to_i64(globals)?
+    };
+    let mut ary: Array = lfp.self_val().into();
+    let ary_len = ary.len() as i64;
+    if ary_len == 0 {
+    } else if i > 0 {
+        let i = i % ary_len;
+        ary.rotate_left(i as usize);
+    } else {
+        let i = (-i) % ary_len;
+        ary.rotate_right(i as usize);
+    };
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Array#rotate
+///
+/// - rotate(cnt = 1) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate.html]
+#[monoruby_builtin]
+fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 0..=1)?;
+    let i = if lfp.arg_len() == 0 {
+        1
+    } else {
+        lfp.arg(0).coerce_to_i64(globals)?
+    };
+    let mut ary: Array = Array::dup(lfp.self_val().as_array());
+    let ary_len = ary.len() as i64;
+    if ary_len == 0 {
+    } else if i > 0 {
+        let i = i % ary_len;
+        ary.rotate_left(i as usize);
+    } else {
+        let i = (-i) % ary_len;
+        ary.rotate_right(i as usize);
+    };
+    Ok(ary.into())
+}
+
+///
 /// ### Array#uniq
 ///
 /// - uniq -> Array
@@ -1041,6 +1121,13 @@ mod test {
             res
         "##,
         );
+    }
+
+    #[test]
+    fn concat() {
+        run_test(r##"["a", "b"].concat ["c", "d"]"##);
+        run_test(r##"["a"].concat(["b"], ["c", "d"])"##);
+        run_test(r##"a = [1,2]; a.concat(a, a)"##);
     }
 
     #[test]
@@ -1329,6 +1416,60 @@ mod test {
         run_test(r#"[].transpose"#);
         run_test_error(r#"[1,2,3].transpose"#);
         run_test_error(r#"[[1,2],[3,4,5],[6,7]].transpose"#);
+    }
+
+    #[test]
+    fn rotate() {
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate, a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate(2), a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate(-3), a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = []
+        b = a.rotate
+        [a, b, a.object_id == b.object_id]
+        "#,
+        );
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate!, a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate!(2), a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = ["a","b","c","d"]
+        [a.rotate!(-3), a]
+        "#,
+        );
+        run_test(
+            r#"
+        a = []
+        b = a.rotate!
+        [a, b, a.object_id == b.object_id]
+        "#,
+        );
     }
 
     #[test]

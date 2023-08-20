@@ -57,7 +57,11 @@ fn object_object_id(
     _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.load_rax(recv);
+    gen.load_rdi(recv);
+    monoasm! {&mut gen.jit,
+        movq rax, (crate::executor::op::i64_to_value);
+        call rax;
+    }
     ctx.dealloc_xmm(ret);
     gen.store_rax(ret);
 }
@@ -469,6 +473,37 @@ mod test {
         run_test2("nil.inspect");
         run_test2("Time.singleton_class.to_s");
         run_test2(r#"File.write("/tmp/foo", "woo")"#);
+    }
+
+    #[test]
+    fn object_id() {
+        run_test_with_prelude(
+            r##"
+            id == a.object_id
+            "##,
+            r##"
+            a = [1,2,3]
+            id = a.object_id
+            "##,
+        );
+        run_test_with_prelude(
+            r##"
+            id == a.object_id
+            "##,
+            r##"
+            a = 1356
+            id = a.object_id
+            "##,
+        );
+        run_test_with_prelude(
+            r##"
+            id == a.object_id
+            "##,
+            r##"
+            a = -49.52
+            id = a.object_id
+            "##,
+        );
     }
 
     #[test]

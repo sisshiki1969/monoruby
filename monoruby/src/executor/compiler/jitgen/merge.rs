@@ -14,7 +14,7 @@ impl Codegen {
                 ..
             } in entries
             {
-                #[cfg(feature = "emit-tir")]
+                #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 self.gen_write_back_for_target(
@@ -38,15 +38,15 @@ impl Codegen {
         //let bb_pos = cc.cur_pos;
         let is_loop = func.get_pc(bb_pos).is_loop();
         let res = if is_loop {
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {bb_pos}");
-            self.gen_merging_branches_loop(func, cc, bb_pos)
+            self.gen_merging_branches_loop(func, cc, bb_pos)?
         } else {
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {bb_pos}");
             self.gen_merging_branches_non_loop(func, cc, bb_pos)?
         };
-        #[cfg(feature = "emit-tir")]
+        #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
         Some(res)
     }
@@ -56,7 +56,7 @@ impl Codegen {
         func: &ISeqInfo,
         cc: &mut JitContext,
         bb_pos: BcIndex,
-    ) -> BBContext {
+    ) -> Option<BBContext> {
         //let bb_pos = cc.cur_pos;
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
@@ -66,7 +66,7 @@ impl Codegen {
 
             let cur_label = cc.labels[&bb_pos];
 
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             {
                 eprintln!("  use set:  {:?}", use_set);
                 eprintln!("  not used: {:?}", unused);
@@ -95,16 +95,16 @@ impl Codegen {
             for r in const_vec {
                 target_ctx.link_new_xmm(r);
             }
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("  target_ctx:   {:?}", target_ctx.slot_state);
 
             self.write_back_branches(entries, &target_ctx, cur_label, pc + 1, bb_pos, &unused);
 
             cc.new_backedge(&target_ctx, bb_pos, cur_label, unused);
 
-            target_ctx
+            Some(target_ctx)
         } else {
-            unreachable!()
+            None
         }
     }
 
@@ -154,10 +154,10 @@ impl Codegen {
         } in entries
         {
             bbctx.remove_unused(unused);
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             self.gen_write_back_for_target(bbctx, &target_ctx, entry, cur_label, pc, cont);
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back end");
         }
     }
@@ -171,7 +171,7 @@ impl Codegen {
         pc: BcPc,
         cont: bool,
     ) {
-        #[cfg(feature = "emit-tir")]
+        #[cfg(feature = "jit-debug")]
         {
             eprintln!("    src:    {:?}", src_ctx.slot_state);
             eprintln!("    target: {:?}", target_ctx.slot_state);
@@ -191,7 +191,7 @@ impl Codegen {
                         self.gen_xmm_to_stack(freg, src_ctx.xmm_slots(freg));
                     }
                     LinkMode::Const(v) => {
-                        #[cfg(feature = "emit-tir")]
+                        #[cfg(feature = "jit-debug")]
                         eprintln!("      wb: Const({:?})->{:?}", v, reg);
                         self.gen_write_back_constant(reg, v);
                     }
@@ -275,7 +275,7 @@ impl Codegen {
         for (reg, freg) in conv_list {
             self.load_rdi(reg);
             self.unbox_integer_float_to_f64(freg.enc(), side_exit);
-            #[cfg(feature = "emit-tir")]
+            #[cfg(feature = "jit-debug")]
             eprintln!("      conv: {:?}->{:?}", reg, freg);
         }
         for reg in guard_list {
