@@ -41,6 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
+    globals.define_builtin_func(STRING_CLASS, "sum", sum, 0);
 }
 
 ///
@@ -1076,6 +1077,30 @@ fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
     Ok(Value::string(res))
 }
 
+///
+/// ### String#sum
+///
+/// - sum(bits = 16) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/sum.html]
+#[monoruby_builtin]
+fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let bits = if len == 0 {
+        16
+    } else {
+        lfp.arg(0).coerce_to_i64(globals)?
+    };
+    let self_val = lfp.self_val();
+    let bytes = self_val.as_bytes();
+    let mut sum = 0;
+    for b in bytes {
+        sum += *b as u64;
+    }
+    Ok(Value::integer((sum & ((1 << bits) - 1)) as i64))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1362,5 +1387,11 @@ mod test {
     fn upcase() {
         run_test(r"'AkrFj妖精u35]['.upcase");
         run_test(r"'AkrFj妖精u35]['.downcase");
+    }
+
+    #[test]
+    fn sum() {
+        run_test(r#"File.read("../LICENSE-MIT").sum"#);
+        run_test(r#"File.read("../LICENSE-MIT").sum(11)"#);
     }
 }

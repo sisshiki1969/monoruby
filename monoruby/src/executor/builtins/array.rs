@@ -50,6 +50,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "slice!", slice_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "pack", pack, 1);
 }
 
 ///
@@ -995,6 +996,27 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
     Value::array_from_iter(iter)
 }
 
+///
+/// ### Array#pack
+///
+/// - pack(template) -> String
+/// - pack(template, buffer: String.new) -> String
+///
+#[monoruby_builtin]
+fn pack(_: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 0..=1)?;
+    let ary: Array = lfp.self_val().into();
+    if lfp.arg_len() == 1 && lfp.arg(0).expect_string(globals)? != "C*" {
+        unimplemented!()
+    }
+    let mut v = vec![];
+    for elem in ary.iter() {
+        let i = elem.coerce_to_i64(globals)? as i8 as u8;
+        v.push(i);
+    }
+    Ok(Value::bytes(v))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1576,5 +1598,10 @@ mod test {
         [a, b]
         "#,
         );
+    }
+
+    #[test]
+    fn pack() {
+        run_test(r#"[*(0..100)].pack("C*")"#);
     }
 }

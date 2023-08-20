@@ -20,6 +20,9 @@ struct CommandLineArgs {
     /// switch for garbage collection.
     #[arg(long)]
     no_gc: bool,
+    /// emit AST.
+    #[arg(long)]
+    ast: bool,
     /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
     directory: Vec<String>,
@@ -57,16 +60,31 @@ fn main() {
     }
 
     if !args.exec.is_empty() {
-        let path = std::path::Path::new("irm");
-        for code in args.exec {
-            match globals.compile_and_run(&code, path) {
-                Ok(_val) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("=> {:?}", _val)
+        let path = std::path::Path::new("-e");
+        if args.ast {
+            for code in args.exec {
+                match ruruby_parse::Parser::parse_program(code, path) {
+                    Ok(res) => {
+                        eprintln!("{:#?}", res.node)
+                    }
+                    Err(err) => {
+                        let err = MonorubyErr::parse(err);
+                        err.show_error_message_and_all_loc();
+                        std::process::exit(1);
+                    }
                 }
-                Err(err) => {
-                    err.show_error_message_and_all_loc();
-                    std::process::exit(1);
+            }
+        } else {
+            for code in args.exec {
+                match globals.compile_and_run(&code, path) {
+                    Ok(_val) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("=> {:?}", _val)
+                    }
+                    Err(err) => {
+                        err.show_error_message_and_all_loc();
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -89,8 +107,16 @@ fn main() {
         std::io::stdin().read_to_string(&mut code).unwrap();
         std::path::PathBuf::from("-")
     };
-    if let Err(err) = globals.compile_and_run(&code, &path) {
-        err.show_error_message_and_all_loc();
-        std::process::exit(1);
-    };
+    if args.ast {
+        if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {
+            let err = MonorubyErr::parse(err);
+            err.show_error_message_and_all_loc();
+            std::process::exit(1);
+        }
+    } else {
+        if let Err(err) = globals.compile_and_run(&code, &path) {
+            err.show_error_message_and_all_loc();
+            std::process::exit(1);
+        };
+    }
 }
