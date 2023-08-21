@@ -44,6 +44,7 @@ end
 
 class Object
   def freeze
+    self
   end
 
   #def to_enum

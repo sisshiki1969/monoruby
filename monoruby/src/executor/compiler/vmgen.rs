@@ -888,6 +888,14 @@ impl Codegen {
         };
     }
 
+    fn vm_lhs_integer(&mut self) {
+        let int_class: u32 = INTEGER_CLASS.into();
+        monoasm! { &mut self.jit,
+            movl  [r13 - 8], (int_class);
+            movl  [r13 - 4], (int_class);
+        };
+    }
+
     fn vm_save_binary_integer(&mut self) {
         let int_class: u32 = INTEGER_CLASS.into();
         monoasm! { &mut self.jit,
@@ -1393,6 +1401,7 @@ impl Codegen {
             lea rdi, [rdi + rdi + 1];
             movq [r15], rdi;
         };
+        self.vm_lhs_integer();
         self.fetch_and_dispatch();
         self.vm_generic_unop(generic, neg_value as _);
         label

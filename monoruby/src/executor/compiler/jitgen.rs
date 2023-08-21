@@ -453,7 +453,7 @@ impl Codegen {
         self.gen_backedge_branches(&mut ctx, func);
 
         self.jit.finalize();
-        #[cfg(feature = "jit-debug")]
+        #[cfg(any(feature = "jit-debug", feature = "log-jit"))]
         {
             self.jit.select_page(0);
             eprintln!("    total bytes(0):{:?}", self.jit.get_current());
