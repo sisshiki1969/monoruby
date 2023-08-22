@@ -30,10 +30,8 @@ struct CommandLineArgs {
     #[arg(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
-    #[arg(num_args = 1)]
-    file: Option<String>,
-    #[arg(num_args = 0..)]
-    argv: Vec<String>,
+    #[arg(num_args = 0.., trailing_var_arg = true)]
+    file: Vec<String>,
 }
 
 fn main() {
@@ -92,13 +90,15 @@ fn main() {
     }
 
     let mut code = String::new();
-    let path = if let Some(file_name) = args.file {
-        let iter = args.argv.into_iter().map(|s| Value::string(s));
-        let argv = Value::array_from_iter(iter);
+    let mut iter = args.file.into_iter();
+    let path = if let Some(file_name) = iter.next() {
+        let argv = Value::array_from_iter(iter.map(|s| Value::string(s)));
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
         let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
-        let mut file = File::open(&file_name).unwrap();
-        file.read_to_string(&mut code).unwrap();
+        File::open(&file_name)
+            .unwrap()
+            .read_to_string(&mut code)
+            .unwrap();
         path
     } else {
         if finish_flag {
