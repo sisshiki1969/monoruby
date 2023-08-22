@@ -69,7 +69,7 @@ impl Codegen {
             }
             LinkMode::Const(v) => {
                 monoasm!(&mut self.jit,
-                    movq rax, (v.get());
+                    movq rax, (v.id());
                 );
                 ctx[reg] = LinkMode::Stack;
             }
@@ -139,7 +139,7 @@ impl Codegen {
                     let freg = ctx.link_new_both(reg);
                     let f = self.jit.const_f64(i as f64);
                     monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::integer(i).get());
+                        movq [r14 - (conv(reg))], (Value::integer(i).id());
                         movq xmm(freg.enc()), [rip + f];
                     }
                     freg
@@ -209,7 +209,7 @@ impl Codegen {
                     let freg = ctx.link_new_both(reg);
                     let f = self.jit.const_f64(i as f64);
                     monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::integer(i).get());
+                        movq [r14 - (conv(reg))], (Value::integer(i).id());
                         movq xmm(freg.enc()), [rip + f];
                     }
                     freg

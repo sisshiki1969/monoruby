@@ -106,7 +106,7 @@ impl ClassId {
         match globals.store[self].name {
             Some(id) => id.to_string(),
             None => match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().get()),
+                None => format!("#<Class:{:016x}>", class.as_val().id()),
                 Some(base) => format!("#<Class:{}>", globals.to_s(base)),
             },
         }
@@ -121,7 +121,7 @@ impl ClassId {
         match globals.store[self].name {
             Some(id) => Some(id),
             None => Some(IdentId::get_id_from_string(match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().get()),
+                None => format!("#<Class:{:016x}>", class.as_val().id()),
                 Some(base) => format!("#<Class:{}>", globals.to_s(base)),
             })),
         }

@@ -346,7 +346,7 @@ impl Globals {
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(val),
                 ObjKind::GENERATOR => self.object_tos(val),
-                _ => format!("{:016x}", val.get()),
+                _ => format!("{:016x}", val.id()),
             },
         }
     }
@@ -467,7 +467,7 @@ impl Globals {
         let func_id = fiber.func_id();
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
-            val.get(),
+            val.id(),
             self[func_id].as_ruby_func().get_location(),
         )
     }

@@ -9,8 +9,8 @@ pub const ARRAY_INLINE_CAPA: usize = 5;
 pub struct Array(Value);
 
 impl Array {
-    pub fn get(self) -> u64 {
-        self.0.get()
+    pub fn id(self) -> u64 {
+        self.0.id()
     }
 
     pub fn peel(self) -> Value {
@@ -208,19 +208,6 @@ impl ArrayInner {
             }
         };
         Ok(val)
-    }
-
-    pub(crate) fn get_index(&self, idx: i64) -> Option<Value> {
-        return Some(if idx >= 0 {
-            self.get(idx as usize).cloned().unwrap_or_default()
-        } else {
-            let idx = self.len() as i64 + idx;
-            if idx < 0 {
-                Value::nil()
-            } else {
-                self.get(idx as usize).cloned().unwrap_or_default()
-            }
-        });
     }
 
     /// Calculate array index.

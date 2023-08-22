@@ -105,76 +105,52 @@ impl Codegen {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             let exit = self.jit.label();
             let array_integer_generic = self.jit.label();
-            let generic = self.jit.label();
             let out_range = self.jit.label();
             let heap = self.jit.label();
-            //let deopt = self.gen_side_deopt(pc, ctx);
+            let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
             }
-            self.guard_class(ARRAY_CLASS, generic);
+            self.guard_class(ARRAY_CLASS, deopt);
+
             if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
-                    //no lower range check
                     movl rsi, (i);
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
-                    jne array_integer_generic;
-                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                    cmpq rax, (ARRAY_INLINE_CAPA);
-                    jgt  heap;
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle  out_range;
-                    movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-                exit:
                 }
-                self.jit.select_page(1);
-                monoasm! { &mut self.jit,
-                heap:
-                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle out_range;
-                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                    movq rax, [rdi + rsi * 8];
-                    jmp  exit;
-                };
-                self.jit.select_page(0);
             } else {
                 monoasm! { &mut self.jit,
                     movq rsi, [r14 - (conv(idx))]; // idx: Value
                     testq rsi, 0b01;
-                    jeq generic;
+                    jeq deopt;
                     sarq rsi, 1;
                     // lower range check
                     cmpq rsi, 0;
                     jlt array_integer_generic;
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
-                    jne array_integer_generic;
-                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                    cmpq rax, (ARRAY_INLINE_CAPA);
-                    jgt  heap;
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle  out_range;
-                    movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-                exit:
                 }
-                self.jit.select_page(1);
-                monoasm! { &mut self.jit,
-                heap:
-                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle out_range;
-                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                    movq rax, [rdi + rsi * 8];
-                    jmp  exit;
-                };
-                self.jit.select_page(0);
             }
-
+            monoasm! { &mut self.jit,
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+                jne  array_integer_generic;
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (ARRAY_INLINE_CAPA);
+                jgt  heap;
+                // upper range check
+                cmpq rax, rsi;
+                jle  out_range;
+                movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
+            exit:
+            }
             self.jit.select_page(1);
+            monoasm! { &mut self.jit,
+            heap:
+                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                // upper range check
+                cmpq rax, rsi;
+                jle out_range;
+                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                movq rax, [rdi + rsi * 8];
+                jmp  exit;
+            };
             self.jit.bind_label(array_integer_generic);
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
@@ -188,11 +164,6 @@ impl Codegen {
                 movl rax, (NIL_VALUE);
                 jmp  exit;
             };
-            self.jit.bind_label(generic);
-            self.generic_index(&xmm_using, base, idx, pc);
-            monoasm! { &mut self.jit,
-                jmp exit;
-            }
             self.jit.select_page(0);
         } else {
             self.generic_index(&xmm_using, base, idx, pc);
@@ -233,30 +204,11 @@ impl Codegen {
                 movq rdi, [r14 - (conv(base))]; // base: Value
             };
             self.guard_class(ARRAY_CLASS, deopt);
+
             if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
-                    // no lower range check
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
-                    jne generic;
-                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                    cmpq rax, (ARRAY_INLINE_CAPA);
-                    jgt  heap;
-                    // upper range check
-                    cmpq rax, (i);
-                    jle  generic;
-                    movq rax, [r14 - (conv(src))];
-                    movq [rdi + (i as i32 * 8 + RVALUE_OFFSET_INLINE)], rax;
-                    jmp exit;
-                heap:
-                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                    // upper range check
-                    cmpq rax, (i);
-                    jle generic;
-                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                    movq rax, [r14 - (conv(src))];
-                    movq [rdi + (i as i32 * 8)], rax;
-                exit:
-                };
+                    movl rsi, (i);
+                }
             } else {
                 monoasm! { &mut self.jit,
                     movq rsi, [r14 - (conv(idx))]; // idx: Value
@@ -266,28 +218,30 @@ impl Codegen {
                     // lower range check
                     cmpq rsi, 0;
                     jlt generic;
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
-                    jne generic;
-                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                    cmpq rax, (ARRAY_INLINE_CAPA);
-                    jgt  heap;
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle  generic;
-                    movq rax, [r14 - (conv(src))];
-                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
-                    jmp exit;
-                heap:
-                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                    // upper range check
-                    cmpq rax, rsi;
-                    jle generic;
-                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                    movq rax, [r14 - (conv(src))];
-                    movq [rdi + rsi * 8], rax;
-                exit:
-                };
+                }
             }
+            monoasm! { &mut self.jit,
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+                jne generic;
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (ARRAY_INLINE_CAPA);
+                jgt  heap;
+                // upper range check
+                cmpq rax, rsi;
+                jle  generic;
+                movq rax, [r14 - (conv(src))];
+                movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
+                jmp exit;
+            heap:
+                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                // upper range check
+                cmpq rax, rsi;
+                jle generic;
+                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                movq rax, [r14 - (conv(src))];
+                movq [rdi + rsi * 8], rax;
+            exit:
+            };
 
             self.jit.select_page(1);
             self.jit.bind_label(generic);

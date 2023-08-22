@@ -893,9 +893,9 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 fn uniq_noblock(mut ary: Array) -> Result<bool> {
     let mut h = HashSet::default();
     let mut recursive = false;
-    let self_id = ary.get();
+    let self_id = ary.id();
     ary.retain(|x| {
-        if self_id == x.get() {
+        if self_id == x.id() {
             if !recursive {
                 recursive = true;
                 Ok(true)

@@ -46,7 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/object_id.html]
 #[monoruby_builtin]
 fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().get() as i64))
+    Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
 fn object_object_id(
@@ -122,7 +122,7 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
 #[monoruby_builtin]
 fn equal_(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
-    Ok(Value::bool(lfp.self_val().get() == lfp.arg(0).get()))
+    Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
 ///

@@ -133,7 +133,7 @@ impl Value {
     }
 
     pub fn is_nil(&self) -> bool {
-        self.get() == NIL_VALUE
+        self.id() == NIL_VALUE
     }
 
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
@@ -160,12 +160,12 @@ impl Value {
         }
     }
 
-    pub(crate) fn get(&self) -> u64 {
+    pub(crate) fn id(&self) -> u64 {
         self.0.get()
     }
 
     pub fn as_bool(&self) -> bool {
-        self.get() & !0x10 != NIL_VALUE
+        self.id() & !0x10 != NIL_VALUE
     }
 
     pub fn set_instance_var(
@@ -403,7 +403,7 @@ impl Value {
             RV::Fixnum(i)
         } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
-        } else if self.get() == 0 {
+        } else if self.id() == 0 {
             RV::None
         } else if let Some(rv) = self.try_rvalue() {
             rv.unpack()
@@ -506,11 +506,11 @@ impl Value {
     }
 
     fn is_symbol(&self) -> bool {
-        self.get() & 0xff == TAG_SYMBOL
+        self.id() & 0xff == TAG_SYMBOL
     }
 
     fn as_symbol(&self) -> IdentId {
-        IdentId::from((self.get() >> 32) as u32)
+        IdentId::from((self.id() >> 32) as u32)
     }
 
     pub fn try_symbol(&self) -> Option<IdentId> {
@@ -544,11 +544,11 @@ impl Value {
     }
 
     pub(crate) fn rvalue(&self) -> &RValue {
-        unsafe { &*(self.get() as *const RValue) }
+        unsafe { &*(self.id() as *const RValue) }
     }
 
     pub(crate) fn rvalue_mut(&mut self) -> &mut RValue {
-        unsafe { &mut *(self.get() as *mut RValue) }
+        unsafe { &mut *(self.id() as *mut RValue) }
     }
 
     pub(crate) fn as_array(&self) -> &ArrayInner {

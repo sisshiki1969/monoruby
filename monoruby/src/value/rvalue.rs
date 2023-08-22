@@ -129,9 +129,9 @@ impl RValue {
                 }
                 lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
                     // Support self-containing arrays.
-                    if self.id() == a1.get() && other.id() == a2.get() {
+                    if self.id() == a1.id() && other.id() == a2.id() {
                         true
-                    } else if self.id() == a1.get() || other.id() == a2.get() {
+                    } else if self.id() == a1.id() || other.id() == a2.id() {
                         false
                     } else {
                         a1.eql(a2)

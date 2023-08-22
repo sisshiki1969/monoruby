@@ -221,10 +221,10 @@ impl Codegen {
             cmpq rdi, rsi;
             jeq  exit;
             jlt  less_than;
-            movq rax, (Value::from_ord(std::cmp::Ordering::Greater).get());
+            movq rax, (Value::from_ord(std::cmp::Ordering::Greater).id());
             jmp  exit;
         less_than:
-            movq rax, (Value::from_ord(std::cmp::Ordering::Less).get());
+            movq rax, (Value::from_ord(std::cmp::Ordering::Less).id());
         exit:
         };
     }
@@ -362,7 +362,7 @@ impl Codegen {
             //       |             |
             //
             // set self
-            movq rax, (main_object.get());
+            movq rax, (main_object.id());
             movq [r14 - (LBP_SELF)], rax;
             movq rax, [r13 + (FUNCDATA_CODEPTR)];
             // set pc

@@ -81,11 +81,11 @@ impl PartialEq for HashKey {
     // Object#eql?()
     // This type of equality is used for comparison for keys of Hash.
     fn eq(&self, other: &Self) -> bool {
-        if self.0.get() == other.0.get() {
+        if self.0.id() == other.0.id() {
             return true;
         }
         match (self.try_rvalue(), other.try_rvalue()) {
-            (None, None) => self.0.get() == other.0.get(),
+            (None, None) => self.0.id() == other.0.id(),
             (Some(lhs), Some(rhs)) => lhs.eql(rhs),
             _ => false,
         }
@@ -104,7 +104,7 @@ impl Deref for IdentKey {
 
 impl Hash for IdentKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (self.0.get()).hash(state);
+        (self.0.id()).hash(state);
     }
 }
 
@@ -112,7 +112,7 @@ impl PartialEq for IdentKey {
     // Object#eql?()
     // This type of equality is used for comparison for keys of Hash.
     fn eq(&self, other: &Self) -> bool {
-        self.0.get() == other.0.get()
+        self.0.id() == other.0.id()
     }
 }
 

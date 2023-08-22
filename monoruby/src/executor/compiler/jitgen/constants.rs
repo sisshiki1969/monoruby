@@ -33,7 +33,7 @@ impl Codegen {
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
             jne  deopt;
-            movq rax, (v.get());
+            movq rax, (v.id());
         );
         self.store_rax(dst);
     }
@@ -58,7 +58,7 @@ impl Codegen {
             cmpq rax, [rip + cached_const_version];
             jne  deopt;
             movq xmm(fdst.enc()), [rip + cached_float];
-            movq rax, (Value::float(f).get());
+            movq rax, (Value::float(f).id());
         );
         self.store_rax(dst);
     }

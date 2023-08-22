@@ -102,7 +102,7 @@ impl Bc {
     pub(super) fn from_with_value(op1: u64, val: Value) -> Self {
         Self {
             op1,
-            op2: Bc2::from(val.get()),
+            op2: Bc2::from(val.id()),
         }
     }
 

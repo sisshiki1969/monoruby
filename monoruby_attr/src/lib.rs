@@ -102,7 +102,7 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         impl #base {
             pub fn as_ptr(self) -> *mut RValue {
-                self.0.get() as _
+                self.0.id() as _
             }
         }
     };

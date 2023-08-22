@@ -196,7 +196,7 @@ impl LFP {
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
         unsafe {
-            let v = vec![0, 0, self_val.get(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
+            let v = vec![0, 0, self_val.id(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
             let len = v.len() * 8;
             let mut heap_lfp = LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();

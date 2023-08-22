@@ -628,7 +628,7 @@ impl Codegen {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
                         monoasm!( &mut self.jit,
-                          movq rdi, (val.get());
+                          movq rdi, (val.id());
                           movq rax, (Value::value_deep_copy);
                           call rax;
                         );
@@ -1564,14 +1564,14 @@ impl Codegen {
     }
 
     fn gen_write_back_constant(&mut self, reg: SlotId, v: Value) {
-        let i = v.get() as i64;
+        let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
-                movq [r14 - (conv(reg))], (v.get());
+                movq [r14 - (conv(reg))], (v.id());
             }
         } else {
             monoasm! { &mut self.jit,
-                movq rax, (v.get());
+                movq rax, (v.id());
                 movq [r14 - (conv(reg))], rax;
             }
         }

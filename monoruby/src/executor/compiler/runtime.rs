@@ -476,8 +476,11 @@ pub(super) extern "C" fn get_index(
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
 }
 
-pub(super) extern "C" fn get_array_integer_index(base: Value, index: i64) -> Option<Value> {
-    base.as_array().get_index(index)
+pub(super) extern "C" fn get_array_integer_index(base: Array, index: i64) -> Value {
+    match base.get_array_index(index) {
+        None => Value::nil(),
+        Some(i) => base.get(i).cloned().unwrap_or_default(),
+    }
 }
 
 pub(super) extern "C" fn set_index(
@@ -808,7 +811,7 @@ pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
 }
 
 pub(super) extern "C" fn illegal_classid(v: Value) {
-    panic!("illegal Value for get_class(): {:016x}", v.get());
+    panic!("illegal Value for get_class(): {:016x}", v.id());
 }
 
 pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {

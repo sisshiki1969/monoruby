@@ -595,7 +595,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             cmpl [rip + global_class_version], (cached_version);
             je   cont;
-            movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).get());
+            movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
             jmp  side_exit;
         cont:
         );
@@ -643,7 +643,7 @@ impl Codegen {
         if let Some(func_id) = callsite.block_func_id {
             let bh = BlockHandler::from(func_id);
             monoasm!( &mut self.jit,
-                movq [rsp - (16 + LBP_BLOCK)], (bh.0.get());
+                movq [rsp - (16 + LBP_BLOCK)], (bh.0.id());
             );
         } else if let Some(block) = block {
             self.load_rax(block);
