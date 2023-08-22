@@ -58,11 +58,11 @@ pub struct Globals {
     random: Prng,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
-    #[cfg(feature = "log-jit")]
     /// stats for deoptimization
+    #[cfg(any(feature = "log-jit", feature = "profile"))]
     pub(super) deopt_stats: HashMap<(FuncId, usize), usize>,
-    #[cfg(feature = "log-jit")]
     /// stats for method cache miss
+    #[cfg(any(feature = "log-jit", feature = "profile"))]
     method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
@@ -109,9 +109,9 @@ impl Globals {
             ],
             random: Prng::new(),
             loaded_canonicalized_files: IndexSet::default(),
-            #[cfg(feature = "log-jit")]
+            #[cfg(any(feature = "log-jit", feature = "profile"))]
             deopt_stats: HashMap::default(),
-            #[cfg(feature = "log-jit")]
+            #[cfg(any(feature = "log-jit", feature = "profile"))]
             method_cache_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,

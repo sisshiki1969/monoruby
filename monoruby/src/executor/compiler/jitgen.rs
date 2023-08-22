@@ -344,22 +344,28 @@ pub(in crate::executor) enum LinkMode {
     Const(Value),
 }
 
-#[cfg(feature = "log-jit")]
+#[cfg(any(feature = "log-jit", feature = "profile"))]
 extern "C" fn log_deoptimize(
     _vm: &mut Executor,
     globals: &mut Globals,
     func_id: FuncId,
     pc: BcPc,
-    v: Option<Value>,
+    #[cfg(feature = "log-jit")] v: Option<Value>,
 ) {
-    let name = globals.store.func_description(func_id);
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
+    #[cfg(feature = "log-jit")]
+    let name = globals.store.func_description(func_id);
+    #[cfg(feature = "log-jit")]
     let fmt = pc.format(globals, index).unwrap_or_default();
+
     if let TraceIr::LoopEnd = pc.get_ir() {
         // normal exit from jit'ed loop
-        eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {fmt}", index);
+        #[cfg(feature = "log-jit")]
+        {
+            eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt}", index);
+        }
     } else {
         match globals.deopt_stats.get_mut(&(func_id, index)) {
             Some(c) => *c = *c + 1,
@@ -367,21 +373,24 @@ extern "C" fn log_deoptimize(
                 globals.deopt_stats.insert((func_id, index), 1);
             }
         };
-        let trace_ir = pc.get_ir();
-        if let TraceIr::LoadConst(..) = trace_ir {
-            // inline constant cache miss
-            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt}", index);
-        } else if let TraceIr::ClassDef { .. } = trace_ir {
-            // error in class def (illegal superclass etc.)
-            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt}", index);
-        } else if let Some(v) = v {
-            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
-        } else {
-            eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt}", index);
+        #[cfg(feature = "log-jit")]
+        {
+            let trace_ir = pc.get_ir();
+            if let TraceIr::LoadConst(..) = trace_ir {
+                // inline constant cache miss
+                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                eprintln!("    [{:05}] {fmt}", index);
+            } else if let TraceIr::ClassDef { .. } = trace_ir {
+                // error in class def (illegal superclass etc.)
+                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                eprintln!("    [{:05}] {fmt}", index);
+            } else if let Some(v) = v {
+                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
+            } else {
+                eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
+                eprintln!("    [{:05}] {fmt}", index);
+            }
         }
     }
 }
@@ -1523,7 +1532,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.get_u64());
         );
-        #[cfg(feature = "log-jit")]
+        #[cfg(any(feature = "log-jit", feature = "profile"))]
         monoasm!( &mut self.jit,
             movq r8, rdi; // the Value which caused this deopt.
             movq rdi, rbx;

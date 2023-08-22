@@ -274,7 +274,7 @@ impl IdentifierTable {
     ///
     /// Append the name of *self* to *s*.
     ///
-    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit",))]
     fn append_to(&self, id: IdentId, s: &mut String) {
         s.push_str(self.table[id.to_usize() - 1].as_str());
     }

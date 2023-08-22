@@ -547,7 +547,7 @@ impl Globals {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<MethodTableEntry> {
-        #[cfg(feature = "log-jit")]
+        #[cfg(any(feature = "log-jit", feature = "profile"))]
         {
             match self.method_cache_stats.get_mut(&(class_id, name)) {
                 Some(c) => *c += 1,

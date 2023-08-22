@@ -903,7 +903,7 @@ impl BcPc {
 }
 
 impl BcPc {
-    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit",))]
     pub fn format(&self, globals: &Globals, i: usize) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt {
@@ -1384,7 +1384,7 @@ impl SlotId {
         self.0 == 0
     }
 
-    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit",))]
     fn ret_str(&self) -> String {
         match self.0 {
             0 => "_".to_string(),
