@@ -26,11 +26,11 @@ mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 pub const RVALUE_OFFSET_TY: usize = 2;
-pub const RVALUE_OFFSET_KIND: i64 = std::mem::offset_of!(RValue, kind) as _;
-pub const RVALUE_OFFSET_ARY_CAPA: usize = 16;
-pub const RVALUE_OFFSET_INLINE: usize = 24;
-pub const RVALUE_OFFSET_HEAP_PTR: usize = 24;
-pub const RVALUE_OFFSET_HEAP_LEN: usize = 32;
+pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
+pub const RVALUE_OFFSET_ARY_CAPA: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_CAPA;
+pub const RVALUE_OFFSET_INLINE: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_INLINE;
+pub const RVALUE_OFFSET_HEAP_PTR: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_PTR;
+pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_LEN;
 
 pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
 pub const PROCINNER_FUNCDATA: i64 = std::mem::offset_of!(ProcInner, func_data) as _;

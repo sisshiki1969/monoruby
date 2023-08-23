@@ -15,6 +15,7 @@ mod binary_op;
 mod compile;
 mod constants;
 mod guard;
+mod index;
 mod init_method;
 mod merge;
 mod method_call;
@@ -685,13 +686,10 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
-                    self.fetch_slots(&mut ctx, &[base, idx]);
-                    ctx.dealloc_xmm(ret);
-                    self.jit_get_index(&ctx, ret, base, idx, pc);
+                    self.jit_get_index(&mut ctx, ret, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    self.fetch_slots(&mut ctx, &[base, idx, src]);
-                    self.jit_index_assign(&ctx, src, base, idx, pc);
+                    self.jit_index_assign(&mut ctx, src, base, idx, pc);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);

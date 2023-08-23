@@ -256,8 +256,8 @@ impl Codegen {
         }
         self.vm_handle_error();
         monoasm! { &mut self.jit,
-            lea  rdx, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_FUNCDATA))];
-            movq rax, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_OUTER))];
+            lea  rdx, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
+            movq rax, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args

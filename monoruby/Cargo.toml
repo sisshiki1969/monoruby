@@ -41,7 +41,6 @@ dtoa = "1.0"
 chrono = "0.4.19"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
-  "union",
 ] }
 escape_string = "0.1.2"
 hex = "0.4.3"

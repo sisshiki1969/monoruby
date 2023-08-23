@@ -471,16 +471,15 @@ pub(super) extern "C" fn get_index(
                 }
             }
         }
+        METHOD_CLASS => {
+            let method = base.as_method();
+            let func_id = method.func_id();
+            let receiver = method.receiver();
+            return vm.invoke_func(globals, func_id, receiver, &[index], None);
+        }
         _ => {}
     }
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
-}
-
-pub(super) extern "C" fn get_array_integer_index(base: Array, index: i64) -> Value {
-    match base.get_array_index(index) {
-        None => Value::nil(),
-        Some(i) => base.get(i).cloned().unwrap_or_default(),
-    }
 }
 
 pub(super) extern "C" fn set_index(
