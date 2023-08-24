@@ -21,6 +21,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        ">>",
+        shr,
+        1,
+        integer_shr,
+        analysis_integer_binop,
+    );
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "<<",
+        shl,
+        1,
+        integer_shl,
+        analysis_integer_binop,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
@@ -149,6 +165,30 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
     Ok(Value::float(f))
 }
 
+fn integer_tof(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    pc: BcPc,
+    deopt: DestLabel,
+) {
+    let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.load_rdi(recv);
+    if !recv.is_zero() {
+        gen.guard_class(pc.class_version().0, deopt);
+    }
+    let fret = ctx.xmm_write_enc(ret);
+    monoasm!( &mut gen.jit,
+        sarq  rdi, 1;
+        cvtsi2sdq xmm(fret), rdi;
+    );
+}
+
+fn analysis_integer_tof(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.use_non_float(callsite.recv);
+    info.def_as(callsite.ret, true);
+}
+
 ///
 /// ### Integer#to_i
 ///
@@ -181,6 +221,98 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 }
 
 ///
+/// ### Integer#>>
+///
+/// - self >> bits -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
+#[monoruby_builtin]
+fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    match super::op::shr_values(vm, globals, lfp.self_val(), arg[0]) {
+        Some(val) => Ok(val),
+        None => {
+            let err = vm.take_error();
+            Err(err)
+        }
+    }
+}
+
+fn integer_shr(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    deopt: DestLabel,
+) {
+    let CallSiteInfo {
+        recv, ret, args, ..
+    } = *callsite;
+    if let Some(rhs) = ctx.is_u8_literal(args) {
+        gen.fetch_slots(ctx, &[recv]);
+        ctx.dealloc_xmm(ret);
+        gen.load_guard_rdi_fixnum(recv, deopt);
+        gen.gen_shr_imm(rhs);
+    } else {
+        gen.fetch_slots(ctx, &[recv, args]);
+        ctx.dealloc_xmm(ret);
+        gen.load_guard_binary_fixnum(recv, args, deopt);
+        gen.gen_shr(deopt);
+    }
+    gen.store_rdi(ret);
+}
+
+fn analysis_integer_binop(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.use_non_float(callsite.recv);
+    info.use_non_float(callsite.args);
+    info.def_as(callsite.ret, false);
+}
+
+///
+/// ### Integer#<<
+///
+/// - self << bits -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
+#[monoruby_builtin]
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    match super::op::shl_values(vm, globals, lfp.self_val(), arg[0]) {
+        Some(val) => Ok(val),
+        None => {
+            let err = vm.take_error();
+            Err(err)
+        }
+    }
+}
+
+fn integer_shl(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    deopt: DestLabel,
+) {
+    let CallSiteInfo {
+        recv, ret, args, ..
+    } = *callsite;
+    if let Some(rhs) = ctx.is_u8_literal(args) {
+        gen.fetch_slots(ctx, &[recv]);
+        ctx.dealloc_xmm(ret);
+        gen.load_guard_rdi_fixnum(recv, deopt);
+        gen.gen_shl_imm(rhs, deopt);
+    } else {
+        gen.fetch_slots(ctx, &[recv, args]);
+        ctx.dealloc_xmm(ret);
+        gen.load_guard_binary_fixnum(recv, args, deopt);
+        gen.gen_shl(deopt);
+    }
+    gen.store_rdi(ret);
+}
+
+///
 /// ### Integer#[]
 ///
 /// self[nth] -> Integer
@@ -194,30 +326,6 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let self_val = lfp.self_val();
     op::integer_index1(globals, self_val, arg[0])
-}
-
-fn integer_tof(
-    gen: &mut Codegen,
-    ctx: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-    deopt: DestLabel,
-) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.load_rdi(recv);
-    if !recv.is_zero() {
-        gen.guard_class(pc.class_version().0, deopt);
-    }
-    let fret = ctx.xmm_write_enc(ret);
-    monoasm!( &mut gen.jit,
-        sarq  rdi, 1;
-        cvtsi2sdq xmm(fret), rdi;
-    );
-}
-
-fn analysis_integer_tof(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.def_as(callsite.ret, true);
 }
 
 ///

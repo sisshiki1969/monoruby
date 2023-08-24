@@ -65,6 +65,32 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
+fn object_nil(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    _deopt: DestLabel,
+) {
+    let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.load_rdi(recv);
+    ctx.dealloc_xmm(ret);
+    let l1 = gen.jit.label();
+    monoasm!( &mut gen.jit,
+        movq rax, (FALSE_VALUE);
+        cmpq rdi, (NIL_VALUE);
+        jne  l1;
+        movq rax, (TRUE_VALUE);
+    l1:
+    );
+    gen.store_rax(ret);
+}
+
+fn analysis_object_nil(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.use_non_float(callsite.recv);
+    info.def_as(callsite.ret, false);
+}
+
 ///
 /// ### Kernel.#puts
 ///
@@ -569,32 +595,6 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let path = globals.current_source_path(vm).parent().unwrap();
     Ok(Value::string(path.to_string_lossy().to_string()))
-}
-
-fn object_nil(
-    gen: &mut Codegen,
-    ctx: &mut BBContext,
-    callsite: &CallSiteInfo,
-    _pc: BcPc,
-    _deopt: DestLabel,
-) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.load_rdi(recv);
-    ctx.dealloc_xmm(ret);
-    let l1 = gen.jit.label();
-    monoasm!( &mut gen.jit,
-        movq rax, (FALSE_VALUE);
-        cmpq rdi, (NIL_VALUE);
-        jne  l1;
-        movq rax, (TRUE_VALUE);
-    l1:
-    );
-    gen.store_rax(ret);
-}
-
-fn analysis_object_nil(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.def_as(callsite.ret, false);
 }
 
 #[cfg(test)]

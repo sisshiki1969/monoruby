@@ -26,7 +26,7 @@ impl Codegen {
     ///
     /// Fetch *reg*s and store in corresponding stack slots.
     ///
-    pub(super) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
+    pub(in crate::executor) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
         reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
     }
 

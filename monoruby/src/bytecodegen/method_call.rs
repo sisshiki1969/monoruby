@@ -364,7 +364,7 @@ impl BytecodeGen {
         Ok(None)
     }
 
-    fn emit_call(
+    pub(super) fn emit_call(
         &mut self,
         recv: BcReg,
         callid: CallSiteId,
@@ -381,6 +381,18 @@ impl BytecodeGen {
             self.emit(BcIr::MethodCall(ret, callid, has_splat), loc)
         };
         self.emit(BcIr::MethodArgs(recv, arg, len), loc);
+    }
+
+    pub(super) fn emit_binary_op(
+        &mut self,
+        method: IdentId,
+        lhs: BcReg,
+        rhs: BcReg,
+        ret: Option<BcReg>,
+        loc: Loc,
+    ) {
+        let callid = self.add_callsite(method, 1, None, vec![], None, rhs, 1, lhs, ret);
+        self.emit_call(lhs, callid, ret, rhs, 1, false, false, loc);
     }
 
     fn emit_super(

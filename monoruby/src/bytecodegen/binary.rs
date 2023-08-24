@@ -21,13 +21,33 @@ impl BytecodeGen {
             BinOp::BitOr => self.gen_bitor(dst, lhs, rhs, loc),
             BinOp::BitAnd => self.gen_bitand(dst, lhs, rhs, loc),
             BinOp::BitXor => self.gen_bitxor(dst, lhs, rhs, loc),
-            BinOp::Shr => self.gen_shr(dst, lhs, rhs, loc),
-            BinOp::Shl => self.gen_shl(dst, lhs, rhs, loc),
+            BinOp::Shr => self.gen_binop_method(IdentId::_SHR, dst, lhs, rhs, loc),
+            BinOp::Shl => self.gen_binop_method(IdentId::_SHL, dst, lhs, rhs, loc),
             BinOp::LAnd => self.gen_land(dst, lhs, rhs),
             BinOp::LOr => self.gen_lor(dst, lhs, rhs),
             BinOp::Match => self.gen_match(dst, lhs, rhs),
             BinOp::Cmp(kind) => self.gen_cmp(dst, kind, lhs, rhs, false, loc),
         }
+    }
+
+    fn gen_binop_method(
+        &mut self,
+        method: IdentId,
+        dst: Option<BcReg>,
+        lhs: Node,
+        rhs: Node,
+        loc: Loc,
+    ) -> Result<BcReg> {
+        let lhs = self.push_expr(lhs)?.into();
+        let rhs = self.gen_temp_expr(rhs)?.into();
+        let ret = if let Some(ret) = dst {
+            self.pop();
+            ret
+        } else {
+            lhs
+        };
+        self.emit_binary_op(method, lhs, rhs, Some(ret), loc);
+        Ok(ret)
     }
 
     pub(super) fn gen_teq_condbr(
@@ -147,8 +167,6 @@ impl BytecodeGen {
         (bitor, BitOr),
         (bitand, BitAnd),
         (bitxor, BitXor),
-        (shr, Shr),
-        (shl, Shl),
         (exp, Exp)
     );
     gen_ops!((rem, Rem));

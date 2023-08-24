@@ -10,8 +10,6 @@ impl Codegen {
     ) {
         let (_, version) = pc.class_version();
         let deopt = self.gen_side_deopt(pc, ctx);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
         self.guard_version(version, deopt);
         inline_gen(self, ctx, callsite, pc, deopt);
     }
@@ -590,15 +588,20 @@ impl Codegen {
 
 impl Codegen {
     fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
+        assert_eq!(0, self.jit.get_page());
         let global_class_version = self.class_version;
-        let cont = self.jit.label();
+        let fail = self.jit.label();
         monoasm!( &mut self.jit,
             cmpl [rip + global_class_version], (cached_version);
-            je   cont;
+            jne  fail;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        fail:
             movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
             jmp  side_exit;
-        cont:
         );
+        self.jit.select_page(0);
     }
 
     /// Set *self*, len, block, and arguments.

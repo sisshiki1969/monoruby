@@ -278,15 +278,19 @@ impl BBContext {
         merge_ctx
     }
 
-    fn try_positive_i16_literal(&self, slot: SlotId) -> Option<i16> {
+    fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::Const(v) = self[slot] {
             let i = v.try_fixnum()?;
-            let i = i16::try_from(i).ok()?;
-            if i >= 0 {
-                Some(i)
-            } else {
-                None
-            }
+            u16::try_from(i).ok()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
+        if let LinkMode::Const(v) = self[slot] {
+            let i = v.try_fixnum()?;
+            u8::try_from(i).ok()
         } else {
             None
         }

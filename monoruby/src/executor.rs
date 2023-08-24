@@ -1418,8 +1418,6 @@ pub enum BinOpK {
     BitOr = 4,
     BitAnd = 5,
     BitXor = 6,
-    Shr = 7,
-    Shl = 8,
     Rem = 9,
     Exp = 10,
 }
@@ -1435,8 +1433,6 @@ impl fmt::Display for BinOpK {
             BinOpK::BitOr => "|",
             BinOpK::BitAnd => "&",
             BinOpK::BitXor => "^",
-            BinOpK::Shr => ">>",
-            BinOpK::Shl => "<<",
             BinOpK::Rem => "%",
             BinOpK::Exp => "**",
         };
@@ -1454,8 +1450,6 @@ impl BinOpK {
             4 => BinOpK::BitOr,
             5 => BinOpK::BitAnd,
             6 => BinOpK::BitXor,
-            7 => BinOpK::Shr,
-            8 => BinOpK::Shl,
             9 => BinOpK::Rem,
             10 => BinOpK::Exp,
             _ => unreachable!(),
@@ -1471,8 +1465,6 @@ impl BinOpK {
             BinOpK::BitOr => bitor_values,
             BinOpK::BitAnd => bitand_values,
             BinOpK::BitXor => bitxor_values,
-            BinOpK::Shr => shr_values,
-            BinOpK::Shl => shl_values,
             BinOpK::Rem => rem_values,
             BinOpK::Exp => pow_values,
         }

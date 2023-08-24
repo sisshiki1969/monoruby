@@ -11,7 +11,7 @@ impl Codegen {
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             // flag for small positive integer
-            let spi = ctx.try_positive_i16_literal(idx);
+            let spi = ctx.is_u16_literal(idx);
             if spi.is_none() {
                 self.fetch_slots(ctx, &[base, idx]);
             } else {
@@ -118,7 +118,7 @@ impl Codegen {
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             // flag for small positive integer
-            let spi = ctx.try_positive_i16_literal(idx);
+            let spi = ctx.is_u16_literal(idx);
             if spi.is_none() {
                 self.fetch_slots(ctx, &[base, idx, src]);
             } else {

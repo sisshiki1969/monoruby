@@ -116,21 +116,6 @@ impl Codegen {
                             addq rdi, 1;
                         );
                     }
-                    BinOpK::Shr => {
-                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
-                        self.gen_shr(deopt);
-                    }
-                    BinOpK::Shl => match mode {
-                        OpMode::RI(lhs, imm) if imm >= 0 && i8::try_from(imm).is_ok() => {
-                            let imm = i8::try_from(imm).unwrap() as u8;
-                            self.load_guard_rdi_fixnum(lhs, deopt);
-                            self.gen_shl_imm(imm, deopt);
-                        }
-                        _ => {
-                            self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
-                            self.gen_shl(deopt);
-                        }
-                    },
                     _ => unimplemented!(),
                 }
                 self.store_rdi(ret);
@@ -547,7 +532,7 @@ impl Codegen {
         }
     }
 
-    fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
+    pub(crate) fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
         self.load_rdi(reg);
         self.guard_rdi_fixnum(deopt);
     }
@@ -557,7 +542,7 @@ impl Codegen {
         self.guard_rsi_fixnum(deopt);
     }
 
-    fn load_guard_binary_fixnum(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
+    pub(crate) fn load_guard_binary_fixnum(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
         self.load_binary_args(lhs, rhs);
         self.guard_rdi_fixnum(deopt);
         self.guard_rsi_fixnum(deopt);
@@ -581,7 +566,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn load_and_guard_binary_fixnum_with_mode(
+    pub(crate) fn load_and_guard_binary_fixnum_with_mode(
         &mut self,
         deopt: DestLabel,
         mode: &OpMode,
@@ -622,7 +607,21 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn gen_shr(&mut self, deopt: DestLabel) {
+    ///
+    /// gen code for shift-right of integer.
+    ///
+    /// ### in
+    /// - rdi: lhs:Value
+    /// - rsi: rhs:Value
+    ///
+    /// ### out
+    /// - rdi: result:Value
+    ///
+    /// ### destroy
+    /// - rax
+    /// - rcx
+    ///
+    pub(crate) fn gen_shr(&mut self, deopt: DestLabel) {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -651,7 +650,35 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn gen_shl(&mut self, deopt: DestLabel) {
+    pub(crate) fn gen_shr_imm(&mut self, imm: u8) {
+        let after = self.jit.label();
+        let under = self.jit.label();
+        monoasm!( &mut self.jit,
+            movq rcx, (imm);
+            cmpq rcx, 64;
+            jge under;
+            sarq rdi, rcx;
+        after:
+            orq rdi, 1;
+        );
+        self.shift_under(under, after);
+    }
+
+    ///
+    /// gen code for shift-left of integer.
+    ///
+    /// ### in
+    /// - rdi: lhs:Value
+    /// - rsi: rhs:Value
+    ///
+    /// ### out
+    /// - rdi: result:Value
+    ///
+    /// ### destroy
+    /// - rax
+    /// - rcx
+    ///
+    pub(crate) fn gen_shl(&mut self, deopt: DestLabel) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -681,9 +708,19 @@ impl Codegen {
     }
 
     ///
-    /// lhs << imm(>=0)
+    /// gen code for shift-left of integer (rhs is u8).
     ///
-    fn gen_shl_imm(&mut self, imm: u8, deopt: DestLabel) {
+    /// ### in
+    /// - rdi: lhs:Value
+    ///
+    /// ### out
+    /// - rdi: result:Value
+    ///
+    /// ### destroy
+    /// - rax
+    /// - rcx
+    ///
+    pub(crate) fn gen_shl_imm(&mut self, imm: u8, deopt: DestLabel) {
         monoasm!( &mut self.jit,
             movl rcx, (imm);
             lzcntq rax, rdi;

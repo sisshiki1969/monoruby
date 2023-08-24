@@ -197,8 +197,6 @@ impl Codegen {
         let (xor_rr, xor_ri, xor_ir) = self.vm_binops_opt(Self::int_xor, bitxor_values);
         let (div_rr, div_ri, div_ir) = self.vm_binops(div_values);
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values);
-        let (shl_rr, shl_ri, shl_ir) = self.vm_binops(shl_values);
-        let (shr_rr, shr_ri, shr_ir) = self.vm_binops(shr_values);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values);
 
         self.dispatch[1] = self.vm_singleton_method_def();
@@ -309,8 +307,8 @@ impl Codegen {
         self.dispatch[184] = or_ir;
         self.dispatch[185] = and_ir;
         self.dispatch[186] = xor_ir;
-        self.dispatch[187] = shr_ir;
-        self.dispatch[188] = shl_ir;
+        //self.dispatch[187] = shr_ir;
+        //self.dispatch[188] = shl_ir;
         self.dispatch[190] = pow_ir;
 
         self.dispatch[200] = add_rr;
@@ -320,8 +318,8 @@ impl Codegen {
         self.dispatch[204] = or_rr;
         self.dispatch[205] = and_rr;
         self.dispatch[206] = xor_rr;
-        self.dispatch[207] = shr_rr;
-        self.dispatch[208] = shl_rr;
+        //self.dispatch[207] = shr_rr;
+        //self.dispatch[208] = shl_rr;
         self.dispatch[209] = self.vm_remrr();
         self.dispatch[210] = pow_rr;
 
@@ -332,8 +330,8 @@ impl Codegen {
         self.dispatch[224] = or_ri;
         self.dispatch[225] = and_ri;
         self.dispatch[226] = xor_ri;
-        self.dispatch[227] = shr_ri;
-        self.dispatch[228] = shl_ri;
+        //self.dispatch[227] = shr_ri;
+        //self.dispatch[228] = shl_ri;
         self.dispatch[230] = pow_ri;
 
         // method invoker.

@@ -10,7 +10,7 @@ impl BytecodeGen {
     /// Generate bytecode Ir for *expr*.
     pub(super) fn gen_expr(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
         let old = self.temp;
-        let _ = self.gen_expr_inner(expr, use_mode)?;
+        self.gen_expr_inner(expr, use_mode)?;
         match use_mode {
             UseMode::Use => assert_eq!(old + 1, self.temp),
             _ => assert_eq!(old, self.temp),
