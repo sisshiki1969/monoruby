@@ -205,8 +205,8 @@ impl Codegen {
         }
     }
 
-    fn generic_index(&mut self, xmm_using: &[Xmm], base: SlotId, idx: SlotId, pc: BcPc) {
-        self.xmm_save(&xmm_using);
+    fn generic_index(&mut self, using: &[Xmm], base: SlotId, idx: SlotId, pc: BcPc) {
+        self.xmm_save(&using);
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
@@ -216,18 +216,18 @@ impl Codegen {
             movq rax, (runtime::get_index);
             call rax;
         }
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(&using);
     }
 
     fn generic_index_assign(
         &mut self,
-        xmm_using: &[Xmm],
+        using: &[Xmm],
         base: SlotId,
         idx: SlotId,
         src: SlotId,
         pc: BcPc,
     ) {
-        self.xmm_save(&xmm_using);
+        self.xmm_save(&using);
         monoasm! { &mut self.jit,
             movq rdx, [r14 - (conv(base))]; // base: Value
             movq rcx, [r14 - (conv(idx))]; // idx: Value
@@ -238,6 +238,71 @@ impl Codegen {
             movq rax, (runtime::set_index);
             call rax;
         };
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(&using);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::tests::*;
+
+    #[test]
+    fn array_index() {
+        run_test(
+            r##"
+            a = [0,1,2,3,4,5]
+            res = []
+            -10.step(10,1) do |x| res << a[x] end
+            res
+        "##,
+        );
+        run_test(
+            r##"
+            a = [0,1,2,3,4,5]
+            [a[-100000],a[-7],a[-6],a[-5],a[-4],a[-3],a[-2],a[-1],a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8],a[9],a[100000]]
+        "##,
+        );
+    }
+
+    #[test]
+    fn array_index_assign() {
+        run_test(
+            r##"
+            a = [nil, nil, nil, nil, nil]
+            0.step(10,1) do |x| a[x] = x end
+            a
+        "##,
+        );
+        run_test(
+            r##"
+            a = [nil, nil, nil, nil, nil]
+            -5.step(-1,1) do |x| a[x] = x end
+            a
+        "##,
+        );
+        run_test(
+            r##"
+            a = [0,1,2,3,4,5]
+            a[-6] = 10
+            a[-5] = 9
+            a[-4] = 8
+            a[-3] = 7
+            a[-2] = 6
+            a[-1] = 5
+            r = a
+            a[0] = 20
+            a[1] = 21
+            a[2] = 22
+            a[3] = 23
+            a[4] = 24
+            a[5] = 25
+            a[6] = 26
+            [a,r]
+        "##,
+        );
+        run_test("a = []; a[100] = 42; a");
+        run_test("a = []; a[100000] = 42; a");
+        run_test_error("a = [1,2]; a[-3] = 42");
+        run_test_error("a = [1,2]; a[-100000] = 42");
     }
 }
