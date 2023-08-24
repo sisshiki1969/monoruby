@@ -12,45 +12,37 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Kernel");
     let kernel_class = klass.id();
     globals.include_module(OBJECT_CLASS.get_module(globals), klass);
-    globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
-    globals.define_builtin_func(kernel_class, "p", p, -1);
-    globals.define_builtin_func(kernel_class, "class", class, 0);
-    globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(kernel_class, "respond_to?", respond_to, 1);
-    globals.define_builtin_func(kernel_class, "instance_of?", instance_of, 1);
-    globals.define_builtin_inline_func(
-        kernel_class,
-        "nil?",
-        nil,
-        0,
-        object_nil,
-        analysis_object_nil,
-    );
-    globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined, 1);
-    globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set, 2);
-    globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get, 1);
-    globals.define_builtin_func(kernel_class, "puts", puts, -1);
-    globals.define_builtin_func(kernel_class, "print", print, -1);
-    globals.define_builtin_func(kernel_class, "loop", loop_, 0);
-    globals.define_builtin_func(kernel_class, "fail", raise, -1);
-    globals.define_builtin_func(kernel_class, "raise", raise, -1);
-    globals.define_builtin_func(kernel_class, "block_given?", block_given, 0);
-    globals.define_builtin_func(kernel_class, "rand", rand, -1);
-    globals.define_builtin_func(kernel_class, "method", method, 1);
-    globals.define_builtin_func(kernel_class, "Integer", kernel_integer, 1);
-    globals.define_builtin_func(kernel_class, "require", require, 1);
-    globals.define_builtin_func(kernel_class, "require_relative", require_relative, 1);
-    globals.define_builtin_func(kernel_class, "system", system, -1);
-    globals.define_builtin_func(kernel_class, "`", command, 1);
-    globals.define_builtin_func(kernel_class, "abort", abort, -1);
-    globals.define_builtin_func(kernel_class, "__dir__", dir_, 0);
-    globals.define_builtin_func(kernel_class, "__assert", assert, 2);
-    globals.define_builtin_func(kernel_class, "__dump", dump, 0);
+    globals.define_builtin_func(kernel_class, "inspect", inspect);
+    globals.define_builtin_func(kernel_class, "p", p);
+    globals.define_builtin_func(kernel_class, "class", class);
+    globals.define_builtin_func(kernel_class, "singleton_class", singleton_class);
+    globals.define_builtin_func(kernel_class, "respond_to?", respond_to);
+    globals.define_builtin_func(kernel_class, "instance_of?", instance_of);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, object_nil, analysis_object_nil);
+    globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined);
+    globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set);
+    globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get);
+    globals.define_builtin_func(kernel_class, "puts", puts);
+    globals.define_builtin_func(kernel_class, "print", print);
+    globals.define_builtin_func(kernel_class, "loop", loop_);
+    globals.define_builtin_func(kernel_class, "fail", raise);
+    globals.define_builtin_func(kernel_class, "raise", raise);
+    globals.define_builtin_func(kernel_class, "block_given?", block_given);
+    globals.define_builtin_func(kernel_class, "rand", rand);
+    globals.define_builtin_func(kernel_class, "method", method);
+    globals.define_builtin_func(kernel_class, "Integer", kernel_integer);
+    globals.define_builtin_func(kernel_class, "require", require);
+    globals.define_builtin_func(kernel_class, "require_relative", require_relative);
+    globals.define_builtin_func(kernel_class, "system", system);
+    globals.define_builtin_func(kernel_class, "`", command);
+    globals.define_builtin_func(kernel_class, "abort", abort);
+    globals.define_builtin_func(kernel_class, "__dir__", dir_);
+    globals.define_builtin_func(kernel_class, "__assert", assert);
+    globals.define_builtin_func(kernel_class, "__dump", dump);
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
         super::enumerator::yielder_yield,
-        -1,
     );
 }
 

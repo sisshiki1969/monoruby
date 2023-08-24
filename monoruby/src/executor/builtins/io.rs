@@ -7,8 +7,8 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS);
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
-    globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
-    globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
+    globals.define_builtin_func(IO_CLASS, "sync", sync);
+    globals.define_builtin_func(IO_CLASS, "sync=", assign_sync);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);

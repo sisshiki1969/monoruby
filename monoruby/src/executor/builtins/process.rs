@@ -14,9 +14,9 @@ mod rusage;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Process").id();
     globals.define_class_by_str("Tms", globals.object_class(), klass);
-    globals.define_builtin_module_func(klass, "pid", pid, 0);
-    globals.define_builtin_module_func(klass, "times", times, 0);
-    globals.define_builtin_module_func(klass, "clock_gettime", clock_gettime, 1);
+    globals.define_builtin_module_func(klass, "pid", pid);
+    globals.define_builtin_module_func(klass, "times", times);
+    globals.define_builtin_module_func(klass, "clock_gettime", clock_gettime);
 }
 
 ///

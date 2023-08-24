@@ -6,16 +6,16 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS);
-    globals.define_builtin_class_func(RANGE_CLASS, "new", range_new, -1);
-    globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
-    globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
-    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
-    globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
-    globals.define_builtin_func(RANGE_CLASS, "all?", all_, -1);
-    globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "entries", toa, 0);
-    globals.define_builtin_func(RANGE_CLASS, "to_a", toa, 0);
+    globals.define_builtin_class_func(RANGE_CLASS, "new", range_new);
+    globals.define_builtin_func(RANGE_CLASS, "begin", begin);
+    globals.define_builtin_func(RANGE_CLASS, "end", end);
+    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end);
+    globals.define_builtin_func(RANGE_CLASS, "each", each);
+    globals.define_builtin_func(RANGE_CLASS, "all?", all_);
+    globals.define_builtin_func(RANGE_CLASS, "collect", map);
+    globals.define_builtin_func(RANGE_CLASS, "map", map);
+    globals.define_builtin_func(RANGE_CLASS, "entries", toa);
+    globals.define_builtin_func(RANGE_CLASS, "to_a", toa);
 }
 
 /// ### Range.new

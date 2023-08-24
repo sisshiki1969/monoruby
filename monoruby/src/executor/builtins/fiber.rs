@@ -6,9 +6,9 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Fiber", FIBER_CLASS);
-    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
-    globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield, -1);
-    globals.define_builtin_func(FIBER_CLASS, "resume", resume, -1);
+    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new);
+    globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield);
+    globals.define_builtin_func(FIBER_CLASS, "resume", resume);
 }
 
 ///

@@ -7,25 +7,23 @@ use num::{ToPrimitive, Zero};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Integer", INTEGER_CLASS);
-    globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "step", step, -1);
+    globals.define_builtin_func(INTEGER_CLASS, "chr", chr);
+    globals.define_builtin_func(INTEGER_CLASS, "times", times);
+    globals.define_builtin_func(INTEGER_CLASS, "step", step);
     globals.define_builtin_inline_func(
         INTEGER_CLASS,
         "to_f",
         to_f,
-        0,
         integer_tof,
         analysis_integer_tof,
     );
-    globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
+    globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i);
+    globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i);
+    globals.define_builtin_func(INTEGER_CLASS, "+", add);
     globals.define_builtin_inline_func(
         INTEGER_CLASS,
         ">>",
         shr,
-        1,
         integer_shr,
         analysis_integer_binop,
     );
@@ -33,13 +31,12 @@ pub(super) fn init(globals: &mut Globals) {
         INTEGER_CLASS,
         "<<",
         shl,
-        1,
         integer_shl,
         analysis_integer_binop,
     );
-    globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "[]", index);
+    globals.define_builtin_func(INTEGER_CLASS, "even?", even_);
+    globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_);
 }
 
 ///

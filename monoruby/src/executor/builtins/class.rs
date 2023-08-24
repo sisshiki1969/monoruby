@@ -8,17 +8,16 @@ use monoruby_attr::monoruby_builtin;
 pub(super) fn init(globals: &mut Globals) {
     let module = MODULE_CLASS.get_module(globals);
     globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
-    globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
+    globals.define_builtin_class_func(CLASS_CLASS, "new", class_new);
     globals.define_builtin_inline_func(
         CLASS_CLASS,
         "new",
         new,
-        -1,
         inline_class_new,
         analysis_class_new,
     );
-    globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_func(CLASS_CLASS, "superclass", superclass);
+    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate);
 }
 
 /// ### Class.new

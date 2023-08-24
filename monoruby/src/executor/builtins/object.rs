@@ -12,30 +12,29 @@ pub(super) fn init(globals: &mut Globals) {
         OBJECT_CLASS,
         "object_id",
         object_id,
-        0,
         object_object_id,
         analysis_object_id,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "send", send, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "__send__", send, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect);
+    globals.define_builtin_func(OBJECT_CLASS, "class", class);
+    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class);
+    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum);
+    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_);
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s);
+    globals.define_builtin_func(OBJECT_CLASS, "method", method);
+    globals.define_builtin_func(OBJECT_CLASS, "system", system);
+    globals.define_builtin_func(OBJECT_CLASS, "`", command);
+    globals.define_builtin_func(OBJECT_CLASS, "send", send);
+    globals.define_builtin_func(OBJECT_CLASS, "__send__", send);
 }
 
 ///

@@ -7,8 +7,8 @@ use num::BigInt;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Random").id();
-    globals.define_builtin_class_func(klass, "srand", srand, -1);
-    globals.define_builtin_class_func(klass, "rand", rand, 0);
+    globals.define_builtin_class_func(klass, "srand", srand);
+    globals.define_builtin_class_func(klass, "rand", rand);
 }
 
 /// ### Random.srand

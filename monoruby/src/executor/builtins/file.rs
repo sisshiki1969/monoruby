@@ -16,15 +16,15 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
         .id();
-    globals.define_builtin_class_func(klass, "write", write, 2);
-    globals.define_builtin_class_func(klass, "read", read, 1);
-    globals.define_builtin_class_func(klass, "binread", binread, 1);
-    globals.define_builtin_class_func(klass, "join", join, -1);
-    globals.define_builtin_class_func(klass, "expand_path", expand_path, -1);
-    globals.define_builtin_class_func(klass, "dirname", dirname, 1);
-    globals.define_builtin_class_func(klass, "basename", basename, 1);
-    globals.define_builtin_class_func(klass, "extname", extname, 1);
-    globals.define_builtin_class_func(klass, "exist?", exist, 1);
+    globals.define_builtin_class_func(klass, "write", write);
+    globals.define_builtin_class_func(klass, "read", read);
+    globals.define_builtin_class_func(klass, "binread", binread);
+    globals.define_builtin_class_func(klass, "join", join);
+    globals.define_builtin_class_func(klass, "expand_path", expand_path);
+    globals.define_builtin_class_func(klass, "dirname", dirname);
+    globals.define_builtin_class_func(klass, "basename", basename);
+    globals.define_builtin_class_func(klass, "extname", extname);
+    globals.define_builtin_class_func(klass, "exist?", exist);
 }
 
 ///

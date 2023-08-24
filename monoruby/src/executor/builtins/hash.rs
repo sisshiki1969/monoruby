@@ -6,27 +6,27 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
-    globals.define_builtin_class_func(HASH_CLASS, "new", new, -1);
-    globals.define_builtin_func(HASH_CLASS, "size", size, 0);
-    globals.define_builtin_func(HASH_CLASS, "length", size, 0);
-    globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
-    globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
-    globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
-    globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
-    globals.define_builtin_func(HASH_CLASS, "fetch", fetch, -1);
-    globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
-    globals.define_builtin_func(HASH_CLASS, "values", values, 0);
-    globals.define_builtin_func(HASH_CLASS, "each", each, 0);
-    globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
-    globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
-    globals.define_builtin_func(HASH_CLASS, "has_key?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "include?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "key?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "member?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
-    globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(HASH_CLASS, "merge", merge, -1);
-    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
+    globals.define_builtin_class_func(HASH_CLASS, "new", new);
+    globals.define_builtin_func(HASH_CLASS, "size", size);
+    globals.define_builtin_func(HASH_CLASS, "length", size);
+    globals.define_builtin_func(HASH_CLASS, "clear", clear);
+    globals.define_builtin_func(HASH_CLASS, "[]", index);
+    globals.define_builtin_func(HASH_CLASS, "[]=", index_assign);
+    globals.define_builtin_func(HASH_CLASS, "store", index_assign);
+    globals.define_builtin_func(HASH_CLASS, "fetch", fetch);
+    globals.define_builtin_func(HASH_CLASS, "keys", keys);
+    globals.define_builtin_func(HASH_CLASS, "values", values);
+    globals.define_builtin_func(HASH_CLASS, "each", each);
+    globals.define_builtin_func(HASH_CLASS, "each_key", each_key);
+    globals.define_builtin_func(HASH_CLASS, "each_value", each_value);
+    globals.define_builtin_func(HASH_CLASS, "has_key?", include);
+    globals.define_builtin_func(HASH_CLASS, "include?", include);
+    globals.define_builtin_func(HASH_CLASS, "key?", include);
+    globals.define_builtin_func(HASH_CLASS, "member?", include);
+    globals.define_builtin_func(HASH_CLASS, "to_s", inspect);
+    globals.define_builtin_func(HASH_CLASS, "inspect", inspect);
+    globals.define_builtin_func(HASH_CLASS, "merge", merge);
+    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -53,8 +53,8 @@ pub(super) fn init(globals: &mut Globals) {
 
     let env = Value::hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
-    globals.define_builtin_singleton_func(env, "fetch", fetch, -1);
-    globals.define_builtin_singleton_func(env, "[]", env_index, 1);
+    globals.define_builtin_singleton_func(env, "fetch", fetch);
+    globals.define_builtin_singleton_func(env, "[]", env_index);
 }
 
 /// ### Hash.new

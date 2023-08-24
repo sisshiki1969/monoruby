@@ -2,7 +2,7 @@ use crate::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     let module = globals.define_class_under_obj("Struct");
-    globals.define_builtin_class_func(module.id(), "new", struct_new, -1);
+    globals.define_builtin_class_func(module.id(), "new", struct_new);
 }
 
 #[monoruby_builtin]
@@ -25,11 +25,11 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
             globals.store[class_id].set_name(&format!("Struct::{s}"));
         }
     };
-    globals.define_builtin_func(class_id, "initialize", initialize, -1);
-    globals.define_builtin_func(class_id, "inspect", inspect, 0);
-    globals.define_builtin_func(class_id, "to_s", inspect, 0);
-    globals.define_builtin_class_func(class_id, "[]", new, -1);
-    globals.define_builtin_class_func(class_id, "new", new, -1);
+    globals.define_builtin_func(class_id, "initialize", initialize);
+    globals.define_builtin_func(class_id, "inspect", inspect);
+    globals.define_builtin_func(class_id, "to_s", inspect);
+    globals.define_builtin_class_func(class_id, "[]", new);
+    globals.define_builtin_class_func(class_id, "new", new);
 
     for arg in &arg_vec {
         let name = arg.expect_symbol_or_string(globals)?;

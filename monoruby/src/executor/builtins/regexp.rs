@@ -6,13 +6,13 @@ use crate::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Regexp", REGEXP_CLASS);
-    globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
-    globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
-    globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "last_match", regexp_last_match, -1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new);
+    globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new);
+    globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape);
+    globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape);
+    globals.define_builtin_class_func(REGEXP_CLASS, "last_match", regexp_last_match);
+    globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match);
+    globals.define_builtin_func(REGEXP_CLASS, "===", teq);
 }
 
 // Class methods

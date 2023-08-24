@@ -6,22 +6,22 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Module", MODULE_CLASS);
-    globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
-    globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
-    globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
-    globals.define_builtin_func(MODULE_CLASS, "constants", constants, -1);
-    globals.define_builtin_func(MODULE_CLASS, "const_get", const_get, -1);
-    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods, 0);
-    globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader, -1);
-    globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
-    globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
-    globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
-    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
-    globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
-    globals.define_private_builtin_func(MODULE_CLASS, "private", private, -1);
-    globals.define_private_builtin_func(MODULE_CLASS, "protected", protected, -1);
-    globals.define_private_builtin_func(MODULE_CLASS, "public", public, -1);
-    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
+    globals.define_builtin_func(MODULE_CLASS, "==", eq);
+    globals.define_builtin_func(MODULE_CLASS, "===", teq);
+    globals.define_builtin_func(MODULE_CLASS, "to_s", tos);
+    globals.define_builtin_func(MODULE_CLASS, "constants", constants);
+    globals.define_builtin_func(MODULE_CLASS, "const_get", const_get);
+    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods);
+    globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader);
+    globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer);
+    globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor);
+    globals.define_builtin_func(MODULE_CLASS, "include", include);
+    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined);
+    globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function);
+    globals.define_private_builtin_func(MODULE_CLASS, "private", private);
+    globals.define_private_builtin_func(MODULE_CLASS, "protected", protected);
+    globals.define_private_builtin_func(MODULE_CLASS, "public", public);
+    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method);
 }
 
 /// ### Module#==

@@ -6,12 +6,9 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
         visi: Visibility,
     ) -> FuncId {
-        let func_id = self
-            .store
-            .add_builtin_func(name.to_string(), address, arity);
+        let func_id = self.store.add_builtin_func(name.to_string(), address);
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, visi);
         func_id
@@ -22,9 +19,8 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
     ) -> FuncId {
-        self.new_builtin_func(class_id, name, address, arity, Visibility::Public)
+        self.new_builtin_func(class_id, name, address, Visibility::Public)
     }
 
     pub(crate) fn define_private_builtin_func(
@@ -32,9 +28,8 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
     ) -> FuncId {
-        self.new_builtin_func(class_id, name, address, arity, Visibility::Private)
+        self.new_builtin_func(class_id, name, address, Visibility::Private)
     }
 
     pub(crate) fn define_builtin_module_func(
@@ -42,11 +37,8 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
     ) -> FuncId {
-        let func_id = self
-            .store
-            .add_builtin_func(name.to_string(), address, arity);
+        let func_id = self.store.add_builtin_func(name.to_string(), address);
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Private);
         let class_id = self.get_metaclass(class_id).id();
@@ -59,11 +51,10 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
-        let func_id = self.define_builtin_func(class_id, name, address, arity);
+        let func_id = self.define_builtin_func(class_id, name, address);
         let inline_id = self.store.add_inline_info(
             inline_gen,
             inline_analysis,
@@ -78,10 +69,9 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
-        self.define_builtin_func(class_id, name, address, arity)
+        self.define_builtin_func(class_id, name, address)
     }
 
     pub(crate) fn define_builtin_singleton_func(
@@ -89,10 +79,9 @@ impl Globals {
         obj: Value,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
     ) -> FuncId {
         let class_id = self.get_singleton(obj).id();
-        self.define_builtin_func(class_id, name, address, arity)
+        self.define_builtin_func(class_id, name, address)
     }
 
     pub(in crate::executor) fn define_builtin_module_inline_func(
@@ -100,11 +89,10 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: i32,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
-        let func_id = self.define_builtin_module_func(class_id, name, address, arity);
+        let func_id = self.define_builtin_module_func(class_id, name, address);
         let inline_id = self.store.add_inline_info(
             inline_gen,
             inline_analysis,

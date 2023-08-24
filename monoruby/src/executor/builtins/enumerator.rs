@@ -11,19 +11,19 @@ static YIELDER_INIT: Once = Once::new();
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
-    globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index, -1);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
+    globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "next", next);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind);
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
-    globals.define_builtin_func(yielder.id(), "<<", yielder_push, 0);
-    globals.define_builtin_func(yielder.id(), "yield", yielder_yield, -1);
+    globals.define_builtin_func(yielder.id(), "<<", yielder_push);
+    globals.define_builtin_func(yielder.id(), "yield", yielder_yield);
 
     globals.define_builtin_class_by_str(
         "Generator",
@@ -31,8 +31,8 @@ pub(super) fn init(globals: &mut Globals) {
         OBJECT_CLASS.get_module(globals),
         ENUMERATOR_CLASS,
     );
-    globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new, 0);
-    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);
+    globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new);
+    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each);
 }
 
 ///

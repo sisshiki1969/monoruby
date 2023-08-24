@@ -49,13 +49,11 @@ impl std::default::Default for Funcs {
             FuncId::new(1),
             "".to_string(),
             enum_yielder,
-            -1,
         ));
         info.push(FuncInfo::new_native(
             FuncId::new(2),
             "".to_string(),
             yielder,
-            -1,
         ));
         Self {
             info,
@@ -149,15 +147,9 @@ impl Funcs {
         Ok(func_id)
     }
 
-    pub(super) fn add_native_func(
-        &mut self,
-        name: String,
-        address: BuiltinFn,
-        arity: i32,
-    ) -> FuncId {
+    pub(super) fn add_native_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
         let id = self.next_func_id();
-        self.info
-            .push(FuncInfo::new_native(id, name, address, arity));
+        self.info.push(FuncInfo::new_native(id, name, address));
         id
     }
 
@@ -390,14 +382,13 @@ impl FuncInfo {
         }
     }
 
-    fn new_native(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
-        let reg_num = if arity == -1 { -1 } else { arity as i64 };
+    fn new_native(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
         Self {
             name: Some(IdentId::get_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: None,
-                meta: Meta::native(func_id, reg_num),
+                meta: Meta::native(func_id),
             },
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
@@ -412,7 +403,7 @@ impl FuncInfo {
             data: FuncData {
                 codeptr: None,
                 pc: None,
-                meta: Meta::native(func_id, 0),
+                meta: Meta::native(func_id),
             },
             kind: FuncKind::AttrReader { ivar_name },
             jit_entry: Default::default(),
@@ -425,7 +416,7 @@ impl FuncInfo {
             data: FuncData {
                 codeptr: None,
                 pc: None,
-                meta: Meta::native(func_id, 1),
+                meta: Meta::native(func_id),
             },
             kind: FuncKind::AttrWriter { ivar_name },
             jit_entry: Default::default(),

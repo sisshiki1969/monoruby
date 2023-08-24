@@ -34,8 +34,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("TypeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("ZeroDivisionError", standarderr, OBJECT_CLASS);
 
-    globals.define_builtin_class_func(EXCEPTION_CLASS, "new", exception_new, -1);
-    globals.define_builtin_class_func(EXCEPTION_CLASS, "exception", exception_new, -1);
+    globals.define_builtin_class_func(EXCEPTION_CLASS, "new", exception_new);
+    globals.define_builtin_class_func(EXCEPTION_CLASS, "exception", exception_new);
 }
 
 ///
