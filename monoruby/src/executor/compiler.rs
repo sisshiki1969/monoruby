@@ -872,7 +872,7 @@ impl Codegen {
     /// - rax: Value
     ///
     /// ### destroy
-    /// - caller saved registers except rdi
+    /// - rax, rcx
     ///
     pub(super) fn f64_to_val(jit: &mut JitMemory) {
         let normal = jit.label();
@@ -898,7 +898,11 @@ impl Codegen {
             ret;
         heap_alloc:
         // we must save rdi for log_deoptimize.
-            subq rsp, 120;
+            subq rsp, 152;
+            movq [rsp + 144], r9;
+            movq [rsp + 136], r8;
+            movq [rsp + 128], rdx;
+            movq [rsp + 120], rsi;
             movq [rsp + 112], rdi;
             movq [rsp + 104], xmm15;
             movq [rsp + 96], xmm14;
@@ -931,7 +935,11 @@ impl Codegen {
             movq xmm14, [rsp + 96];
             movq xmm15, [rsp + 104];
             movq rdi, [rsp + 112];
-            addq rsp, 120;
+            movq rsi, [rsp + 120];
+            movq rdx, [rsp + 128];
+            movq r8, [rsp + 136];
+            movq r9, [rsp + 144];
+            addq rsp, 152;
             ret;
         );
     }

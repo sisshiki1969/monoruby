@@ -59,10 +59,13 @@ fn object_object_id(
     gen.fetch_slots(ctx, &[recv]);
     ctx.dealloc_xmm(ret);
     gen.load_rdi(recv);
+    let using = ctx.get_xmm_using();
+    gen.xmm_save(&using);
     monoasm! {&mut gen.jit,
         movq rax, (crate::executor::op::i64_to_value);
         call rax;
     }
+    gen.xmm_restore(&using);
     gen.store_rax(ret);
 }
 
