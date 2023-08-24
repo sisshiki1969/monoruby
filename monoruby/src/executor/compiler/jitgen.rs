@@ -716,7 +716,6 @@ impl Codegen {
                 }
                 TraceIr::BlockArgProxy(dst, outer) => {
                     ctx.dealloc_xmm(dst);
-                    let exit = self.jit.label();
                     if outer == 0 {
                         monoasm! { &mut self.jit,
                             movq rax, r14;
@@ -736,10 +735,11 @@ impl Codegen {
                     }
                     monoasm! { &mut self.jit,
                         movq rax, [rax - (LBP_BLOCK)];
+                        xorq rdi, rdi;
+                        movq rsi, 0b10;
                         testq rax, 0b1;
-                        jeq  exit;
-                        addq rax, 0b10;
-                    exit:
+                        cmovneq rdi, rsi;
+                        addq rax, rdi;
                     };
                     self.store_rax(dst);
                 }
@@ -876,13 +876,9 @@ impl Codegen {
                 TraceIr::Not { ret, src } => {
                     self.fetch_slot(&mut ctx, src);
                     ctx.dealloc_xmm(ret);
-                    monoasm!( &mut self.jit,
-                        movq rdi, [r14 - (conv(src))];
-                    );
+                    self.load_rdi(src);
                     self.not_rdi_to_rax();
-                    monoasm!( &mut self.jit,
-                        movq [r14 - (conv(ret))], rax;
-                    );
+                    self.store_rax(ret);
                 }
                 TraceIr::Neg { ret, src } => {
                     if pc.is_float1() {
@@ -1394,7 +1390,7 @@ impl Codegen {
             cmpl [rip + counter], 0;
             jlt deopt;
             jeq recompile;
-            dec:
+        dec:
             subl [rip + counter], 1;
             jmp deopt;
         );

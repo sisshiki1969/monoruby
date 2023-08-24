@@ -68,13 +68,11 @@ fn object_nil(
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     ctx.dealloc_xmm(ret);
-    let l1 = gen.jit.label();
     monoasm!( &mut gen.jit,
         movq rax, (FALSE_VALUE);
+        movq rsi, (TRUE_VALUE);
         cmpq rdi, (NIL_VALUE);
-        jne  l1;
-        movq rax, (TRUE_VALUE);
-    l1:
+        cmoveqq rax, rsi;
     );
     gen.store_rax(ret);
 }

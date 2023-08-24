@@ -74,9 +74,7 @@ impl Codegen {
                 ctx[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {
-                monoasm!(&mut self.jit,
-                    movq rax, [r14 - (conv(reg))];
-                );
+                self.load_rax(reg);
             }
         }
     }

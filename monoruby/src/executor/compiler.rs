@@ -214,18 +214,15 @@ impl Codegen {
     }
 
     fn icmp_cmp(&mut self) {
-        let less_than = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
             xorq rax, rax;
+            movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
             cmpq rdi, rsi;
             jeq  exit;
-            jlt  less_than;
-            movq rax, (Value::from_ord(std::cmp::Ordering::Greater).id());
-            jmp  exit;
-        less_than:
-            movq rax, (Value::from_ord(std::cmp::Ordering::Less).id());
-        exit:
+            cmovgeq rax, rdx;
+            movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
+            cmovltq rax, rdx;
         };
     }
 

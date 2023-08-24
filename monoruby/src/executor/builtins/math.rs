@@ -87,13 +87,14 @@ fn math_sqrt(
 ) {
     let CallSiteInfo {
         recv, args, ret, ..
-    } = callsite;
-    gen.load_rdi(*recv);
+    } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
+    gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(*ret);
+    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fret = ctx.xmm_write_enc(ret);
     monoasm!( &mut gen.jit,
         sqrtsd xmm(fret), xmm(fsrc);
     );
@@ -108,13 +109,14 @@ fn math_cos(
 ) {
     let CallSiteInfo {
         recv, args, ret, ..
-    } = callsite;
-    gen.load_rdi(*recv);
+    } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
+    gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(*ret);
+    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fret = ctx.xmm_write_enc(ret);
     let xmm_using = ctx.get_xmm_using();
     gen.xmm_save(&xmm_using);
     monoasm!( &mut gen.jit,
@@ -131,19 +133,20 @@ fn math_cos(
 fn math_sin(
     gen: &mut Codegen,
     ctx: &mut BBContext,
-    method_info: &CallSiteInfo,
+    callsite: &CallSiteInfo,
     pc: BcPc,
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
         recv, args, ret, ..
-    } = method_info;
-    gen.load_rdi(*recv);
+    } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
+    gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(*ret);
+    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fret = ctx.xmm_write_enc(ret);
     let xmm_using = ctx.get_xmm_using();
     gen.xmm_save(&xmm_using);
     monoasm!( &mut gen.jit,
