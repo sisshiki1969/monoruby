@@ -79,7 +79,7 @@ fn inline_class_new(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
-    _pc: BcPc,
+    pc: BcPc,
     _deopt: DestLabel,
 ) {
     let CallSiteInfo {
@@ -89,8 +89,9 @@ fn inline_class_new(
         ret,
         ..
     } = *callsite;
-    ctx.dealloc_xmm(ret);
+    gen.fetch_slots(ctx, &[recv]);
     gen.fetch_range(ctx, args, len);
+    ctx.dealloc_xmm(ret);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
     gen.load_rdi(recv);
@@ -99,6 +100,7 @@ fn inline_class_new(
     let class_version = gen.class_version;
     let slow_path = gen.jit.label();
     let checked = gen.jit.label();
+    let no_error = gen.jit.label();
     let exit = gen.jit.label();
     monoasm!( &mut gen.jit,
         movq rax, (allocate_instance);
@@ -123,13 +125,18 @@ fn inline_class_new(
         movq [rsp], 0;
         movq rax, (gen.method_invoker2);
         call rax;
+        testq rax, rax;
+        jne  no_error;
+        xorq r15, r15;
+    no_error:
         addq rsp, 16;
     exit:
+        movq rax, r15;
     );
     gen.xmm_restore(&using);
-    //gen.jit_handle_error(ctx, pc);
+    gen.jit_handle_error(ctx, pc);
     if !ret.is_zero() {
-        gen.store_r15(ret);
+        gen.store_rax(ret);
     }
 
     gen.jit.select_page(1);

@@ -65,6 +65,7 @@ fn object_nil(
     _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     ctx.dealloc_xmm(ret);
     let l1 = gen.jit.label();

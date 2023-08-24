@@ -56,12 +56,13 @@ fn object_object_id(
     _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
+    ctx.dealloc_xmm(ret);
     gen.load_rdi(recv);
     monoasm! {&mut gen.jit,
         movq rax, (crate::executor::op::i64_to_value);
         call rax;
     }
-    ctx.dealloc_xmm(ret);
     gen.store_rax(ret);
 }
 

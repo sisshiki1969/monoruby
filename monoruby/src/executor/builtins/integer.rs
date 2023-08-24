@@ -170,6 +170,7 @@ fn integer_tof(
     deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);

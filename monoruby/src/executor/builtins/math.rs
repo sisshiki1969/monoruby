@@ -13,9 +13,15 @@ pub(super) fn init(globals: &mut Globals) {
         .as_class();
     globals.define_class_by_str("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(3.141592653589793));
-    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, math_sqrt, analysis_sqrt);
-    globals.define_builtin_module_inline_func(klass, "cos", cos, math_cos, analysis_cos);
-    globals.define_builtin_module_inline_func(klass, "sin", sin, math_sin, analysis_sin);
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, math_sqrt, analysis_math);
+    globals.define_builtin_module_inline_func(klass, "cos", cos, math_cos, analysis_math);
+    globals.define_builtin_module_inline_func(klass, "sin", sin, math_sin, analysis_math);
+}
+
+fn analysis_math(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.use_non_float(callsite.recv);
+    info.use_as(callsite.args, true, FLOAT_CLASS);
+    info.def_as(callsite.ret, true);
 }
 
 /// ### Math.#sqrt
@@ -93,12 +99,6 @@ fn math_sqrt(
     );
 }
 
-fn analysis_sqrt(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.use_as(callsite.args, true, FLOAT_CLASS);
-    info.def_as(callsite.ret, true);
-}
-
 fn math_cos(
     gen: &mut Codegen,
     ctx: &mut BBContext,
@@ -128,12 +128,6 @@ fn math_cos(
     );
 }
 
-fn analysis_cos(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.use_as(callsite.args, true, FLOAT_CLASS);
-    info.def_as(callsite.ret, true);
-}
-
 fn math_sin(
     gen: &mut Codegen,
     ctx: &mut BBContext,
@@ -161,12 +155,6 @@ fn math_sin(
     monoasm!( &mut gen.jit,
         movq xmm(fret), xmm0;
     );
-}
-
-fn analysis_sin(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.use_as(callsite.args, true, FLOAT_CLASS);
-    info.def_as(callsite.ret, true);
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {
