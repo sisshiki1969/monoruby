@@ -9,6 +9,7 @@
 #![feature(step_trait)]
 #![feature(naked_functions)]
 #![feature(offset_of)]
+#![feature(ptr_internals)]
 mod alloc;
 pub mod bytecodegen;
 pub mod executor;

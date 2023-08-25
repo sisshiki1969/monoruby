@@ -50,6 +50,10 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
+pub const VEC_PTR: usize = 0;
+pub const VEC_CAPA: usize = 8;
+pub const VEC_LEN: usize = 16;
+
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {

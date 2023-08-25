@@ -69,12 +69,12 @@ impl Codegen {
             movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
             testq rsi, rsi;
             jz   exit;
-            movq rdi, [rsi]; // capa
+            movq rdi, [rsi + (VEC_CAPA)]; // capa
             testq rdi, rdi;
             jz   exit;
-            movq rdi, [rsi + 16]; // len
+            movq rdi, [rsi + (VEC_LEN)]; // len
             cmpq rdi, (idx);
-            movq rdi, [rsi + 8]; // ptr
+            movq rdi, [rsi + (VEC_PTR)]; // ptr
             cmovgtq rax, [rdi + (idx * 8)];
         exit:
         );

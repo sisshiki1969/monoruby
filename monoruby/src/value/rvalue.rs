@@ -9,6 +9,7 @@ pub use self::enumerator::*;
 pub use self::fiber::*;
 pub use self::hash::*;
 pub use self::io::IoInner;
+pub use self::ivar_table::*;
 pub use self::method::MethodInner;
 pub use self::module::*;
 pub use self::regexp::RegexpInner;
@@ -19,6 +20,7 @@ mod enumerator;
 mod fiber;
 mod hash;
 mod io;
+mod ivar_table;
 mod method;
 mod module;
 mod regexp;
@@ -43,7 +45,7 @@ pub struct RValue {
     header: Header,
     /// instance variable table. 8 bytes
     #[allow(clippy::box_collection)]
-    var_table: Option<Box<Vec<Option<Value>>>>,
+    var_table: Option<Box<IvarTable>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
 }
@@ -318,7 +320,8 @@ impl RValue {
                 v[i] = Some(val);
             }
             None => {
-                let mut v = vec![None; i + 1];
+                let mut v = IvarTable::with_capacity(i + 1);
+                v.resize(i + 1, None);
                 v[i] = Some(val);
                 self.var_table = Some(Box::new(v));
             }
@@ -336,10 +339,7 @@ impl RValue {
     pub(super) fn deep_copy(&self) -> Self {
         RValue {
             header: self.header,
-            var_table: self
-                .var_table
-                .as_ref()
-                .map(|table| Box::new(table.iter().map(|v| v.map(|v| v.deep_copy())).collect())),
+            var_table: self.var_table.clone(),
             kind: match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS | ObjKind::MODULE => {
