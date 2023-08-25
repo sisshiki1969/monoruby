@@ -85,7 +85,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn kind(&self) -> Option<u8> {
+    pub(crate) fn ty(&self) -> Option<u8> {
         self.try_rvalue().map(|rv| rv.ty())
     }
 

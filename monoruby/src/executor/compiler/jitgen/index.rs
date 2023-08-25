@@ -98,13 +98,14 @@ impl Codegen {
     /// - rax: the length.
     ///
     fn get_array_length(&mut self) {
-        let inline = self.jit.label();
+        //let inline = self.jit.label();
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
-            jle  inline;
-            movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-        inline:
+            //jle  inline;
+            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            //movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+        //inline:
         }
     }
 

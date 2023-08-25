@@ -1,5 +1,5 @@
-#cd monoruby && cargo install --path .
-#cd ../
+cd monoruby && cargo install --path .
+cd ../
 echo 'Ruby'
 ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 echo 'Ruby --yjit'

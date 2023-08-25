@@ -314,7 +314,7 @@ impl Globals {
     ///
     pub(crate) fn get_metaclass(&mut self, original: ClassId) -> Module {
         let original_obj = self.get_class_obj(original);
-        if original_obj.as_val().kind() == Some(ObjKind::CLASS) {
+        if original_obj.as_val().ty() == Some(ObjKind::CLASS) {
             let class = original_obj.as_val().get_class_obj(self);
             if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
                 return class;

@@ -26,6 +26,7 @@ mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 pub const RVALUE_OFFSET_TY: usize = 2;
+pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
 pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
 pub const RVALUE_OFFSET_ARY_CAPA: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_CAPA;
 pub const RVALUE_OFFSET_INLINE: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_INLINE;

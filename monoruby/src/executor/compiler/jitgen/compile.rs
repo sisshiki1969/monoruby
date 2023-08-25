@@ -10,21 +10,24 @@ impl Codegen {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        let exit = self.jit.label();
-        let xmm_using = ctx.get_xmm_using();
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
+        let xmm_using = ctx.get_xmm_using();
         if ctx.self_value.class() == cached_class {
-            if ctx.self_value.kind() == Some(ObjKind::OBJECT)
-                && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
-            {
+            if ctx.self_value.ty() == Some(ObjKind::OBJECT) {
+                if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+                    monoasm!( &mut self.jit,
+                        movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
+                    );
+                } else {
+                    self.load_ivar_heap(cached_ivarid);
+                }
+                // We must check whether the ivar slot is None.
                 monoasm!( &mut self.jit,
-                    movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
-                    // We must check whether the ivar slot is None.
+                    movq rdi, (NIL_VALUE);
                     testq rax, rax;
-                    jne  exit;
-                    movq rax, (NIL_VALUE);
+                    cmoveqq rax, rdi;
                 );
             } else {
                 monoasm!( &mut self.jit,
@@ -43,8 +46,41 @@ impl Codegen {
             );
             self.xmm_restore(&xmm_using);
         }
-        self.jit.bind_label(exit);
         self.store_rax(ret);
+    }
+
+    ///
+    /// Load ivar on `var_table`.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi
+    ///
+    fn load_ivar_heap(&mut self, ivarid: IvarId) {
+        let exit = self.jit.label();
+        let nil = self.jit.label();
+        monoasm!( &mut self.jit,
+            movq rax, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            testq rax, rax;
+            jz   nil;
+            movq rdi, [rax + 8]; // why?
+            testq rdi, rdi;
+            jz   nil;
+            movq rax, [rdi + ((ivarid.get() as i32 - OBJECT_INLINE_IVAR as i32) * 8)];
+        exit:
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        nil:
+            movq rax, (NIL_VALUE);
+            jmp  exit;
+        );
+        self.jit.select_page(0);
     }
 
     pub(super) fn jit_store_ivar(
@@ -63,12 +99,12 @@ impl Codegen {
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
         if ctx.self_value.class() == cached_class {
-            if ctx.self_value.kind() == Some(ObjKind::OBJECT)
+            if ctx.self_value.ty() == Some(ObjKind::OBJECT)
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {
                 self.load_rax(src);
                 monoasm!( &mut self.jit,
-                    movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
+                    movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
             } else {
                 monoasm!( &mut self.jit,
