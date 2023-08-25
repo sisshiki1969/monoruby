@@ -59,28 +59,25 @@ impl Codegen {
     /// - rax: Value
     ///
     /// #### destroy
-    /// - rdi
+    /// - rdi, rsi
     ///
     fn load_ivar_heap(&mut self, ivarid: IvarId) {
         let exit = self.jit.label();
-        let nil = self.jit.label();
+        let idx = (ivarid.get() as usize - OBJECT_INLINE_IVAR) as i32;
         monoasm!( &mut self.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rax, rax;
-            jz   nil;
-            movq rdi, [rax + 8]; // why?
+            movq rax, (NIL_VALUE);
+            movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            testq rsi, rsi;
+            jz   exit;
+            movq rdi, [rsi]; // capa
             testq rdi, rdi;
-            jz   nil;
-            movq rax, [rdi + ((ivarid.get() as i32 - OBJECT_INLINE_IVAR as i32) * 8)];
+            jz   exit;
+            movq rdi, [rsi + 16]; // len
+            cmpq rdi, (idx);
+            movq rdi, [rsi + 8]; // ptr
+            cmovgtq rax, [rdi + (idx * 8)];
         exit:
         );
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        nil:
-            movq rax, (NIL_VALUE);
-            jmp  exit;
-        );
-        self.jit.select_page(0);
     }
 
     pub(super) fn jit_store_ivar(

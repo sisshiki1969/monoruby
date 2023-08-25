@@ -266,10 +266,10 @@ impl Codegen {
                     movl rsi, (ivar_id.get());
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
-                    movq rax, [rdi + rsi * 8 + 16];
+                    movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)];
+                    movq rdi, (NIL_VALUE);
                     testq rax,rax;
-                    jnz  exit;
-                    movq rax, (NIL_VALUE);
+                    cmoveqq rax, rdi;
                 exit:
                 );
                 self.jit.select_page(1);
@@ -338,7 +338,7 @@ impl Codegen {
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [r14 - (conv(args))];  //val: Value
-                    movq [rdi + rsi * 8 + 16], rax;
+                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rax;
                 exit:
                 );
                 self.jit.select_page(1);
