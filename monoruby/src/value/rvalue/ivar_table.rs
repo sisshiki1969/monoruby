@@ -20,7 +20,6 @@ impl RawTable {
     }
 
     fn with_capacity(capacity: usize) -> Self {
-        eprintln!("with_capacity() RawTable");
         let ptr = if capacity == 0 {
             Unique::dangling()
         } else {
@@ -30,7 +29,6 @@ impl RawTable {
     }
 
     fn grow(&mut self) {
-        eprintln!("grow() {}", self.cap);
         unsafe {
             let elem_size = mem::size_of::<T>();
             let align = mem::align_of::<T>();
@@ -80,7 +78,6 @@ impl Clone for RawTable {
 
 impl Drop for RawTable {
     fn drop(&mut self) {
-        eprintln!("drop RawTable");
         let elem_size = mem::size_of::<T>();
         if self.cap != 0 {
             let align = mem::align_of::<T>();
@@ -219,7 +216,6 @@ impl IvarTable {
         unsafe {
             let mut ptr = self.as_mut_ptr().add(self.len);
             for _ in 0..n {
-                eprintln!("{:?}", ptr);
                 ptr::write(ptr, value);
                 ptr = ptr.add(1);
             }
@@ -252,7 +248,6 @@ impl Clone for IvarTable {
 
 impl Drop for IvarTable {
     fn drop(&mut self) {
-        eprintln!("drop IvarTable");
         while let Some(_) = self.pop() {}
         // allocation is handled by RawVec
     }
