@@ -768,10 +768,10 @@ impl Codegen {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use crate::tests::*;
     #[test]
     fn polymorphic() {
-        tests::run_test_with_prelude(
+        run_test_with_prelude(
             r##"
         res = []
                 
@@ -810,7 +810,7 @@ mod test {
 
     #[test]
     fn yield_test() {
-        tests::run_test(
+        run_test(
             r##"
           def f(x,y)
             yield x,y
@@ -828,7 +828,7 @@ mod test {
 
     #[test]
     fn iterator() {
-        tests::run_test(
+        run_test(
             r##"
         class Array
           def iich
@@ -849,7 +849,7 @@ mod test {
 
     #[test]
     fn attr_accessor() {
-        tests::run_test_with_prelude(
+        run_test_with_prelude(
             r##"
             x = [C.new, B.new, A.new]
             res = []
@@ -889,6 +889,52 @@ mod test {
               attr_accessor :a, :b, :c
             end
         "##,
+        );
+    }
+
+    #[test]
+    fn jit_attr_reader() {
+        run_test_with_prelude(
+            r###"
+        x = C.new
+        [x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h]
+        "###,
+            r###"
+        class C
+          attr_reader :a, :b, :c, :d, :e, :f, :g, :h
+          def initialize
+            @a = 1
+            @b = 2
+            @c = 3
+            @d = 4
+            @e = 5
+            @f = 6
+            @g = 7
+            @h = 8
+          end
+        end
+        "###,
+        );
+        run_test_with_prelude(
+            r###"
+        x = C.new
+        [x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h]
+        "###,
+            r###"
+        class C < Array
+          attr_reader :a, :b, :c, :d, :e, :f, :g, :h
+          def initialize
+            @a = 1
+            @b = 2
+            @c = 3
+            @d = 4
+            @e = 5
+            @f = 6
+            @g = 7
+            @h = 8
+          end
+        end
+        "###,
         );
     }
 }

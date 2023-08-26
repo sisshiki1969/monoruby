@@ -406,4 +406,46 @@ mod test {
         "##,
         );
     }
+
+    #[test]
+    fn ivar_in_different_class() {
+        run_test_with_prelude(
+            r##"
+            s = S.new
+            c = C.new
+            [s.get, c.get]
+        "##,
+            r##"
+            class S
+                def initialize
+                    @a = 10
+                    @b = 20
+                    @c = 30
+                    @d = 40
+                    @e = 50
+                    @f = 60
+                    @g = 70
+                    @h = 80
+                end
+                def get
+                    [@a, @b, @c, @d, @e, @f, @g, @h]
+                end
+            end
+
+            class C < S
+                def initialize
+                    @h = 8
+                    @g = 7
+                    @f = 6
+                    @e = 5
+                    @d = 4
+                    @c = 3
+                    @b = 2
+                    @a = 1
+                end
+            end
+            
+            "##,
+        );
+    }
 }
