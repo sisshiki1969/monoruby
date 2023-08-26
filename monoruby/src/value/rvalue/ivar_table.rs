@@ -5,8 +5,13 @@ extern crate alloc;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr::{self, Unique};
+use std::slice;
 
 type T = Option<Value>;
+
+pub const IVAR_TABLE_PTR: usize = std::mem::offset_of!(IvarTable, buf.ptr);
+pub const IVAR_TABLE_CAPA: usize = std::mem::offset_of!(IvarTable, buf.cap);
+pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable, len);
 
 ///
 /// A table of instant variables in the field `ivar_table` of RValue.
@@ -23,13 +28,13 @@ pub struct IvarTable {
 impl Deref for IvarTable {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        unsafe { ::std::slice::from_raw_parts(self.ptr(), self.len) }
+        unsafe { slice::from_raw_parts(self.ptr(), self.len) }
     }
 }
 
 impl DerefMut for IvarTable {
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { ::std::slice::from_raw_parts_mut(self.ptr(), self.len) }
+        unsafe { slice::from_raw_parts_mut(self.ptr(), self.len) }
     }
 }
 
@@ -84,12 +89,8 @@ impl IvarTable {
         self.reserve(n);
 
         unsafe {
-            let mut ptr = self.as_mut_ptr().add(self.len);
-            //ptr::write_bytes(ptr, 0, n * mem::size_of::<T>());
-            for _ in 0..n {
-                ptr::write(ptr, None);
-                ptr = ptr.add(1);
-            }
+            let ptr = self.as_mut_ptr().add(self.len);
+            ptr::write_bytes(ptr, 0, n);
         }
         self.len += n;
     }
@@ -141,7 +142,7 @@ impl Clone for RawTable {
     fn clone(&self) -> Self {
         unsafe {
             let ptr = alloc(self.cap);
-            std::ptr::copy_nonoverlapping(self.ptr.as_ptr(), ptr.as_ptr(), self.cap);
+            ptr::copy_nonoverlapping(self.ptr.as_ptr(), ptr.as_ptr(), self.cap);
             Self {
                 ptr: ptr.into(),
                 cap: self.cap,
@@ -214,7 +215,7 @@ impl RawTable {
             alloc::alloc::realloc(self.ptr.as_ptr() as _, layout, capacity * elem_size) as _
         };
         // If allocate or reallocate fail, we'll get `null` back
-        match std::ptr::NonNull::new(ptr) {
+        match ptr::NonNull::new(ptr) {
             None => alloc::alloc::handle_alloc_error(layout),
             Some(ptr) => ptr,
         }
@@ -224,7 +225,7 @@ impl RawTable {
 ///
 /// Allocate buffer.
 ///
-fn alloc(capacity: usize) -> std::ptr::NonNull<T> {
+fn alloc(capacity: usize) -> ptr::NonNull<T> {
     assert_ne!(0, capacity);
     let elem_size = mem::size_of::<T>();
     let align = mem::align_of::<T>();
@@ -233,7 +234,7 @@ fn alloc(capacity: usize) -> std::ptr::NonNull<T> {
     let ptr = unsafe { alloc::alloc::alloc(layout) as *mut T };
 
     // If allocate or reallocate fail, we'll get `null` back
-    match std::ptr::NonNull::new(ptr) {
+    match ptr::NonNull::new(ptr) {
         None => alloc::alloc::handle_alloc_error(layout),
         Some(ptr) => ptr,
     }

@@ -5,7 +5,7 @@ authors = ["monochrome <sisshiki@mac.com>"]
 description = "another Ruby interpreter with JIT compiler."
 repository = "https://github.com/sisshiki1969/monoruby"
 edition = "2021"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 default-run = "monoruby"
 build = "build.rs"
 
