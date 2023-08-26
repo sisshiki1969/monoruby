@@ -257,15 +257,14 @@ impl Codegen {
         ret: SlotId,
     ) {
         let exit = self.jit.label();
-        let no_inline = self.jit.label();
-        let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
+                let not_object = self.jit.label();
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                    jne  no_inline;
+                    jne  not_object;
                     movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)];
                     movq rdi, (NIL_VALUE);
                     testq rax,rax;
@@ -273,8 +272,10 @@ impl Codegen {
                 exit:
                 );
                 self.jit.select_page(1);
-                self.jit.bind_label(no_inline);
-                self.get_ivar(&xmm_using);
+                monoasm!( &mut self.jit,
+                    not_object:
+                );
+                self.load_ivar_heap_index();
                 monoasm!( &mut self.jit,
                     jmp  exit;
                 );
@@ -282,10 +283,16 @@ impl Codegen {
             } else {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
+                    xorq rax, rax;
+                    movl rdx, (OBJECT_INLINE_IVAR);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                    cmoveqq rax, rdx;
+                    subl rsi, rax;
                 );
-                self.get_ivar(&xmm_using);
+                self.load_ivar_heap_index();
             }
         } else {
+            let xmm_using = ctx.get_xmm_using();
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -316,6 +323,37 @@ impl Codegen {
         if !ret.is_zero() {
             self.store_rax(ret);
         }
+    }
+
+    ///
+    /// Load ivar on `var_table`.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    /// - rsi: index
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rdx
+    ///
+    fn load_ivar_heap_index(&mut self) {
+        let exit = self.jit.label();
+        monoasm!( &mut self.jit,
+            movq rax, (NIL_VALUE);
+            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            testq rdx, rdx;
+            jz   exit;
+            movq rdi, [rdx + (VEC_CAPA)]; // capa
+            testq rdi, rdi;
+            jz   exit;
+            movq rdi, [rdx + (VEC_LEN)]; // len
+            cmpq rdi, rsi;
+            movq rdi, [rdx + (VEC_PTR)]; // ptr
+            cmovgtq rax, [rdi + rsi * 8];
+        exit:
+        );
     }
 
     fn attr_writer(
