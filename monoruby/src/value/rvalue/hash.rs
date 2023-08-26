@@ -116,26 +116,26 @@ impl PartialEq for IdentKey {
     }
 }
 
-pub enum IntoIter {
+pub enum MonorubyHashIntoIter {
     Map(indexmap::map::IntoIter<HashKey, Value>),
     IdentMap(indexmap::map::IntoIter<IdentKey, Value>),
 }
 
-impl IntoIter {
-    fn new(hash: HashInner) -> IntoIter {
+impl MonorubyHashIntoIter {
+    fn new(hash: HashInner) -> MonorubyHashIntoIter {
         match hash {
-            HashInner::Map(map) => IntoIter::Map(map.into_iter()),
-            HashInner::IdentMap(map) => IntoIter::IdentMap(map.into_iter()),
+            HashInner::Map(map) => MonorubyHashIntoIter::Map(map.into_iter()),
+            HashInner::IdentMap(map) => MonorubyHashIntoIter::IdentMap(map.into_iter()),
         }
     }
 }
 
-impl Iterator for IntoIter {
+impl Iterator for MonorubyHashIntoIter {
     type Item = (Value, Value);
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            IntoIter::Map(map) => map.next().map(|(k, v)| (k.0, v)),
-            IntoIter::IdentMap(map) => map.next().map(|(k, v)| (k.0, v)),
+            MonorubyHashIntoIter::Map(map) => map.next().map(|(k, v)| (k.0, v)),
+            MonorubyHashIntoIter::IdentMap(map) => map.next().map(|(k, v)| (k.0, v)),
         }
     }
 }
@@ -202,10 +202,10 @@ define_into_iterator!(&'a mut HashInner, IterMut);
 
 impl IntoIterator for HashInner {
     type Item = (Value, Value);
-    type IntoIter = IntoIter;
+    type IntoIter = MonorubyHashIntoIter;
 
-    fn into_iter(self) -> IntoIter {
-        IntoIter::new(self)
+    fn into_iter(self) -> MonorubyHashIntoIter {
+        MonorubyHashIntoIter::new(self)
     }
 }
 

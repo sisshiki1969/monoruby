@@ -315,13 +315,13 @@ impl RValue {
         match &mut self.var_table {
             Some(v) => {
                 if v.len() <= i {
-                    v.resize(i + 1, None);
+                    v.resize(i + 1);
                 }
                 v[i] = Some(val);
             }
             None => {
                 let mut v = IvarTable::with_capacity(i + 1);
-                v.resize(i + 1, None);
+                v.resize(i + 1);
                 v[i] = Some(val);
                 self.var_table = Some(Box::new(v));
             }

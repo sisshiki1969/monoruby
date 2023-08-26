@@ -350,7 +350,6 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
 fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let val = arg[1];
-    eprintln!("iv_set");
     globals.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
 }
