@@ -263,6 +263,7 @@ impl Codegen {
                 let not_object = self.jit.label();
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
+                    // we don't know ty of the receiver in a compile time.
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  not_object;
                     movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)];
@@ -285,6 +286,7 @@ impl Codegen {
                     movl rsi, (ivar_id.get());
                     xorq rax, rax;
                     movl rdx, (OBJECT_INLINE_IVAR);
+                    // we don't know ty of the receiver in a compile time.
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     cmoveqq rax, rdx;
                     subl rsi, rax;
@@ -373,6 +375,7 @@ impl Codegen {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
+                    // we don't know ty of the receiver in a compile time.
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [r14 - (conv(args))];  //val: Value
@@ -405,12 +408,13 @@ impl Codegen {
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
                 jeq  slow_path;
+                // we don't know ty of the receiver in a compile time.
                 cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                 jne  no_inline;
                 cmpl rsi, (OBJECT_INLINE_IVAR);
                 jge no_inline;
                 movq rax, [r14 - (conv(args))];  //val: Value
-                movq [rdi + rsi * 8 + 16], rax;
+                movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rax;
             exit:
             );
             if !ret.is_zero() {
@@ -935,6 +939,211 @@ mod test {
           end
         end
         "###,
+        );
+    }
+
+    #[test]
+    fn deopt_method_recv_class() {
+        run_test_error(
+            r##"
+          class A
+            def w
+              42
+            end
+          end
+          class B
+          end
+          a = A.new
+          res = []
+          for i in 0..10
+            if i == 8
+              a = B.new
+            end
+            res << a.w
+          end
+          res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_reader_recv_class() {
+        run_test(
+            r##"
+            class A
+                attr_accessor :w
+            end
+            class B
+              def w
+                100
+              end
+            end
+            a = A.new
+            a.w = 42
+            res = []
+            for i in 0..10
+              if i == 8
+                a = B.new
+              end
+              res << a.w
+            end
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_writer_recv_class() {
+        run_test(
+            r##"
+            class A
+              attr_accessor :w
+            end
+            class B
+              attr_reader :w
+              def w=(v)
+                @w = v * 2
+              end
+            end
+            a = A.new
+            res = []
+            for i in 0..10
+              if i == 8
+                a = B.new
+              end
+              a.w = 42
+              res << a.w
+            end
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_reader_class_version() {
+        run_test(
+            r##"
+        class A
+          attr_accessor :w
+        end
+        a = A.new
+        a.w = 42
+        res = []
+        for i in 0..10
+          if i == 8
+            class A
+              def w
+                99
+              end
+            end
+          end
+          res << a.w
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_writer_class_version() {
+        run_test(
+            r##"
+        class A
+          attr_accessor :w
+        end
+        a = A.new
+        res = []
+        for i in 0..10
+          if i == 8
+            class A
+              def w=(v)
+                @w = v * 2
+              end
+            end
+          end
+          a.w = 42
+          res << a.w
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn attr_reader_in_different_class() {
+        run_test_with_prelude(
+            r##"
+            s = S.new
+            c = C.new
+            [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h, c.a, c.b, c.c, c.d, c.e, c.f, c.g, c.h]
+        "##,
+            r##"
+            class S
+                def initialize
+                    @a = 10
+                    @b = 20
+                    @c = 30
+                    @d = 40
+                    @e = 50
+                    @f = 60
+                    @g = 70
+                    @h = 80
+                end
+                attr_reader :a, :b, :c, :d, :e, :f, :g, :h
+            end
+
+            class C < S
+                def initialize
+                    @h = 8
+                    @g = 7
+                    @f = 6
+                    @e = 5
+                    @d = 4
+                    @c = 3
+                    @b = 2
+                    @a = 1
+                end
+                attr_reader :a, :b, :c, :c, :e, :f, :g, :h
+            end
+            
+            "##,
+        );
+        run_test_with_prelude(
+            r##"
+            s = S.new
+            c = C.new
+            [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h, c.a, c.b, c.c, c.d, c.e, c.f, c.g, c.h]
+        "##,
+            r##"
+            class S < Array
+                def initialize
+                    @a = 10
+                    @b = 20
+                    @c = 30
+                    @d = 40
+                    @e = 50
+                    @f = 60
+                    @g = 70
+                    @h = 80
+                end
+                attr_reader :a, :b, :c, :d, :e, :f, :g, :h
+            end
+
+            class C < S
+                def initialize
+                    @h = 8
+                    @g = 7
+                    @f = 6
+                    @e = 5
+                    @d = 4
+                    @c = 3
+                    @b = 2
+                    @a = 1
+                end
+                attr_reader :a, :b, :c, :c, :e, :f, :g, :h
+            end
+            
+            "##,
         );
     }
 }

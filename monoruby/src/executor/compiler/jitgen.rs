@@ -12,11 +12,12 @@ use slot::SlotState;
 pub mod analysis;
 mod basic_block;
 mod binary_op;
-mod compile;
 mod constants;
+mod definition;
 mod guard;
 mod index;
 mod init_method;
+mod ivar;
 mod merge;
 mod method_call;
 mod read_slot;
@@ -539,6 +540,38 @@ impl Codegen {
             movq  xmm0, xmm(l.enc());
             movq  xmm(l.enc()), xmm(r.enc());
             movq  xmm(r.enc()), xmm0;
+        );
+    }
+
+    pub(in crate::executor) fn xmm_save(&mut self, xmm_using: &[Xmm]) {
+        let len = xmm_using.len();
+        if len == 0 {
+            return;
+        }
+        let sp_offset = (len + len % 2) * 8;
+        monoasm!( &mut self.jit,
+            subq rsp, (sp_offset);
+        );
+        for (i, freg) in xmm_using.iter().enumerate() {
+            monoasm!( &mut self.jit,
+                movq [rsp + (8 * i)], xmm(freg.enc());
+            );
+        }
+    }
+
+    pub(in crate::executor) fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
+        let len = xmm_using.len();
+        if len == 0 {
+            return;
+        }
+        let sp_offset = (len + len % 2) * 8;
+        for (i, freg) in xmm_using.iter().enumerate() {
+            monoasm!( &mut self.jit,
+                movq xmm(freg.enc()), [rsp + (8 * i)];
+            );
+        }
+        monoasm!( &mut self.jit,
+            addq rsp, (sp_offset);
         );
     }
 
@@ -1574,36 +1607,51 @@ impl Codegen {
             }
         }
     }
+}
 
-    pub(in crate::executor) fn xmm_save(&mut self, xmm_using: &[Xmm]) {
-        let len = xmm_using.len();
-        if len == 0 {
-            return;
-        }
-        let sp_offset = (len + len % 2) * 8;
+impl Codegen {
+    ///
+    /// Get an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    ///
+    /// - rsi: IvarId
+    ///
+    /// #### out
+    ///
+    /// - rax: Value
+    ///
+    fn get_ivar(&mut self, using: &[Xmm]) {
+        self.xmm_save(using);
         monoasm!( &mut self.jit,
-            subq rsp, (sp_offset);
+            movq rax, (RValue::get_ivar);
+            call rax;
         );
-        for (i, freg) in xmm_using.iter().enumerate() {
-            monoasm!( &mut self.jit,
-                movq [rsp + (8 * i)], xmm(freg.enc());
-            );
-        }
+        self.xmm_restore(using);
     }
 
-    pub(in crate::executor) fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
-        let len = xmm_using.len();
-        if len == 0 {
-            return;
-        }
-        let sp_offset = (len + len % 2) * 8;
-        for (i, freg) in xmm_using.iter().enumerate() {
-            monoasm!( &mut self.jit,
-                movq xmm(freg.enc()), [rsp + (8 * i)];
-            );
-        }
+    ///
+    /// Set an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    ///
+    /// - rsi: IvarId
+    ///
+    /// #### destroy
+    ///
+    /// - caller-save registers
+    ///
+    fn set_ivar(&mut self, src: SlotId, using: &[Xmm]) {
+        self.xmm_save(using);
         monoasm!( &mut self.jit,
-            addq rsp, (sp_offset);
+            movq rdx, [r14 - (conv(src))];   // val: Value
+            movq rax, (RValue::set_ivar);
+            call rax;
         );
+        self.xmm_restore(using);
     }
 }
