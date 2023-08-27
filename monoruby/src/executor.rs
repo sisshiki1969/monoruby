@@ -1007,17 +1007,23 @@ impl BcPc {
             }
             TraceIr::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
-                    "{:?} = {id}: {}[{:?}]",
+                    "{:?} = {id}: {}",
                     reg,
-                    class_id.get_name(globals),
-                    ivar_id,
+                    if let Some(id) = class_id {
+                        format!("{}[{:?}]", id.get_name(globals), ivar_id)
+                    } else {
+                        format!("-")
+                    }
                 )
             }
             TraceIr::StoreIvar(reg, id, class_id, ivar_id) => {
                 format!(
-                    "{id}: {}[{:?}] = {:?}",
-                    class_id.get_name(globals),
-                    ivar_id,
+                    "{id}: {} = {:?}",
+                    if let Some(id) = class_id {
+                        format!("{}[{:?}]", id.get_name(globals), ivar_id)
+                    } else {
+                        format!("-")
+                    },
                     reg
                 )
             }

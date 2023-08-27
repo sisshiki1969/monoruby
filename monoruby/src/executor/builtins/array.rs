@@ -780,9 +780,9 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
         .is_array()
         .ok_or_else(|| MonorubyErr::argumenterr("Each element of receiver must be an array."))?
         .len();
-    let mut trans = vec![];
+    let mut trans = Array::new();
     for i in 0..len {
-        let mut temp = vec![];
+        let mut temp = Array::new();
         for v in ary.iter().cloned() {
             let a = v.is_array().ok_or_else(|| {
                 MonorubyErr::argumenterr("Each element of receiver must be an array.")
@@ -792,11 +792,9 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
             }
             temp.push(a[i]);
         }
-        let ary = Value::array_from_vec(temp);
-        trans.push(ary);
+        trans.push(temp.into());
     }
-    let res = Value::array_from_vec(trans);
-    Ok(res)
+    Ok(trans.into())
 }
 
 ///

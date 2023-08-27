@@ -53,8 +53,8 @@ pub(crate) enum TraceIr {
     StoreDynVar(DynVar, SlotId),
     BlockArgProxy(SlotId, usize),
     BlockArg(SlotId, usize),
-    LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
-    StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
+    LoadIvar(SlotId, IdentId, Option<ClassId>, IvarId), // ret, id  - %ret = @id
+    StoreIvar(SlotId, IdentId, Option<ClassId>, IvarId), // src, id  - @id = %src
     LoadGvar {
         dst: SlotId,
         name: IdentId,
@@ -276,7 +276,7 @@ impl TraceIr {
                     Self::LoadIvar(
                         SlotId::new(op1),
                         IdentId::from(op2),
-                        class,
+                        if class.0 == 0 { None } else { Some(class) },
                         IvarId::new(ivar),
                     )
                 }
@@ -285,7 +285,7 @@ impl TraceIr {
                     Self::StoreIvar(
                         SlotId::new(op1),
                         IdentId::from(op2),
-                        class,
+                        if class.0 == 0 { None } else { Some(class) },
                         IvarId::new(ivar),
                     )
                 }

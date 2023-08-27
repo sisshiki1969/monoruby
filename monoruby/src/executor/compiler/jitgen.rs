@@ -809,12 +809,22 @@ impl Codegen {
                     self.store_rax(dst);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
-                    ctx.dealloc_xmm(ret);
-                    self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
+                    if let Some(cached_class) = cached_class {
+                        ctx.dealloc_xmm(ret);
+                        self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
+                    } else {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        return;
+                    }
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
-                    self.fetch_slot(&mut ctx, src);
-                    self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
+                    if let Some(cached_class) = cached_class {
+                        self.fetch_slot(&mut ctx, src);
+                        self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
+                    } else {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        return;
+                    }
                 }
                 TraceIr::LoadGvar { dst: ret, name } => {
                     ctx.dealloc_xmm(ret);
