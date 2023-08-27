@@ -360,42 +360,46 @@ extern "C" fn log_deoptimize(
 ) {
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
-    #[cfg(feature = "log-jit")]
-    let name = globals.store.func_description(func_id);
-    #[cfg(feature = "log-jit")]
-    let fmt = pc.format(globals, index).unwrap_or_default();
 
     if let TraceIr::LoopEnd = pc.get_ir() {
         // normal exit from jit'ed loop
         #[cfg(feature = "log-jit")]
         {
+            let name = globals.store.func_description(func_id);
+            let fmt = pc.format(globals, index).unwrap_or_default();
             eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);
         }
     } else {
-        match globals.deopt_stats.get_mut(&(func_id, index)) {
-            Some(c) => *c = *c + 1,
-            None => {
-                globals.deopt_stats.insert((func_id, index), 1);
+        #[cfg(feature = "profile")]
+        {
+            match globals.deopt_stats.get_mut(&(func_id, index)) {
+                Some(c) => *c = *c + 1,
+                None => {
+                    globals.deopt_stats.insert((func_id, index), 1);
+                }
             }
-        };
+        }
         #[cfg(feature = "log-jit")]
         {
             let trace_ir = pc.get_ir();
-            if let TraceIr::LoadConst(..) = trace_ir {
-                // inline constant cache miss
-                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                eprintln!("    [{:05}] {fmt}", index);
-            } else if let TraceIr::ClassDef { .. } = trace_ir {
-                // error in class def (illegal superclass etc.)
-                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                eprintln!("    [{:05}] {fmt}", index);
-            } else if let Some(v) = v {
-                eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
-            } else {
-                eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
-                eprintln!("    [{:05}] {fmt}", index);
+            let name = globals.store.func_description(func_id);
+            let fmt = pc.format(globals, index).unwrap_or_default();
+            match trace_ir {
+                TraceIr::LoadConst(..)          // inline constant cache miss
+                | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)
+                | TraceIr::LoadIvar(..)         // inline ivar cache miss
+                | TraceIr::StoreIvar(..) => {
+                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt}", index);
+                },
+                _ => if let Some(v) = v {
+                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
+                } else {
+                    eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt}", index);
+                },
             }
         }
     }

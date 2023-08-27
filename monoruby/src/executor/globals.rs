@@ -59,11 +59,14 @@ pub struct Globals {
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
     /// stats for deoptimization
-    #[cfg(any(feature = "log-jit", feature = "profile"))]
+    #[cfg(feature = "profile")]
     pub(super) deopt_stats: HashMap<(FuncId, usize), usize>,
+    /// stats for inline method cache miss
+    #[cfg(feature = "profile")]
+    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     /// stats for method cache miss
-    #[cfg(any(feature = "log-jit", feature = "profile"))]
-    method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    #[cfg(feature = "profile")]
+    method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
     #[cfg(feature = "emit-bc")]
@@ -109,10 +112,12 @@ impl Globals {
             ],
             random: Prng::new(),
             loaded_canonicalized_files: IndexSet::default(),
-            #[cfg(any(feature = "log-jit", feature = "profile"))]
+            #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
-            #[cfg(any(feature = "log-jit", feature = "profile"))]
-            method_cache_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            global_method_cache_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            method_exploration_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
             #[cfg(feature = "emit-bc")]
@@ -622,15 +627,24 @@ impl Globals {
     #[cfg(feature = "profile")]
     pub(crate) fn show_stats(&self) {
         eprintln!();
-        eprintln!("deoptimization stats");
-        eprintln!("{:30} FuncId [{:05}]  {:10}", "func name", "index", "count");
-        eprintln!("---------------------------------------------------------");
+        eprintln!("deoptimization stats (top 20)");
+        eprintln!(
+            "{:30} FuncId [{:05}]     {:7}",
+            "func name", "index", "count"
+        );
+        eprintln!("-------------------------------------------------------------------------------------------------------------------");
         let mut v: Vec<_> = self.deopt_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((func_id, index), count) in v {
+        for ((func_id, index), count) in v.into_iter().take(20) {
+            let bc = BcPc::from(&self.store[*func_id].as_ruby_func().bytecode()[*index]);
+            let fmt = if let Some(fmt) = bc.format(self, *index) {
+                fmt
+            } else {
+                "<INVALID>".to_string()
+            };
             let name = self.store.func_description(*func_id);
             eprintln!(
-                "{:30}  {:5} [{:05}]  {:10}",
+                "{:30}  {:5} [{:05}]  {:10}   {fmt}",
                 name,
                 func_id.get(),
                 index,
@@ -638,10 +652,24 @@ impl Globals {
             );
         }
         eprintln!();
-        eprintln!("method cache stats (top 20)");
+        eprintln!("global method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-        eprintln!("--------------------------------------------------------------");
-        let mut v: Vec<_> = self.method_cache_stats.iter().collect();
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:30} {:30} {:10}",
+                name.to_string(),
+                class_id.get_name(self),
+                count
+            );
+        }
+        eprintln!();
+        eprintln!("full method exploration stats (top 20)");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         for ((class_id, name), count) in v.into_iter().take(20) {
             eprintln!(

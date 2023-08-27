@@ -547,12 +547,12 @@ impl Globals {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<MethodTableEntry> {
-        #[cfg(any(feature = "log-jit", feature = "profile"))]
+        #[cfg(feature = "profile")]
         {
-            match self.method_cache_stats.get_mut(&(class_id, name)) {
+            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
                 Some(c) => *c += 1,
                 None => {
-                    self.method_cache_stats.insert((class_id, name), 1);
+                    self.global_method_cache_stats.insert((class_id, name), 1);
                 }
             };
         }
@@ -562,6 +562,15 @@ impl Globals {
                 return entry.clone();
             }
         };
+        #[cfg(feature = "profile")]
+        {
+            match self.method_exploration_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.method_exploration_stats.insert((class_id, name), 1);
+                }
+            };
+        }
         let entry = self.search_method(class_id, name);
         self.global_method_cache
             .insert((name, class_id), (class_version, entry.clone()));
