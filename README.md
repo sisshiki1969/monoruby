@@ -7,9 +7,78 @@ Ruby implementation with yet another JIT compiler written in Rust.
 
 ## Features
 
-- register-based bytecode.
-- bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
-- a compact and fast just-in-time compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
+- Written in Rust from scratch. No dependencies on any other Ruby implementations.
+- Fast. Currently, monoruby is about 20% faster than ruby3.3.0(preview1)+YJIT in the optcarrot benchmark.
+- Hand-written original parser.
+- Register-based bytecode.
+- Bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
+- A compact and fast just-in-time compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
+
+## Prerequisites
+
+### Platform
+
+Currently, only x86-64/linux is supported.
+
+### Build
+
+To build monoruby, You'll need installation of Rust.
+Please be aware that **only nightly Rust works** for monoruby.
+
+[Check here to install Rust](https://www.rust-lang.org/ja/tools/install),
+and [see here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
+
+## How to run
+
+To run ruby program file on monoruby,
+
+```sh
+> cargo run test.rb
+```
+
+or
+
+```sh
+> cargo run --release -- test.rb
+```
+
+one liner.
+
+```sh
+> cargo run -- -e "puts 100"
+```
+
+And also, you can launch REPL.
+
+```sh
+> cargo run --bin irm
+```
+
+or
+
+```sh
+> ./irm.sh
+```
+
+## How to install
+
+To install monoruby,
+
+```sh
+> cargo install --path monoruby
+```
+
+Now, you can play with monoruby,
+
+```sh
+> monoruby test.rb
+```
+
+and its REPL.
+
+```sh
+> irm
+```
 
 ## Status of this project
 
@@ -40,7 +109,7 @@ This project still remains in alpha stage. Currently, functionalities described 
 
 ### optcarrot
 
-monoruby was about 20% faster than CRuby + YJIT in the optcarrot benchmark.
+Currently, monoruby is about 20% faster than CRuby3.2.2preview1+YJIT in the optcarrot benchmark.
 
 ```sh
 ❯ ./optcarrot.sh
@@ -111,63 +180,3 @@ L3 cache:                        12 MiB
 |vm_const               |   133.905M|     132.822M|       2.535G|
 |vm_const_many          |    11.021M|      62.729M|      66.044M|
 |vm_method_with_block   |     8.846M|       9.322M|      44.352M|
-
-## Prerequisites
-
-### Platform
-
-Currently, only x86-64/linux is supported.
-
-### Build
-
-To build monoruby, You'll need installation of Rust.
-Please be aware that **only nightly Rust works** for monoruby.
-
-[Check here to install Rust](https://www.rust-lang.org/ja/tools/install),
-and [see here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
-
-## How to run
-
-To run ruby program file on monoruby,
-
-```sh
-> cargo run test.rb
-```
-
-or
-
-```sh
-> cargo run --release -- test.rb
-```
-
-one liner.
-
-```sh
-> cargo run -- -e "puts 100"
-```
-
-And also, you can launch REPL.
-
-```sh
-> cargo run --bin irm
-```
-
-or
-
-```sh
-> ./irm.sh
-```
-
-## How to install
-
-To install monoruby,
-
-```sh
-> cargo install --path monoruby
-```
-
-Now, you can play with monoruby.
-
-```sh
-> monoruby test.rb
-```

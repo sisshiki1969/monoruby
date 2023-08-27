@@ -1,5 +1,4 @@
-cd monoruby && cargo install --path .
-cd ../
+cargo install --path monoruby
 ruby -v
 ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 echo
