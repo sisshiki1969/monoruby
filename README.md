@@ -8,7 +8,7 @@ Ruby implementation with yet another JIT compiler written in Rust.
 ## Features
 
 - register-based bytecode.
-- bytecode executer (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
+- bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
 - a compact and fast just-in-time compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
 
 ## Status of this project
@@ -33,41 +33,84 @@ This project still remains in alpha stage. Currently, functionalities described 
   - rest parameter
   - block parameter
   - keyword parameter
-- garbage collection
+- coroutine (Fiber class)
+- garbage collector
 
 ## Benchmark
 
+### optcarrot
+
+monoruby was about 20% faster than CRuby + YJIT in the optcarrot benchmark.
+
+```sh
+❯ ./optcarrot.sh
+
+ruby 3.3.0preview1 (2023-05-12 master a1b01e7701) [x86_64-linux]
+fps: 44.79677739994306
+checksum: 59662
+
+ruby 3.3.0preview1 (2023-05-12 master a1b01e7701) +YJIT [x86_64-linux]
+fps: 115.83473434296302
+checksum: 59662
+
+monoruby 0.2.0
+fps: 141.93747364788806
+checksum: 59662
+
+❯ lscpu
+Architecture:                    x86_64
+CPU op-mode(s):                  32-bit, 64-bit
+CPU(s):                          12
+Thread(s) per core:              2
+Core(s) per socket:              6
+Socket(s):                       1
+Model name:                      Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz
+CPU MHz:                         3696.000
+L1d cache:                       192 KiB
+L1i cache:                       192 KiB
+L2 cache:                        1.5 MiB
+L3 cache:                        12 MiB
+<partially omitted>
+```
+
+### micro benchmark
+
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
-- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), or in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with *).
+- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with *).
 - measurements are shown in iteration/sec (the higher, the better).
 
-|                     |   3.2.0| 3.2.0 --yjit|     monoruby|
+|                     |   3.2.2| 3.2.2 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
-|loop_whileloop       |   3.061|        3.058|       20.708|
-|qsort*               |  1.429k|       3.436k|       6.188k|
-|app_fib              |   3.723|       14.790|       18.564|
-|tarai*               |   3.019|       13.356|       14.279|
-|so_mandelbrot        |   0.623|        0.978|       20.194|
-|so_nbody             |   1.105|        1.750|        7.650|
-|app_aobench          |   0.027|        0.048|        0.138|
+|loop_whileloop       |   3.151|        3.159|       18.044|
+|qsort*               |  1.435k|       3.342k|       6.287k|
+|app_fib              |   3.771|       14.614|       19.603|
+|tarai*               |   3.056|       13.392|       14.618|
+|so_mandelbrot        |   0.600|        0.984|       20.453|
+|so_nbody             |   1.066|        1.815|        6.866|
+|app_aobench          |   0.027|        0.048|        0.147|
 
-|                     |   3.2.0| 3.2.0 --yjit|     monoruby|
+|                     |   3.2.2| 3.2.2 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
-|vm_ivar              |135.293M|     132.692M|       1.098G|
-|vm_ivar_get          |  11.542|       20.882|       68.378|
-|vm_ivar_set          |179.545M|     180.243M|     855.925M|
-|vm_ivar_generic_get  | 15.578M|      15.860M|     127.333M|
-|vm_ivar_generic_set  | 12.817M|      16.633M|      88.632M|
-|vm_attr_ivar         | 58.971M|      57.871M|     331.872M|
-|vm_attr_ivar_set     | 53.193M|      53.351M|     332.233M|
+|vm_ivar              |129.866M|     130.487M|       1.547G|
+|vm_ivar_get          |  12.187|       21.640|       76.887|
+|vm_ivar_set          |158.653M|     174.550M|       5.459G|
+|vm_ivar_generic_get  | 14.025M|      14.028M|     185.909M|
+|vm_ivar_generic_set  | 11.315M|      14.576M|     149.477M|
+|vm_attr_ivar         | 59.776M|      57.298M|     632.528M|
+|vm_attr_ivar_set     | 53.396M|      51.188M|     616.784M|
 
-|                     |   3.2.0| 3.2.0 --yjit|     monoruby|
-|:--------------------|-------:|------------:|------------:|
-|vm_const             |135.574M|     133.186M|       1.076G|
-|vm_const_many        | 10.765M|      60.566M|      63.591M|
-|vm_method_with_block |  8.399M|       8.239M|      37.176M|
-|vm_block             | 32.759M|      61.373M|      93.229M|
-|vm_yield             |   1.179|        1.158|        4.037|
+|                             |   3.2.2| 3.2.2 --yjit|   monoruby|
+|:----------------------------|-------:|------------:|----------:|
+|vm_array_index_small         |  8.634M|       8.514M|    42.198M|
+|vm_array_index_assign_small  |  3.350M|       3.348M|    36.469M|
+|vm_array_index               |  8.476M|       8.483M|    31.332M|
+|vm_array_index_assign        |  4.002M|       4.034M|    30.559M|
+
+|                       |      3.2.2| 3.2.2 --yjit|     monoruby|
+|:----------------------|----------:|------------:|------------:|
+|vm_const               |   133.905M|     132.822M|       2.535G|
+|vm_const_many          |    11.021M|      62.729M|      66.044M|
+|vm_method_with_block   |     8.846M|       9.322M|      44.352M|
 
 ## Prerequisites
 
