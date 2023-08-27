@@ -5,3 +5,4 @@
 *.bytecode
 *.jpg
 .quine
+out.*

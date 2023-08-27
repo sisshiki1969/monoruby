@@ -77,6 +77,7 @@ pub struct Allocator<T> {
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
     pub gc_enabled: bool,
+    /// Threshold of malloced memory for invoking GC.
     pub malloc_threshold: usize,
 }
 
@@ -84,7 +85,7 @@ impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
-        let ptr = PageRef::alloc_page();
+        let ptr = Page::alloc_page();
         Allocator {
             used_in_current: 0,
             allocated: 0,
@@ -169,6 +170,13 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Get heap page from a RValue pointer.
+    ///
+    fn get_page(&self, ptr: *const T) -> PageRef<T> {
+        std::ptr::Unique::new((ptr as usize & !(ALLOC_SIZE - 1)) as _).unwrap()
+    }
+
+    ///
     /// Allocate object.
     ///
     pub(crate) fn alloc(&mut self, data: T) -> *mut T {
@@ -189,17 +197,14 @@ impl<T: GCBox> Allocator<T> {
             // Allocate new page.
             self.used_in_current = 1;
             self.pages.push(self.current);
-            self.current = self
-                .free_pages
-                .pop()
-                .unwrap_or_else(|| PageRef::alloc_page());
-            self.current.get_data_ptr(0)
+            self.current = self.free_pages.pop().unwrap_or_else(|| Page::alloc_page());
+            unsafe { self.current.as_ref().get_first_ptr() }
         } else {
             // Bump allocation.
             if self.used_in_current == THRESHOLD {
                 self.set_alloc_flag();
             }
-            let ptr = self.current.get_data_ptr(self.used_in_current);
+            let ptr = unsafe { self.current.as_ref().get_data_ptr(self.used_in_current) };
             self.used_in_current += 1;
             ptr
         };
@@ -211,13 +216,6 @@ impl<T: GCBox> Allocator<T> {
         unsafe { std::ptr::write(gcbox, data) }
         gcbox
     }
-
-    /*#[allow(unused)]
-    pub fn gc_mark_only(&mut self, root: &impl GC<T>) {
-        self.clear_mark();
-        root.mark(self);
-        self.print_mark();
-    }*/
 
     pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
@@ -260,15 +258,15 @@ impl<T: GCBox> Allocator<T> {
     /// If object is already marked, return true.
     /// If not yet, mark it and return false.
     pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
-        let ptr = ptr as *const T as *mut T;
+        let ptr = ptr as *const T;
         #[cfg(feature = "gc-debug")]
         self.check_ptr(ptr);
-        let mut page_ptr = PageRef::from_inner(ptr);
+        let mut page_ptr = self.get_page(ptr);
 
-        let index = unsafe { ptr.offset_from(page_ptr.get_data_ptr(0)) } as usize;
+        let index = unsafe { page_ptr.as_ref().get_index(ptr) };
         assert!(index < DATA_LEN);
         let bit_mask = 1 << (index % 64);
-        let bitmap = &mut page_ptr.mark_bits_mut()[index / 64];
+        let bitmap = unsafe { &mut page_ptr.as_mut().mark_bits[index / 64] };
 
         let is_marked = (*bitmap & bit_mask) != 0;
         *bitmap |= bit_mask;
@@ -282,69 +280,82 @@ impl<T: GCBox> Allocator<T> {
 impl<T: GCBox> Allocator<T> {
     /// Clear all mark bitmaps.
     fn clear_mark(&mut self) {
-        self.current.clear_bits();
-        self.pages.iter().for_each(|heap| heap.clear_bits());
+        unsafe {
+            self.current.as_mut().clear_bits();
+            self.pages
+                .iter_mut()
+                .for_each(|heap| heap.as_mut().clear_bits());
+        }
         self.mark_counter = 0;
     }
 
     fn dealloc_empty_pages(&mut self) {
         let len = self.pages.len();
-        for i in 0..len {
-            if self.pages[len - i - 1].all_dead() {
-                let page = self.pages.remove(len - i - 1);
-                page.free_page();
-                self.free_pages.push(page);
-                #[cfg(feature = "gc-debug")]
-                eprintln!("dealloc: {:?}", page.0);
-            }
-        }
-    }
-
-    fn sweep_bits(bit: usize, mut map: u64, ptr: &mut *mut T, head: &mut *mut T) -> usize {
-        let mut c = 0;
-        let min = map.trailing_ones() as usize;
-        *ptr = unsafe { (*ptr).add(min) };
-        map = map.checked_shr(min as u32).unwrap_or(0);
-        for _ in min..bit {
-            if map & 1 == 0 {
-                unsafe {
-                    (**head).set_next(*ptr);
-                    *head = *ptr;
-                    (**ptr).free();
-                    (**ptr).set_next_none();
-                    c += 1;
+        unsafe {
+            for i in 0..len {
+                if self.pages[len - i - 1].as_ref().all_dead() {
+                    let mut page = self.pages.remove(len - i - 1);
+                    page.as_mut().free();
+                    self.free_pages.push(page);
+                    #[cfg(feature = "gc-debug")]
+                    eprintln!("dealloc: {:?}", page);
                 }
             }
-            *ptr = unsafe { (*ptr).add(1) };
-            map >>= 1;
         }
-        c
     }
 
     fn sweep(&mut self) {
+        fn sweep_bits<T: GCBox>(
+            bit: usize,
+            mut map: u64,
+            ptr: &mut *mut T,
+            head: &mut *mut T,
+        ) -> usize {
+            let mut c = 0;
+            let min = map.trailing_ones() as usize;
+            *ptr = unsafe { (*ptr).add(min) };
+            map = map.checked_shr(min as u32).unwrap_or(0);
+            for _ in min..bit {
+                if map & 1 == 0 {
+                    unsafe {
+                        (**head).set_next(*ptr);
+                        *head = *ptr;
+                        (**ptr).free();
+                        (**ptr).set_next_none();
+                        c += 1;
+                    }
+                }
+                *ptr = unsafe { (*ptr).add(1) };
+                map >>= 1;
+            }
+            c
+        }
+
         let mut c = 0;
         let mut anchor = T::new_invalid();
         let head = &mut ((&mut anchor) as *mut T);
 
-        for pinfo in self.pages.iter() {
-            let mut ptr = pinfo.get_data_ptr(0);
-            for map in pinfo.mark_bits().iter() {
-                c += Allocator::sweep_bits(64, *map, &mut ptr, head);
+        for pinfo in self.pages.iter_mut() {
+            unsafe {
+                let mut ptr = pinfo.as_ref().get_first_ptr();
+                for map in pinfo.as_mut().mark_bits.iter() {
+                    c += sweep_bits(64, *map, &mut ptr, head);
+                }
             }
         }
 
-        let mut ptr = self.current.get_data_ptr(0);
+        let mut ptr = unsafe { self.current.as_ref().get_first_ptr() };
         assert!(self.used_in_current <= DATA_LEN);
         let i = self.used_in_current / 64;
         let bit = self.used_in_current % 64;
-        let bitmap = self.current.mark_bits();
+        let bitmap = unsafe { self.current.as_mut().mark_bits };
 
         for map in bitmap.iter().take(i) {
-            c += Allocator::sweep_bits(64, *map, &mut ptr, head);
+            c += sweep_bits(64, *map, &mut ptr, head);
         }
 
         if i < SIZE - 1 {
-            c += Allocator::sweep_bits(bit, bitmap[i], &mut ptr, head);
+            c += sweep_bits(bit, bitmap[i], &mut ptr, head);
         }
 
         self.free = anchor.next();
@@ -355,17 +366,21 @@ impl<T: GCBox> Allocator<T> {
 // For debug
 #[cfg(feature = "gc-debug")]
 impl<T: GCBox> Allocator<T> {
-    fn check_ptr(&self, ptr: *mut T) {
-        let page_ptr = PageRef::from_inner(ptr);
-        if self.pages.iter().any(|heap| *heap == page_ptr) {
+    fn check_ptr(&self, ptr: *const T) {
+        let page_ptr = self.get_page(ptr);
+        if self
+            .pages
+            .iter()
+            .any(|heap| heap.as_ptr() == page_ptr.as_ptr())
+        {
             return;
         };
-        if self.current == page_ptr {
+        if self.current.as_ptr() == page_ptr.as_ptr() {
             return;
         };
         eprintln!("dump heap pages");
-        self.pages.iter().for_each(|x| eprintln!("{:?}", x.0));
-        eprintln!("{:?}", self.current.0);
+        self.pages.iter().for_each(|x| eprintln!("{:?}", x));
+        eprintln!("{:?}", self.current);
         unreachable!("The ptr is not in heap pages. {:?}", ptr);
     }
 
@@ -432,42 +447,16 @@ impl<T: GCBox> std::fmt::Debug for Page<T> {
     }
 }
 
-#[derive(PartialEq)]
-struct PageRef<T>(*mut Page<T>);
+type PageRef<T> = std::ptr::Unique<Page<T>>;
 
-impl<T> Clone for PageRef<T> {
-    fn clone(&self) -> Self {
-        Self(self.0)
-    }
-}
-
-impl<T> Copy for PageRef<T> {}
-
-impl<T: GCBox> PageRef<T> {
-    ///
-    /// Get a reference of the mark bit array.
-    ///
-    fn mark_bits(&self) -> &[u64; SIZE - 1] {
-        unsafe { &(*self.0).mark_bits }
-    }
-
-    ///
-    /// Get a mutable reference of the mark bit array.
-    ///
-    fn mark_bits_mut(&mut self) -> &mut [u64; SIZE - 1] {
-        unsafe { &mut (*self.0).mark_bits }
-    }
-
+impl<T: GCBox> Page<T> {
     ///
     /// Allocate heap page with `ALLOC_SIZE`.
     ///
-    fn alloc_page() -> Self {
+    fn alloc_page() -> PageRef<T> {
         let layout = Layout::from_size_align(ALLOC_SIZE, ALLOC_SIZE).unwrap();
         let ptr = unsafe { System.alloc(layout) };
-        #[cfg(feature = "gc-debug")]
-        assert_eq!(0, ptr as *const u8 as usize & (ALLOC_SIZE - 1));
-
-        PageRef(ptr as *mut Page<T>)
+        std::ptr::Unique::new(ptr as _).unwrap()
     }
 
     /*
@@ -481,8 +470,8 @@ impl<T: GCBox> PageRef<T> {
     ///
     /// Free all objects in the heap page.
     ///
-    fn free_page(&self) {
-        let mut ptr = self.get_data_ptr(0);
+    fn free(&self) {
+        let mut ptr = self.get_first_ptr();
         for _ in 0..DATA_LEN {
             unsafe { (*ptr).free() };
             ptr = unsafe { ptr.add(1) };
@@ -490,30 +479,34 @@ impl<T: GCBox> PageRef<T> {
     }
 
     ///
-    /// Get heap page from a RValue pointer.
-    ///
-    fn from_inner(ptr: *mut T) -> Self {
-        PageRef((ptr as usize & !(ALLOC_SIZE - 1)) as *mut Page<T>)
-    }
-
-    ///
     /// Get raw pointer of RValue with `index`.
     ///
     fn get_data_ptr(&self, index: usize) -> *mut T {
-        unsafe { &(*self.0).data[index] as *const _ as *mut _ }
+        &self.data[index] as *const _ as *mut _
+    }
+
+    ///
+    /// Get raw pointer of the first RValue in the page.
+    ///
+    fn get_first_ptr(&self) -> *mut T {
+        self.get_data_ptr(0)
     }
 
     ///
     /// Get raw pointer for marking bitmap.
     ///
     fn get_bitmap_ptr(&self) -> *mut [u64; SIZE - 1] {
-        unsafe { &(*self.0).mark_bits as *const _ as *mut _ }
+        &self.mark_bits as *const _ as *mut _
+    }
+
+    fn get_index(&self, ptr: *const T) -> usize {
+        unsafe { ptr.offset_from(self.get_first_ptr()) as usize }
     }
 
     ///
     /// Clear marking bitmap.
     ///
-    fn clear_bits(&self) {
+    fn clear_bits(&mut self) {
         unsafe { std::ptr::write_bytes(self.get_bitmap_ptr(), 0, 1) }
     }
 
@@ -521,6 +514,6 @@ impl<T: GCBox> PageRef<T> {
     /// Check whether all objects were dead.
     ///
     fn all_dead(&self) -> bool {
-        unsafe { (*self.0).mark_bits.iter().all(|bits| *bits == 0) }
+        self.mark_bits.iter().all(|bits| *bits == 0)
     }
 }

@@ -62,7 +62,7 @@ impl Value {
         Value(std::num::NonZeroU64::new(id).unwrap())
     }
 
-    pub(crate) fn from_ptr(ptr: *mut RValue) -> Self {
+    fn from_ptr(ptr: *mut RValue) -> Self {
         Value::from(ptr as u64)
     }
 
