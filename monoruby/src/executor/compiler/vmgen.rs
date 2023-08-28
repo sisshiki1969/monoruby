@@ -197,6 +197,7 @@ impl Codegen {
         let (xor_rr, xor_ri, xor_ir) = self.vm_binops_opt(Self::int_xor, bitxor_values);
         let (div_rr, div_ri, div_ir) = self.vm_binops(div_values);
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values);
+        let (rem_rr, rem_ri, rem_ir) = self.vm_binops(rem_values);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values);
 
         self.dispatch[1] = self.vm_singleton_method_def();
@@ -309,6 +310,7 @@ impl Codegen {
         self.dispatch[186] = xor_ir;
         //self.dispatch[187] = shr_ir;
         //self.dispatch[188] = shl_ir;
+        self.dispatch[189] = rem_ir;
         self.dispatch[190] = pow_ir;
 
         self.dispatch[200] = add_rr;
@@ -320,7 +322,7 @@ impl Codegen {
         self.dispatch[206] = xor_rr;
         //self.dispatch[207] = shr_rr;
         //self.dispatch[208] = shl_rr;
-        self.dispatch[209] = self.vm_remrr();
+        self.dispatch[209] = rem_rr;
         self.dispatch[210] = pow_rr;
 
         self.dispatch[220] = add_ri;
@@ -332,6 +334,7 @@ impl Codegen {
         self.dispatch[226] = xor_ri;
         //self.dispatch[227] = shr_ri;
         //self.dispatch[228] = shl_ri;
+        self.dispatch[229] = rem_ri;
         self.dispatch[230] = pow_ri;
 
         // method invoker.
@@ -1515,18 +1518,6 @@ impl Codegen {
         monoasm!( &mut self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
-    }
-
-    // TODO: result in not correct when lhs < 0 or rhs < 0.
-    fn vm_remrr(&mut self) -> CodePtr {
-        let common = self.jit.label();
-        let ptr_rr = self.jit.get_current_address();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-
-        self.vm_generic_binop(common, rem_values as _);
-
-        self.fetch_and_dispatch();
-        ptr_rr
     }
 
     fn vm_method_def(&mut self) -> CodePtr {

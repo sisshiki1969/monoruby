@@ -8,7 +8,7 @@ Ruby implementation with yet another JIT compiler written in Rust.
 ## Features
 
 - Written in Rust from scratch. No dependencies on any other Ruby implementations.
-- Fast. Currently, monoruby is comparable to ruby3.3.0(preview1)+YJIT in the optcarrot benchmark.
+- Fast. Currently, monoruby is comparable to ruby3.3.0+YJIT in the optcarrot benchmark.
 - Hand-written original parser.
 - Register-based bytecode.
 - Bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
@@ -115,19 +115,19 @@ Currently, monoruby is about 20% faster than CRuby3.2.2preview1+YJIT in the optc
 ❯ ./optcarrot.sh
 
 ruby 3.2.2 (2023-03-30 revision e51014f9c0) +YJIT [x86_64-linux]
-fps: 102.62420932611712
+fps: 102.02545586179582
 checksum: 59662
 
 ruby 3.3.0preview1 (2023-05-12 master a1b01e7701) +YJIT [x86_64-linux]
-fps: 116.40629851045172
+fps: 115.5163025371511
 checksum: 59662
 
 ruby 3.3.0dev (2023-08-28T08:52:50Z master 00439dbdb4) +YJIT [x86_64-linux]
-fps: 149.6915307244487
+fps: 148.73353885228963
 checksum: 59662
 
 monoruby 0.2.0
-fps: 141.96223105288338
+fps: 151.06222422324366
 checksum: 59662
 
 ❯ lscpu

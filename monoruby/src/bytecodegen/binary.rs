@@ -105,28 +105,6 @@ impl BytecodeGen {
     }
 }
 
-macro_rules! gen_ops {
-  (($op:ident, $inst:ident)) => {
-      paste! {
-          fn [<gen_ $op>](
-              &mut self,
-              dst: Option<BcReg>,
-              lhs: Node,
-              rhs: Node,
-              loc: Loc,
-          ) -> Result<BcReg> {
-              let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-              self.emit(BcIr::BinOp(BinOpK::$inst, dst, BinopMode::RR(lhs, rhs)), loc);
-              Ok(dst)
-          }
-      }
-  };
-  (($op1:ident, $inst1:ident), $(($op2:ident, $inst2:ident)),+) => {
-      gen_ops!(($op1, $inst1));
-      gen_ops!($(($op2, $inst2)),+);
-  };
-}
-
 macro_rules! gen_ri_ops {
   (($op:ident, $inst:ident)) => {
       paste! {
@@ -167,9 +145,10 @@ impl BytecodeGen {
         (bitor, BitOr),
         (bitand, BitAnd),
         (bitxor, BitXor),
-        (exp, Exp)
+        (exp, Exp),
+        (rem, Rem)
     );
-    gen_ops!((rem, Rem));
+    //gen_ops!((rem, Rem));
 
     fn gen_singular(&mut self, dst: Option<BcReg>, lhs: Node) -> Result<(BcReg, BcReg)> {
         let lhs = self.gen_temp_expr(lhs)?;

@@ -91,9 +91,56 @@ impl Codegen {
                 self.xmm_restore(&xmm_using);
                 self.store_rax(ret);
             }
-            BinOpK::Mul | BinOpK::Div | BinOpK::Rem => {
+            BinOpK::Mul | BinOpK::Div => {
                 self.load_binary_args_with_mode(&mode);
                 self.generic_binop(ctx, ret, kind, pc);
+            }
+            BinOpK::Rem => {
+                match mode {
+                    OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
+                        self.load_guard_rdi_fixnum(lhs, deopt);
+                        monoasm!( &mut self.jit,
+                            andq rdi, (rhs * 2 - 1);
+                        );
+                        self.store_rdi(ret);
+                    }
+                    _ => {
+                        self.load_binary_args_with_mode(&mode);
+                        self.generic_binop(ctx, ret, kind, pc);
+                    }
+                }
+                /*match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            subq rdi, rsi;
+                            jo deopt;
+                            addq rdi, 1;
+                        );
+                        self.store_rdi(ret);
+                    }
+                    OpMode::RI(lhs, rhs) => {
+                        self.load_guard_rdi_fixnum(lhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            subq rdi, (Value::i32(rhs as i32).id() - 1);
+                            jo deopt;
+                        );
+                        self.store_rdi(ret);
+                    }
+                    OpMode::IR(lhs, rhs) => {
+                        self.load_guard_rsi_fixnum(rhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            movq rdi, (Value::i32(lhs as i32).id());
+                            subq rdi, rsi;
+                            jo deopt;
+                            addq rdi, 1;
+                        );
+                        self.store_rdi(ret);
+                    }
+                }*/
             }
             _ => {
                 match kind {
@@ -740,5 +787,20 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         self.store_rax(ret);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::tests::*;
+
+    #[test]
+    fn rem() {
+        run_test("a = 3456; a % 64");
+        run_test("a = 3456; a % 32");
+        run_test("a = 3456; a % 16");
+        run_test("a = 3456; a % 8");
+        run_test("a = 3456; a % 4");
+        run_test("a = 3456; a % 2");
     }
 }
