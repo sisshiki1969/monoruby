@@ -4,5 +4,6 @@
 *.disas
 *.bytecode
 *.jpg
-.quine
+.vscode
+.ruby-version
 out.*
