@@ -1,6 +1,6 @@
 use smallvec::smallvec;
 
-use crate::*;
+use super::*;
 
 //
 // Array class
@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a);
     globals.define_builtin_func(ARRAY_CLASS, "+", add);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul);
-    globals.define_builtin_func(ARRAY_CLASS, "<<", shl);
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis_array_shl);
     globals.define_builtin_func(ARRAY_CLASS, "==", eq);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign);
@@ -289,6 +289,39 @@ fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     let mut ary: Array = lfp.self_val().into();
     ary.push(arg[0]);
     Ok(ary.into())
+}
+
+extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
+    ary.push(arg);
+    ary.into()
+}
+
+fn array_shl(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    deopt: DestLabel,
+) {
+    let CallSiteInfo {
+        recv, ret, args, ..
+    } = *callsite;
+    gen.fetch_slots(ctx, &[recv, args]);
+    ctx.dealloc_xmm(ret);
+    gen.load_rdi(recv);
+    gen.guard_class(ARRAY_CLASS, deopt);
+    gen.load_rsi(args);
+    monoasm!( &mut gen.jit,
+        movq rax, (ary_shl);
+        call rax;
+    );
+    gen.store_rax(ret);
+}
+
+fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.r#use(callsite.recv);
+    info.r#use(callsite.args);
+    info.def(callsite.ret);
 }
 
 ///
