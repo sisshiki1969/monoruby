@@ -70,8 +70,8 @@ fn object_object_id(
 }
 
 fn analysis_object_id(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.def_as(callsite.ret, false);
+    info.r#use(callsite.recv);
+    info.def(callsite.ret);
 }
 
 ///

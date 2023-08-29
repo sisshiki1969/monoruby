@@ -1382,6 +1382,32 @@ impl BcPc {
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) struct SlotId(pub u16);
 
+impl std::iter::Step for SlotId {
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        if start.0 <= end.0 {
+            Some((end.0 - start.0) as usize)
+        } else {
+            None
+        }
+    }
+
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        if start.0 + count as u16 <= std::u16::MAX {
+            Some(Self(start.0 + count as u16))
+        } else {
+            None
+        }
+    }
+
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        if start.0 >= count as u16 {
+            Some(Self(start.0 - count as u16))
+        } else {
+            None
+        }
+    }
+}
+
 impl SlotId {
     pub fn new(reg: u16) -> Self {
         Self(reg)

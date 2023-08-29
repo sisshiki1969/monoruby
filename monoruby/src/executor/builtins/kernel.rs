@@ -78,8 +78,8 @@ fn object_nil(
 }
 
 fn analysis_object_nil(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.def_as(callsite.ret, false);
+    info.r#use(callsite.recv);
+    info.def(callsite.ret);
 }
 
 ///

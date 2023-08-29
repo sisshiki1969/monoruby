@@ -166,11 +166,9 @@ fn analysis_class_new(info: &mut SlotInfo, callsite: &CallSiteInfo) {
         ret,
         ..
     } = *callsite;
-    info.use_non_float(recv);
-    for r in args.0..args.0 + len {
-        info.use_non_float(SlotId(r));
-    }
-    info.def_as(ret, false);
+    info.r#use(recv);
+    info.use_range(args, len);
+    info.def(ret);
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

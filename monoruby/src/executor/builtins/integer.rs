@@ -183,8 +183,8 @@ fn integer_tof(
 }
 
 fn analysis_integer_tof(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.def_as(callsite.ret, true);
+    info.r#use(callsite.recv);
+    info.def_as_float(callsite.ret);
 }
 
 ///
@@ -262,9 +262,9 @@ fn integer_shr(
 }
 
 fn analysis_integer_binop(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.use_non_float(callsite.args);
-    info.def_as(callsite.ret, false);
+    info.r#use(callsite.recv);
+    info.r#use(callsite.args);
+    info.def(callsite.ret);
 }
 
 ///

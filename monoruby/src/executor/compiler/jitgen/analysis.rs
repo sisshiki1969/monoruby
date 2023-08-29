@@ -192,8 +192,8 @@ impl JitContext {
             match pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { new, old } => {
-                    info.use_non_float(new);
-                    info.use_non_float(old);
+                    info.r#use(new);
+                    info.r#use(old);
                 }
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
@@ -209,48 +209,44 @@ impl JitContext {
                 | TraceIr::Integer(ret, ..)
                 | TraceIr::Symbol(ret, ..)
                 | TraceIr::Nil(ret) => {
-                    info.def_as(ret, false);
+                    info.def(ret);
                 }
                 TraceIr::DefinedMethod { ret, recv, .. } => {
-                    info.def_as(ret, false);
-                    info.use_non_float(recv);
+                    info.def(ret);
+                    info.r#use(recv);
                 }
                 TraceIr::Literal(dst, val) => {
                     if val.class() == FLOAT_CLASS {
-                        info.def_float_const(dst);
+                        info.def_as_float(dst);
                     } else {
-                        info.def_as(dst, false);
+                        info.def(dst);
                     }
                 }
                 TraceIr::Array { ret, callid } => {
                     let CallSiteInfo { args, len, .. } = store[callid];
-                    for r in args.0..args.0 + len {
-                        info.use_non_float(SlotId(r));
-                    }
-                    info.def_as(ret, false);
+                    info.use_range(args, len);
+                    info.def(ret);
                 }
                 TraceIr::Hash { ret, args, len } => {
-                    for r in args.0..args.0 + len * 2 {
-                        info.use_non_float(SlotId(r));
-                    }
-                    info.def_as(ret, false);
+                    info.use_range(args, len * 2);
+                    info.def(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
-                    info.def_as(ret, false);
-                    info.use_non_float(base);
-                    info.use_non_float(idx);
+                    info.def(ret);
+                    info.r#use(base);
+                    info.r#use(idx);
                 }
                 TraceIr::Range {
                     ret, start, end, ..
                 } => {
-                    info.def_as(ret, false);
-                    info.use_non_float(start);
-                    info.use_non_float(end);
+                    info.def(ret);
+                    info.r#use(start);
+                    info.r#use(end);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    info.use_non_float(src);
-                    info.use_non_float(base);
-                    info.use_non_float(idx);
+                    info.r#use(src);
+                    info.r#use(base);
+                    info.r#use(idx);
                 }
                 TraceIr::ClassDef {
                     ret,
@@ -258,11 +254,11 @@ impl JitContext {
                     ..
                 }
                 | TraceIr::SingletonClassDef { ret, base, .. } => {
-                    info.use_non_float(base);
-                    info.def_as(ret, false);
+                    info.r#use(base);
+                    info.def(ret);
                 }
                 TraceIr::ModuleDef { ret, .. } => {
-                    info.def_as(ret, false);
+                    info.def(ret);
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
@@ -278,38 +274,38 @@ impl JitContext {
                 | TraceIr::LoadIvar(dst, ..)
                 | TraceIr::LoadGvar { dst, .. }
                 | TraceIr::LoadSvar { dst, .. } => {
-                    info.def_as(dst, false);
+                    info.def(dst);
                 }
                 TraceIr::StoreConst(src, _)
                 | TraceIr::StoreDynVar(_, src)
                 | TraceIr::StoreIvar(src, ..)
                 | TraceIr::StoreGvar { src, .. } => {
-                    info.use_non_float(src);
+                    info.r#use(src);
                 }
                 TraceIr::BitNot { ret, src } => {
-                    info.use_non_float(src);
-                    info.def_as(ret, false);
+                    info.r#use(src);
+                    info.def(ret);
                 }
                 TraceIr::Neg { ret, src } | TraceIr::Pos { ret, src } => {
                     let is_float = pc.is_float1();
-                    info.use_as(src, is_float, pc.classid1());
+                    info.use_as(src, is_float, pc.classid1() == FLOAT_CLASS);
                     info.def_as(ret, is_float);
                 }
                 TraceIr::Not { ret, src } => {
-                    info.use_non_float(src);
-                    info.def_as(ret, false);
+                    info.r#use(src);
+                    info.def(ret);
                 }
                 TraceIr::FBinOp { ret, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as(lhs, true, pc.classid1());
-                            info.use_as(rhs, true, pc.classid2());
+                            info.use_as_float(lhs, pc.classid1() == FLOAT_CLASS);
+                            info.use_as_float(rhs, pc.classid2() == FLOAT_CLASS);
                         }
                         OpMode::IR(_, reg) | OpMode::RI(reg, _) => {
-                            info.use_as(reg, true, pc.classid2());
+                            info.use_as_float(reg, pc.classid2() == FLOAT_CLASS);
                         }
                     }
-                    info.def_as(ret, true);
+                    info.def_as_float(ret);
                 }
                 TraceIr::IBinOp {
                     ret,
@@ -321,9 +317,9 @@ impl JitContext {
                     mode: OpMode::RR(lhs, rhs),
                     ..
                 } => {
-                    info.use_as(lhs, false, pc.classid1());
-                    info.use_as(rhs, false, pc.classid2());
-                    info.def_as(ret, false);
+                    info.r#use(lhs);
+                    info.r#use(rhs);
+                    info.def(ret);
                 }
                 TraceIr::IBinOp {
                     ret,
@@ -345,49 +341,41 @@ impl JitContext {
                     mode: OpMode::IR(_, reg),
                     ..
                 } => {
-                    info.use_as(reg, false, pc.classid2());
-                    info.def_as(ret, false);
+                    info.r#use(reg);
+                    info.def(ret);
                 }
                 TraceIr::Cmp(_, dst, mode, _) => {
                     let is_float = mode.is_float_op(&pc);
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as(lhs, is_float, pc.classid1());
-                            info.use_as(rhs, is_float, pc.classid2());
+                            info.use_as(lhs, is_float, pc.classid1() == FLOAT_CLASS);
+                            info.use_as(rhs, is_float, pc.classid2() == FLOAT_CLASS);
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as(lhs, is_float, pc.classid1());
+                            info.use_as(lhs, is_float, pc.classid1() == FLOAT_CLASS);
                         }
                         _ => unreachable!(),
                     }
-                    info.def_as(dst, false);
+                    info.def(dst);
                 }
                 TraceIr::Mov(dst, src) => {
                     info.copy(dst, src);
                 }
-                TraceIr::ConcatStr(dst, arg, len) => {
-                    for r in arg.0..arg.0 + len {
-                        info.use_as(SlotId(r), false, STRING_CLASS);
-                    }
-                    info.def_as(dst, false);
+                TraceIr::ConcatStr(dst, args, len) => {
+                    info.use_range(args, len);
+                    info.def(dst);
                 }
-                TraceIr::ConcatRegexp(dst, arg, len) => {
-                    for r in arg.0..arg.0 + len {
-                        info.use_as(SlotId(r), false, STRING_CLASS);
-                    }
-                    info.def_as(dst, false);
+                TraceIr::ConcatRegexp(dst, args, len) => {
+                    info.use_range(args, len);
+                    info.def(dst);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
-                    for r in dst.0..dst.0 + len {
-                        info.def_as(SlotId(r), false);
-                    }
-                    info.use_as(src, false, NIL_CLASS);
+                    info.use_range(dst, len);
+                    info.r#use(src);
                 }
                 TraceIr::Yield { ret, args, len, .. } => {
-                    for i in 0..len {
-                        info.use_non_float(args + i);
-                    }
-                    info.def_as(ret, false);
+                    info.use_range(args, len);
+                    info.def(ret);
                 }
                 TraceIr::MethodCall { callid, .. } | TraceIr::Super { callid, .. } => {
                     let CallSiteInfo {
@@ -397,12 +385,10 @@ impl JitContext {
                         ret,
                         ..
                     } = store[callid];
-                    info.use_non_float(recv);
-                    for i in 0..len {
-                        info.use_non_float(args + i);
-                    }
+                    info.r#use(recv);
+                    info.use_range(args, len);
                     //reg_info.unlink_locals(func);
-                    info.def_as(ret, false);
+                    info.def(ret);
                 }
                 TraceIr::MethodCallBlock { callid, .. } => {
                     let CallSiteInfo {
@@ -412,12 +398,10 @@ impl JitContext {
                         ret,
                         ..
                     } = store[callid];
-                    info.use_non_float(recv);
-                    for i in 0..len + 1 {
-                        info.use_non_float(args + i);
-                    }
+                    info.r#use(recv);
+                    info.use_range(args, len + 1);
                     info.unlink_locals(func);
-                    info.def_as(ret, false);
+                    info.def(ret);
                 }
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
@@ -431,18 +415,18 @@ impl JitContext {
                 | TraceIr::MethodRet(src)
                 | TraceIr::Break(src)
                 | TraceIr::Raise(src) => {
-                    info.use_non_float(src);
+                    info.r#use(src);
                     return (ExitType::Return, info);
                 }
                 TraceIr::Br(_) => {
                     return (ExitType::Continue, info);
                 }
                 TraceIr::CondBr(cond_, _, _, _) => {
-                    info.use_as(cond_, false, TRUE_CLASS);
+                    info.r#use(cond_);
                     return (ExitType::Continue, info);
                 }
                 TraceIr::CheckLocal(src, _) => {
-                    info.use_non_float(src);
+                    info.r#use(src);
                     return (ExitType::Continue, info);
                 }
             }
@@ -532,9 +516,44 @@ impl SlotInfo {
         }
     }
 
-    pub(crate) fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
+    ///
+    /// Use `slot` as a Value.
+    ///
+    /// ### Arguments
+    /// - `slot` - the slot to be used.
+    ///
+    pub(crate) fn r#use(&mut self, slot: SlotId) {
+        self.use_as(slot, false, false);
+    }
+
+    pub(crate) fn use_range(&mut self, args: SlotId, len: u16) {
+        for arg in args..(args + len) {
+            self.r#use(arg);
+        }
+    }
+
+    ///
+    /// Use `slot` as a Float.
+    ///
+    /// ### Arguments
+    /// - `slot` - the slot to be used.
+    /// - `is_float` - whether the value in the slot is a Float or not.
+    ///
+    pub(crate) fn use_as_float(&mut self, slot: SlotId, is_float: bool) {
+        self.use_as(slot, true, is_float);
+    }
+
+    ///
+    /// Use `slot`.
+    ///
+    /// ### Arguments
+    /// - `slot` - the slot to be used.
+    /// - `use_as_float` - whether the slot is to be used as a Float or not.
+    /// - `is_float` - whether the value in the slot is a Float or not.
+    ///
+    fn use_as(&mut self, slot: SlotId, use_as_float: bool, is_float: bool) {
         self[slot].ty = if use_as_float {
-            if class == FLOAT_CLASS {
+            if is_float {
                 match self[slot].ty {
                     Ty::Val | Ty::Both => Ty::Both,
                     Ty::Float => Ty::Float,
@@ -555,10 +574,6 @@ impl SlotInfo {
         self.use_(slot);
     }
 
-    pub(crate) fn use_non_float(&mut self, slot: SlotId) {
-        self.use_as(slot, false, NIL_CLASS)
-    }
-
     fn unlink(&mut self, slot: SlotId) {
         self[slot].ty = Ty::Val;
     }
@@ -569,19 +584,19 @@ impl SlotInfo {
         }
     }
 
+    pub(crate) fn def(&mut self, slot: SlotId) {
+        self.def_as(slot, false)
+    }
+
+    pub(crate) fn def_as_float(&mut self, slot: SlotId) {
+        self.def_as(slot, true)
+    }
+
     pub(crate) fn def_as(&mut self, slot: SlotId, is_float: bool) {
         if slot.is_zero() {
             return;
         }
         self[slot].ty = if is_float { Ty::Float } else { Ty::Val };
-        self.def_(slot);
-    }
-
-    fn def_float_const(&mut self, slot: SlotId) {
-        if slot.is_zero() {
-            return;
-        }
-        self[slot].ty = Ty::Float;
         self.def_(slot);
     }
 

@@ -19,9 +19,9 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 fn analysis_math(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.use_non_float(callsite.recv);
-    info.use_as(callsite.args, true, FLOAT_CLASS);
-    info.def_as(callsite.ret, true);
+    info.r#use(callsite.recv);
+    info.use_as_float(callsite.args, true);
+    info.def_as_float(callsite.ret);
 }
 
 /// ### Math.#sqrt
