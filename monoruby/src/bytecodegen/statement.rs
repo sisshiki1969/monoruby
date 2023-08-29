@@ -22,7 +22,7 @@ impl BytecodeGen {
             let break_dest = self.new_label();
             let next_dest = self.new_label();
             let ret = match use_value {
-                true => Some(self.next_reg().into()),
+                true => Some(self.sp().into()),
                 false => None,
             };
             self.loop_push(break_dest, next_dest, ret);
@@ -112,7 +112,7 @@ impl BytecodeGen {
         let succ_pos = self.new_label();
         let loop_exit = self.new_label();
         let ret = match use_value {
-            true => Some(self.next_reg().into()),
+            true => Some(self.sp().into()),
             false => None,
         };
         self.loop_push(loop_exit, loop_start, ret);
@@ -146,7 +146,7 @@ impl BytecodeGen {
         let break_dest = self.new_label();
         let next_dest = self.new_label();
         let ret = match use_value {
-            true => Some(self.next_reg().into()),
+            true => Some(self.sp().into()),
             false => None,
         };
         self.loop_push(break_dest, next_dest, ret);
@@ -177,7 +177,7 @@ impl BytecodeGen {
         let exit_pos = self.new_label();
         if let Some(box cond) = cond {
             let ret = self.push().into();
-            let rhs = self.next_reg().into();
+            let rhs = self.sp().into();
             self.gen_expr(cond, UseMode::Use)?;
             for branch in when_ {
                 let CaseBranch { box body, mut when } = branch;
@@ -254,7 +254,7 @@ impl BytecodeGen {
         use_mode: UseMode,
     ) -> Result<()> {
         let base = self.temp;
-        let ret_reg = self.next_reg().into();
+        let ret_reg = self.sp().into();
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.

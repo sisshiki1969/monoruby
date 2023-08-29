@@ -13,7 +13,7 @@ impl BytecodeGen {
         let (ret, ret_pop_flag) = if ret.is_some() {
             (ret, false)
         } else if use_mode.use_val() {
-            (Some(self.next_reg().into()), true)
+            (Some(self.sp().into()), true)
         } else {
             (None, false)
         };
@@ -66,7 +66,7 @@ impl BytecodeGen {
         let (ret, ret_push_flag) = if ret.is_some() {
             (ret, false)
         } else if use_mode.use_val() {
-            (Some(self.next_reg().into()), true)
+            (Some(self.sp().into()), true)
         } else {
             (None, false)
         };
@@ -102,7 +102,7 @@ impl BytecodeGen {
             let args = if outer == 0 {
                 BcLocal(0).into()
             } else {
-                let args = self.next_reg().into();
+                let args = self.sp().into();
                 for i in 0..len {
                     let ret = self.push().into();
                     let src = BcLocal(i as _).into();
@@ -156,7 +156,7 @@ impl BytecodeGen {
         };
 
         let old_temp = self.temp;
-        let arg = self.next_reg();
+        let arg = self.sp();
         let block_func_id = self.handle_block(optional_params, block)?;
         self.push_nil();
         self.temp = old_temp;
@@ -262,7 +262,7 @@ impl BytecodeGen {
             None
         } else {
             let mut kw_args = HashMap::default();
-            let kw_pos = self.next_reg().into();
+            let kw_pos = self.sp().into();
             let mut hash_splat_pos = vec![];
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
                 self.push_expr(node)?;
@@ -299,7 +299,7 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>)> {
         let with_block = arglist.block.is_some();
-        let args = self.next_reg().into();
+        let args = self.sp().into();
         let block_func_id = if with_block {
             let block = std::mem::take(&mut arglist.block);
             self.handle_block_param(block, loc)?

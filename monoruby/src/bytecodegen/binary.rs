@@ -75,7 +75,7 @@ impl BytecodeGen {
     ) -> Result<()> {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
-            let cond = self.next_reg().into();
+            let cond = self.sp().into();
             if kind == CmpKind::Cmp {
                 self.gen_cmp(None, kind, lhs, rhs, false, loc)?;
                 self.pop();
@@ -243,7 +243,7 @@ impl BytecodeGen {
         let ret = if let Some(ret) = dst {
             ret
         } else {
-            self.next_reg().into()
+            self.sp().into()
         };
         let method = IdentId::get_id("=~");
         self.gen_method_call(

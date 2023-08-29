@@ -358,6 +358,8 @@ struct BytecodeGen {
     mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
+    /// bytecode IR.
+    sp: Vec<SlotId>,
     /// destination labels.
     labels: Vec<Option<BcIndex>>,
     /// loop information.
@@ -408,6 +410,7 @@ impl BytecodeGen {
             id: info.id(),
             mother,
             ir: vec![],
+            sp: vec![],
             labels: vec![],
             loops: vec![],
             locals: HashMap::default(),
@@ -516,7 +519,7 @@ impl BytecodeGen {
     }
 
     /// get the next register id.
-    fn next_reg(&mut self) -> BcTemp {
+    fn sp(&mut self) -> BcTemp {
         self.push();
         self.pop()
     }
@@ -655,6 +658,7 @@ impl BytecodeGen {
 
     fn emit(&mut self, op: BcIr, loc: Loc) {
         self.ir.push((op, loc));
+        self.sp.push(SlotId(self.temp));
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) {
@@ -999,7 +1003,14 @@ impl BytecodeGen {
         })
     }
 
-    /// Generate bytecode Ir that evaluate *expr* and assign it to a temporary register.
+    ///
+    /// Evaluate *expr* and
+    ///
+    /// if *expr* is a local variable, return it.
+    /// otherwise, push the result and return the register.
+    ///
+    /// `temp` is not moved.
+    ///
     fn gen_temp_expr(&mut self, expr: Node) -> Result<BcReg> {
         Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
@@ -1010,6 +1021,11 @@ impl BytecodeGen {
         })
     }
 
+    ///
+    /// Evaluate *lhs* and *rhs*, and return the registers.
+    ///
+    /// `temp` is not moved.
+    ///
     fn gen_binary_temp_expr(&mut self, lhs: Node, rhs: Node) -> Result<(BcReg, BcReg)> {
         match (self.is_refer_local(&lhs), self.is_refer_local(&rhs)) {
             (None, None) => {
@@ -1031,7 +1047,7 @@ impl BytecodeGen {
     /// (start of reg: BcTemp, reg length: usize, splat position:Vec<usize>)
     ///
     fn gen_args(&mut self, args: Vec<Node>) -> Result<(BcReg, usize, Vec<usize>)> {
-        let arg = self.next_reg().into();
+        let arg = self.sp().into();
         let mut splat_pos = vec![];
         let len = args.len();
         for (i, arg) in args.into_iter().enumerate() {

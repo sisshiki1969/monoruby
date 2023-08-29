@@ -1,13 +1,24 @@
 use super::*;
 
 impl BytecodeGen {
+    ///
+    /// Evaluate *expr*, push the result, and return the register.
+    ///
+    /// `temp` is moved next.
+    ///
     pub(super) fn push_expr(&mut self, expr: Node) -> Result<BcTemp> {
-        let ret = self.next_reg();
+        let ret = self.sp();
         self.gen_expr(expr, UseMode::Use)?;
         Ok(ret)
     }
 
-    /// Generate bytecode Ir for *expr*.
+    ///
+    /// Evaluate *expr* and
+    ///
+    /// * If *use_mode* is `UseMode::Use`, push the result to the stack and return the register.
+    /// * If *use_mode* is `UseMode::Ret`, return the register.
+    /// * If *use_mode* is `UseMode::NotUse`, the result will discarded.
+    ///
     pub(super) fn gen_expr(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
         let old = self.temp;
         self.gen_expr_inner(expr, use_mode)?;
@@ -18,6 +29,11 @@ impl BytecodeGen {
         Ok(())
     }
 
+    ///
+    /// Evaluate *expr* and store the result to *dst*.
+    ///
+    /// `temp` is not moved.
+    ///
     pub(super) fn gen_store_expr(&mut self, dst: BcReg, rhs: Node) -> Result<()> {
         let loc = rhs.loc;
         match rhs.kind {
@@ -226,6 +242,13 @@ impl BytecodeGen {
         Ok(())
     }
 
+    ///
+    /// Evaluate *expr* and
+    ///
+    /// * If *use_mode* is `UseMode::Use`, push the result to the stack and return the register.
+    /// * If *use_mode* is `UseMode::Ret`, return the register.
+    /// * If *use_mode* is `UseMode::NotUse`, the result will discarded.
+    ///
     fn gen_expr_inner(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
         if !use_mode.use_val() {
             match &expr.kind {
@@ -587,7 +610,7 @@ impl BytecodeGen {
             }
             NodeKind::InterporatedString(nodes) => {
                 let len = nodes.len();
-                let arg = self.next_reg();
+                let arg = self.sp();
                 for expr in nodes {
                     self.push_expr(expr)?;
                 }
@@ -692,7 +715,7 @@ impl BytecodeGen {
         let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
             let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?.into();
             mrhs_len = mlhs_len;
-            let rhs_reg = self.next_reg();
+            let rhs_reg = self.sp();
             let old = self.temp;
             for _ in 0..mlhs_len {
                 self.push();
@@ -704,7 +727,7 @@ impl BytecodeGen {
             );
             (rhs_reg, Some(rhs))
         } else {
-            let rhs_reg = self.next_reg();
+            let rhs_reg = self.sp();
             for rhs in mrhs {
                 self.push_expr(rhs)?;
             }
@@ -768,7 +791,7 @@ impl BytecodeGen {
     fn gen_hash(&mut self, ret: BcReg, nodes: Vec<(Node, Node)>, loc: Loc) -> Result<()> {
         let len = nodes.len();
         let old_reg = self.temp;
-        let args = self.next_reg();
+        let args = self.sp();
         for (k, v) in nodes {
             self.push_expr(k)?;
             self.push_expr(v)?;
@@ -780,7 +803,7 @@ impl BytecodeGen {
 
     fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, op: String, loc: Loc) -> Result<()> {
         let len = nodes.len() + 1;
-        let arg = self.next_reg();
+        let arg = self.sp();
         self.emit_literal(arg.into(), Value::string(format!("(?{op})")));
         self.push();
         for expr in nodes {
