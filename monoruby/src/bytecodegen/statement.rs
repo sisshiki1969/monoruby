@@ -112,7 +112,7 @@ impl BytecodeGen {
         let succ_pos = self.new_label();
         let loop_exit = self.new_label();
         let ret = match use_value {
-            true => Some(self.sp().into()),
+            true => Some(self.push_nil()),
             false => None,
         };
         self.loop_push(loop_exit, loop_start, ret);
@@ -124,9 +124,6 @@ impl BytecodeGen {
         self.emit_br(loop_start);
         self.apply_label(succ_pos);
 
-        if use_value {
-            self.push_nil();
-        }
         self.loop_pop();
         self.apply_label(loop_exit);
         self.emit(BcIr::LoopEnd, loc);

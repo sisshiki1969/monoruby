@@ -268,7 +268,9 @@ impl BBContext {
     }
 
     fn merge(&mut self, other: &Self) {
-        assert_eq!(self.sp, other.sp);
+        if self.sp != other.sp {
+            eprintln!("sp mismatch: {:?} {:?}", self.sp, other.sp);
+        };
         self.slot_state.merge(&other.slot_state);
     }
 

@@ -866,9 +866,10 @@ impl BytecodeGen {
         Ok(())
     }
 
-    fn push_nil(&mut self) {
+    fn push_nil(&mut self) -> BcReg {
         let reg = self.push().into();
         self.emit_nil(reg);
+        reg
     }
 
     ///
@@ -999,6 +1000,7 @@ impl BytecodeGen {
     /// Evaluate *expr* and return the register which the result is stored.
     ///
     /// if *expr* is a local variable, return it. `temp` is not moved.
+    ///
     /// otherwise, push the result and return the register. `temp` moves to  +1.
     ///
     fn gen_expr_reg(&mut self, expr: Node) -> Result<BcReg> {

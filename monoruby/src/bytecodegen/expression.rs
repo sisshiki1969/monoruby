@@ -490,8 +490,7 @@ impl BytecodeGen {
                     }
                 };
                 if let Some(reg) = ret {
-                    let temp = self.gen_temp_expr(val)?;
-                    self.emit_mov(reg, temp)
+                    self.gen_store_expr(reg, val)?;
                 } else {
                     self.gen_expr(val, UseMode::NotUse)?;
                 }
@@ -502,7 +501,7 @@ impl BytecodeGen {
                 return Ok(());
             }
             NodeKind::Next(box val) => {
-                let LoopInfo { next_dest, ret, .. } = match self.loops.last().cloned() {
+                let LoopInfo { next_dest, .. } = match self.loops.last().cloned() {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
@@ -519,12 +518,7 @@ impl BytecodeGen {
                         }
                     }
                 };
-                if let Some(reg) = ret {
-                    let temp = self.gen_temp_expr(val)?;
-                    self.emit_mov(reg, temp)
-                } else {
-                    self.gen_expr(val, UseMode::NotUse)?;
-                }
+                self.gen_expr(val, UseMode::NotUse)?;
                 self.emit(BcIr::Br(next_dest), loc);
                 if use_mode == UseMode::Use {
                     self.push();
