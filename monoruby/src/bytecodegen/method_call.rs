@@ -234,7 +234,7 @@ impl BytecodeGen {
         Ok(())
     }
 
-    pub(super) fn gen_method_assign(
+    pub(super) fn emit_method_assign(
         &mut self,
         callid: CallSiteId,
         receiver: BcReg,

@@ -479,13 +479,14 @@ impl FuncInfo {
             let pc = BcPc::from(pc);
             if let Some(fmt) = pc.format(globals, i) {
                 eprint!(
-                    "{}:{:05} ",
+                    "{}:{:05} [{:02}] ",
                     if info.bb_info.is_bb_head(BcIndex::from(i)) {
                         "+"
                     } else {
                         " "
                     },
-                    i
+                    i,
+                    info.sp[i].0
                 );
                 eprintln!("{}", fmt);
             };

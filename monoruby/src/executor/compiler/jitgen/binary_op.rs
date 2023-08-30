@@ -418,6 +418,7 @@ impl Codegen {
         &mut self,
         ctx: &mut BBContext,
         cc: &mut JitContext,
+        func: &ISeqInfo,
         mode: OpMode,
         kind: CmpKind,
         ret: SlotId,
@@ -480,6 +481,7 @@ impl Codegen {
                         self.cmp_opt_generic(ctx, kind, branch_dest, brkind, pc);
                     }
                 }
+                ctx.sp = func.sp[index.0 as usize];
                 cc.new_branch(index, dest_idx, ctx.clone(), branch_dest);
             }
             _ => unreachable!(),

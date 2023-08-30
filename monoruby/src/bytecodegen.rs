@@ -358,8 +358,8 @@ struct BytecodeGen {
     mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
-    /// bytecode IR.
-    sp: Vec<SlotId>,
+    /// temp stack pointer.
+    sp: Vec<BcTemp>,
     /// destination labels.
     labels: Vec<Option<BcIndex>>,
     /// loop information.
@@ -658,7 +658,7 @@ impl BytecodeGen {
 
     fn emit(&mut self, op: BcIr, loc: Loc) {
         self.ir.push((op, loc));
-        self.sp.push(SlotId(self.temp));
+        self.sp.push(BcTemp(self.temp));
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) {
@@ -952,7 +952,7 @@ impl BytecodeGen {
         Ok(lhs)
     }
 
-    fn gen_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
+    fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
         match lhs {
             LvalueKind::Const(name) => {
                 self.emit(BcIr::StoreConst(src, name), loc);
@@ -987,7 +987,7 @@ impl BytecodeGen {
             }
             LvalueKind::Send { recv, method } => {
                 let callid = self.add_callsite(method, 1, None, vec![], None, src, 1, recv, None);
-                self.gen_method_assign(callid, recv, src, loc);
+                self.emit_method_assign(callid, recv, src, loc);
             }
             LvalueKind::LocalVar { dst } => {
                 self.emit_mov(dst, src);
@@ -995,7 +995,12 @@ impl BytecodeGen {
         }
     }
 
-    /// Generate bytecode Ir that evaluate *expr* and assign it to a temporary register.
+    ///
+    /// Evaluate *expr* and return the register which the result is stored.
+    ///
+    /// if *expr* is a local variable, return it. `temp` is not moved.
+    /// otherwise, push the result and return the register. `temp` moves to  +1.
+    ///
     fn gen_expr_reg(&mut self, expr: Node) -> Result<BcReg> {
         Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
@@ -1019,27 +1024,6 @@ impl BytecodeGen {
                 self.pop().into()
             }
         })
-    }
-
-    ///
-    /// Evaluate *lhs* and *rhs*, and return the registers.
-    ///
-    /// `temp` is not moved.
-    ///
-    fn gen_binary_temp_expr(&mut self, lhs: Node, rhs: Node) -> Result<(BcReg, BcReg)> {
-        match (self.is_refer_local(&lhs), self.is_refer_local(&rhs)) {
-            (None, None) => {
-                let lhs = self.push_expr(lhs)?.into();
-                let rhs = self.push_expr(rhs)?.into();
-                self.temp -= 2;
-                Ok((lhs, rhs))
-            }
-            _ => {
-                let lhs = self.gen_temp_expr(lhs)?;
-                let rhs = self.gen_temp_expr(rhs)?;
-                Ok((lhs, rhs))
-            }
-        }
     }
 
     ///

@@ -107,6 +107,11 @@ impl BytecodeGen {
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
         info.sourcemap = locs;
+        let sp = std::mem::take(&mut self.sp);
+        info.sp = sp
+            .into_iter()
+            .map(|r| self.get_index(&BcReg::from(r)))
+            .collect();
 
         info.bb_info = BasicBlockInfo::new(info);
 

@@ -168,7 +168,7 @@ impl SlotState {
         self.xmm_write(reg).enc()
     }
 
-    pub(super) fn merge(&mut self, other: &BBContext) {
+    pub(super) fn merge(&mut self, other: &SlotState) {
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             match (&self[i], &other[i]) {

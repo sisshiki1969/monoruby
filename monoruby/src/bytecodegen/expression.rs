@@ -122,8 +122,8 @@ impl BytecodeGen {
                         let temp = self.temp;
                         let lhs = self.eval_lvalue(&lhs)?;
                         self.gen_store_expr(dst, rhs)?;
-                        self.gen_assign(dst, lhs, loc);
                         self.temp = temp;
+                        self.emit_assign(dst, lhs, loc);
                     }
                 } else {
                     self.gen_mul_assign(mlhs, mrhs, UseMode::Use)?;
@@ -325,9 +325,9 @@ impl BytecodeGen {
                 let lhs_kind = self.eval_lvalue(&lhs)?;
                 // Evaluate rvalue.
                 let src = self.gen_binop(op, lhs, rhs, None, loc)?;
-                // Assign rvalue to lvalue.
-                self.gen_assign(src, lhs_kind, lhs_loc);
                 self.temp = temp;
+                // Assign rvalue to lvalue.
+                self.emit_assign(src, lhs_kind, lhs_loc);
                 self.handle_mode(use_mode, src);
                 return Ok(());
             }
@@ -342,8 +342,8 @@ impl BytecodeGen {
                     let temp = self.temp;
                     let lhs = self.eval_lvalue(&lhs)?;
                     let src = self.gen_expr_reg(rhs)?;
-                    self.gen_assign(src, lhs, loc);
                     self.temp = temp;
+                    self.emit_assign(src, lhs, loc);
                     self.handle_mode(use_mode, src);
                     return Ok(());
                 } else {
@@ -742,7 +742,7 @@ impl BytecodeGen {
                 self.emit_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.gen_assign(src, kind, loc);
+                self.emit_assign(src, kind, loc);
             }
             temp_reg += 1;
         }
@@ -762,12 +762,15 @@ impl BytecodeGen {
     }
 
     fn gen_index(&mut self, ret: Option<BcReg>, base: Node, index: Node, loc: Loc) -> Result<()> {
-        let (base, idx) = self.gen_binary_temp_expr(base, index)?;
+        let old = self.temp;
+        let base = self.gen_expr_reg(base)?;
+        let index = self.gen_expr_reg(index)?;
+        self.temp = old;
         let ret = match ret {
             None => self.push().into(),
             Some(local) => local,
         };
-        self.emit(BcIr::Index(ret, base, idx), loc);
+        self.emit(BcIr::Index(ret, base, index), loc);
         Ok(())
     }
 }
@@ -822,7 +825,10 @@ impl BytecodeGen {
         exclude_end: bool,
         loc: Loc,
     ) -> Result<()> {
-        let (start, end) = self.gen_binary_temp_expr(start, end)?;
+        let old = self.temp;
+        let start = self.gen_expr_reg(start)?;
+        let end = self.gen_expr_reg(end)?;
+        self.temp = old;
         self.emit(
             BcIr::Range {
                 ret,
@@ -920,7 +926,9 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<()> {
         let func_id = self.add_classdef(None, info);
-        let base = self.gen_temp_expr(base)?;
+        let old = self.temp;
+        let base = self.gen_expr_reg(base)?;
+        self.temp = old;
         self.emit(
             BcIr::SingletonClassDef {
                 ret: dst,

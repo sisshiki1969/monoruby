@@ -155,9 +155,12 @@ impl JitContext {
         }
     }
 
+    ///
+    /// Add new branch from *src_idx to *dest* with *bbctx*.
+    ///
     fn new_branch(&mut self, src_idx: BcIndex, dest: BcIndex, bbctx: BBContext, entry: DestLabel) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: {src_idx}->{dest}");
+        eprintln!("   new_branch: [{:?}]{src_idx}->{dest}", bbctx.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
@@ -174,7 +177,7 @@ impl JitContext {
         entry: DestLabel,
     ) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue: {src_idx}->{dest}");
+        eprintln!("   new_continue:[{:?}] {src_idx}->{dest}", bbctx.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
@@ -191,7 +194,7 @@ impl JitContext {
         unused: Vec<SlotId>,
     ) {
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge: {bb_pos}");
+        eprintln!("   new_backedge:[{:?}] {bb_pos}", bbctx.sp);
         self.backedge_map
             .insert(bb_pos, (dest_label, bbctx.clone(), unused));
     }
@@ -227,6 +230,8 @@ impl WriteBack {
 pub(in crate::executor) struct BBContext {
     /// Information for stack slots.
     slot_state: SlotState,
+    /// Stack top register.
+    sp: SlotId,
     self_value: Value,
     local_num: usize,
 }
@@ -248,6 +253,7 @@ impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
             slot_state: SlotState::new(cc),
+            sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,
             local_num: cc.local_num,
         }
@@ -261,6 +267,11 @@ impl BBContext {
         unused.iter().for_each(|reg| self.dealloc_xmm(*reg));
     }
 
+    fn merge(&mut self, other: &Self) {
+        assert_eq!(self.sp, other.sp);
+        self.slot_state.merge(&other.slot_state);
+    }
+
     fn merge_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
@@ -271,7 +282,7 @@ impl BBContext {
         } in entries.iter()
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
+            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
             merge_ctx.merge(bbctx);
         }
         #[cfg(feature = "jit-debug")]
@@ -1065,7 +1076,7 @@ impl Codegen {
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
                     let index = bb_pos + 1;
-                    self.gen_cmp_opt(&mut ctx, cc, mode, kind, ret, pc, index);
+                    self.gen_cmp_opt(&mut ctx, cc, func, mode, kind, ret, pc, index);
                 }
                 TraceIr::Mov(dst, src) => {
                     self.copy_slot(&mut ctx, src, dst);
@@ -1383,6 +1394,7 @@ impl Codegen {
                     let next_idx = bb_pos + 1;
                     let dest_idx = next_idx + disp;
                     let branch_dest = self.jit.label();
+                    ctx.sp = func.sp[bb_pos.0 as usize];
                     cc.new_branch(bb_pos, dest_idx, ctx, branch_dest);
                     monoasm!( &mut self.jit,
                         jmp branch_dest;
@@ -1393,6 +1405,7 @@ impl Codegen {
                     self.fetch_slot(&mut ctx, cond_);
                     let dest_idx = bb_pos + 1 + disp;
                     let branch_dest = self.jit.label();
+                    ctx.sp = func.sp[bb_pos.0 as usize];
                     cc.new_branch(bb_pos, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(cond_);
                     monoasm!( &mut self.jit,
@@ -1408,6 +1421,7 @@ impl Codegen {
                 TraceIr::CheckLocal(local, disp) => {
                     let dest_idx = bb_pos + 1 + disp;
                     let branch_dest = self.jit.label();
+                    ctx.sp = func.sp[bb_pos.0 as usize];
                     cc.new_branch(bb_pos, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(local);
                     monoasm!( &mut self.jit,
@@ -1416,10 +1430,12 @@ impl Codegen {
                     );
                 }
             }
+            ctx.sp = func.sp[bb_pos.0 as usize];
         }
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
             let branch_dest = self.jit.label();
+            ctx.sp = func.sp[bb_end.0 as usize];
             cc.new_continue(bb_end, next_idx, ctx, branch_dest);
             if let Some(target_ctx) = self.gen_merging_branches(func, cc, next_idx) {
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());

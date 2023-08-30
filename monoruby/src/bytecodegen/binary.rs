@@ -38,18 +38,24 @@ impl BytecodeGen {
         rhs: Node,
         loc: Loc,
     ) -> Result<BcReg> {
-        let lhs = self.push_expr(lhs)?.into();
-        let rhs = self.gen_temp_expr(rhs)?.into();
+        let old = self.temp;
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
+        self.temp = old;
         let ret = if let Some(ret) = dst {
-            self.pop();
             ret
         } else {
-            lhs
+            self.push().into()
         };
         self.emit_binary_op(method, lhs, rhs, Some(ret), loc);
         Ok(ret)
     }
 
+    ///
+    /// Generate TEQ.
+    ///
+    /// `temp` is not moved.
+    ///
     pub(super) fn gen_teq_condbr(
         &mut self,
         lhs: Node,
@@ -58,11 +64,13 @@ impl BytecodeGen {
         jmp_if_true: bool,
     ) -> Result<()> {
         let loc = lhs.loc;
-        let lhs = self.gen_temp_expr(lhs)?;
+        let old = self.temp;
+        let lhs = self.push_expr(lhs)?.into();
         self.emit(
             BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
             loc,
         );
+        self.temp = old;
         self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
         Ok(())
     }
@@ -77,7 +85,7 @@ impl BytecodeGen {
             let loc = cond.loc;
             let cond = self.sp().into();
             if kind == CmpKind::Cmp {
-                self.gen_cmp(None, kind, lhs, rhs, false, loc)?;
+                self.gen_cmp(None, kind, lhs, rhs, false, loc)?; // +1
                 self.pop();
                 self.emit_condbr(cond, else_pos, jmp_if_true, false);
             } else {
@@ -98,7 +106,9 @@ impl BytecodeGen {
                 self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
             }
         } else {
-            let cond = self.gen_temp_expr(cond)?;
+            let old = self.temp;
+            let cond = self.gen_expr_reg(cond)?;
+            self.temp = old;
             self.emit_condbr(cond, else_pos, jmp_if_true, false);
         }
         Ok(())
@@ -151,7 +161,9 @@ impl BytecodeGen {
     //gen_ops!((rem, Rem));
 
     fn gen_singular(&mut self, dst: Option<BcReg>, lhs: Node) -> Result<(BcReg, BcReg)> {
-        let lhs = self.gen_temp_expr(lhs)?;
+        let old = self.temp;
+        let lhs = self.gen_expr_reg(lhs)?;
+        self.temp = old;
         let dst = match dst {
             None => self.push().into(),
             Some(local) => local,
@@ -165,7 +177,10 @@ impl BytecodeGen {
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg, BcReg)> {
-        let (lhs, rhs) = self.gen_binary_temp_expr(lhs, rhs)?;
+        let old = self.temp;
+        let lhs = self.gen_expr_reg(lhs)?;
+        let rhs = self.gen_expr_reg(rhs)?;
+        self.temp = old;
         let dst = match dst {
             None => self.push().into(),
             Some(local) => local,

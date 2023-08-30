@@ -31,6 +31,10 @@ pub(crate) struct ISeqInfo {
     ///
     pub sourcemap: Vec<Loc>,
     ///
+    /// Valid temp register information.
+    ///
+    pub sp: Vec<SlotId>,
+    ///
     /// Exception handling map.
     ///
     exception_map: Vec<(
@@ -106,6 +110,7 @@ impl ISeqInfo {
             bytecode: None,
             loc,
             sourcemap: vec![],
+            sp: vec![],
             exception_map: vec![],
             args: args.clone(),
             outer_locals,

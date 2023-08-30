@@ -1,17 +1,20 @@
-            20000.times do |x|
-                puts x
-                a=Object.new;
-                a.instance_variable_set("@a", 0);
-                a.instance_variable_set("@b", 1);
-                a.instance_variable_set("@c", 2);
-                a.instance_variable_set("@d", 3);
-                a.instance_variable_set("@e", 4);
-                a.instance_variable_set("@f", 5);
-                a.instance_variable_set("@g", 6);
-                a.instance_variable_set("@h", 7);
-                a.instance_variable_set("@i", 8);
-                a.instance_variable_set("@j", 9);
-                a.instance_variable_set("@k", 10);
-                a.instance_variable_set("@l", 11);
-                a.inspect;
-            end
+for __i in 0..7 do
+    class A
+        attr_accessor :w
+    end
+    class B
+      def w
+        100
+      end
+    end
+    a = A.new
+    a.w = 42
+    res = []
+    for i in 0..10
+      if i == 8
+        a = B.new
+      end
+      res << a.w
+    end
+    res
+end
