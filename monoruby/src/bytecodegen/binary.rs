@@ -125,15 +125,10 @@ macro_rules! gen_ri_ops {
               rhs: Node,
               loc: Loc,
           ) -> Result<BcReg> {
-              let (dst, mode) = if let Some(i) = is_smi(&rhs) {
-                  let (dst, lhs) = self.gen_singular(dst, lhs)?;
-                  (dst, BinopMode::RI(lhs, i))
-              } else if let Some(i) = is_smi(&lhs) {
-                  let (dst, rhs) = self.gen_singular(dst, rhs)?;
-                  (dst, BinopMode::IR(i, rhs))
-              } else {
-                  let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-                  (dst, BinopMode::RR(lhs, rhs))
+              let mode = self.gen_mode(lhs, rhs)?;
+              let dst = match dst {
+                  None => self.push().into(),
+                  Some(local) => local,
               };
               self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
               Ok(dst)
@@ -147,6 +142,36 @@ macro_rules! gen_ri_ops {
 }
 
 impl BytecodeGen {
+    ///
+    /// Generate operand mode.
+    ///
+    /// ### argument
+    /// - `lhs`: left hand side expression.
+    /// - `rhs`: right hand side expression.
+    ///
+    /// ### returns
+    /// - `BinopMode`: operand mode.
+    ///
+    /// ### note
+    /// `temp` is not moved.
+    ///
+    fn gen_mode(&mut self, lhs: Node, rhs: Node) -> Result<BinopMode> {
+        let old = self.temp;
+        let mode = if let Some(i) = is_smi(&rhs) {
+            let lhs = self.gen_expr_reg(lhs)?;
+            BinopMode::RI(lhs, i)
+        } else if let Some(i) = is_smi(&lhs) {
+            let rhs = self.gen_expr_reg(rhs)?;
+            BinopMode::IR(i, rhs)
+        } else {
+            let lhs = self.gen_expr_reg(lhs)?;
+            let rhs = self.gen_expr_reg(rhs)?;
+            BinopMode::RR(lhs, rhs)
+        };
+        self.temp = old;
+        Ok(mode)
+    }
+
     gen_ri_ops!(
         (add, Add),
         (sub, Sub),
@@ -158,36 +183,22 @@ impl BytecodeGen {
         (exp, Exp),
         (rem, Rem)
     );
-    //gen_ops!((rem, Rem));
 
-    fn gen_singular(&mut self, dst: Option<BcReg>, lhs: Node) -> Result<(BcReg, BcReg)> {
-        let old = self.temp;
-        let lhs = self.gen_expr_reg(lhs)?;
-        self.temp = old;
-        let dst = match dst {
-            None => self.push().into(),
-            Some(local) => local,
-        };
-        Ok((dst, lhs))
-    }
-
-    fn gen_binary(
-        &mut self,
-        dst: Option<BcReg>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<(BcReg, BcReg, BcReg)> {
-        let old = self.temp;
-        let lhs = self.gen_expr_reg(lhs)?;
-        let rhs = self.gen_expr_reg(rhs)?;
-        self.temp = old;
-        let dst = match dst {
-            None => self.push().into(),
-            Some(local) => local,
-        };
-        Ok((dst, lhs, rhs))
-    }
-
+    ///
+    /// Generate BcIr::Cmp.
+    ///
+    /// - Evaluate *lhs* and *rhs*.
+    /// - If *dst* is Some, store the result to *dst*. (`temp` is not moved)
+    /// - If *dst* is None, push the result. (`temp` is moved to +1)
+    ///
+    /// ### Parameters
+    /// - `dst`: destination register. if None, push the result.
+    /// - `kind`: kind of comparison.
+    /// - `lhs`: left hand side expression.
+    /// - `rhs`: right hand side expression.
+    /// - `optimizable`: if true, the result is used for the next conditional branch instruction.
+    /// - `loc`: location of the expression.
+    ///
     fn gen_cmp(
         &mut self,
         dst: Option<BcReg>,
@@ -197,12 +208,19 @@ impl BytecodeGen {
         optimizable: bool,
         loc: Loc,
     ) -> Result<BcReg> {
-        let (dst, mode) = if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            (dst, BinopMode::RI(lhs, i))
+        let old = self.temp;
+        let mode = if let Some(i) = is_smi(&rhs) {
+            let lhs = self.gen_expr_reg(lhs)?;
+            BinopMode::RI(lhs, i)
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            (dst, BinopMode::RR(lhs, rhs))
+            let lhs = self.gen_expr_reg(lhs)?;
+            let rhs = self.gen_expr_reg(rhs)?;
+            BinopMode::RR(lhs, rhs)
+        };
+        self.temp = old;
+        let dst = match dst {
+            None => self.push().into(),
+            Some(local) => local,
         };
         self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
         Ok(dst)
