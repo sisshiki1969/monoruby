@@ -309,8 +309,8 @@ impl BytecodeGen {
                 self.gen_store_expr(ret, expr)?;
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
-                //return Ok(());
+                self.gen_binop(op, lhs, rhs, use_mode.into(), loc)?;
+                return Ok(());
             }
             NodeKind::Index {
                 box base,

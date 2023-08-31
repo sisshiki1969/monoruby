@@ -315,7 +315,9 @@ fn array_shl(
         movq rax, (ary_shl);
         call rax;
     );
-    gen.store_rax(ret);
+    if !ret.is_zero() {
+        gen.store_rax(ret);
+    }
 }
 
 fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {

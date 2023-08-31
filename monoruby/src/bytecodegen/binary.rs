@@ -69,7 +69,7 @@ impl BytecodeGen {
         };
         self.emit_binary_op(method, lhs, rhs, ret, loc);
         if use_mode == UseMode2::Ret {
-            self.pop();
+            self.emit_ret(None);
         }
         Ok(())
     }
