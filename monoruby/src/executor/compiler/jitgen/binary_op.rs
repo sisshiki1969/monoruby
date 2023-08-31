@@ -586,7 +586,7 @@ impl Codegen {
                 self.fetch_slots(ctx, &[*lhs, *rhs]);
             }
             OpMode::RI(r, _) | OpMode::IR(_, r) => {
-                self.fetch_slot(ctx, *r);
+                self.fetch_slots(ctx, &[*r]);
             }
         }
     }

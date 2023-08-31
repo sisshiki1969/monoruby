@@ -16,7 +16,7 @@ impl std::fmt::Debug for SlotState {
             .enumerate()
             .flat_map(|(i, mode)| match mode {
                 LinkMode::Stack => None,
-                LinkMode::Const(v) => Some(format!("%{i}:Const({:?}) ", v)),
+                LinkMode::Literal(v) => Some(format!("%{i}:Literal({:?}) ", v)),
                 LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
                 LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
             })
@@ -96,7 +96,7 @@ impl SlotState {
 
     pub(super) fn link_const(&mut self, reg: SlotId, v: Value) {
         self.unlink_xmm(reg);
-        self[reg] = LinkMode::Const(v);
+        self[reg] = LinkMode::Literal(v);
     }
 
     pub(super) fn xmm_to_both(&mut self, freg: Xmm) {
@@ -120,7 +120,7 @@ impl SlotState {
                     self.xmm[freg.0 as usize].retain(|e| *e != reg);
                     self[reg] = LinkMode::Stack;
                 }
-                LinkMode::Const(_) => {
+                LinkMode::Literal(_) => {
                     self[reg] = LinkMode::Stack;
                 }
                 LinkMode::Stack => {}
@@ -145,7 +145,7 @@ impl SlotState {
                     *x = l;
                 }
             }
-            LinkMode::Stack | LinkMode::Const(_) => {}
+            LinkMode::Stack | LinkMode::Literal(_) => {}
         });
     }
 
@@ -158,7 +158,7 @@ impl SlotState {
                 assert_eq!(reg, self.xmm[freg.0 as usize][0]);
                 freg
             }
-            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Const(_) => {
+            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Literal(_) => {
                 self.unlink_xmm(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
@@ -177,22 +177,22 @@ impl SlotState {
             match (&self[i], &other[i]) {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                 | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
-                (LinkMode::Both(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
+                (LinkMode::Both(l), LinkMode::Literal(r)) if r.class() == FLOAT_CLASS => {
                     self.link_both(i, *l)
                 }
-                (LinkMode::Const(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
+                (LinkMode::Literal(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
                     let x = self.alloc_xmm();
                     self.link_both(i, x);
                 }
                 (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
-                (LinkMode::Xmm(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
+                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.class() == FLOAT_CLASS => {
                     self.link_xmm(i, *l)
                 }
-                (LinkMode::Const(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
+                (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
                     let x = self.alloc_xmm();
                     self.link_xmm(i, x);
                 }
-                (LinkMode::Const(l), LinkMode::Const(r)) if l == r => self.link_const(i, *l),
+                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_const(i, *l),
                 _ => self.unlink_xmm(i),
             };
         }
@@ -225,7 +225,7 @@ impl SlotState {
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
-                LinkMode::Const(v) => Some((*v, SlotId(idx as u16))),
+                LinkMode::Literal(v) => Some((*v, SlotId(idx as u16))),
                 _ => None,
             })
             .collect();
@@ -262,7 +262,7 @@ impl SlotState {
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
-                LinkMode::Const(v) if idx <= local_num => Some((*v, SlotId(idx as u16))),
+                LinkMode::Literal(v) if idx <= local_num => Some((*v, SlotId(idx as u16))),
                 _ => None,
             })
             .collect();

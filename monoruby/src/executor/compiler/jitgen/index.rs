@@ -22,7 +22,7 @@ impl Codegen {
             let out_range = self.jit.label();
             let heap = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_guard_base(base, side_exit);
+            self.load_guard_array(base, side_exit);
 
             if let Some(i) = spi {
                 monoasm! { &mut self.jit,
@@ -43,8 +43,6 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     addq rsi, rax;
                     js   out_range;
-                }
-                monoasm! { &mut self.jit,
                 exit:
                 }
             }
@@ -102,10 +100,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
-            //jle  inline;
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            //movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-        //inline:
         }
     }
 
@@ -131,7 +126,7 @@ impl Codegen {
             let heap = self.jit.label();
             let generic = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_guard_base(base, side_exit);
+            self.load_guard_array(base, side_exit);
 
             if let Some(i) = spi {
                 monoasm! { &mut self.jit,
@@ -197,7 +192,7 @@ impl Codegen {
         self.jit_handle_error(ctx, pc);
     }
 
-    fn load_guard_base(&mut self, base: SlotId, side_exit: DestLabel) {
+    fn load_guard_array(&mut self, base: SlotId, side_exit: DestLabel) {
         self.load_rdi(base);
         self.guard_class(ARRAY_CLASS, side_exit);
         monoasm! { &mut self.jit,

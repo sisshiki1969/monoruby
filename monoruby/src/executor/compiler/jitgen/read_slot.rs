@@ -4,7 +4,7 @@ impl Codegen {
     ///
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
-    pub(super) fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
+    fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
         match ctx[reg] {
             LinkMode::Xmm(freg) => {
                 let f64_to_val = self.f64_to_val;
@@ -15,7 +15,7 @@ impl Codegen {
                 self.store_rax(reg);
                 ctx[reg] = LinkMode::Both(freg);
             }
-            LinkMode::Const(v) => {
+            LinkMode::Literal(v) => {
                 self.gen_write_back_constant(reg, v);
                 ctx[reg] = LinkMode::Stack;
             }
@@ -39,7 +39,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn fetch_args(
+    pub(super) fn fetch_callargs(
         &mut self,
         ctx: &mut BBContext,
         args: SlotId,
@@ -67,7 +67,7 @@ impl Codegen {
                 );
                 ctx[reg] = LinkMode::Both(freg);
             }
-            LinkMode::Const(v) => {
+            LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
                     movq rax, (v.id());
                 );
@@ -125,7 +125,7 @@ impl Codegen {
                 self.unbox_float(freg.enc(), side_exit);
                 freg
             }
-            LinkMode::Const(v) => {
+            LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     let freg = ctx.link_new_xmm(reg);
                     let f = self.jit.const_f64(f);
@@ -195,7 +195,7 @@ impl Codegen {
                 self.integer_to_f64(freg.enc(), side_exit);
                 freg
             }
-            LinkMode::Const(v) => {
+            LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     let freg = ctx.link_new_xmm(reg);
                     let f = self.jit.const_f64(f);

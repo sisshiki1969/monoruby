@@ -72,11 +72,6 @@ struct JitContext {
     ///
     backedge_map: HashMap<BcIndex, (DestLabel, BBContext, Vec<SlotId>)>,
     ///
-    /// The start offset of a machine code corresponding to thhe current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    start_codepos: usize,
-    ///
     /// the number of slots.
     ///
     total_reg_num: usize,
@@ -92,6 +87,11 @@ struct JitContext {
     /// source map.
     ///
     sourcemap: Vec<(BcIndex, usize)>,
+    ///
+    /// The start offset of a machine code corresponding to thhe current basic block.
+    ///
+    #[cfg(feature = "emit-asm")]
+    start_codepos: usize,
 }
 
 #[derive(Clone)]
@@ -146,12 +146,12 @@ impl JitContext {
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
-            #[cfg(feature = "emit-asm")]
-            start_codepos,
             total_reg_num,
             local_num,
             self_value,
             sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos,
         }
     }
 
@@ -293,7 +293,7 @@ impl BBContext {
     }
 
     fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::Const(v) = self[slot] {
+        if let LinkMode::Literal(v) = self[slot] {
             let i = v.try_fixnum()?;
             u16::try_from(i).ok()
         } else {
@@ -302,7 +302,7 @@ impl BBContext {
     }
 
     pub(crate) fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::Const(v) = self[slot] {
+        if let LinkMode::Literal(v) = self[slot] {
             let i = v.try_fixnum()?;
             u8::try_from(i).ok()
         } else {
@@ -360,7 +360,7 @@ pub(crate) enum LinkMode {
     ///
     /// Constant.
     ///
-    Const(Value),
+    Literal(Value),
 }
 
 #[cfg(any(feature = "log-jit", feature = "profile"))]
@@ -619,7 +619,7 @@ impl Codegen {
                 self.load_rax(src);
                 self.store_rax(dst);
             }
-            LinkMode::Const(v) => {
+            LinkMode::Literal(v) => {
                 ctx.link_const(dst, v);
             }
         }
@@ -761,7 +761,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::StoreConst(src, id) => {
-                    self.fetch_slot(&mut ctx, src);
+                    self.fetch_slots(&mut ctx, &[src]);
                     self.jit_store_constant(&ctx, id, src);
                 }
                 TraceIr::BlockArgProxy(dst, outer) => {
@@ -836,7 +836,7 @@ impl Codegen {
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
                     if let Some(cached_class) = cached_class {
-                        self.fetch_slot(&mut ctx, src);
+                        self.fetch_slots(&mut ctx, &[src]);
                         self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -857,7 +857,7 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::StoreGvar { src: val, name } => {
-                    self.fetch_slot(&mut ctx, val);
+                    self.fetch_slots(&mut ctx, &[val]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm! { &mut self.jit,
@@ -902,7 +902,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::StoreDynVar(dst, src) => {
-                    self.fetch_slot(&mut ctx, src);
+                    self.fetch_slots(&mut ctx, &[src]);
                     monoasm!( &mut self.jit,
                         movq rax, [r14 - (LBP_OUTER)];
                     );
@@ -918,7 +918,7 @@ impl Codegen {
                     );
                 }
                 TraceIr::BitNot { ret, src } => {
-                    self.fetch_slot(&mut ctx, src);
+                    self.fetch_slots(&mut ctx, &[src]);
                     ctx.unlink_xmm(ret);
                     if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -934,7 +934,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::Not { ret, src } => {
-                    self.fetch_slot(&mut ctx, src);
+                    self.fetch_slots(&mut ctx, &[src]);
                     ctx.unlink_xmm(ret);
                     self.load_rdi(src);
                     self.not_rdi_to_rax();
@@ -950,7 +950,7 @@ impl Codegen {
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
                     } else {
-                        self.fetch_slot(&mut ctx, src);
+                        self.fetch_slots(&mut ctx, &[src]);
                         ctx.unlink_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -972,7 +972,7 @@ impl Codegen {
                         let fdst = ctx.xmm_write(ret);
                         self.xmm_mov(fsrc, fdst);
                     } else {
-                        self.fetch_slot(&mut ctx, src);
+                        self.fetch_slots(&mut ctx, &[src]);
                         ctx.unlink_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1136,7 +1136,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
-                    self.fetch_slot(&mut ctx, src);
+                    self.fetch_slots(&mut ctx, &[src]);
                     for reg in dst.0..dst.0 + len {
                         ctx.unlink_xmm(SlotId(reg));
                     }
@@ -1181,8 +1181,8 @@ impl Codegen {
                         ret,
                         ..
                     } = store[callid];
-                    self.fetch_slot(&mut ctx, recv);
-                    self.fetch_args(&mut ctx, args, len, &store[callid]);
+                    self.fetch_slots(&mut ctx, &[recv]);
+                    self.fetch_callargs(&mut ctx, args, len, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1208,8 +1208,8 @@ impl Codegen {
                         ret,
                         ..
                     } = store[callid];
-                    self.fetch_slot(&mut ctx, recv);
-                    self.fetch_args(&mut ctx, args, len + 1, &store[callid]);
+                    self.fetch_slots(&mut ctx, &[recv]);
+                    self.fetch_callargs(&mut ctx, args, len + 1, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1238,7 +1238,7 @@ impl Codegen {
                         ret,
                         ..
                     } = store[callid];
-                    self.fetch_slot(&mut ctx, recv);
+                    self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_range(&mut ctx, args, len);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
@@ -1257,7 +1257,7 @@ impl Codegen {
                     callsite,
                     ..
                 } => {
-                    self.fetch_slot(&mut ctx, store[callsite].recv);
+                    self.fetch_slots(&mut ctx, &[store[callsite].recv]);
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
@@ -1338,7 +1338,7 @@ impl Codegen {
                 }
                 TraceIr::DefinedMethod { ret, recv, name } => {
                     ctx.unlink_xmm(ret);
-                    self.fetch_slot(&mut ctx, recv);
+                    self.fetch_slots(&mut ctx, &[recv]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1428,7 +1428,7 @@ impl Codegen {
                     return;
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
-                    self.fetch_slot(&mut ctx, cond_);
+                    self.fetch_slots(&mut ctx, &[cond_]);
                     let dest_idx = bb_pos + 1 + disp;
                     let branch_dest = self.jit.label();
                     ctx.sp = func.sp[bb_pos.0 as usize];

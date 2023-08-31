@@ -79,7 +79,7 @@ impl Codegen {
             for (reg, coerced) in use_set {
                 match template[reg] {
                     LinkMode::Stack => {}
-                    LinkMode::Const(v) => {
+                    LinkMode::Literal(v) => {
                         if v.class() == FLOAT_CLASS {
                             const_vec.push(reg);
                         }
@@ -194,9 +194,9 @@ impl Codegen {
                         src_ctx.xmm_to_both(freg);
                         self.gen_xmm_to_stack(freg, src_ctx.xmm_slots(freg));
                     }
-                    LinkMode::Const(v) => {
+                    LinkMode::Literal(v) => {
                         #[cfg(feature = "jit-debug")]
-                        eprintln!("      wb: Const({:?})->{:?}", v, reg);
+                        eprintln!("      wb: Literal({:?})->{:?}", v, reg);
                         self.gen_write_back_constant(reg, v);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
@@ -259,8 +259,8 @@ impl Codegen {
                     src_ctx.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
-                (LinkMode::Const(l), LinkMode::Const(r)) if l == r => {}
-                (LinkMode::Const(l), LinkMode::Xmm(r)) => {
+                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
+                (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
                         src_ctx.link_xmm(reg, r);
                         let f = self.jit.const_f64(f);
