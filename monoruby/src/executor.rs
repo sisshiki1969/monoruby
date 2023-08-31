@@ -1084,7 +1084,7 @@ impl BcPc {
                 ret,
                 mode: OpMode::RR(lhs, rhs),
             } => {
-                let op1 = format!("{:?} = {:?} {} {:?}", ret, lhs, kind, rhs);
+                let op1 = format!("{} = {:?} {} {:?}", ret_str(ret), lhs, kind, rhs);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1107,7 +1107,7 @@ impl BcPc {
                 ret,
                 mode: OpMode::RI(lhs, rhs),
             } => {
-                let op1 = format!("{:?} = {:?} {} {}: i16", ret, lhs, kind, rhs,);
+                let op1 = format!("{} = {:?} {} {}: i16", ret_str(ret), lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1130,7 +1130,7 @@ impl BcPc {
                 ret,
                 mode: OpMode::IR(lhs, rhs),
             } => {
-                let op1 = format!("{:?} = {}: i16 {} {:?}", ret, lhs, kind, rhs,);
+                let op1 = format!("{} = {}: i16 {} {:?}", ret_str(ret), lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1464,8 +1464,8 @@ pub enum BinOpK {
     BitOr = 4,
     BitAnd = 5,
     BitXor = 6,
-    Rem = 9,
-    Exp = 10,
+    Rem = 7,
+    Exp = 8,
 }
 
 use std::fmt;
@@ -1496,8 +1496,8 @@ impl BinOpK {
             4 => BinOpK::BitOr,
             5 => BinOpK::BitAnd,
             6 => BinOpK::BitXor,
-            9 => BinOpK::Rem,
-            10 => BinOpK::Exp,
+            7 => BinOpK::Rem,
+            8 => BinOpK::Exp,
             _ => unreachable!(),
         }
     }

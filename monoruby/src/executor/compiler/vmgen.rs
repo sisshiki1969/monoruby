@@ -308,10 +308,18 @@ impl Codegen {
         self.dispatch[184] = or_ir;
         self.dispatch[185] = and_ir;
         self.dispatch[186] = xor_ir;
-        //self.dispatch[187] = shr_ir;
-        //self.dispatch[188] = shl_ir;
-        self.dispatch[189] = rem_ir;
-        self.dispatch[190] = pow_ir;
+        self.dispatch[187] = rem_ir;
+        self.dispatch[188] = pow_ir;
+
+        self.dispatch[190] = add_ri;
+        self.dispatch[191] = sub_ri;
+        self.dispatch[192] = mul_ri;
+        self.dispatch[193] = div_ri;
+        self.dispatch[194] = or_ri;
+        self.dispatch[195] = and_ri;
+        self.dispatch[196] = xor_ri;
+        self.dispatch[197] = rem_ri;
+        self.dispatch[198] = pow_ri;
 
         self.dispatch[200] = add_rr;
         self.dispatch[201] = sub_rr;
@@ -320,22 +328,8 @@ impl Codegen {
         self.dispatch[204] = or_rr;
         self.dispatch[205] = and_rr;
         self.dispatch[206] = xor_rr;
-        //self.dispatch[207] = shr_rr;
-        //self.dispatch[208] = shl_rr;
-        self.dispatch[209] = rem_rr;
-        self.dispatch[210] = pow_rr;
-
-        self.dispatch[220] = add_ri;
-        self.dispatch[221] = sub_ri;
-        self.dispatch[222] = mul_ri;
-        self.dispatch[223] = div_ri;
-        self.dispatch[224] = or_ri;
-        self.dispatch[225] = and_ri;
-        self.dispatch[226] = xor_ri;
-        //self.dispatch[227] = shr_ri;
-        //self.dispatch[228] = shl_ri;
-        self.dispatch[229] = rem_ri;
-        self.dispatch[230] = pow_ri;
+        self.dispatch[207] = rem_rr;
+        self.dispatch[208] = pow_rr;
 
         // method invoker.
         self.method_invoker =

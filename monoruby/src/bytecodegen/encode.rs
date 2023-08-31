@@ -468,18 +468,18 @@ impl BytecodeGen {
             BcIr::BinOp(kind, ret, mode) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.get_index(&ret));
                 match mode {
-                    BinopMode::RR(lhs, rhs) => {
-                        let op2 = self.get_index(lhs);
-                        let op3 = self.get_index(rhs);
-                        Bc::from_with_class2(enc_www(200 + *kind as u16, op1.0, op2.0, op3.0))
-                    }
                     BinopMode::IR(lhs, rhs) => {
                         let op3 = self.get_index(rhs);
                         Bc::from_with_class2(enc_wsww(180 + *kind as u16, op1.0, *lhs, op3.0))
                     }
                     BinopMode::RI(lhs, rhs) => {
                         let op2 = self.get_index(lhs);
-                        Bc::from_with_class2(enc_wwsw(220 + *kind as u16, op1.0, op2.0, *rhs))
+                        Bc::from_with_class2(enc_wwsw(190 + *kind as u16, op1.0, op2.0, *rhs))
+                    }
+                    BinopMode::RR(lhs, rhs) => {
+                        let op2 = self.get_index(lhs);
+                        let op3 = self.get_index(rhs);
+                        Bc::from_with_class2(enc_www(200 + *kind as u16, op1.0, op2.0, op3.0))
                     }
                 }
             }

@@ -525,7 +525,7 @@ impl TraceIr {
                     },
                 },
                 179 => Self::ConcatStr(SlotId::from(op1), SlotId::new(op2), op3),
-                180..=199 => {
+                180..=189 => {
                     let kind = BinOpK::from(opcode - 180);
                     let ret = SlotId::from(op1);
                     let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
@@ -537,25 +537,25 @@ impl TraceIr {
                         Self::BinOp { kind, ret, mode }
                     }
                 }
-                200..=219 => {
+                190..=199 => {
+                    let kind = BinOpK::from(opcode - 190);
+                    let ret = SlotId::from(op1);
+                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    if pc.is_integer1() {
+                        Self::IBinOp { kind, ret, mode }
+                    } else if pc.is_float1() {
+                        Self::FBinOp { kind, ret, mode }
+                    } else {
+                        Self::BinOp { kind, ret, mode }
+                    }
+                }
+                200..=209 => {
                     let kind = BinOpK::from(opcode - 200);
                     let ret = SlotId::from(op1);
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
                     if pc.is_integer_binop() {
                         Self::IBinOp { kind, ret, mode }
                     } else if pc.is_float_binop() {
-                        Self::FBinOp { kind, ret, mode }
-                    } else {
-                        Self::BinOp { kind, ret, mode }
-                    }
-                }
-                220..=239 => {
-                    let kind = BinOpK::from(opcode - 220);
-                    let ret = SlotId::from(op1);
-                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
-                    if pc.is_integer1() {
-                        Self::IBinOp { kind, ret, mode }
-                    } else if pc.is_float1() {
                         Self::FBinOp { kind, ret, mode }
                     } else {
                         Self::BinOp { kind, ret, mode }
