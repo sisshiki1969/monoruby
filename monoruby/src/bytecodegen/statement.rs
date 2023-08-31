@@ -71,7 +71,7 @@ impl BytecodeGen {
             self.pop(); // pop *dst*
             self.emit_condbr(dst, loop_exit, true, true);
 
-            self.gen_expr(*body.body, UseMode::NotUse)?;
+            self.gen_expr(*body.body, UseMode2::NotUse)?;
             self.apply_label(next_dest);
 
             self.emit(
@@ -120,7 +120,7 @@ impl BytecodeGen {
         self.apply_label(loop_start);
         self.emit(BcIr::LoopStart, loc);
         self.gen_opt_condbr(!cond_op, cond, succ_pos)?;
-        self.gen_expr(body, UseMode::NotUse)?;
+        self.gen_expr(body, UseMode2::NotUse)?;
         self.emit_br(loop_start);
         self.apply_label(succ_pos);
 
@@ -150,7 +150,7 @@ impl BytecodeGen {
         let loc = body.loc;
         self.apply_label(loop_pos);
         self.emit(BcIr::LoopStart, loc);
-        self.gen_expr(body, UseMode::NotUse)?;
+        self.gen_expr(body, UseMode2::NotUse)?;
         self.apply_label(next_dest);
         self.gen_opt_condbr(cond_op, cond, loop_pos)?;
 
@@ -230,14 +230,14 @@ impl BytecodeGen {
                     self.emit_br(succ_pos);
                     self.apply_label(then_pos);
                 }
-                self.gen_expr(body, use_mode)?;
+                self.gen_expr(body, use_mode.into())?;
                 if !use_mode.is_ret() {
                     self.emit_br(exit_pos);
                 }
                 self.apply_label(succ_pos);
             }
             self.temp = temp;
-            self.gen_expr(else_, use_mode)?;
+            self.gen_expr(else_, use_mode.into())?;
         }
 
         self.apply_label(exit_pos);
@@ -272,7 +272,7 @@ impl BytecodeGen {
         let body_end = self.new_label();
         let range = body_start..body_end;
         self.apply_label(body_start);
-        self.gen_expr(body, body_use)?;
+        self.gen_expr(body, body_use.into())?;
         self.apply_label(body_end);
         let else_label = self.new_label();
         if !rescue.is_empty() {
@@ -307,7 +307,7 @@ impl BytecodeGen {
                 self.apply_label(cont_pos);
                 match rescue_use {
                     UseMode::Push => self.gen_store_expr(ret_reg, body)?,
-                    _ => self.gen_expr(body, rescue_use)?,
+                    _ => self.gen_expr(body, rescue_use.into())?,
                 }
                 if !rescue_use.is_ret() {
                     self.emit_br(ensure_label);
@@ -317,7 +317,7 @@ impl BytecodeGen {
             }
             // no rescue branch was matched.
             if let Some(box ensure) = &ensure {
-                self.gen_expr(ensure.clone(), UseMode::NotUse)?;
+                self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
             }
             self.emit(BcIr::Raise(err_reg), Loc::default());
             self.pop();
@@ -346,7 +346,7 @@ impl BytecodeGen {
                 let err_reg = self.push().into();
                 let rescue_pos = self.new_label();
                 self.apply_label(rescue_pos);
-                self.gen_expr(ensure.clone(), UseMode::NotUse)?;
+                self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
                 self.emit(BcIr::Raise(err_reg), Loc::default());
                 self.pop();
 
@@ -367,11 +367,11 @@ impl BytecodeGen {
         }
         self.apply_label(else_label);
         if let Some(box else_) = else_ {
-            self.gen_expr(else_, rescue_use)?;
+            self.gen_expr(else_, rescue_use.into())?;
         }
         self.apply_label(ensure_label);
         if let Some(box ensure) = ensure {
-            self.gen_expr(ensure, UseMode::NotUse)?;
+            self.gen_expr(ensure, UseMode2::NotUse)?;
             self.emit(BcIr::EnsureEnd, Loc::default());
             if use_mode.is_ret() {
                 self.emit_ret(None);
