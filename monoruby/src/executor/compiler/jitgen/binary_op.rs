@@ -431,7 +431,7 @@ impl Codegen {
         func: &ISeqInfo,
         mode: OpMode,
         kind: CmpKind,
-        ret: SlotId,
+        ret: Option<SlotId>,
         pc: BcPc,
         index: BcIndex,
     ) {

@@ -1058,7 +1058,9 @@ impl Codegen {
                             _ => unreachable!(),
                         }
                         self.setflag_float(kind);
-                        self.store_rax(ret);
+                        if let Some(ret) = ret {
+                            self.store_rax(ret);
+                        }
                     } else if mode.is_integer_op(&pc) {
                         self.writeback_binary(&mut ctx, &mode);
                         ctx.unlink_xmm(ret);
@@ -1066,7 +1068,9 @@ impl Codegen {
                         self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
                         self.jit_handle_error(&ctx, pc);
-                        self.store_rax(ret);
+                        if let Some(ret) = ret {
+                            self.store_rax(ret);
+                        }
                     } else {
                         self.writeback_binary(&mut ctx, &mode);
                         ctx.unlink_xmm(ret);
@@ -1077,7 +1081,9 @@ impl Codegen {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
                             self.jit_handle_error(&ctx, pc);
-                            self.store_rax(ret);
+                            if let Some(ret) = ret {
+                                self.store_rax(ret);
+                            }
                         }
                     }
                 }

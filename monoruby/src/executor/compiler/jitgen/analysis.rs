@@ -354,7 +354,7 @@ impl JitContext {
                         info.def(ret);
                     }
                 }
-                TraceIr::Cmp(_, dst, mode, _) => {
+                TraceIr::Cmp(_, ret, mode, _) => {
                     let is_float = mode.is_float_op(&pc);
                     match mode {
                         OpMode::RR(lhs, rhs) => {
@@ -366,7 +366,9 @@ impl JitContext {
                         }
                         _ => unreachable!(),
                     }
-                    info.def(dst);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::Mov(dst, src) => {
                     info.copy(dst, src);

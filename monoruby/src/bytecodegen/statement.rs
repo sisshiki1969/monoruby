@@ -62,7 +62,7 @@ impl BytecodeGen {
                     } else {
                         CmpKind::Gt
                     },
-                    dst,
+                    Some(dst),
                     BinopMode::RR(counter.into(), end),
                     true,
                 ),

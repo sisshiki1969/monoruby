@@ -12,41 +12,22 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<()> {
         match op {
-            BinOp::Add => return self.gen_add(use_mode, lhs, rhs, loc),
-            BinOp::Sub => return self.gen_sub(use_mode, lhs, rhs, loc),
-            BinOp::Mul => return self.gen_mul(use_mode, lhs, rhs, loc),
-            BinOp::Div => return self.gen_div(use_mode, lhs, rhs, loc),
-            BinOp::Rem => return self.gen_rem(use_mode, lhs, rhs, loc),
-            BinOp::Exp => return self.gen_exp(use_mode, lhs, rhs, loc),
-            BinOp::BitOr => return self.gen_bitor(use_mode, lhs, rhs, loc),
-            BinOp::BitAnd => return self.gen_bitand(use_mode, lhs, rhs, loc),
-            BinOp::BitXor => return self.gen_bitxor(use_mode, lhs, rhs, loc),
-            BinOp::Shr => return self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
-            BinOp::Shl => return self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
-            BinOp::Match => {
-                return self.gen_binop_method(IdentId::get_id("=~"), lhs, rhs, use_mode, loc)
-            }
-            BinOp::LAnd => return self.gen_land(use_mode, lhs, rhs),
-            BinOp::LOr => return self.gen_lor(use_mode, lhs, rhs),
-            _ => {}
-        };
-        let use_mode2 = match use_mode {
-            UseMode2::Store(r) => UseMode2::Store(r),
-            _ => UseMode2::Push,
-        };
-        match op {
-            BinOp::Cmp(kind) => self.gen_cmp(use_mode2, kind, lhs, rhs, false, loc),
-            _ => unreachable!(),
+            BinOp::Add => self.gen_add(use_mode, lhs, rhs, loc),
+            BinOp::Sub => self.gen_sub(use_mode, lhs, rhs, loc),
+            BinOp::Mul => self.gen_mul(use_mode, lhs, rhs, loc),
+            BinOp::Div => self.gen_div(use_mode, lhs, rhs, loc),
+            BinOp::Rem => self.gen_rem(use_mode, lhs, rhs, loc),
+            BinOp::Exp => self.gen_exp(use_mode, lhs, rhs, loc),
+            BinOp::BitOr => self.gen_bitor(use_mode, lhs, rhs, loc),
+            BinOp::BitAnd => self.gen_bitand(use_mode, lhs, rhs, loc),
+            BinOp::BitXor => self.gen_bitxor(use_mode, lhs, rhs, loc),
+            BinOp::Shr => self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
+            BinOp::Shl => self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
+            BinOp::Match => self.gen_binop_method(IdentId::_MATCH, lhs, rhs, use_mode, loc),
+            BinOp::LAnd => self.gen_land(use_mode, lhs, rhs),
+            BinOp::LOr => self.gen_lor(use_mode, lhs, rhs),
+            BinOp::Cmp(kind) => self.gen_cmp(use_mode, kind, lhs, rhs, false, loc),
         }?;
-        match use_mode {
-            UseMode2::NotUse => {
-                self.pop();
-            }
-            UseMode2::Ret => {
-                self.emit_ret(None);
-            }
-            _ => {}
-        };
         Ok(())
     }
 
@@ -90,7 +71,7 @@ impl BytecodeGen {
         let old = self.temp;
         let lhs = self.push_expr(lhs)?.into();
         self.emit(
-            BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
+            BcIr::Cmp(CmpKind::TEq, Some(lhs), BinopMode::RR(lhs, rhs), true),
             loc,
         );
         self.temp = old;
@@ -246,11 +227,19 @@ impl BytecodeGen {
         };
         self.temp = old;
         let dst = match use_mode {
-            UseMode2::Push => self.push().into(),
-            UseMode2::Store(dst) => dst,
-            _ => unreachable!(),
+            UseMode2::Store(dst) => Some(dst),
+            UseMode2::Push | UseMode2::Ret | UseMode2::NotUse => Some(self.push().into()),
         };
         self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
+        match use_mode {
+            UseMode2::NotUse => {
+                self.pop();
+            }
+            UseMode2::Ret => {
+                self.emit_ret(None);
+            }
+            _ => {}
+        }
         Ok(())
     }
 

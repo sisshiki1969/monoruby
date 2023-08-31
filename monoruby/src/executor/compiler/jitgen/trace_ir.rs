@@ -102,8 +102,8 @@ pub(crate) enum TraceIr {
         ret: Option<SlotId>,
         mode: OpMode,
     },
-    /// cmp(%ret, %lhs, %rhs, optimizable)
-    Cmp(ruruby_parse::CmpKind, SlotId, OpMode, bool),
+    /// cmp(cmpkind, %ret, opmode, optimizable)
+    Cmp(ruruby_parse::CmpKind, Option<SlotId>, OpMode, bool),
     /// return(%src)
     Ret(SlotId),
     /// method_return(%src)
@@ -443,13 +443,13 @@ impl TraceIr {
                 },
                 134..=141 => Self::Cmp(
                     CmpKind::from(opcode - 134),
-                    SlotId::new(op1),
+                    SlotId::from(op1),
                     OpMode::RR(SlotId::new(op2), SlotId::new(op3)),
                     false,
                 ),
                 142..=149 => Self::Cmp(
                     CmpKind::from(opcode - 142),
-                    SlotId::new(op1),
+                    SlotId::from(op1),
                     OpMode::RI(SlotId::new(op2), op3 as i16),
                     false,
                 ),
@@ -475,13 +475,13 @@ impl TraceIr {
                 },
                 154..=161 => Self::Cmp(
                     CmpKind::from(opcode - 154),
-                    SlotId(op1),
+                    SlotId::from(op1),
                     OpMode::RR(SlotId(op2), SlotId(op3)),
                     true,
                 ),
                 162..=169 => Self::Cmp(
                     CmpKind::from(opcode - 162),
-                    SlotId::new(op1),
+                    SlotId::from(op1),
                     OpMode::RI(SlotId::new(op2), op3 as i16),
                     true,
                 ),
