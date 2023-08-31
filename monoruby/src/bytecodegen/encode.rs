@@ -31,9 +31,9 @@ impl BytecodeGen {
             let args = self.get_index(&args);
             let recv = self.get_index(&recv);
             let ret = if let Some(slot) = ret {
-                self.get_index(&slot)
+                Some(self.get_index(&slot))
             } else {
-                SlotId(0)
+                None
             };
             let (kw_pos, kw_args, hash_splat_pos) = if let Some(KeywordArgs {
                 kw_pos,

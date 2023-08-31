@@ -71,7 +71,7 @@ impl Codegen {
                 assert!(store[callid].kw_args.is_empty());
                 assert!(store[callid].block_func_id.is_none());
                 if cached.class_id.is_always_frozen() {
-                    if !ret.is_zero() {
+                    if let Some(ret) = ret {
                         monoasm!( &mut self.jit,
                             movq rax, (NIL_VALUE);
                         );
@@ -214,7 +214,7 @@ impl Codegen {
             testq rax, rax;
             jeq raise;
         );
-        if !ret.is_zero() {
+        if let Some(ret) = ret {
             self.store_rax(ret);
         }
 
@@ -254,7 +254,7 @@ impl Codegen {
         ctx: &BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: SlotId,
+        ret: Option<SlotId>,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
@@ -322,7 +322,7 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if !ret.is_zero() {
+        if let Some(ret) = ret {
             self.store_rax(ret);
         }
     }
@@ -363,7 +363,7 @@ impl Codegen {
         ctx: &BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: SlotId,
+        ret: Option<SlotId>,
         args: SlotId,
         pc: BcPc,
     ) {
@@ -397,9 +397,6 @@ impl Codegen {
                 self.set_ivar(args, &xmm_using);
                 self.jit_handle_error(ctx, pc);
             }
-            if !ret.is_zero() {
-                self.store_rax(ret);
-            }
         } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
@@ -417,9 +414,6 @@ impl Codegen {
                 movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rax;
             exit:
             );
-            if !ret.is_zero() {
-                self.store_rax(ret);
-            }
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
@@ -446,6 +440,9 @@ impl Codegen {
                 jmp exit;
             );
             self.jit.select_page(0);
+        }
+        if let Some(ret) = ret {
+            self.store_rax(ret);
         }
     }
 
@@ -551,7 +548,7 @@ impl Codegen {
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if !ret.is_zero() {
+        if let Some(ret) = ret {
             self.store_rax(ret);
         }
     }
@@ -562,7 +559,7 @@ impl Codegen {
         store: &Store,
         args: SlotId,
         len: u16,
-        ret: SlotId,
+        ret: Option<SlotId>,
         callid: CallSiteId,
         pc: BcPc,
     ) {
@@ -622,7 +619,7 @@ impl Codegen {
         self.call_rax();
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if !ret.is_zero() {
+        if let Some(ret) = ret {
             self.store_rax(ret);
         }
     }

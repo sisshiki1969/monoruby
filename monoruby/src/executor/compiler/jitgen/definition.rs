@@ -4,7 +4,7 @@ impl Codegen {
     pub(super) fn jit_class_def(
         &mut self,
         ctx: &BBContext,
-        ret: SlotId,
+        ret: Option<SlotId>,
         superclass: SlotId,
         name: IdentId,
         func_id: FuncId,
@@ -46,7 +46,7 @@ impl Codegen {
     pub(super) fn jit_singleton_class_def(
         &mut self,
         ctx: &BBContext,
-        ret: SlotId,
+        ret: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
         pc: BcPc,
@@ -65,7 +65,13 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
-    fn jit_class_def_sub(&mut self, ctx: &BBContext, func_id: FuncId, ret: SlotId, pc: BcPc) {
+    fn jit_class_def_sub(
+        &mut self,
+        ctx: &BBContext,
+        func_id: FuncId,
+        ret: Option<SlotId>,
+        pc: BcPc,
+    ) {
         monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
@@ -88,7 +94,7 @@ impl Codegen {
             xorq rdx, rdx;
         }
         self.call_rax();
-        if !ret.is_zero() {
+        if let Some(ret) = ret {
             self.store_rax(ret);
         }
         // pop class context.

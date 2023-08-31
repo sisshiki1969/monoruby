@@ -307,7 +307,9 @@ fn array_shl(
         recv, ret, args, ..
     } = *callsite;
     gen.fetch_slots(ctx, &[recv, args]);
-    ctx.dealloc_xmm(ret);
+    if let Some(ret) = ret {
+        ctx.unlink_xmm(ret);
+    }
     gen.load_rdi(recv);
     gen.guard_class(ARRAY_CLASS, deopt);
     gen.load_rsi(args);
@@ -315,7 +317,7 @@ fn array_shl(
         movq rax, (ary_shl);
         call rax;
     );
-    if !ret.is_zero() {
+    if let Some(ret) = ret {
         gen.store_rax(ret);
     }
 }
@@ -323,7 +325,9 @@ fn array_shl(
 fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
-    info.def(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
 }
 
 ///

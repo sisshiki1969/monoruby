@@ -433,7 +433,7 @@ impl Codegen {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.fetch_float_binary(ctx, lhs, rhs, pc);
-                            ctx.dealloc_xmm(ret);
+                            ctx.unlink_xmm(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), xmm(frhs.enc());
                             };
@@ -441,7 +441,7 @@ impl Codegen {
                         OpMode::RI(lhs, rhs) => {
                             let rhs_label = self.jit.const_f64(rhs as f64);
                             let flhs = self.fetch_float_assume_float(ctx, lhs, pc);
-                            ctx.dealloc_xmm(ret);
+                            ctx.unlink_xmm(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), [rip + rhs_label];
                             };
@@ -451,7 +451,7 @@ impl Codegen {
                     self.condbr_float(kind, branch_dest, brkind);
                 } else {
                     self.writeback_binary(ctx, &mode);
-                    ctx.dealloc_xmm(ret);
+                    ctx.unlink_xmm(ret);
                     if mode.is_integer_op(&pc) {
                         let deopt = self.gen_side_deopt(pc, ctx);
                         match mode {

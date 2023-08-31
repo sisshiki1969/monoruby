@@ -175,16 +175,20 @@ fn integer_tof(
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
-    let fret = ctx.xmm_write_enc(ret);
-    monoasm!( &mut gen.jit,
-        sarq  rdi, 1;
-        cvtsi2sdq xmm(fret), rdi;
-    );
+    if let Some(ret) = ret {
+        let fret = ctx.xmm_write_enc(ret);
+        monoasm!( &mut gen.jit,
+            sarq  rdi, 1;
+            cvtsi2sdq xmm(fret), rdi;
+        );
+    }
 }
 
 fn analysis_integer_tof(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    info.def_as_float(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def_as_float(ret);
+    }
 }
 
 ///
@@ -249,22 +253,30 @@ fn integer_shr(
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(ctx, &[recv]);
-        ctx.dealloc_xmm(ret);
+        if let Some(ret) = ret {
+            ctx.unlink_xmm(ret);
+        }
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shr_imm(rhs);
     } else {
         gen.fetch_slots(ctx, &[recv, args]);
-        ctx.dealloc_xmm(ret);
+        if let Some(ret) = ret {
+            ctx.unlink_xmm(ret);
+        }
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shr(deopt);
     }
-    gen.store_rdi(ret);
+    if let Some(ret) = ret {
+        gen.store_rdi(ret);
+    }
 }
 
 fn analysis_integer_binop(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
-    info.def(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
 }
 
 ///
@@ -298,16 +310,22 @@ fn integer_shl(
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(ctx, &[recv]);
-        ctx.dealloc_xmm(ret);
+        if let Some(ret) = ret {
+            ctx.unlink_xmm(ret);
+        }
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shl_imm(rhs, deopt);
     } else {
         gen.fetch_slots(ctx, &[recv, args]);
-        ctx.dealloc_xmm(ret);
+        if let Some(ret) = ret {
+            ctx.unlink_xmm(ret);
+        }
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shl(deopt);
     }
-    gen.store_rdi(ret);
+    if let Some(ret) = ret {
+        gen.store_rdi(ret);
+    }
 }
 
 ///

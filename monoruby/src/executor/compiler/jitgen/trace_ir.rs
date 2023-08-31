@@ -162,7 +162,7 @@ pub(crate) enum TraceIr {
         version: u32,
     },
     Yield {
-        ret: SlotId,
+        ret: Option<SlotId>,
         args: SlotId,
         len: u16,
         callid: CallSiteId,
@@ -182,24 +182,24 @@ pub(crate) enum TraceIr {
     },
     /// class definition(method_name, func_id)
     ClassDef {
-        ret: SlotId,
+        ret: Option<SlotId>,
         superclass: SlotId,
         name: IdentId,
         func_id: FuncId,
     },
     ModuleDef {
-        ret: SlotId,
+        ret: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
     },
     SingletonClassDef {
-        ret: SlotId,
+        ret: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
     },
     /// concatenate strings(ret, args, args_len)
-    ConcatStr(SlotId, SlotId, u16),
-    ConcatRegexp(SlotId, SlotId, u16),
+    ConcatStr(Option<SlotId>, SlotId, u16),
+    ConcatRegexp(Option<SlotId>, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
     AliasMethod {
         new: SlotId,
@@ -290,20 +290,20 @@ impl TraceIr {
                     )
                 }
                 18 => Self::ClassDef {
-                    ret: SlotId::new(op1),
+                    ret: SlotId::from(op1),
                     superclass: SlotId::new(op2 as u16),
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 19 => Self::ModuleDef {
-                    ret: SlotId::new(op1),
+                    ret: SlotId::from(op1),
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => Self::SingletonClassDef {
-                    ret: SlotId::new(op1),
+                    ret: SlotId::from(op1),
                     base: SlotId::new(op2 as u16),
                     func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
@@ -413,7 +413,7 @@ impl TraceIr {
                 82 => Self::Break(SlotId::new(op1)),
                 83 => Self::Raise(SlotId::new(op1)),
                 85 => Self::EnsureEnd,
-                86 => Self::ConcatRegexp(SlotId::new(op1), SlotId::new(op2), op3),
+                86 => Self::ConcatRegexp(SlotId::from(op1), SlotId::new(op2), op3),
                 126 => Self::Pos {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),
@@ -468,7 +468,7 @@ impl TraceIr {
                     SlotId::new(op3),
                 ),
                 152 => Self::Yield {
-                    ret: SlotId::new(op1),
+                    ret: SlotId::from(op1),
                     args: SlotId::new(op2),
                     len: op3,
                     callid: CallSiteId::from(pc.op2.0 as u32),
@@ -524,7 +524,7 @@ impl TraceIr {
                         _ => unreachable!(),
                     },
                 },
-                179 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
+                179 => Self::ConcatStr(SlotId::from(op1), SlotId::new(op2), op3),
                 180..=199 => {
                     let kind = BinOpK::from(opcode - 180);
                     let ret = SlotId::new(op1);

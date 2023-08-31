@@ -57,7 +57,9 @@ fn object_object_id(
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
-    ctx.dealloc_xmm(ret);
+    if let Some(ret) = ret {
+        ctx.unlink_xmm(ret);
+    }
     gen.load_rdi(recv);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
@@ -66,12 +68,16 @@ fn object_object_id(
         call rax;
     }
     gen.xmm_restore(&using);
-    gen.store_rax(ret);
+    if let Some(ret) = ret {
+        gen.store_rax(ret);
+    }
 }
 
 fn analysis_object_id(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    info.def(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
 }
 
 ///

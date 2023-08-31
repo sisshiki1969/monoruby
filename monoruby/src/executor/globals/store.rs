@@ -232,7 +232,7 @@ impl Store {
         args: SlotId,
         len: usize,
         recv: SlotId,
-        ret: SlotId,
+        ret: Option<SlotId>,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
@@ -337,7 +337,7 @@ pub(crate) struct CallSiteInfo {
     /// Position of the receiver.
     pub recv: SlotId,
     /// Position where the result is to be stored to.
-    pub ret: SlotId,
+    pub ret: Option<SlotId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

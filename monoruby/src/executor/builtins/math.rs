@@ -21,7 +21,9 @@ pub(super) fn init(globals: &mut Globals) {
 fn analysis_math(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.use_as_float(callsite.args, true);
-    info.def_as_float(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def_as_float(ret);
+    }
 }
 
 /// ### Math.#sqrt
@@ -94,10 +96,12 @@ fn math_sqrt(
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
-    let fret = ctx.xmm_write_enc(ret);
-    monoasm!( &mut gen.jit,
-        sqrtsd xmm(fret), xmm(fsrc);
-    );
+    if let Some(ret) = ret {
+        let fret = ctx.xmm_write_enc(ret);
+        monoasm!( &mut gen.jit,
+            sqrtsd xmm(fret), xmm(fsrc);
+        );
+    }
 }
 
 fn math_cos(
@@ -116,18 +120,20 @@ fn math_cos(
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
-    let fret = ctx.xmm_write_enc(ret);
-    let xmm_using = ctx.get_xmm_using();
-    gen.xmm_save(&xmm_using);
-    monoasm!( &mut gen.jit,
-        movq xmm0, xmm(fsrc);
-        movq rax, (extern_cos);
-        call rax;
-    );
-    gen.xmm_restore(&xmm_using);
-    monoasm!( &mut gen.jit,
-        movq xmm(fret), xmm0;
-    );
+    if let Some(ret) = ret {
+        let fret = ctx.xmm_write_enc(ret);
+        let xmm_using = ctx.get_xmm_using();
+        gen.xmm_save(&xmm_using);
+        monoasm!( &mut gen.jit,
+            movq xmm0, xmm(fsrc);
+            movq rax, (extern_cos);
+            call rax;
+        );
+        gen.xmm_restore(&xmm_using);
+        monoasm!( &mut gen.jit,
+            movq xmm(fret), xmm0;
+        );
+    }
 }
 
 fn math_sin(
@@ -146,18 +152,20 @@ fn math_sin(
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
-    let fret = ctx.xmm_write_enc(ret);
-    let xmm_using = ctx.get_xmm_using();
-    gen.xmm_save(&xmm_using);
-    monoasm!( &mut gen.jit,
-        movq xmm0, xmm(fsrc);
-        movq rax, (extern_sin);
-        call rax;
-    );
-    gen.xmm_restore(&xmm_using);
-    monoasm!( &mut gen.jit,
-        movq xmm(fret), xmm0;
-    );
+    if let Some(ret) = ret {
+        let fret = ctx.xmm_write_enc(ret);
+        let xmm_using = ctx.get_xmm_using();
+        gen.xmm_save(&xmm_using);
+        monoasm!( &mut gen.jit,
+            movq xmm0, xmm(fsrc);
+            movq rax, (extern_sin);
+            call rax;
+        );
+        gen.xmm_restore(&xmm_using);
+        monoasm!( &mut gen.jit,
+            movq xmm(fret), xmm0;
+        );
+    }
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {

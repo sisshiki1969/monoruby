@@ -91,7 +91,9 @@ fn inline_class_new(
     } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
     gen.fetch_range(ctx, args, len);
-    ctx.dealloc_xmm(ret);
+    if let Some(ret) = ret {
+        ctx.unlink_xmm(ret);
+    }
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
     gen.load_rdi(recv);
@@ -135,7 +137,7 @@ fn inline_class_new(
     );
     gen.xmm_restore(&using);
     gen.jit_handle_error(ctx, pc);
-    if !ret.is_zero() {
+    if let Some(ret) = ret {
         gen.store_rax(ret);
     }
 
@@ -168,7 +170,9 @@ fn analysis_class_new(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     } = *callsite;
     info.r#use(recv);
     info.use_range(args, len);
-    info.def(ret);
+    if let Some(ret) = ret {
+        info.def(ret);
+    }
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

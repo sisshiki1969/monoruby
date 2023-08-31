@@ -1185,7 +1185,7 @@ impl BcPc {
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}){}",
-                    ret.ret_str(),
+                    ret_str(ret),
                     recv,
                     if len == 0 {
                         "".to_string()
@@ -1219,7 +1219,7 @@ impl BcPc {
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{} &{:?}){}",
-                    ret.ret_str(),
+                    ret_str(ret),
                     recv,
                     if len == 0 {
                         "".to_string()
@@ -1242,7 +1242,7 @@ impl BcPc {
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = super({}{}){}",
-                    ret.ret_str(),
+                    ret_str(ret),
                     if len == 0 {
                         "".to_string()
                     } else {
@@ -1272,11 +1272,11 @@ impl BcPc {
                 } = globals.store[callsite];
                 let name = &globals.store.get_inline_info(inline_id).2;
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.inline {name}()", ret.ret_str(), recv,)
+                    format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
                 } else {
                     format!(
                         "{} = {:?}.inline {name}({:?}; {})",
-                        ret.ret_str(),
+                        ret_str(ret),
                         recv,
                         args,
                         len,
@@ -1291,9 +1291,9 @@ impl BcPc {
                 callid: _,
             } => {
                 if len == 0 {
-                    format!("{} = yield", ret.ret_str())
+                    format!("{} = yield", ret_str(ret))
                 } else {
-                    format!("{} = yield({:?}; {})", ret.ret_str(), args, len)
+                    format!("{} = yield({:?}; {})", ret_str(ret), args, len)
                 }
             }
             TraceIr::MethodArgs(..) => return None,
@@ -1301,11 +1301,7 @@ impl BcPc {
                 format!("method_def {name}: {:?}", func_id)
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
-                format!(
-                    "singleton_method_def {}.{name}: {:?}",
-                    obj.ret_str(),
-                    func_id
-                )
+                format!("singleton_method_def {:?}.{name}: {:?}", obj, func_id)
             }
             TraceIr::ClassDef {
                 ret,
@@ -1314,28 +1310,28 @@ impl BcPc {
                 func_id,
             } => {
                 format!(
-                    "{} = class_def {name} < {}: {:?}",
-                    ret.ret_str(),
-                    superclass.ret_str(),
+                    "{} = class_def {name} < {:?}: {:?}",
+                    ret_str(ret),
+                    superclass,
                     func_id
                 )
             }
             TraceIr::ModuleDef { ret, name, func_id } => {
-                format!("{} = module_def {name}: {:?}", ret.ret_str(), func_id)
+                format!("{} = module_def {name}: {:?}", ret_str(ret), func_id)
             }
             TraceIr::SingletonClassDef { ret, base, func_id } => {
                 format!(
                     "{} = singleton_class_def << {:?}: {:?}",
-                    ret.ret_str(),
+                    ret_str(ret),
                     base,
                     func_id
                 )
             }
             TraceIr::ConcatStr(ret, args, len) => {
-                format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
+                format!("{} = concat({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ConcatRegexp(ret, args, len) => {
-                format!("{} = concat_regexp({:?}; {})", ret.ret_str(), args, len)
+                format!("{} = concat_regexp({:?}; {})", ret_str(ret), args, len)
             }
             TraceIr::ExpandArray(src, dst, len) => {
                 format!("{:?}; {} = expand({:?})", dst, len, src)
@@ -1343,7 +1339,7 @@ impl BcPc {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
-            TraceIr::DefinedYield { ret } => format!("{} = defined?(yield)", ret.ret_str()),
+            TraceIr::DefinedYield { ret } => format!("{:?} = defined?(yield)", ret),
             TraceIr::DefinedConst { ret, siteid } => {
                 let ConstSiteInfo {
                     name,
@@ -1357,16 +1353,16 @@ impl BcPc {
                     const_name += "::";
                 }
                 name.append_to(&mut const_name);
-                format!("{} = defined?(constant) {const_name}", ret.ret_str())
+                format!("{:?} = defined?(constant) {const_name}", ret)
             }
             TraceIr::DefinedMethod { ret, recv, name } => {
-                format!("{} = defined?(method) {:?}.{}", ret.ret_str(), recv, name)
+                format!("{:?} = defined?(method) {:?}.{}", ret, recv, name)
             }
             TraceIr::DefinedGvar { ret, name } => {
-                format!("{} = defined?(gvar) {}", ret.ret_str(), name)
+                format!("{:?} = defined?(gvar) {}", ret, name)
             }
             TraceIr::DefinedIvar { ret, name } => {
-                format!("{} = defined?(ivar) {}", ret.ret_str(), name)
+                format!("{:?} = defined?(ivar) {}", ret, name)
             }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
@@ -1413,25 +1409,20 @@ impl SlotId {
         Self(reg)
     }
 
+    pub fn from(reg: u16) -> Option<Self> {
+        if reg == 0 {
+            None
+        } else {
+            Some(Self(reg))
+        }
+    }
+
     pub fn self_() -> Self {
         Self(0)
     }
 
     fn is_zero(&self) -> bool {
         self.0 == 0
-    }
-
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
-    fn ret_str(&self) -> String {
-        match self.0 {
-            0 => "_".to_string(),
-            ret => format!("%{}", ret),
-        }
     }
 }
 
@@ -1445,6 +1436,19 @@ impl std::ops::Add<u16> for SlotId {
     type Output = Self;
     fn add(self, rhs: u16) -> Self {
         Self(self.0 + rhs)
+    }
+}
+
+#[cfg(any(
+    feature = "emit-bc",
+    feature = "emit-asm",
+    feature = "log-jit",
+    feature = "profile"
+))]
+fn ret_str(slot: Option<SlotId>) -> String {
+    match slot {
+        None => "_".to_string(),
+        Some(ret) => format!("{:?}", ret),
     }
 }
 

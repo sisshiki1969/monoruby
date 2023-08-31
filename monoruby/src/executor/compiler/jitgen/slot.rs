@@ -71,7 +71,7 @@ impl SlotState {
     }
 
     pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.dealloc_xmm(reg);
+        self.unlink_xmm(reg);
         self[reg] = LinkMode::Xmm(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -83,7 +83,7 @@ impl SlotState {
     }
 
     pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.dealloc_xmm(reg);
+        self.unlink_xmm(reg);
         self[reg] = LinkMode::Both(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -95,7 +95,7 @@ impl SlotState {
     }
 
     pub(super) fn link_const(&mut self, reg: SlotId, v: Value) {
-        self.dealloc_xmm(reg);
+        self.unlink_xmm(reg);
         self[reg] = LinkMode::Const(v);
     }
 
@@ -112,23 +112,26 @@ impl SlotState {
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
-    pub(crate) fn dealloc_xmm(&mut self, reg: SlotId) {
-        match self[reg] {
-            LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
-                assert!(self.xmm[freg.0 as usize].contains(&reg));
-                self.xmm[freg.0 as usize].retain(|e| *e != reg);
-                self[reg] = LinkMode::Stack;
-            }
-            LinkMode::Const(_) => {
-                self[reg] = LinkMode::Stack;
-            }
-            LinkMode::Stack => {}
+    pub(crate) fn unlink_xmm(&mut self, reg: impl Into<Option<SlotId>>) {
+        match reg.into() {
+            Some(reg) => match self[reg] {
+                LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
+                    assert!(self.xmm[freg.0 as usize].contains(&reg));
+                    self.xmm[freg.0 as usize].retain(|e| *e != reg);
+                    self[reg] = LinkMode::Stack;
+                }
+                LinkMode::Const(_) => {
+                    self[reg] = LinkMode::Stack;
+                }
+                LinkMode::Stack => {}
+            },
+            None => {}
         }
     }
 
-    pub(super) fn dealloc_locals(&mut self) {
+    pub(super) fn unlink_locals(&mut self) {
         for reg in 1..1 + self.local_num as u16 {
-            self.dealloc_xmm(SlotId(reg));
+            self.unlink_xmm(SlotId(reg));
         }
     }
 
@@ -156,7 +159,7 @@ impl SlotState {
                 freg
             }
             LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Const(_) => {
-                self.dealloc_xmm(reg);
+                self.unlink_xmm(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
                 freg
@@ -190,7 +193,7 @@ impl SlotState {
                     self.link_xmm(i, x);
                 }
                 (LinkMode::Const(l), LinkMode::Const(r)) if l == r => self.link_const(i, *l),
-                _ => self.dealloc_xmm(i),
+                _ => self.unlink_xmm(i),
             };
         }
     }

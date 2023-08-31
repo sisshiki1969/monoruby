@@ -255,10 +255,14 @@ impl JitContext {
                 }
                 | TraceIr::SingletonClassDef { ret, base, .. } => {
                     info.r#use(base);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::ModuleDef { ret, .. } => {
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
@@ -361,13 +365,17 @@ impl JitContext {
                 TraceIr::Mov(dst, src) => {
                     info.copy(dst, src);
                 }
-                TraceIr::ConcatStr(dst, args, len) => {
+                TraceIr::ConcatStr(ret, args, len) => {
                     info.use_range(args, len);
-                    info.def(dst);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
-                TraceIr::ConcatRegexp(dst, args, len) => {
+                TraceIr::ConcatRegexp(ret, args, len) => {
                     info.use_range(args, len);
-                    info.def(dst);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
                     info.use_range(dst, len);
@@ -375,7 +383,9 @@ impl JitContext {
                 }
                 TraceIr::Yield { ret, args, len, .. } => {
                     info.use_range(args, len);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::MethodCall { callid, .. } | TraceIr::Super { callid, .. } => {
                     let CallSiteInfo {
@@ -388,7 +398,9 @@ impl JitContext {
                     info.r#use(recv);
                     info.use_range(args, len);
                     //reg_info.unlink_locals(func);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::MethodCallBlock { callid, .. } => {
                     let CallSiteInfo {
@@ -401,7 +413,9 @@ impl JitContext {
                     info.r#use(recv);
                     info.use_range(args, len + 1);
                     info.unlink_locals(func);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {

@@ -67,19 +67,25 @@ fn object_nil(
     let CallSiteInfo { recv, ret, .. } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
-    ctx.dealloc_xmm(ret);
+    if let Some(ret) = ret {
+        ctx.unlink_xmm(ret);
+    }
     monoasm!( &mut gen.jit,
         movq rax, (FALSE_VALUE);
         movq rsi, (TRUE_VALUE);
         cmpq rdi, (NIL_VALUE);
         cmoveqq rax, rsi;
     );
-    gen.store_rax(ret);
+    if let Some(ret) = ret {
+        gen.store_rax(ret);
+    }
 }
 
 fn analysis_object_nil(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    info.def(callsite.ret);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
 }
 
 ///

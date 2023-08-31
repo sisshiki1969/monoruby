@@ -201,7 +201,7 @@ impl Codegen {
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
                 }
-                src_ctx.dealloc_xmm(reg);
+                src_ctx.unlink_xmm(reg);
             };
         }
 
