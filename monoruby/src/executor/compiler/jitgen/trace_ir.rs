@@ -89,17 +89,17 @@ pub(crate) enum TraceIr {
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp {
         kind: BinOpK,
-        ret: SlotId,
+        ret: Option<SlotId>,
         mode: OpMode,
     },
     IBinOp {
         kind: BinOpK,
-        ret: SlotId,
+        ret: Option<SlotId>,
         mode: OpMode,
     },
     FBinOp {
         kind: BinOpK,
-        ret: SlotId,
+        ret: Option<SlotId>,
         mode: OpMode,
     },
     /// cmp(%ret, %lhs, %rhs, optimizable)
@@ -527,7 +527,7 @@ impl TraceIr {
                 179 => Self::ConcatStr(SlotId::from(op1), SlotId::new(op2), op3),
                 180..=199 => {
                     let kind = BinOpK::from(opcode - 180);
-                    let ret = SlotId::new(op1);
+                    let ret = SlotId::from(op1);
                     let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
                     if pc.is_integer2() {
                         Self::IBinOp { kind, ret, mode }
@@ -539,7 +539,7 @@ impl TraceIr {
                 }
                 200..=219 => {
                     let kind = BinOpK::from(opcode - 200);
-                    let ret = SlotId::new(op1);
+                    let ret = SlotId::from(op1);
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
                     if pc.is_integer_binop() {
                         Self::IBinOp { kind, ret, mode }
@@ -551,7 +551,7 @@ impl TraceIr {
                 }
                 220..=239 => {
                     let kind = BinOpK::from(opcode - 220);
-                    let ret = SlotId::new(op1);
+                    let ret = SlotId::from(op1);
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     if pc.is_integer1() {
                         Self::IBinOp { kind, ret, mode }

@@ -290,9 +290,9 @@ pub(super) enum BcIr {
         ret: BcReg,
         src: BcReg,
     },
-    BinOp(BinOpK, BcReg, BinopMode),      // kind, ret, (lhs, rhs)
-    Cmp(CmpKind, BcReg, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
-    Mov(BcReg, BcReg),                    // dst, offset
+    BinOp(BinOpK, Option<BcReg>, BinopMode), // kind, ret, (lhs, rhs)
+    Cmp(CmpKind, BcReg, BinopMode, bool),    // kind, dst, (lhs, rhs), optimizable
+    Mov(BcReg, BcReg),                       // dst, offset
     CheckLocal(BcReg, Label),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),

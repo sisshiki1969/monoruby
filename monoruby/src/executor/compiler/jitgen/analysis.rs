@@ -309,7 +309,9 @@ impl JitContext {
                             info.use_as_float(reg, pc.classid2() == FLOAT_CLASS);
                         }
                     }
-                    info.def_as_float(ret);
+                    if let Some(ret) = ret {
+                        info.def_as_float(ret);
+                    }
                 }
                 TraceIr::IBinOp {
                     ret,
@@ -323,7 +325,9 @@ impl JitContext {
                 } => {
                     info.r#use(lhs);
                     info.r#use(rhs);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::IBinOp {
                     ret,
@@ -346,7 +350,9 @@ impl JitContext {
                     ..
                 } => {
                     info.r#use(reg);
-                    info.def(ret);
+                    if let Some(ret) = ret {
+                        info.def(ret);
+                    }
                 }
                 TraceIr::Cmp(_, dst, mode, _) => {
                     let is_float = mode.is_float_op(&pc);

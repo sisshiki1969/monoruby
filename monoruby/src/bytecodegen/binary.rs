@@ -147,15 +147,15 @@ macro_rules! gen_ri_ops {
               lhs: Node,
               rhs: Node,
               loc: Loc,
-          ) -> Result<BcReg> {
+          ) -> Result<()> {
               let mode = self.gen_mode(lhs, rhs)?;
               let dst = match use_mode {
-                  UseMode2::Push => self.push().into(),
-                  UseMode2::Store(dst) => dst,
+                  UseMode2::Push => Some(self.push().into()),
+                  UseMode2::Store(dst) => Some(dst),
                   _ => unreachable!(),
               };
               self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
-              Ok(dst)
+              Ok(())
           }
       }
   };
@@ -231,7 +231,7 @@ impl BytecodeGen {
         rhs: Node,
         optimizable: bool,
         loc: Loc,
-    ) -> Result<BcReg> {
+    ) -> Result<()> {
         let old = self.temp;
         let mode = if let Some(i) = is_smi(&rhs) {
             let lhs = self.gen_expr_reg(lhs)?;
@@ -248,10 +248,10 @@ impl BytecodeGen {
             _ => unreachable!(),
         };
         self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
-        Ok(dst)
+        Ok(())
     }
 
-    fn gen_land(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<BcReg> {
+    fn gen_land(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<()> {
         let exit_pos = self.new_label();
         // Support "a &&= 100"
         if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
@@ -266,10 +266,10 @@ impl BytecodeGen {
         self.emit_condbr(dst, exit_pos, false, false);
         self.gen_store_expr(dst, rhs)?;
         self.apply_label(exit_pos);
-        Ok(dst)
+        Ok(())
     }
 
-    fn gen_lor(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<BcReg> {
+    fn gen_lor(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<()> {
         let exit_pos = self.new_label();
         // Support "a ||= 100"
         if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
@@ -282,7 +282,7 @@ impl BytecodeGen {
                 self.emit_condbr(dst, exit_pos, true, false);
                 self.gen_store_expr(dst, rhs)?;
                 self.apply_label(exit_pos);
-                Ok(dst)
+                Ok(())
             }
             UseMode2::Store(dst) => {
                 let tmp = self.push().into();
@@ -292,7 +292,7 @@ impl BytecodeGen {
                 self.apply_label(exit_pos);
                 self.pop();
                 self.emit_mov(dst, tmp);
-                Ok(dst)
+                Ok(())
             }
             _ => unreachable!(),
         }

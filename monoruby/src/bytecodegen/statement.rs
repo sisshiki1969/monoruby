@@ -77,7 +77,7 @@ impl BytecodeGen {
             self.emit(
                 BcIr::BinOp(
                     BinOpK::Add,
-                    counter.into(),
+                    Some(counter.into()),
                     BinopMode::RI(counter.into(), 1),
                 ),
                 loc,

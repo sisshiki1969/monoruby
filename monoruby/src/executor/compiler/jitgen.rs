@@ -1001,18 +1001,24 @@ impl Codegen {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);
-                            let fret = ctx.xmm_write(ret);
-                            self.gen_binop_float_rr(kind, &ctx, fret, flhs, frhs);
+                            if let Some(ret) = ret {
+                                let fret = ctx.xmm_write(ret);
+                                self.gen_binop_float_rr(kind, &ctx, fret, flhs, frhs);
+                            }
                         }
                         OpMode::RI(lhs, rhs) => {
                             let flhs = self.fetch_float_assume_float(&mut ctx, lhs, pc);
-                            let fret = ctx.xmm_write(ret);
-                            self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
+                            if let Some(ret) = ret {
+                                let fret = ctx.xmm_write(ret);
+                                self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
+                            }
                         }
                         OpMode::IR(lhs, rhs) => {
                             let frhs = self.fetch_float_assume_float(&mut ctx, rhs, pc);
-                            let fret = ctx.xmm_write(ret);
-                            self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
+                            if let Some(ret) = ret {
+                                let fret = ctx.xmm_write(ret);
+                                self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
+                            }
                         }
                     };
                 }

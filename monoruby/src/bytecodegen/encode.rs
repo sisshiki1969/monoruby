@@ -465,8 +465,8 @@ impl BytecodeGen {
                 let op2 = self.get_index(&BcReg::from(*arg));
                 Bc::from(enc_www(179, op1.0, op2.0, *len as u16))
             }
-            BcIr::BinOp(kind, dst, mode) => {
-                let op1 = self.get_index(dst);
+            BcIr::BinOp(kind, ret, mode) => {
+                let op1 = ret.map_or(SlotId::self_(), |ret| self.get_index(&ret));
                 match mode {
                     BinopMode::RR(lhs, rhs) => {
                         let op2 = self.get_index(lhs);

@@ -6,75 +6,79 @@ impl Codegen {
         &mut self,
         pc: BcPc,
         kind: BinOpK,
-        ret: SlotId,
+        ret: Option<SlotId>,
         mode: OpMode,
         ctx: &BBContext,
     ) {
         let deopt = self.gen_side_deopt(pc, ctx);
         match kind {
             BinOpK::Add => {
-                match mode {
-                    OpMode::RR(lhs, rhs) => {
-                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            subq rdi, 1;
-                            addq rdi, rsi;
-                            jo deopt;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::RI(lhs, rhs) => {
-                        self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            addq rdi, (Value::i32(rhs as i32).id() - 1);
-                            jo deopt;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::IR(lhs, rhs) => {
-                        self.load_guard_rsi_fixnum(rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            addq rsi, (Value::i32(lhs as i32).id() - 1);
-                            jo deopt;
-                        );
-                        self.store_rsi(ret);
+                if let Some(ret) = ret {
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                subq rdi, 1;
+                                addq rdi, rsi;
+                                jo deopt;
+                            );
+                            self.store_rdi(ret);
+                        }
+                        OpMode::RI(lhs, rhs) => {
+                            self.load_guard_rdi_fixnum(lhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                addq rdi, (Value::i32(rhs as i32).id() - 1);
+                                jo deopt;
+                            );
+                            self.store_rdi(ret);
+                        }
+                        OpMode::IR(lhs, rhs) => {
+                            self.load_guard_rsi_fixnum(rhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                addq rsi, (Value::i32(lhs as i32).id() - 1);
+                                jo deopt;
+                            );
+                            self.store_rsi(ret);
+                        }
                     }
                 }
             }
             BinOpK::Sub => {
-                match mode {
-                    OpMode::RR(lhs, rhs) => {
-                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            subq rdi, rsi;
-                            jo deopt;
-                            addq rdi, 1;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::RI(lhs, rhs) => {
-                        self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            subq rdi, (Value::i32(rhs as i32).id() - 1);
-                            jo deopt;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::IR(lhs, rhs) => {
-                        self.load_guard_rsi_fixnum(rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            movq rdi, (Value::i32(lhs as i32).id());
-                            subq rdi, rsi;
-                            jo deopt;
-                            addq rdi, 1;
-                        );
-                        self.store_rdi(ret);
+                if let Some(ret) = ret {
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                subq rdi, rsi;
+                                jo deopt;
+                                addq rdi, 1;
+                            );
+                            self.store_rdi(ret);
+                        }
+                        OpMode::RI(lhs, rhs) => {
+                            self.load_guard_rdi_fixnum(lhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                subq rdi, (Value::i32(rhs as i32).id() - 1);
+                                jo deopt;
+                            );
+                            self.store_rdi(ret);
+                        }
+                        OpMode::IR(lhs, rhs) => {
+                            self.load_guard_rsi_fixnum(rhs, deopt);
+                            monoasm!( &mut self.jit,
+                                // fastpath
+                                movq rdi, (Value::i32(lhs as i32).id());
+                                subq rdi, rsi;
+                                jo deopt;
+                                addq rdi, 1;
+                            );
+                            self.store_rdi(ret);
+                        }
                     }
                 }
             }
@@ -89,7 +93,9 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                self.store_rax(ret);
+                if let Some(ret) = ret {
+                    self.store_rax(ret);
+                }
             }
             BinOpK::Mul | BinOpK::Div => {
                 self.load_binary_args_with_mode(&mode);
@@ -99,10 +105,12 @@ impl Codegen {
                 match mode {
                     OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                         self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!( &mut self.jit,
-                            andq rdi, (rhs * 2 - 1);
-                        );
-                        self.store_rdi(ret);
+                        if let Some(ret) = ret {
+                            monoasm!( &mut self.jit,
+                                andq rdi, (rhs * 2 - 1);
+                            );
+                            self.store_rdi(ret);
+                        }
                     }
                     _ => {
                         self.load_binary_args_with_mode(&mode);
@@ -165,7 +173,9 @@ impl Codegen {
                     }
                     _ => unimplemented!(),
                 }
-                self.store_rdi(ret);
+                if let Some(ret) = ret {
+                    self.store_rdi(ret);
+                }
             }
         }
     }
@@ -393,7 +403,7 @@ impl Codegen {
         ctx: &BBContext,
         pc: BcPc,
         kind: BinOpK,
-        ret: SlotId,
+        ret: Option<SlotId>,
     ) {
         self.generic_binop(ctx, ret, kind, pc);
     }
@@ -781,14 +791,16 @@ impl Codegen {
         );
     }
 
-    fn generic_binop(&mut self, ctx: &BBContext, ret: SlotId, kind: BinOpK, pc: BcPc) {
+    fn generic_binop(&mut self, ctx: &BBContext, ret: Option<SlotId>, kind: BinOpK, pc: BcPc) {
         let func = kind.generic_func();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        self.store_rax(ret);
+        if let Some(ret) = ret {
+            self.store_rax(ret);
+        }
     }
 }
 
