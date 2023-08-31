@@ -208,7 +208,7 @@ struct BranchEntry {
     cont: bool,
 }
 
-fn conv(reg: SlotId) -> i64 {
+pub(crate) fn conv(reg: SlotId) -> i64 {
     reg.0 as i64 * 8 + LBP_SELF
 }
 
@@ -227,7 +227,7 @@ impl WriteBack {
 /// Context of the current Basic block.
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub(in crate::executor) struct BBContext {
+pub(crate) struct BBContext {
     /// Information for stack slots.
     slot_state: SlotState,
     /// Stack top register.
@@ -326,7 +326,7 @@ impl InlineCached {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub(in crate::executor) struct Xmm(u16);
+pub(crate) struct Xmm(u16);
 
 impl Xmm {
     fn new(id: u16) -> Self {
@@ -342,7 +342,7 @@ impl Xmm {
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::executor) enum LinkMode {
+pub(crate) enum LinkMode {
     ///
     /// Linked to an xmm register and we can read and write.
     ///
@@ -512,7 +512,7 @@ macro_rules! load_store {
             /// store $reg to *reg*
             ///
             #[allow(dead_code)]
-            pub(in crate::executor) fn [<store_ $reg>](&mut self, reg: SlotId) {
+            pub(crate) fn [<store_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
                     movq [r14 - (conv(reg))], $reg;
                 );
@@ -522,7 +522,7 @@ macro_rules! load_store {
             /// load *reg* to $reg
             ///
             #[allow(dead_code)]
-            pub(in crate::executor) fn [<load_ $reg>](&mut self, reg: SlotId) {
+            pub(crate) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
                     movq $reg, [r14 - (conv(reg))];
                 );
@@ -560,7 +560,7 @@ impl Codegen {
         );
     }
 
-    pub(in crate::executor) fn xmm_save(&mut self, xmm_using: &[Xmm]) {
+    pub(crate) fn xmm_save(&mut self, xmm_using: &[Xmm]) {
         let len = xmm_using.len();
         if len == 0 {
             return;
@@ -576,7 +576,7 @@ impl Codegen {
         }
     }
 
-    pub(in crate::executor) fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
+    pub(crate) fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
         let len = xmm_using.len();
         if len == 0 {
             return;
@@ -1513,7 +1513,7 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(in crate::executor) fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
+    pub(crate) fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
         let raise = self.entry_raise;
         let wb = ctx.get_write_back();
         if self.jit.get_page() == 0 {

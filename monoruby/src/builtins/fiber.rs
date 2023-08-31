@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 
 //
 // Fiber class
@@ -33,7 +33,7 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 #[monoruby_builtin]
 fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    if vm.parent_fiber.is_none() {
+    if vm.parent_fiber().is_none() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
         ));

@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     let module = globals.define_class_under_obj("Struct");

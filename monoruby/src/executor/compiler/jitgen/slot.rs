@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, PartialEq)]
-pub(in crate::executor) struct SlotState {
+pub(crate) struct SlotState {
     slots: Vec<LinkMode>,
     /// Information for xmm registers.
     xmm: [Vec<SlotId>; 14],

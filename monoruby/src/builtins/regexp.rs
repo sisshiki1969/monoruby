@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 
 //
 // Regexp class

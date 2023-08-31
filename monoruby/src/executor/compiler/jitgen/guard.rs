@@ -10,7 +10,7 @@ impl Codegen {
     /// ### in
     /// - rdi: Value
     ///
-    pub(in crate::executor) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+    pub(crate) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,

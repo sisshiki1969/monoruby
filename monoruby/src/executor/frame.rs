@@ -39,7 +39,7 @@ impl CFP {
     ///
     /// Get LFP.
     ///
-    pub(super) fn lfp(&self) -> LFP {
+    pub(crate) fn lfp(&self) -> LFP {
         unsafe {
             let bp = self.bp();
             LFP::new(*bp.sub(BP_LFP as usize / 8) as _)
@@ -49,14 +49,14 @@ impl CFP {
     ///
     /// Get outermost LFP.
     ///
-    pub(super) fn outermost_lfp(&self) -> LFP {
+    pub(crate) fn outermost_lfp(&self) -> LFP {
         match self.lfp().outer() {
             Some(dfp) => dfp.outermost().lfp(),
             None => self.lfp(),
         }
     }
 
-    pub(super) fn block_given(&self) -> bool {
+    pub(crate) fn block_given(&self) -> bool {
         self.outermost_lfp().block().is_some()
     }
 

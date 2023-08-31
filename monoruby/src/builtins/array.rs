@@ -1,6 +1,5 @@
-use smallvec::smallvec;
-
 use super::*;
+use smallvec::smallvec;
 
 //
 // Array class

@@ -2,20 +2,19 @@ use super::*;
 use monoasm::*;
 use ruruby_parse::Node;
 
-mod builtins;
 mod compiler;
 mod error;
 mod frame;
 mod globals;
 pub mod inline;
-mod op;
+pub mod op;
 pub use builtins::*;
 use bytecodegen::*;
 use compiler::jitgen::trace_ir::*;
 use fancy_regex::Captures;
 pub use frame::*;
 pub use globals::*;
-use op::*;
+pub use op::*;
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
@@ -239,7 +238,7 @@ impl Executor {
         self.temp_stack.push(val);
     }
 
-    fn temp_append(&mut self, mut v: Vec<Value>) -> usize {
+    pub fn temp_append(&mut self, mut v: Vec<Value>) -> usize {
         let len = self.temp_stack.len();
         self.temp_stack.append(&mut v);
         len
@@ -251,6 +250,10 @@ impl Executor {
 
     fn temp_tear(&mut self, len: usize) -> Vec<Value> {
         self.temp_stack.drain(len..).collect()
+    }
+
+    pub fn parent_fiber(&self) -> Option<NonNull<Executor>> {
+        self.parent_fiber
     }
 }
 
@@ -270,7 +273,7 @@ impl Executor {
         self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
     }
 
-    fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
+    pub(crate) fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
         match (globals.codegen.yield_fiber)(self as _, val) {
             Some(res) => Ok(res),
             None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
@@ -293,7 +296,7 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
-    fn eval_script(
+    pub(crate) fn eval_script(
         &mut self,
         globals: &mut Globals,
         code: String,
@@ -304,22 +307,22 @@ impl Executor {
             .and_then(|fid| self.eval(globals, fid))
     }
 
-    fn enter_class_context(&mut self) {
+    pub(crate) fn enter_class_context(&mut self) {
         self.lexical_class.push(vec![]);
     }
 
-    fn exit_class_context(&mut self) {
+    pub(crate) fn exit_class_context(&mut self) {
         self.lexical_class.pop();
     }
 
-    fn push_class_context(&mut self, class_id: ClassId) {
+    pub(crate) fn push_class_context(&mut self, class_id: ClassId) {
         self.lexical_class
             .last_mut()
             .unwrap()
             .push(Cref::new(class_id, false, Visibility::Public));
     }
 
-    fn pop_class_context(&mut self) -> Option<ClassId> {
+    pub(crate) fn pop_class_context(&mut self) -> Option<ClassId> {
         self.lexical_class
             .last_mut()
             .unwrap()
@@ -327,7 +330,7 @@ impl Executor {
             .map(|x| x.class_id)
     }
 
-    fn set_module_function(&mut self) {
+    pub(crate) fn set_module_function(&mut self) {
         self.lexical_class
             .last_mut()
             .unwrap()
@@ -354,7 +357,7 @@ impl Executor {
             .unwrap_or(OBJECT_CLASS)
     }
 
-    fn context_visibility(&self) -> Visibility {
+    pub(crate) fn context_visibility(&self) -> Visibility {
         self.lexical_class
             .last()
             .unwrap()
@@ -363,7 +366,7 @@ impl Executor {
             .unwrap_or(Visibility::Private)
     }
 
-    fn set_context_visibility(&mut self, visi: Visibility) {
+    pub(crate) fn set_context_visibility(&mut self, visi: Visibility) {
         self.lexical_class
             .last_mut()
             .unwrap()
@@ -392,7 +395,7 @@ impl Executor {
     ///
     /// Invoke method for *receiver* and *method*.
     ///
-    fn invoke_method(
+    pub(crate) fn invoke_method(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
@@ -422,7 +425,7 @@ impl Executor {
     ///
     /// Invoke method for *receiver* and *method*.
     ///
-    fn invoke_method_inner(
+    pub(crate) fn invoke_method_inner(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
@@ -548,7 +551,12 @@ impl Executor {
     ///
     /// Invoke proc.
     ///
-    fn invoke_proc(&mut self, globals: &mut Globals, proc: Value, args: &[Value]) -> Result<Value> {
+    pub(crate) fn invoke_proc(
+        &mut self,
+        globals: &mut Globals,
+        proc: Value,
+        args: &[Value],
+    ) -> Result<Value> {
         (globals.codegen.block_invoker)(
             self,
             globals,
@@ -560,7 +568,7 @@ impl Executor {
         .ok_or_else(|| self.take_error())
     }
 
-    fn invoke_method_if_exists(
+    pub(crate) fn invoke_method_if_exists(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
@@ -579,7 +587,7 @@ impl Executor {
     ///
     /// Invoke func with *args*: Args.
     ///
-    fn invoke_func2(
+    pub(crate) fn invoke_func2(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
@@ -1428,7 +1436,7 @@ impl SlotId {
         Self(0)
     }
 
-    fn is_zero(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.0 == 0
     }
 }
@@ -1475,7 +1483,7 @@ pub enum BinOpK {
     Exp = 8,
 }
 
-use std::fmt;
+use std::{fmt, ptr::NonNull};
 impl fmt::Display for BinOpK {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match *self {

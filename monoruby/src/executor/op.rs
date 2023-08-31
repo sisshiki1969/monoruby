@@ -17,7 +17,7 @@ pub extern "C" fn i64_to_value(i: i64) -> Value {
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
-            pub(super) extern "C" fn [<$op _values>](
+            pub(crate) extern "C" fn [<$op _values>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -57,7 +57,7 @@ macro_rules! binop_values {
     };
 }
 
-pub(super) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
+pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
     if let Ok(rhs) = i32::try_from(rhs) {
         if rhs < 0 {
             unimplemented!("a**b: b<0 in not supported yet.")
@@ -76,12 +76,12 @@ fn pow_ff(lhs: f64, rhs: f64) -> Value {
     Value::float(lhs.powf(rhs))
 }
 
-pub(super) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
+pub(crate) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.powf(rhs)
 }
 
 // TODO: support rhs < 0.
-pub(super) extern "C" fn pow_values(
+pub(crate) extern "C" fn pow_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -136,7 +136,7 @@ binop_values!(
     (rem, IdentId::_REM)
 );
 
-pub(super) extern "C" fn div_values(
+pub(crate) extern "C" fn div_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -217,7 +217,7 @@ int_binop_values!(
     (bitxor, IdentId::_BXOR)
 );
 
-pub(super) extern "C" fn shr_values(
+pub(crate) extern "C" fn shr_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -245,7 +245,7 @@ pub(super) extern "C" fn shr_values(
     Some(v)
 }
 
-pub(super) extern "C" fn shl_values(
+pub(crate) extern "C" fn shl_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -298,7 +298,7 @@ fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
 macro_rules! cmp_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
-            pub(super) extern "C" fn [<cmp_ $op _values>](
+            pub(crate) extern "C" fn [<cmp_ $op _values>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -336,7 +336,7 @@ cmp_values!(
 );
 
 impl Executor {
-    pub(super) fn eq_values_bool(
+    pub(crate) fn eq_values_bool(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
@@ -370,7 +370,7 @@ impl Executor {
         Ok(b)
     }
 
-    pub(super) fn ne_values_bool(
+    pub(crate) fn ne_values_bool(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
@@ -495,7 +495,7 @@ pub(super) extern "C" fn cmp_cmp_values(
 }
 
 impl Executor {
-    pub(super) fn cmp_cmp_values_inner(
+    pub(crate) fn cmp_cmp_values_inner(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
@@ -505,7 +505,7 @@ impl Executor {
         Ok(Value::from_ord(ord))
     }
 
-    pub(super) fn compare_values(
+    pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
@@ -553,7 +553,7 @@ impl Executor {
     }
 }
 
-pub(super) extern "C" fn neg_value(
+pub(crate) extern "C" fn neg_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -572,7 +572,7 @@ pub(super) extern "C" fn neg_value(
     Some(v)
 }
 
-pub(super) extern "C" fn pos_value(
+pub(crate) extern "C" fn pos_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -588,7 +588,7 @@ pub(super) extern "C" fn pos_value(
     Some(v)
 }
 
-pub(super) extern "C" fn bitnot_value(
+pub(crate) extern "C" fn bitnot_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -603,7 +603,7 @@ pub(super) extern "C" fn bitnot_value(
     Some(v)
 }
 
-pub(super) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Result<Value> {
+pub(crate) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Result<Value> {
     // we must support Integer#[Range].
     match (base.unpack(), index.unpack()) {
         (RV::Fixnum(base), RV::Fixnum(index)) => {

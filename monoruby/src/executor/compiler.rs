@@ -110,8 +110,8 @@ macro_rules! cmp_opt_main {
 pub struct Codegen {
     pub jit: JitMemory,
     pub main_object: Value,
-    pub(super) class_version: DestLabel,
-    pub(super) class_version_addr: *mut u32,
+    pub(crate) class_version: DestLabel,
+    pub(crate) class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
     #[allow(dead_code)]
@@ -176,8 +176,8 @@ pub struct Codegen {
     get_class: DestLabel,
     dispatch: Vec<CodePtr>,
     pub(super) entry_point: EntryPoint,
-    pub(super) method_invoker: MethodInvoker,
-    pub(super) method_invoker2: MethodInvoker2,
+    pub(crate) method_invoker: MethodInvoker,
+    pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
     pub(crate) block_invoker_with_self: BlockInvoker,
     ///

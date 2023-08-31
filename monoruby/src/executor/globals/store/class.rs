@@ -204,7 +204,7 @@ impl Globals {
         self.define_class(name_id, Some(object_class), OBJECT_CLASS, true)
     }
 
-    pub(in crate::executor) fn define_builtin_class_under_obj(
+    pub(crate) fn define_builtin_class_under_obj(
         &mut self,
         name: &str,
         class_id: ClassId,
@@ -229,7 +229,7 @@ impl Globals {
         self.define_class(name_id, Some(object_class), OBJECT_CLASS, false)
     }
 
-    pub(in crate::executor) fn define_builtin_class_by_str(
+    pub(crate) fn define_builtin_class_by_str(
         &mut self,
         name: &str,
         class_id: ClassId,
@@ -470,11 +470,7 @@ impl Globals {
     ///
     /// Check whether public/protected method *name* is defined for *class_id* or its superclasses.
     ///
-    pub(in crate::executor) fn method_defined(
-        &mut self,
-        class_id: ClassId,
-        func_name: IdentId,
-    ) -> bool {
+    pub(crate) fn method_defined(&mut self, class_id: ClassId, func_name: IdentId) -> bool {
         match self.check_method_for_class(class_id, func_name) {
             Some(entry) => match entry.visibility {
                 Visibility::Private => false,
@@ -489,7 +485,7 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub(in crate::executor) fn find_method_entry_for_class(
+    pub(crate) fn find_method_entry_for_class(
         &mut self,
         class: ClassId,
         func_name: IdentId,
@@ -515,11 +511,7 @@ impl Globals {
     ///
     /// Check whether a method *name* for object *obj* exists.
     ///
-    pub(in crate::executor) fn check_method(
-        &mut self,
-        obj: Value,
-        name: IdentId,
-    ) -> Option<FuncId> {
+    pub(crate) fn check_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
         let class_id = obj.class();
         self.check_method_for_class(class_id, name)
             .map(|e| e.func_id())
@@ -528,7 +520,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(in crate::executor) fn check_super(
+    pub(crate) fn check_super(
         &mut self,
         self_val: Value,
         name: IdentId,
@@ -542,7 +534,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(in crate::executor) fn check_method_for_class(
+    pub(crate) fn check_method_for_class(
         &mut self,
         class_id: ClassId,
         name: IdentId,
@@ -605,7 +597,7 @@ impl Globals {
         }
     }
 
-    pub(in crate::executor) fn change_method_visibility_for_class(
+    pub(crate) fn change_method_visibility_for_class(
         &mut self,
         class_id: ClassId,
         names: &[IdentId],

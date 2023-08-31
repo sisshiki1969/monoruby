@@ -458,7 +458,7 @@ impl JitContext {
 }
 
 #[derive(Clone)]
-pub(in crate::executor) struct SlotInfo {
+pub(crate) struct SlotInfo {
     info: Vec<State>,
 }
 

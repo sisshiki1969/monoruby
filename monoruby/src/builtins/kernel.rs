@@ -1,8 +1,6 @@
-use std::io::Write;
-
-use num::Zero;
-
 use super::*;
+use num::Zero;
+use std::io::Write;
 
 //
 // Kernel module
@@ -240,7 +238,7 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Res
 
 #[monoruby_builtin]
 fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
-    crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
+    crate::runtime::_dump_stacktrace(vm, globals);
     Ok(Value::nil())
 }
 

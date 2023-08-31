@@ -11,6 +11,7 @@
 #![feature(offset_of)]
 #![feature(ptr_internals)]
 mod alloc;
+mod builtins;
 pub mod bytecodegen;
 pub mod executor;
 mod id_table;

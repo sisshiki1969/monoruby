@@ -9,7 +9,7 @@ use super::*;
 ///
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
 ///
-pub(super) extern "C" fn find_method(
+pub(crate) extern "C" fn find_method(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
@@ -28,7 +28,7 @@ pub(super) extern "C" fn find_method(
     Some(func_data.as_ptr())
 }
 
-pub(in crate::executor) extern "C" fn check_initializer(
+pub(crate) extern "C" fn check_initializer(
     globals: &mut Globals,
     receiver: Value,
 ) -> Option<FuncDataPtr> {

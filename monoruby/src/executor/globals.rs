@@ -20,7 +20,7 @@ pub(in crate::executor) type InlineGen =
 pub(in crate::executor) type InlineAnalysis = fn(&mut jitgen::analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct MethodTableEntry {
+pub(crate) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
@@ -124,7 +124,7 @@ impl Globals {
             startup_flag: false,
         };
         globals.random.init_with_seed(None);
-        builtins::init_builtins(&mut globals);
+        crate::builtins::init_builtins(&mut globals);
         globals
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
@@ -500,15 +500,15 @@ impl Globals {
 
 // Random generator
 impl Globals {
-    pub(super) fn random_seed(&self) -> &[u8; 4] {
+    pub(crate) fn random_seed(&self) -> &[u8; 4] {
         &self.random.seed
     }
 
-    pub(super) fn random_init(&mut self, seed: Option<i64>) {
+    pub(crate) fn random_init(&mut self, seed: Option<i64>) {
         self.random.init_with_seed(seed)
     }
 
-    pub(super) fn random_gen<T>(&mut self) -> T
+    pub(crate) fn random_gen<T>(&mut self) -> T
     where
         rand::distributions::Standard: rand::prelude::Distribution<T>,
     {

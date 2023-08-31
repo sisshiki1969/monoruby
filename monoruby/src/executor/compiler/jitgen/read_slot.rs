@@ -26,14 +26,14 @@ impl Codegen {
     ///
     /// Fetch *reg*s and store in corresponding stack slots.
     ///
-    pub(in crate::executor) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
+    pub(crate) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
         reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
     }
 
     ///
     /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
     ///
-    pub(in crate::executor) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
+    pub(crate) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
         for reg in args.0..args.0 + len {
             self.fetch_slot(ctx, SlotId::new(reg))
         }
@@ -148,7 +148,7 @@ impl Codegen {
         }
     }
 
-    pub(in crate::executor) fn fetch_float_assume_float_enc(
+    pub(crate) fn fetch_float_assume_float_enc(
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,

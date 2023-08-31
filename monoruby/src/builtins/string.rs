@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use num::{BigInt, Num};
 
-use crate::*;
+use super::*;
 
 //
 // String class

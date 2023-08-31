@@ -121,7 +121,7 @@ fn inline_class_new(
         movq rsi, r12;
         movq rdx, rax;
         movq rcx, r15;
-        lea r8, [r14 - (conv(args))];
+        lea r8, [r14 - (crate::executor::jitgen::conv(args))];
         movl r9, (len);
         subq rsp, 16;
         movq [rsp], 0;
@@ -156,9 +156,9 @@ fn inline_class_new(
     gen.jit.select_page(0);
 }
 
-fn conv(reg: SlotId) -> i64 {
+/*fn conv(reg: SlotId) -> i64 {
     reg.0 as i64 * 8 + LBP_SELF
-}
+}*/
 
 fn analysis_class_new(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     let CallSiteInfo {
