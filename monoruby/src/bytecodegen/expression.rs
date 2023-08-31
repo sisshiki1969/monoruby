@@ -8,7 +8,7 @@ impl BytecodeGen {
     ///
     pub(super) fn push_expr(&mut self, expr: Node) -> Result<BcTemp> {
         let ret = self.sp();
-        self.gen_expr(expr, UseMode::Use)?;
+        self.gen_expr(expr, UseMode::Push)?;
         Ok(ret)
     }
 
@@ -16,14 +16,14 @@ impl BytecodeGen {
     /// Evaluate *expr* and
     ///
     /// * If *use_mode* is `UseMode::Use`, push the result to the stack and return the register.
-    /// * If *use_mode* is `UseMode::Ret`, return the register.
+    /// * If *use_mode* is `UseMode::Ret`, emit BcIr::Ret with the result.
     /// * If *use_mode* is `UseMode::NotUse`, the result will discarded.
     ///
     pub(super) fn gen_expr(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
         let old = self.temp;
         self.gen_expr_inner(expr, use_mode)?;
         match use_mode {
-            UseMode::Use => assert_eq!(old + 1, self.temp),
+            UseMode::Push => assert_eq!(old + 1, self.temp),
             _ => assert_eq!(old, self.temp),
         };
         Ok(())
@@ -32,6 +32,11 @@ impl BytecodeGen {
     ///
     /// Evaluate *expr* and store the result to *dst*.
     ///
+    /// ### arguments
+    /// - `dst`: destination register.
+    /// - `expr`: expression.
+    ///
+    /// ### note
     /// `temp` is not moved.
     ///
     pub(super) fn gen_store_expr(&mut self, dst: BcReg, rhs: Node) -> Result<()> {
@@ -80,7 +85,7 @@ impl BytecodeGen {
                         Some(base),
                         arglist,
                         Some(dst),
-                        UseMode::Use,
+                        UseMode::Push,
                         loc,
                     )?;
                 } else {
@@ -126,7 +131,7 @@ impl BytecodeGen {
                         self.emit_assign(dst, lhs, loc);
                     }
                 } else {
-                    self.gen_mul_assign(mlhs, mrhs, UseMode::Use)?;
+                    self.gen_mul_assign(mlhs, mrhs, UseMode::Push)?;
                     let temp = self.pop().into();
                     self.emit_mov(dst, temp);
                 }
@@ -174,24 +179,29 @@ impl BytecodeGen {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(dst);
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, Some(receiver), arglist, ret, UseMode::Use, loc)?;
+                self.gen_method_call(
+                    method,
+                    Some(receiver),
+                    arglist,
+                    Some(dst),
+                    UseMode::Push,
+                    loc,
+                )?;
             }
             NodeKind::FuncCall {
                 method,
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(dst);
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, None, arglist, ret, UseMode::Use, loc)?;
+                self.gen_method_call(method, None, arglist, Some(dst), UseMode::Push, loc)?;
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
-                    return self.gen_method_return(val);
+                    return self.gen_method_return(val, UseMode2::Store(dst));
                 } else {
-                    return self.gen_return(val);
+                    return self.gen_return(val, UseMode2::Store(dst));
                 }
             }
             NodeKind::CompStmt(nodes) => {
@@ -204,9 +214,16 @@ impl BytecodeGen {
                 info,
                 is_module,
             } => {
-                let dst = Some(dst);
                 let name = IdentId::get_id_from_string(name);
-                self.gen_class_def(name, base, superclass, info, dst, is_module, loc)?;
+                self.gen_class_def(
+                    name,
+                    base,
+                    superclass,
+                    info,
+                    UseMode2::Store(dst),
+                    is_module,
+                    loc,
+                )?;
             }
             _ => {
                 let ret = self.push_expr(rhs)?.into();
@@ -247,7 +264,7 @@ impl BytecodeGen {
     ///
     /// * If *use_mode* is `UseMode::Use`, push the result to the stack and return the register.
     /// * If *use_mode* is `UseMode::Ret`, return the register.
-    /// * If *use_mode* is `UseMode::NotUse`, the result will discarded.
+    /// * If *use_mode* is `UseMode::NotUse`, the result is discarded.
     ///
     fn gen_expr_inner(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
         if !use_mode.use_val() {
@@ -423,7 +440,7 @@ impl BytecodeGen {
                 } else {
                     let succ_pos = self.new_label();
                     match use_mode {
-                        UseMode::NotUse | UseMode::Use => {
+                        UseMode::NotUse | UseMode::Push => {
                             self.emit_br(succ_pos);
                         }
                         UseMode::Ret => {}
@@ -476,10 +493,7 @@ impl BytecodeGen {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.gen_break(val)?;
-                            if use_mode == UseMode::Use {
-                                self.push();
-                            }
+                            self.gen_break(val, use_mode.into())?;
                             return Ok(());
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
@@ -495,7 +509,7 @@ impl BytecodeGen {
                     self.gen_expr(val, UseMode::NotUse)?;
                 }
                 self.emit(BcIr::Br(break_dest), loc);
-                if use_mode == UseMode::Use {
+                if use_mode == UseMode::Push {
                     self.push();
                 }
                 return Ok(());
@@ -505,10 +519,7 @@ impl BytecodeGen {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.gen_return(val)?;
-                            if use_mode == UseMode::Use {
-                                self.push();
-                            }
+                            self.gen_return(val, use_mode.into())?;
                             return Ok(());
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
@@ -520,20 +531,18 @@ impl BytecodeGen {
                 };
                 self.gen_expr(val, UseMode::NotUse)?;
                 self.emit(BcIr::Br(next_dest), loc);
-                if use_mode == UseMode::Use {
+                if use_mode == UseMode::Push {
                     self.push();
                 }
                 return Ok(());
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
-                    self.gen_method_return(val)?;
+                    self.gen_method_return(val, use_mode.into())?;
                 } else {
-                    self.gen_return(val)?;
+                    self.gen_return(val, use_mode.into())?;
                 }
-                if use_mode == UseMode::Use {
-                    self.push();
-                }
+
                 return Ok(());
             }
             NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(nodes, None, use_mode),
@@ -547,25 +556,13 @@ impl BytecodeGen {
             }
             NodeKind::MethodDef(name, block) => {
                 let name = IdentId::get_id_from_string(name);
-                self.gen_method_def(name, block, loc)?;
-                if use_mode.use_val() {
-                    self.push_symbol(name);
-                }
-                if use_mode.is_ret() {
-                    self.emit_ret(None);
-                }
+                self.gen_method_def(name, block, use_mode.into(), loc)?;
                 return Ok(());
             }
             NodeKind::SingletonMethodDef(box obj, name, block) => {
-                self.gen_expr(obj, UseMode::Use)?;
+                self.gen_expr(obj, UseMode::Push)?;
                 let name = IdentId::get_id_from_string(name);
-                self.gen_singleton_method_def(name, block, loc)?;
-                if use_mode.use_val() {
-                    self.push_symbol(name);
-                }
-                if use_mode.is_ret() {
-                    self.emit_ret(None);
-                }
+                self.gen_singleton_method_def(name, block, use_mode.into(), loc)?;
                 return Ok(());
             }
             NodeKind::ClassDef {
@@ -575,31 +572,17 @@ impl BytecodeGen {
                 info,
                 is_module,
             } => {
-                let dst = if use_mode.use_val() {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
                 let name = IdentId::get_id_from_string(name);
-                self.gen_class_def(name, base, superclass, info, dst, is_module, loc)?;
-                if use_mode.is_ret() {
-                    self.emit_ret(None);
-                }
+                let use_mode = use_mode.into();
+                self.gen_class_def(name, base, superclass, info, use_mode, is_module, loc)?;
                 return Ok(());
             }
             NodeKind::SingletonClassDef {
                 box singleton,
                 info,
             } => {
-                let dst = if use_mode.use_val() {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
-                self.gen_singleton_class_def(singleton, info, dst, loc)?;
-                if use_mode.is_ret() {
-                    self.emit_ret(None);
-                }
+                let use_mode = use_mode.into();
+                self.gen_singleton_class_def(singleton, info, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::InterporatedString(nodes) => {
@@ -623,12 +606,10 @@ impl BytecodeGen {
             NodeKind::AliasMethod(box new, box old) => {
                 match (new.kind, old.kind) {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
-                        let new = IdentId::get_id_from_string(new);
-                        let old = IdentId::get_id_from_string(old);
-                        self.push_symbol(new);
-                        self.push_symbol(old);
-                        let old = self.pop().into();
-                        let new = self.pop().into();
+                        let temp = self.temp;
+                        let new = self.push_symbol(IdentId::get_id_from_string(new));
+                        let old = self.push_symbol(IdentId::get_id_from_string(old));
+                        self.temp = temp;
                         self.emit(BcIr::AliasMethod { new, old }, loc);
                     }
                     _ => unimplemented!(),
@@ -639,7 +620,7 @@ impl BytecodeGen {
                         self.emit_ret(None);
                     }
                     UseMode::NotUse => {}
-                    UseMode::Use => {
+                    UseMode::Push => {
                         self.push_nil();
                     }
                 }
@@ -657,7 +638,7 @@ impl BytecodeGen {
             UseMode::NotUse => {
                 self.pop();
             }
-            UseMode::Use => {}
+            UseMode::Push => {}
         }
         Ok(())
     }
@@ -667,7 +648,7 @@ impl BytecodeGen {
             UseMode::Ret => {
                 self.emit_ret(Some(src));
             }
-            UseMode::Use => {
+            UseMode::Push => {
                 self.emit_temp_mov(src);
             }
             UseMode::NotUse => {}
@@ -773,9 +754,20 @@ impl BytecodeGen {
 // Literals
 //
 impl BytecodeGen {
-    fn push_symbol(&mut self, sym: IdentId) {
-        let reg = self.push().into();
-        self.emit_symbol(reg, sym);
+    fn gen_symbol(&mut self, sym: IdentId, use_mode: UseMode2) {
+        match use_mode {
+            UseMode2::NotUse => {}
+            UseMode2::Push => {
+                self.push_symbol(sym);
+            }
+            UseMode2::Store(r) => {
+                self.emit_symbol(r, sym);
+            }
+            UseMode2::Ret => {
+                self.push_symbol(sym);
+                self.emit_ret(None);
+            }
+        }
     }
 
     fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
@@ -856,9 +848,16 @@ impl BytecodeGen {
 // Definitions
 //
 impl BytecodeGen {
-    fn gen_method_def(&mut self, name: IdentId, block: BlockInfo, loc: Loc) -> Result<()> {
+    fn gen_method_def(
+        &mut self,
+        name: IdentId,
+        block: BlockInfo,
+        use_mode: UseMode2,
+        loc: Loc,
+    ) -> Result<()> {
         let func_id = self.add_method(Some(name), block);
         self.emit(BcIr::MethodDef { name, func_id }, loc);
+        self.gen_symbol(name, use_mode);
         Ok(())
     }
 
@@ -866,21 +865,35 @@ impl BytecodeGen {
         &mut self,
         name: IdentId,
         block: BlockInfo,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
         let func_id = self.add_method(Some(name), block);
         let obj = self.pop().into();
         self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
+        self.gen_symbol(name, use_mode);
         Ok(())
     }
 
+    ///
+    /// Generate class definition.
+    ///
+    /// ### arguments
+    /// - `name` - class name
+    /// - `base` - base class
+    /// - `superclass` - superclass
+    /// - `info` - block info
+    /// - `use_mode` - use mode
+    /// - `is_module` - whether this is module definition or not
+    /// - `loc` - location
+    ///
     fn gen_class_def(
         &mut self,
         name: IdentId,
         base: Option<Box<Node>>,
         superclass: Option<Box<Node>>,
         info: BlockInfo,
-        ret: Option<BcReg>,
+        use_mode: UseMode2,
         is_module: bool,
         loc: Loc,
     ) -> Result<()> {
@@ -896,6 +909,11 @@ impl BytecodeGen {
             Some(superclass) => Some(self.gen_temp_expr(*superclass)?),
             None => None,
         };
+        let ret = match use_mode {
+            UseMode2::NotUse => None,
+            UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
+            UseMode2::Store(r) => Some(r),
+        };
         self.emit(
             if is_module {
                 BcIr::ModuleDef { ret, name, func_id }
@@ -909,6 +927,9 @@ impl BytecodeGen {
             },
             loc,
         );
+        if use_mode == UseMode2::Ret {
+            self.emit_ret(None);
+        }
         Ok(())
     }
 
@@ -916,21 +937,22 @@ impl BytecodeGen {
         &mut self,
         base: Node,
         info: BlockInfo,
-        dst: Option<BcReg>,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
         let func_id = self.add_classdef(None, info);
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;
-        self.emit(
-            BcIr::SingletonClassDef {
-                ret: dst,
-                base,
-                func_id,
-            },
-            loc,
-        );
+        let ret = match use_mode {
+            UseMode2::NotUse => None,
+            UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
+            UseMode2::Store(r) => Some(r),
+        };
+        self.emit(BcIr::SingletonClassDef { ret, base, func_id }, loc);
+        if use_mode == UseMode2::Ret {
+            self.emit_ret(None);
+        }
         Ok(())
     }
 }
@@ -939,31 +961,38 @@ impl BytecodeGen {
 // Flow control
 //
 impl BytecodeGen {
-    fn gen_return(&mut self, val: Node) -> Result<()> {
-        if let Some(local) = self.is_refer_local(&val) {
-            self.emit_ret(Some(local.into()));
-        } else {
-            self.gen_expr(val, UseMode::Ret)?;
+    fn gen_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
+        self.gen_expr(val, UseMode::Ret)?;
+        if use_mode == UseMode2::Push {
+            self.push();
         }
         Ok(())
     }
 
-    fn gen_method_return(&mut self, val: Node) -> Result<()> {
+    fn gen_method_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit_method_ret(Some(local.into()));
+            self.emit(BcIr::MethodRet(local.into()), Loc::default());
         } else {
-            self.gen_expr(val, UseMode::Use)?;
-            self.emit_method_ret(None);
+            self.gen_expr(val, UseMode::Push)?;
+            let ret = self.pop().into();
+            self.emit(BcIr::MethodRet(ret), Loc::default());
+        }
+        if use_mode == UseMode2::Push {
+            self.push();
         }
         Ok(())
     }
 
-    fn gen_break(&mut self, val: Node) -> Result<()> {
+    fn gen_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit_break(Some(local.into()));
+            self.emit(BcIr::Break(local.into()), Loc::default());
         } else {
-            self.gen_expr(val, UseMode::Use)?;
-            self.emit_break(None);
+            self.gen_expr(val, UseMode::Push)?;
+            let ret = self.pop().into();
+            self.emit(BcIr::Break(ret), Loc::default());
+        }
+        if use_mode == UseMode2::Push {
+            self.push();
         }
         Ok(())
     }

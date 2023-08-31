@@ -284,7 +284,7 @@ impl BytecodeGen {
             Some(lhs),
             ArgList::from_args(vec![rhs]),
             dst,
-            UseMode::Use,
+            UseMode::Push,
             loc,
         )?;
         Ok(ret)

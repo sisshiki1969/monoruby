@@ -192,8 +192,26 @@ enum LvalueKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum UseMode {
     Ret,
-    Use,
+    Push,
     NotUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UseMode2 {
+    Ret,
+    Push,
+    Store(BcReg),
+    NotUse,
+}
+
+impl From<UseMode> for UseMode2 {
+    fn from(value: UseMode) -> Self {
+        match value {
+            UseMode::Ret => Self::Ret,
+            UseMode::Push => Self::Push,
+            UseMode::NotUse => Self::NotUse,
+        }
+    }
 }
 
 impl UseMode {
@@ -670,24 +688,6 @@ impl BytecodeGen {
         self.emit(BcIr::Ret(ret), Loc::default());
     }
 
-    fn emit_method_ret(&mut self, src: Option<BcReg>) {
-        let ret = match src {
-            Some(ret) => ret,
-            None => self.pop().into(),
-        };
-        //assert_eq!(0, self.temp);
-        self.emit(BcIr::MethodRet(ret), Loc::default());
-    }
-
-    fn emit_break(&mut self, src: Option<BcReg>) {
-        let ret = match src {
-            Some(ret) => ret,
-            None => self.pop().into(),
-        };
-        //assert_eq!(0, self.temp);
-        self.emit(BcIr::Break(ret), Loc::default());
-    }
-
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
             self.emit(BcIr::Mov(dst, src), Loc::default());
@@ -869,6 +869,12 @@ impl BytecodeGen {
     fn push_nil(&mut self) -> BcReg {
         let reg = self.push().into();
         self.emit_nil(reg);
+        reg
+    }
+
+    fn push_symbol(&mut self, sym: IdentId) -> BcReg {
+        let reg = self.push().into();
+        self.emit_symbol(reg, sym);
         reg
     }
 

@@ -92,7 +92,7 @@ impl BytecodeGen {
             self.emit(BcIr::LoopEnd, loc);
         } else {
             let use_mode = if use_value {
-                UseMode::Use
+                UseMode::Push
             } else {
                 UseMode::NotUse
             };
@@ -211,7 +211,7 @@ impl BytecodeGen {
                 UseMode::NotUse => {
                     self.pop(); // 0
                 }
-                UseMode::Use => {} // +1
+                UseMode::Push => {} // +1
             }
         } else {
             let temp = self.temp;
@@ -259,12 +259,12 @@ impl BytecodeGen {
             // if else_ exists, rescue must also exists.
             UseMode::NotUse
         } else if ensure.is_some() && use_mode.is_ret() {
-            UseMode::Use
+            UseMode::Push
         } else {
             use_mode
         };
         let rescue_use = if ensure.is_some() && use_mode.is_ret() {
-            UseMode::Use
+            UseMode::Push
         } else {
             use_mode
         };
@@ -306,7 +306,7 @@ impl BytecodeGen {
                 };
                 self.apply_label(cont_pos);
                 match rescue_use {
-                    UseMode::Use => self.gen_store_expr(ret_reg, body)?,
+                    UseMode::Push => self.gen_store_expr(ret_reg, body)?,
                     _ => self.gen_expr(body, rescue_use)?,
                 }
                 if !rescue_use.is_ret() {
@@ -378,7 +378,7 @@ impl BytecodeGen {
             }
         }
         match use_mode {
-            UseMode::Use => assert_eq!(self.temp, base + 1),
+            UseMode::Push => assert_eq!(self.temp, base + 1),
             _ => assert_eq!(self.temp, base),
         }
 
