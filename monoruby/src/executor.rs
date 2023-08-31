@@ -1141,12 +1141,19 @@ impl BcPc {
             TraceIr::Cmp(kind, dst, mode, opt) => {
                 let op1 = match mode {
                     OpMode::RR(lhs, rhs) => {
-                        format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,)
+                        format!(
+                            "{}{} = {:?} {:?} {:?}",
+                            optstr(opt),
+                            ret_str(dst),
+                            lhs,
+                            kind,
+                            rhs,
+                        )
                     }
                     OpMode::RI(lhs, rhs) => format!(
-                        "{}{:?} = {:?} {:?} {}: i16",
+                        "{}{} = {:?} {:?} {}: i16",
                         optstr(opt),
-                        dst,
+                        ret_str(dst),
                         lhs,
                         kind,
                         rhs,
