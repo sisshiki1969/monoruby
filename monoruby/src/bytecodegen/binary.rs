@@ -8,47 +8,70 @@ impl BytecodeGen {
         op: BinOp,
         lhs: Node,
         rhs: Node,
-        dst: Option<BcReg>,
+        use_mode: UseMode2,
         loc: Loc,
-    ) -> Result<BcReg> {
+    ) -> Result<()> {
         match op {
-            BinOp::Add => self.gen_add(dst, lhs, rhs, loc),
-            BinOp::Sub => self.gen_sub(dst, lhs, rhs, loc),
-            BinOp::Mul => self.gen_mul(dst, lhs, rhs, loc),
-            BinOp::Div => self.gen_div(dst, lhs, rhs, loc),
-            BinOp::Rem => self.gen_rem(dst, lhs, rhs, loc),
-            BinOp::Exp => self.gen_exp(dst, lhs, rhs, loc),
-            BinOp::BitOr => self.gen_bitor(dst, lhs, rhs, loc),
-            BinOp::BitAnd => self.gen_bitand(dst, lhs, rhs, loc),
-            BinOp::BitXor => self.gen_bitxor(dst, lhs, rhs, loc),
-            BinOp::Shr => self.gen_binop_method(IdentId::_SHR, dst, lhs, rhs, loc),
-            BinOp::Shl => self.gen_binop_method(IdentId::_SHL, dst, lhs, rhs, loc),
-            BinOp::LAnd => self.gen_land(dst, lhs, rhs),
-            BinOp::LOr => self.gen_lor(dst, lhs, rhs),
-            BinOp::Match => self.gen_match(dst, lhs, rhs),
-            BinOp::Cmp(kind) => self.gen_cmp(dst, kind, lhs, rhs, false, loc),
-        }
+            BinOp::Shr => return self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
+            BinOp::Shl => return self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
+            BinOp::Match => {
+                return self.gen_binop_method(IdentId::get_id("=~"), lhs, rhs, use_mode, loc)
+            }
+            _ => {}
+        };
+        let use_mode2 = match use_mode {
+            UseMode2::Store(r) => UseMode2::Store(r),
+            _ => UseMode2::Push,
+        };
+        match op {
+            BinOp::Add => self.gen_add(use_mode2, lhs, rhs, loc),
+            BinOp::Sub => self.gen_sub(use_mode2, lhs, rhs, loc),
+            BinOp::Mul => self.gen_mul(use_mode2, lhs, rhs, loc),
+            BinOp::Div => self.gen_div(use_mode2, lhs, rhs, loc),
+            BinOp::Rem => self.gen_rem(use_mode2, lhs, rhs, loc),
+            BinOp::Exp => self.gen_exp(use_mode2, lhs, rhs, loc),
+            BinOp::BitOr => self.gen_bitor(use_mode2, lhs, rhs, loc),
+            BinOp::BitAnd => self.gen_bitand(use_mode2, lhs, rhs, loc),
+            BinOp::BitXor => self.gen_bitxor(use_mode2, lhs, rhs, loc),
+            BinOp::LAnd => self.gen_land(use_mode2, lhs, rhs),
+            BinOp::LOr => self.gen_lor(use_mode2, lhs, rhs),
+            BinOp::Cmp(kind) => self.gen_cmp(use_mode2, kind, lhs, rhs, false, loc),
+            _ => unreachable!(),
+        }?;
+        match use_mode {
+            UseMode2::NotUse => {
+                self.pop();
+            }
+            UseMode2::Ret => {
+                self.emit_ret(None);
+            }
+            _ => {}
+        };
+        Ok(())
     }
 
-    fn gen_binop_method(
+    pub(super) fn gen_binop_method(
         &mut self,
         method: IdentId,
-        dst: Option<BcReg>,
         lhs: Node,
         rhs: Node,
+        use_mode: UseMode2,
         loc: Loc,
-    ) -> Result<BcReg> {
+    ) -> Result<()> {
         let old = self.temp;
         let lhs = self.gen_expr_reg(lhs)?;
         let rhs = self.gen_expr_reg(rhs)?;
         self.temp = old;
-        let ret = if let Some(ret) = dst {
-            ret
-        } else {
-            self.push().into()
+        let ret = match use_mode {
+            UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
+            UseMode2::Store(dst) => Some(dst),
+            UseMode2::NotUse => None,
         };
-        self.emit_binary_op(method, lhs, rhs, Some(ret), loc);
-        Ok(ret)
+        self.emit_binary_op(method, lhs, rhs, ret, loc);
+        if use_mode == UseMode2::Ret {
+            self.pop();
+        }
+        Ok(())
     }
 
     ///
@@ -85,11 +108,11 @@ impl BytecodeGen {
             let loc = cond.loc;
             let cond = self.sp().into();
             if kind == CmpKind::Cmp {
-                self.gen_cmp(None, kind, lhs, rhs, false, loc)?; // +1
+                self.gen_cmp(UseMode2::Push, kind, lhs, rhs, false, loc)?; // +1
                 self.pop();
                 self.emit_condbr(cond, else_pos, jmp_if_true, false);
             } else {
-                self.gen_cmp(None, kind, lhs, rhs, true, loc)?;
+                self.gen_cmp(UseMode2::Push, kind, lhs, rhs, true, loc)?;
                 self.pop();
                 self.emit_condbr(cond, else_pos, jmp_if_true, true);
             }
@@ -120,15 +143,16 @@ macro_rules! gen_ri_ops {
       paste! {
           fn [<gen_ $op>](
               &mut self,
-              dst: Option<BcReg>,
+              use_mode: UseMode2,
               lhs: Node,
               rhs: Node,
               loc: Loc,
           ) -> Result<BcReg> {
               let mode = self.gen_mode(lhs, rhs)?;
-              let dst = match dst {
-                  None => self.push().into(),
-                  Some(local) => local,
+              let dst = match use_mode {
+                  UseMode2::Push => self.push().into(),
+                  UseMode2::Store(dst) => dst,
+                  _ => unreachable!(),
               };
               self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
               Ok(dst)
@@ -201,7 +225,7 @@ impl BytecodeGen {
     ///
     fn gen_cmp(
         &mut self,
-        dst: Option<BcReg>,
+        use_mode: UseMode2,
         kind: CmpKind,
         lhs: Node,
         rhs: Node,
@@ -218,23 +242,25 @@ impl BytecodeGen {
             BinopMode::RR(lhs, rhs)
         };
         self.temp = old;
-        let dst = match dst {
-            None => self.push().into(),
-            Some(local) => local,
+        let dst = match use_mode {
+            UseMode2::Push => self.push().into(),
+            UseMode2::Store(dst) => dst,
+            _ => unreachable!(),
         };
         self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
         Ok(dst)
     }
 
-    fn gen_land(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
+    fn gen_land(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<BcReg> {
         let exit_pos = self.new_label();
         // Support "a &&= 100"
         if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
             self.is_assign_local(&lhs[0]);
         }
-        let dst = match dst {
-            None => self.push().into(),
-            Some(reg) => reg,
+        let dst = match use_mode {
+            UseMode2::Store(dst) => dst,
+            UseMode2::Push => self.push().into(),
+            _ => unreachable!(),
         };
         self.gen_store_expr(dst, lhs)?;
         self.emit_condbr(dst, exit_pos, false, false);
@@ -243,14 +269,14 @@ impl BytecodeGen {
         Ok(dst)
     }
 
-    fn gen_lor(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
+    fn gen_lor(&mut self, use_mode: UseMode2, lhs: Node, rhs: Node) -> Result<BcReg> {
         let exit_pos = self.new_label();
         // Support "a ||= 100"
         if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
             self.is_assign_local(&lhs[0]);
         }
-        match dst {
-            None => {
+        match use_mode {
+            UseMode2::Push => {
                 let dst = self.push().into();
                 self.gen_store_expr(dst, lhs)?;
                 self.emit_condbr(dst, exit_pos, true, false);
@@ -258,7 +284,7 @@ impl BytecodeGen {
                 self.apply_label(exit_pos);
                 Ok(dst)
             }
-            Some(dst) => {
+            UseMode2::Store(dst) => {
                 let tmp = self.push().into();
                 self.gen_store_expr(tmp, lhs)?;
                 self.emit_condbr(tmp, exit_pos, true, false);
@@ -268,26 +294,8 @@ impl BytecodeGen {
                 self.emit_mov(dst, tmp);
                 Ok(dst)
             }
+            _ => unreachable!(),
         }
-    }
-
-    fn gen_match(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
-        let loc = lhs.loc().merge(rhs.loc());
-        let ret = if let Some(ret) = dst {
-            ret
-        } else {
-            self.sp().into()
-        };
-        let method = IdentId::get_id("=~");
-        self.gen_method_call(
-            method,
-            Some(lhs),
-            ArgList::from_args(vec![rhs]),
-            dst,
-            UseMode::Push,
-            loc,
-        )?;
-        Ok(ret)
     }
 
     fn gen_opt_land_condbr(

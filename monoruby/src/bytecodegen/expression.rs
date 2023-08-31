@@ -121,7 +121,7 @@ impl BytecodeGen {
                 UnOp::BitNot => self.emit_bitnot(dst, rhs, loc)?,
             },
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(op, lhs, rhs, Some(dst), loc)?;
+                self.gen_binop(op, lhs, rhs, UseMode2::Store(dst), loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -309,7 +309,8 @@ impl BytecodeGen {
                 self.gen_store_expr(ret, expr)?;
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(op, lhs, rhs, None, loc)?;
+                self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
+                //return Ok(());
             }
             NodeKind::Index {
                 box base,
@@ -338,7 +339,7 @@ impl BytecodeGen {
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = self.is_assign_local(&lhs) {
-                    self.gen_binop(op, lhs, rhs, Some(local.into()), loc)?;
+                    self.gen_binop(op, lhs, rhs, UseMode2::Store(local.into()), loc)?;
                     self.handle_mode(use_mode, local.into());
                     return Ok(());
                 }
@@ -347,7 +348,8 @@ impl BytecodeGen {
                 // First, evaluate lvalue.
                 let lhs_kind = self.eval_lvalue(&lhs)?;
                 // Evaluate rvalue.
-                let src = self.gen_binop(op, lhs, rhs, None, loc)?;
+                let src = self.sp().into();
+                self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
                 self.temp = temp;
                 // Assign rvalue to lvalue.
                 self.emit_assign(src, lhs_kind, lhs_loc);
