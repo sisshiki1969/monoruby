@@ -27,10 +27,15 @@ impl BytecodeGen {
             UseMode2::Ret => UseMode::Ret,
         };
         let old = self.temp;
+        //let loc = expr.loc;
         self.gen_expr_inner(expr, use_mode)?;
         match use_mode {
-            UseMode::Push => assert_eq!(old + 1, self.temp),
-            _ => assert_eq!(old, self.temp),
+            UseMode::Push => {
+                assert_eq!(old + 1, self.temp);
+            }
+            _ => {
+                assert_eq!(old, self.temp);
+            }
         };
         Ok(())
     }
@@ -133,8 +138,7 @@ impl BytecodeGen {
                         let temp = self.temp;
                         let lhs = self.eval_lvalue(&lhs)?;
                         self.gen_store_expr(dst, rhs)?;
-                        self.temp = temp;
-                        self.emit_assign(dst, lhs, loc);
+                        self.emit_assign(dst, lhs, Some(temp), loc);
                     }
                 } else {
                     self.gen_mul_assign(mlhs, mrhs, UseMode::Push)?;
@@ -350,10 +354,23 @@ impl BytecodeGen {
                 // Evaluate rvalue.
                 let src = self.sp().into();
                 self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
-                self.temp = temp;
                 // Assign rvalue to lvalue.
-                self.emit_assign(src, lhs_kind, lhs_loc);
-                self.handle_mode(use_mode, src);
+                match use_mode {
+                    UseMode::Ret => {
+                        self.emit_assign(src, lhs_kind, None, lhs_loc);
+                        self.temp = temp;
+                        self.emit_ret(Some(src));
+                    }
+                    UseMode::Push => {
+                        self.emit_assign(src, lhs_kind, None, lhs_loc);
+                        self.temp = temp;
+                        let dst = self.push();
+                        self.emit_mov(dst.into(), src);
+                    }
+                    UseMode::NotUse => {
+                        self.emit_assign(src, lhs_kind, Some(temp), lhs_loc);
+                    }
+                }
                 return Ok(());
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
@@ -367,9 +384,23 @@ impl BytecodeGen {
                     let temp = self.temp;
                     let lhs = self.eval_lvalue(&lhs)?;
                     let src = self.gen_expr_reg(rhs)?;
-                    self.temp = temp;
-                    self.emit_assign(src, lhs, loc);
-                    self.handle_mode(use_mode, src);
+
+                    match use_mode {
+                        UseMode::Ret => {
+                            self.emit_assign(src, lhs, None, loc);
+                            self.temp = temp;
+                            self.emit_ret(Some(src));
+                        }
+                        UseMode::Push => {
+                            self.emit_assign(src, lhs, None, loc);
+                            self.temp = temp;
+                            let dst = self.push();
+                            self.emit_mov(dst.into(), src);
+                        }
+                        UseMode::NotUse => {
+                            self.emit_assign(src, lhs, Some(temp), loc);
+                        }
+                    }
                     return Ok(());
                 } else {
                     return self.gen_mul_assign(mlhs, mrhs, use_mode);
@@ -652,7 +683,8 @@ impl BytecodeGen {
                 self.emit_ret(Some(src));
             }
             UseMode::Push => {
-                self.emit_temp_mov(src);
+                let dst = self.push();
+                self.emit_mov(dst.into(), src);
             }
             UseMode::NotUse => {}
         }
@@ -683,6 +715,7 @@ impl BytecodeGen {
         };
 
         let temp = self.temp;
+
         // At first, we evaluate lvalues and save their info(LhsKind).
         let mut lhs_kind: Vec<LvalueKind> = vec![];
         for lhs in &mlhs {
@@ -694,11 +727,9 @@ impl BytecodeGen {
             let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?.into();
             mrhs_len = mlhs_len;
             let rhs_reg = self.sp();
-            let old = self.temp;
             for _ in 0..mlhs_len {
                 self.push();
             }
-            self.temp = old;
             self.emit(
                 BcIr::ExpandArray(rhs, rhs_reg.into(), mlhs_len as u16),
                 Loc::default(),
@@ -720,10 +751,11 @@ impl BytecodeGen {
                 self.emit_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.emit_assign(src, kind, loc);
+                self.emit_assign(src, kind, None, loc);
             }
             temp_reg += 1;
         }
+
         self.temp = temp;
 
         // Generate return value if needed.
@@ -733,6 +765,7 @@ impl BytecodeGen {
                 self.emit_array(ret, rhs_reg.into(), mrhs_len, vec![], loc);
             }
         }
+
         if use_mode.is_ret() {
             self.emit_ret(None);
         }

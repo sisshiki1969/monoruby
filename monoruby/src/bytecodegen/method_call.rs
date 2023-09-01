@@ -337,11 +337,11 @@ impl BytecodeGen {
             match block.kind {
                 NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
                 NodeKind::LocalVar(0, proc_local) => {
+                    let dst = self.push().into();
                     if let Some(local) = self.refer_local(&proc_local) {
-                        self.emit_temp_mov(local.into());
+                        self.emit_mov(dst, local.into());
                     } else {
-                        let proc_temp = self.push().into();
-                        self.emit(BcIr::BlockArgProxy(proc_temp, 0), loc);
+                        self.emit(BcIr::BlockArgProxy(dst, 0), loc);
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {

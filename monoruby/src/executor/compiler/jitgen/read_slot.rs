@@ -5,9 +5,10 @@ impl Codegen {
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
     fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        /*if reg >= ctx.sp {
-            panic!("{:?} >= {:?}", reg, ctx.sp);
-        };*/
+        if reg >= ctx.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, ctx.sp);
+            panic!();
+        };
         match ctx[reg] {
             LinkMode::Xmm(freg) => {
                 let f64_to_val = self.f64_to_val;
@@ -61,9 +62,10 @@ impl Codegen {
     /// Fetch *arg* and store in *rax*.
     ///
     pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        /*if reg >= ctx.sp {
-            panic!("{:?} >= {:?}", reg, ctx.sp);
-        };*/
+        if reg >= ctx.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
+            panic!();
+        };
         match ctx[reg] {
             LinkMode::Xmm(freg) => {
                 let f64_to_val = self.f64_to_val;

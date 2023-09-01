@@ -155,12 +155,7 @@ impl IdentId {
     ///
     /// Append the name of *self* to *s*.
     ///
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
+    #[cfg(feature = "dump-bc")]
     pub(crate) fn append_to(self, s: &mut String) {
         ID.read().unwrap().append_to(self, s);
     }
@@ -281,12 +276,7 @@ impl IdentifierTable {
     ///
     /// Append the name of *self* to *s*.
     ///
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
+    #[cfg(feature = "dump-bc")]
     fn append_to(&self, id: IdentId, s: &mut String) {
         s.push_str(self.table[id.to_usize() - 1].as_str());
     }

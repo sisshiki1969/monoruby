@@ -293,7 +293,7 @@ impl BytecodeGen {
                 if let Some(box assign) = assign {
                     let lhs = self.eval_lvalue(&assign)?;
                     let loc = assign.loc;
-                    self.emit_assign(err_reg, lhs, loc);
+                    self.emit_assign(err_reg, lhs, None, loc);
                 };
                 let cont_pos = self.new_label();
                 let next_pos = self.new_label();

@@ -269,12 +269,12 @@ impl SlotState {
         WriteBack::new(xmm, constants)
     }
 
-    pub(crate) fn get_xmm_using(&self) -> Vec<Xmm> {
+    pub(super) fn get_xmm_using(&self, sp: SlotId) -> Vec<Xmm> {
         self.xmm
             .iter()
             .enumerate()
             .filter_map(|(i, v)| {
-                if v.is_empty() {
+                if !v.iter().any(|slot| slot < &sp) {
                     None
                 } else {
                     Some(Xmm::new(i as u16))

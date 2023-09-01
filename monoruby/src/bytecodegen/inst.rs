@@ -56,12 +56,7 @@ impl Bc {
         }
     }
 
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
+    #[cfg(feature = "dump-bc")]
     pub fn into_jit_addr(self) -> u64 {
         self.op2.0
     }
@@ -191,12 +186,7 @@ impl BrKind {
         }
     }
 
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
+    #[cfg(feature = "dump-bc")]
     pub(crate) fn to_s(self) -> &'static str {
         match self {
             Self::BrIf => "",

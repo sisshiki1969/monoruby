@@ -18,10 +18,11 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-emit-asm = []
-emit-bc = []
-jit-debug = []
-log-jit = []
+dump-bc = []
+emit-asm = ["dump-bc"]
+emit-bc = ["dump-bc"]
+jit-debug = ["dump-bc"]
+log-jit = ["dump-bc"]
 gc-debug = []
 gc-stress = []
 profile = []

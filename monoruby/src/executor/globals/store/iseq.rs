@@ -124,7 +124,7 @@ impl ISeqInfo {
         }
     }
 
-    #[cfg(feature = "emit-bc")]
+    #[cfg(feature = "dump-bc")]
     pub(super) fn get_exception_map(
         &self,
     ) -> Vec<(

@@ -911,12 +911,7 @@ impl BcPc {
 }
 
 impl BcPc {
-    #[cfg(any(
-        feature = "emit-bc",
-        feature = "emit-asm",
-        feature = "log-jit",
-        feature = "profile"
-    ))]
+    #[cfg(feature = "dump-bc")]
     pub fn format(&self, globals: &Globals, i: usize) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt {
@@ -1454,12 +1449,7 @@ impl std::ops::Add<u16> for SlotId {
     }
 }
 
-#[cfg(any(
-    feature = "emit-bc",
-    feature = "emit-asm",
-    feature = "log-jit",
-    feature = "profile"
-))]
+#[cfg(feature = "dump-bc")]
 fn ret_str(slot: Option<SlotId>) -> String {
     match slot {
         None => "_".to_string(),

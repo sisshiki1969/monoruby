@@ -707,11 +707,6 @@ impl BytecodeGen {
         }
     }
 
-    fn emit_temp_mov(&mut self, src: BcReg) {
-        let dst = self.push();
-        self.emit_mov(dst.into(), src);
-    }
-
     fn emit_br(&mut self, jmp_pos: Label) {
         self.emit(BcIr::Br(jmp_pos), Loc::default());
     }
@@ -972,21 +967,36 @@ impl BytecodeGen {
         Ok(lhs)
     }
 
-    fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
+    fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, old_temp: Option<u16>, loc: Loc) {
         match lhs {
             LvalueKind::Const(name) => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::StoreConst(src, name), loc);
             }
             LvalueKind::InstanceVar(name) => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::StoreIvar(src, name), loc);
             }
             LvalueKind::GlobalVar(name) => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::StoreGvar { val: src, name }, loc);
             }
             LvalueKind::DynamicVar { outer, dst } => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::StoreDynVar { dst, outer, src }, loc);
             }
             LvalueKind::Index { base, index } => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
@@ -1002,14 +1012,23 @@ impl BytecodeGen {
                     None,
                 );
                 self.emit_mov((index1 + 2).into(), src);
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit(BcIr::MethodCall(None, callid, false), loc);
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
                 let callid = self.add_callsite(method, 1, None, vec![], None, src, 1, recv, None);
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit_method_assign(callid, recv, src, loc);
             }
             LvalueKind::LocalVar { dst } => {
+                if let Some(old_temp) = old_temp {
+                    self.temp = old_temp;
+                }
                 self.emit_mov(dst, src);
             }
         }

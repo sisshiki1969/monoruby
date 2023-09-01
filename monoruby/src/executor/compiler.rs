@@ -1021,6 +1021,7 @@ impl Globals {
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
+            self[func_id].dump_bc(self);
         }
         let _sourcemap =
             self.codegen

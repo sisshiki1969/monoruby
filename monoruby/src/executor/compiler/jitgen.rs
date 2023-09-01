@@ -321,6 +321,10 @@ impl BBContext {
             None
         }
     }
+
+    pub(crate) fn get_xmm_using(&self) -> Vec<Xmm> {
+        self.slot_state.get_xmm_using(self.sp)
+    }
 }
 
 #[derive(Debug)]
