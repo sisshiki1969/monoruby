@@ -325,6 +325,10 @@ impl BBContext {
     pub(crate) fn get_xmm_using(&self) -> Vec<Xmm> {
         self.slot_state.get_xmm_using(self.sp)
     }
+
+    fn get_write_back(&self) -> WriteBack {
+        self.slot_state.get_write_back(self.sp)
+    }
 }
 
 #[derive(Debug)]

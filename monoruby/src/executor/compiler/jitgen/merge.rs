@@ -60,7 +60,6 @@ impl Codegen {
         //let bb_pos = cc.cur_pos;
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
-            //let bb_pos = cc.cur_pos;
 
             let (use_set, unused) = cc.analyse(func, bb_pos);
 

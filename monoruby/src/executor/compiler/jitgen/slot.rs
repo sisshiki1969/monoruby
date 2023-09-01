@@ -198,7 +198,7 @@ impl SlotState {
         }
     }
 
-    pub(super) fn get_write_back(&self) -> WriteBack {
+    pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
         let xmm = self
             .xmm
             .iter()
@@ -209,7 +209,7 @@ impl SlotState {
                 } else {
                     let v: Vec<_> = self.xmm[i]
                         .iter()
-                        .filter(|reg| matches!(self[**reg], LinkMode::Xmm(_)))
+                        .filter(|reg| *reg < &sp && matches!(self[**reg], LinkMode::Xmm(_)))
                         .cloned()
                         .collect();
                     if v.is_empty() {
