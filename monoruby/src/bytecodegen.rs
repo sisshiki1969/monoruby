@@ -165,6 +165,9 @@ impl std::fmt::Debug for BcLocal {
     }
 }
 
+///
+/// Label for jump destination.
+///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Label(usize);
 
@@ -227,30 +230,36 @@ impl UseMode {
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 struct CallSite {
-    /// Name of method. (None for *super*)
+    /// Name of the method. (None for *super*)
     name: Option<IdentId>,
     /// Number of positional arguments.
     pos_num: usize,
-    /// *BcTemp* of keyword arguments.
+    /// Keyword arguments information.
     kw: Option<KeywordArgs>,
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
     block_func_id: Option<FuncId>,
+    /// *BcReg* of the first arguments.
     args: BcReg,
+    /// Number of arguments.
     len: usize,
+    /// *BcReg* of the receiver.
     recv: BcReg,
+    /// *BcReg* of the return value. If None, the return value is discarded.
     ret: Option<BcReg>,
 }
 
 ///
-/// keyword arguments information in *Callsite*.
+/// keyword arguments information of *Callsite*.
 ///
 #[derive(Debug, Clone)]
 struct KeywordArgs {
+    /// Position of the first keyword argument.
     kw_pos: BcReg,
     /// Names and positions of keyword arguments.
     kw_args: HashMap<IdentId, usize>,
+    /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }
 
@@ -303,6 +312,7 @@ pub(crate) struct CompileInfo {
     optional_info: Vec<OptionalInfo>,
     /// *for* statement parameters info.
     for_param_info: Vec<ForParamInfo>,
+    /// Location in a source code.
     loc: Loc,
 }
 
@@ -326,6 +336,9 @@ impl CompileInfo {
     }
 }
 
+///
+/// Information for destructuring parameters.
+///
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct DestructureInfo {
     src: usize,
@@ -376,7 +389,7 @@ struct BytecodeGen {
     mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
-    /// temp stack pointer.
+    /// the temp stack pointer for each bytecode instruction.
     sp: Vec<BcTemp>,
     /// destination labels.
     labels: Vec<Option<BcIndex>>,

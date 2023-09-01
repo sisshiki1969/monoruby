@@ -103,8 +103,7 @@ impl Codegen {
 
             self.write_back_branches(entries, &target_ctx, cur_label, pc + 1, bb_pos, &unused);
 
-            target_ctx.sp = func.sp[bb_pos.0 as usize];
-            cc.new_backedge(&target_ctx, bb_pos, cur_label, unused);
+            cc.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
 
             Some(target_ctx)
         } else {

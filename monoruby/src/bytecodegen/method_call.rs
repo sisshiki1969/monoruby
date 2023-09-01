@@ -70,12 +70,12 @@ impl BytecodeGen {
         } else {
             (None, false)
         };
+        let old = self.temp;
         let (callid, args, len) = if let Some(arglist) = arglist {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
         } else {
             let (_, mother_args, outer) = self.mother.clone();
-            let old = self.temp;
             let len = mother_args.pos_num;
             let kw_list = &mother_args.keyword_names;
             let kw = if kw_list.len() == 0 {
@@ -110,11 +110,11 @@ impl BytecodeGen {
                 }
                 args
             };
-            self.temp = old;
             let callid =
                 self.add_callsite(None, len, kw, vec![], None, args, len, BcReg::Self_, ret);
             (callid, args, len)
         };
+        self.temp = old;
         if ret_push_flag {
             self.push();
         };
@@ -194,10 +194,15 @@ impl BytecodeGen {
     pub(super) fn gen_yield(
         &mut self,
         arglist: ArgList,
-        ret: Option<BcReg>,
-        is_ret: bool,
+        use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
+        let ret = if use_mode.use_val() {
+            Some(self.push().into())
+        } else {
+            None
+        };
+        let old = self.temp;
         // TODO: We must check this in parser
         if arglist.delegate {
             return Err(MonorubyErr::syntax(
@@ -227,8 +232,9 @@ impl BytecodeGen {
             },
             loc,
         );
+        self.temp = old;
 
-        if is_ret {
+        if use_mode.is_ret() {
             self.emit_ret(None);
         }
         Ok(())
@@ -252,7 +258,6 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
-        let old_temp = self.temp;
         let (args, len, splat_pos, block_func_id) =
             self.handle_positional_arguments(&mut arglist, loc)?;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
@@ -278,7 +283,6 @@ impl BytecodeGen {
             })
         };
 
-        self.temp = old_temp;
         let callid = self.add_callsite(
             method,
             len,

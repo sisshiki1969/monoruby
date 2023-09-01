@@ -422,12 +422,7 @@ impl BytecodeGen {
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
-                let ret = if use_mode.use_val() {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
-                return self.gen_yield(arglist, ret, use_mode.is_ret(), loc);
+                return self.gen_yield(arglist, use_mode, loc);
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();

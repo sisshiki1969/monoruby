@@ -491,8 +491,7 @@ impl Codegen {
                         self.cmp_opt_generic(ctx, kind, branch_dest, brkind, pc);
                     }
                 }
-                ctx.sp = func.sp[index.0 as usize];
-                cc.new_branch(index, dest_idx, ctx.clone(), branch_dest);
+                cc.new_branch(func, index, dest_idx, ctx.clone(), branch_dest);
             }
             _ => unreachable!(),
         }
