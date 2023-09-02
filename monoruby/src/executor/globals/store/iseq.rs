@@ -124,27 +124,6 @@ impl ISeqInfo {
         }
     }
 
-    #[cfg(feature = "dump-bc")]
-    pub(super) fn get_exception_map(
-        &self,
-    ) -> Vec<(
-        std::ops::Range<BcIndex>,
-        Option<BcIndex>,
-        Option<BcIndex>,
-        Option<SlotId>,
-    )> {
-        self.exception_map
-            .iter()
-            .map(|(range, rescue, ensure, err_reg)| {
-                let start = self.get_pc_index(Some(range.start));
-                let end = self.get_pc_index(Some(range.end));
-                let rescue = rescue.map(|pc| self.get_pc_index(Some(pc)));
-                let ensure = ensure.map(|pc| self.get_pc_index(Some(pc)));
-                (start..end, rescue, ensure, *err_reg)
-            })
-            .collect::<Vec<_>>()
-    }
-
     pub(in crate::executor) fn new_block(
         id: FuncId,
         mother: (FuncId, usize),
@@ -292,6 +271,10 @@ impl ISeqInfo {
         BcIndex::from(i)
     }
 
+    pub(in crate::executor) fn get_sp(&self, i: BcIndex) -> SlotId {
+        self.sp[i.0 as usize]
+    }
+
     pub(in crate::executor) fn get_location(&self) -> String {
         let loc = self.loc;
         format!(
@@ -374,5 +357,26 @@ impl ISeqInfo {
         assert_eq!(0, info[self.bytecode_len()].len());
         info.pop();
         info
+    }
+
+    #[cfg(feature = "dump-bc")]
+    pub(super) fn get_exception_map(
+        &self,
+    ) -> Vec<(
+        std::ops::Range<BcIndex>,
+        Option<BcIndex>,
+        Option<BcIndex>,
+        Option<SlotId>,
+    )> {
+        self.exception_map
+            .iter()
+            .map(|(range, rescue, ensure, err_reg)| {
+                let start = self.get_pc_index(Some(range.start));
+                let end = self.get_pc_index(Some(range.end));
+                let rescue = rescue.map(|pc| self.get_pc_index(Some(pc)));
+                let ensure = ensure.map(|pc| self.get_pc_index(Some(pc)));
+                (start..end, rescue, ensure, *err_reg)
+            })
+            .collect::<Vec<_>>()
     }
 }

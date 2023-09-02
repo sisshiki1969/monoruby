@@ -499,8 +499,9 @@ impl SlotInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, state)| {
+                let i = SlotId(i as u16);
                 if state.used == IsUsed::Killed {
-                    Some(SlotId(i as u16))
+                    Some(i)
                 } else {
                     None
                 }

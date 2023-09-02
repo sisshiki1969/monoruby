@@ -166,7 +166,7 @@ impl JitContext {
         mut bbctx: BBContext,
         entry: DestLabel,
     ) {
-        bbctx.sp = func.sp[src_idx.0 as usize];
+        bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch: [{:?}]{src_idx}->{dest}", bbctx.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
@@ -185,7 +185,7 @@ impl JitContext {
         mut bbctx: BBContext,
         entry: DestLabel,
     ) {
-        bbctx.sp = func.sp[src_idx.0 as usize];
+        bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_continue:[{:?}] {src_idx}->{dest}", bbctx.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
@@ -204,7 +204,7 @@ impl JitContext {
         dest_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
-        bbctx.sp = func.sp[bb_pos.0 as usize];
+        bbctx.sp = func.get_sp(bb_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:[{:?}] {bb_pos}", bbctx.sp);
         self.backedge_map
@@ -282,6 +282,7 @@ impl BBContext {
     fn merge(&mut self, other: &Self) {
         if self.sp != other.sp {
             eprintln!("sp mismatch: {:?} {:?}", self.sp, other.sp);
+            panic!();
         };
         self.slot_state.merge(&other.slot_state);
     }
@@ -1473,7 +1474,7 @@ impl Codegen {
                     );
                 }
             }
-            ctx.sp = func.sp[bb_pos.0 as usize];
+            ctx.sp = func.get_sp(bb_pos);
         }
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
