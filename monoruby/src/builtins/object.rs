@@ -139,98 +139,6 @@ fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 }
 
 ///
-/// ### Kernel.#puts
-///
-/// - puts(*arg) -> nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
-#[monoruby_builtin]
-fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    fn decompose(collector: &mut Vec<Value>, val: Value) {
-        match val.is_array() {
-            Some(ary) => {
-                ary.iter().for_each(|v| decompose(collector, *v));
-            }
-            None => collector.push(val),
-        }
-    }
-    let mut collector = Vec::new();
-    for v in lfp.iter() {
-        decompose(&mut collector, v);
-    }
-
-    for v in collector {
-        let mut bytes = v.to_bytes(globals);
-        bytes.extend(b"\n");
-        globals.write_stdout(&bytes);
-    }
-    globals.flush_stdout();
-    Ok(Value::nil())
-}
-
-///
-/// ### Kernel.#print
-///
-/// - print(*arg) -> nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
-#[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    for v in lfp.iter() {
-        globals.write_stdout(&v.to_bytes(globals));
-    }
-    Ok(Value::nil())
-}
-
-///
-/// ### Kernel.#fail
-///
-/// - [NOT SUPPORTED] raise -> ()
-/// - [NOT SUPPORTED] fail -> ()
-/// - raise(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
-/// - fail(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
-#[monoruby_builtin]
-fn raise(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
-    if let Some(ex) = arg[0].is_exception() {
-        let mut err = MonorubyErr::new_from_exception(ex);
-        if len == 2 {
-            err.set_msg(arg[1].expect_string(globals)?);
-        }
-        return Err(err);
-    } else if let Some(klass) = arg[0].is_class() {
-        if klass.get_module(globals).is_exception() {
-            if let Some(ex) =
-                vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[], None)
-            {
-                let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
-                if len == 2 {
-                    err.set_msg(arg[1].expect_string(globals)?);
-                }
-                return Err(err);
-            } else {
-                return Err(vm.take_error());
-            };
-        }
-    }
-    Err(MonorubyErr::typeerr("exception class/object expected"))
-}
-
-///
-/// ### Kernel.#block_given?
-///
-/// - block_given? -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
-#[monoruby_builtin]
-fn block_given(vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
-    Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
-}
-
-///
 /// ### Object#to_s
 ///
 /// - to_s -> String
@@ -448,11 +356,18 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
-fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    MonorubyErr::check_min_number_of_arguments(lfp.arg_len(), 1)?;
+fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let method = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let args: Vec<_> = lfp.iter().skip(1).collect();
-    vm.invoke_method_inner(globals, method, lfp.self_val(), &args, lfp.block())
+    vm.invoke_method_inner2(
+        globals,
+        method,
+        lfp.self_val(),
+        args + 1,
+        len - 1,
+        lfp.block(),
+    )
 }
 
 #[cfg(test)]

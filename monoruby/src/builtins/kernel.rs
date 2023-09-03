@@ -167,17 +167,13 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
         return Err(err);
     } else if let Some(klass) = arg[0].is_class() {
         if klass.get_module(globals).is_exception() {
-            if let Some(ex) =
-                vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[], None)
-            {
-                let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
-                if len == 2 {
-                    err.set_msg(arg[1].expect_string(globals)?);
-                }
-                return Err(err);
-            } else {
-                return Err(vm.take_error());
-            };
+            let ex =
+                vm.invoke_method_inner(globals, IdentId::NEW, klass.get_obj(globals), &[], None)?;
+            let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            if len == 2 {
+                err.set_msg(arg[1].expect_string(globals)?);
+            }
+            return Err(err);
         }
     }
     Err(MonorubyErr::typeerr("exception class/object expected"))

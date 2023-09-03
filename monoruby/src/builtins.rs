@@ -76,6 +76,13 @@ impl std::ops::Index<usize> for Arg {
     }
 }
 
+impl std::ops::Add<usize> for Arg {
+    type Output = Arg;
+    fn add(self, rhs: usize) -> Arg {
+        Arg(unsafe { self.0.sub(rhs) })
+    }
+}
+
 impl Arg {
     pub fn from(val: &Value) -> Arg {
         Arg(val as _)

@@ -450,6 +450,34 @@ impl Executor {
     }
 
     ///
+    /// Invoke method for *receiver* and *method*.
+    ///
+    pub(crate) fn invoke_method_inner2(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: Arg,
+        len: usize,
+        block_handler: Option<BlockHandler>,
+    ) -> Result<Value> {
+        let func_id = globals.find_method(receiver, method, false)?;
+        let data = globals.compile_on_demand(func_id).clone();
+        match (globals.codegen.method_invoker2)(
+            self,
+            globals,
+            &data,
+            receiver,
+            args,
+            len,
+            block_handler,
+        ) {
+            Some(res) => Ok(res),
+            None => Err(self.take_error()),
+        }
+    }
+
+    ///
     /// Invoke block for *block_handler*.
     ///
     /// To get BlockData, use get_block_data().
