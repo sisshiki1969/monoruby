@@ -19,6 +19,7 @@ mod id_table;
 mod tests;
 mod value;
 
+pub use executor::jitgen::analysis;
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;

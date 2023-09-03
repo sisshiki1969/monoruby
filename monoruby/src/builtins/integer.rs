@@ -10,30 +10,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr);
     globals.define_builtin_func(INTEGER_CLASS, "times", times);
     globals.define_builtin_func(INTEGER_CLASS, "step", step);
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "to_f",
-        to_f,
-        integer_tof,
-        analysis_integer_tof,
-    );
+    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, integer_tof, analysis::f_v);
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i);
     globals.define_builtin_func(INTEGER_CLASS, "+", add);
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        ">>",
-        shr,
-        integer_shr,
-        analysis_integer_binop,
-    );
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "<<",
-        shl,
-        integer_shl,
-        analysis_integer_binop,
-    );
+    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, integer_shr, analysis::v_v_v);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, integer_shl, analysis::v_v_v);
     globals.define_builtin_func(INTEGER_CLASS, "[]", index);
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_);
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_);
@@ -184,13 +166,6 @@ fn integer_tof(
     }
 }
 
-fn analysis_integer_tof(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
-        info.def_as_float(ret);
-    }
-}
-
 ///
 /// ### Integer#to_i
 ///
@@ -268,14 +243,6 @@ fn integer_shr(
     }
     if let Some(ret) = ret {
         gen.store_rdi(ret);
-    }
-}
-
-fn analysis_integer_binop(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    info.r#use(callsite.args);
-    if let Some(ret) = callsite.ret {
-        info.def(ret);
     }
 }
 

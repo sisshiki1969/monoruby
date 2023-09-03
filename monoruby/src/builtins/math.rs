@@ -13,17 +13,9 @@ pub(super) fn init(globals: &mut Globals) {
         .as_class();
     globals.define_class_by_str("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(3.141592653589793));
-    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, math_sqrt, analysis_math);
-    globals.define_builtin_module_inline_func(klass, "cos", cos, math_cos, analysis_math);
-    globals.define_builtin_module_inline_func(klass, "sin", sin, math_sin, analysis_math);
-}
-
-fn analysis_math(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    info.use_as_float(callsite.args, true);
-    if let Some(ret) = callsite.ret {
-        info.def_as_float(ret);
-    }
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, math_sqrt, analysis::f_v_f);
+    globals.define_builtin_module_inline_func(klass, "cos", cos, math_cos, analysis::f_v_f);
+    globals.define_builtin_module_inline_func(klass, "sin", sin, math_sin, analysis::f_v_f);
 }
 
 /// ### Math.#sqrt

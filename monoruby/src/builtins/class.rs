@@ -9,13 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     let module = MODULE_CLASS.get_module(globals);
     globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
     globals.define_builtin_class_func(CLASS_CLASS, "new", class_new);
-    globals.define_builtin_inline_func(
-        CLASS_CLASS,
-        "new",
-        new,
-        inline_class_new,
-        analysis_class_new,
-    );
+    globals.define_builtin_inline_func(CLASS_CLASS, "new", new, inline_class_new, analysis::v_v_vv);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate);
 }
@@ -154,25 +148,6 @@ fn inline_class_new(
         jmp  checked;
     );
     gen.jit.select_page(0);
-}
-
-/*fn conv(reg: SlotId) -> i64 {
-    reg.0 as i64 * 8 + LBP_SELF
-}*/
-
-fn analysis_class_new(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    let CallSiteInfo {
-        recv,
-        args,
-        len,
-        ret,
-        ..
-    } = *callsite;
-    info.r#use(recv);
-    info.use_range(args, len);
-    if let Some(ret) = ret {
-        info.def(ret);
-    }
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

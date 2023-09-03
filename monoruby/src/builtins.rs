@@ -25,7 +25,6 @@ mod string;
 mod struct_class;
 mod time;
 
-pub(self) use crate::executor::jitgen::analysis::SlotInfo;
 pub(self) use crate::executor::jitgen::BBContext;
 pub use enumerator::YIELDER;
 pub(self) use monoasm::DestLabel;

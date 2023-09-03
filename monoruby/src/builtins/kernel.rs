@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(kernel_class, "singleton_class", singleton_class);
     globals.define_builtin_func(kernel_class, "respond_to?", respond_to);
     globals.define_builtin_func(kernel_class, "instance_of?", instance_of);
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, object_nil, analysis_object_nil);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, object_nil, analysis::v_v);
     globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined);
     globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set);
     globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get);
@@ -76,13 +76,6 @@ fn object_nil(
     );
     if let Some(ret) = ret {
         gen.store_rax(ret);
-    }
-}
-
-fn analysis_object_nil(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
-        info.def(ret);
     }
 }
 

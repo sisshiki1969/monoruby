@@ -13,7 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
         "object_id",
         object_id,
         object_object_id,
-        analysis_object_id,
+        analysis::v_v,
     );
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect);
     globals.define_builtin_func(OBJECT_CLASS, "class", class);
@@ -70,13 +70,6 @@ fn object_object_id(
     gen.xmm_restore(&using);
     if let Some(ret) = ret {
         gen.store_rax(ret);
-    }
-}
-
-fn analysis_object_id(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
-        info.def(ret);
     }
 }
 

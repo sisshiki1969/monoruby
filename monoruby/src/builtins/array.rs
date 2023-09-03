@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a);
     globals.define_builtin_func(ARRAY_CLASS, "+", add);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul);
-    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis_array_shl);
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis::v_v_v);
     globals.define_builtin_func(ARRAY_CLASS, "==", eq);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign);
@@ -321,13 +321,13 @@ fn array_shl(
     }
 }
 
-fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+/*fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
     if let Some(ret) = callsite.ret {
         info.def(ret);
     }
-}
+}*/
 
 ///
 /// ### Array#==

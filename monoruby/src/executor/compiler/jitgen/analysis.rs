@@ -545,11 +545,11 @@ impl SlotInfo {
     /// ### Arguments
     /// - `slot` - the slot to be used.
     ///
-    pub(crate) fn r#use(&mut self, slot: SlotId) {
+    fn r#use(&mut self, slot: SlotId) {
         self.use_as(slot, false, false);
     }
 
-    pub(crate) fn use_range(&mut self, args: SlotId, len: u16) {
+    fn use_range(&mut self, args: SlotId, len: u16) {
         for arg in args..(args + len) {
             self.r#use(arg);
         }
@@ -562,7 +562,7 @@ impl SlotInfo {
     /// - `slot` - the slot to be used.
     /// - `is_float` - whether the value in the slot is a Float or not.
     ///
-    pub(crate) fn use_as_float(&mut self, slot: SlotId, is_float: bool) {
+    fn use_as_float(&mut self, slot: SlotId, is_float: bool) {
         self.use_as(slot, true, is_float);
     }
 
@@ -607,15 +607,15 @@ impl SlotInfo {
         }
     }
 
-    pub(crate) fn def(&mut self, slot: SlotId) {
+    fn def(&mut self, slot: SlotId) {
         self.def_as(slot, false)
     }
 
-    pub(crate) fn def_as_float(&mut self, slot: SlotId) {
+    fn def_as_float(&mut self, slot: SlotId) {
         self.def_as(slot, true)
     }
 
-    pub(crate) fn def_as(&mut self, slot: SlotId, is_float: bool) {
+    fn def_as(&mut self, slot: SlotId, is_float: bool) {
         if slot.is_zero() {
             return;
         }
@@ -780,4 +780,64 @@ impl IsUsed {
 pub(super) enum ExitType {
     Continue,
     Return,
+}
+
+///
+/// <Value> = <Value>.method()
+///
+pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.r#use(callsite.recv);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
+}
+
+///
+/// <Value> = <Value>.method(<Value>)
+///
+pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.r#use(callsite.recv);
+    info.r#use(callsite.args);
+    if let Some(ret) = callsite.ret {
+        info.def(ret);
+    }
+}
+
+///
+/// <Value> = <Value>.method(<Value>, ...)
+///
+pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    let CallSiteInfo {
+        recv,
+        args,
+        len,
+        ret,
+        ..
+    } = *callsite;
+    info.r#use(recv);
+    info.use_range(args, len);
+    if let Some(ret) = ret {
+        info.def(ret);
+    }
+}
+
+///
+/// <Float> = <Value>.method()
+///
+pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.r#use(callsite.recv);
+    if let Some(ret) = callsite.ret {
+        info.def_as_float(ret);
+    }
+}
+
+///
+/// <Float> = <Value>.method(<Float>)
+///
+pub(crate) fn f_v_f(info: &mut SlotInfo, callsite: &CallSiteInfo) {
+    info.r#use(callsite.recv);
+    info.use_as_float(callsite.args, true);
+    if let Some(ret) = callsite.ret {
+        info.def_as_float(ret);
+    }
 }
