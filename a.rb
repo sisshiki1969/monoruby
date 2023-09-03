@@ -1,5 +1,10 @@
-        x = 100
-        [2, 3, 4, 5].each do |y|
-          x += y
-        end
-        x
+class C
+  def foo(*x)
+    puts "#{x}"
+  end
+end
+
+c = C.new
+for i in 0..10
+  c.send(:foo, 1, 2)
+end

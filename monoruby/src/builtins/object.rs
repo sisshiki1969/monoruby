@@ -1,3 +1,5 @@
+use crate::jitgen::conv;
+
 use super::*;
 use std::io::Write;
 
@@ -33,7 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "method", method);
     globals.define_builtin_func(OBJECT_CLASS, "system", system);
     globals.define_builtin_func(OBJECT_CLASS, "`", command);
-    globals.define_builtin_func(OBJECT_CLASS, "send", send);
+    globals.define_builtin_inline_func(OBJECT_CLASS, "send", send, object_send, analysis::v_v_vv);
     globals.define_builtin_func(OBJECT_CLASS, "__send__", send);
 }
 
@@ -368,6 +370,78 @@ fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
         len - 1,
         lfp.block(),
     )
+}
+
+fn object_send(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    callsite: &CallSiteInfo,
+    _pc: BcPc,
+    _deopt: DestLabel,
+) {
+    let CallSiteInfo {
+        recv,
+        ret,
+        args,
+        len,
+        block_func_id,
+        ..
+    } = *callsite;
+    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_range(ctx, args, len);
+    if let Some(ret) = ret {
+        ctx.unlink_xmm(ret);
+    }
+    //gen.load_rdi(recv);
+    let using = ctx.get_xmm_using();
+    let bh = match block_func_id {
+        None => 0,
+        Some(func_id) => BlockHandler::from(func_id).0.id(),
+    };
+    gen.xmm_save(&using);
+    monoasm! {&mut gen.jit,
+        movq rdi, rbx;
+        movq rsi, r12;
+        movq rdx, [r14 - (conv(recv))];
+        lea  rcx, [r14 - (conv(args))];
+        movq r8, (len);
+        movq r9, (bh);
+        movq rax, (call_send_wrapper);
+        call rax;
+    }
+    gen.xmm_restore(&using);
+    if let Some(ret) = ret {
+        gen.store_rax(ret);
+    }
+}
+
+extern "C" fn call_send_wrapper(
+    vm: &mut Executor,           // rdi
+    globals: &mut Globals,       // rsi
+    recv: Value,                 // rdx
+    args: Arg,                   // rcx
+    len: usize,                  // r8
+    block: Option<BlockHandler>, // r9
+) -> Option<Value> {
+    fn call_send(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        recv: Value,
+        args: Arg,
+        len: usize,
+        block: Option<BlockHandler>,
+    ) -> Result<Value> {
+        MonorubyErr::check_min_number_of_arguments(len, 1)?;
+        let method = args[0].expect_symbol_or_string(globals)?;
+        vm.invoke_method_inner2(globals, method, recv, args + 1, len - 1, block)
+    }
+    match call_send(vm, globals, recv, args, len, block) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
