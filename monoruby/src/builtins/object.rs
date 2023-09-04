@@ -406,7 +406,10 @@ fn object_send(
         lea  rcx, [r14 - (conv(args))];
         movq r8, (len);
         movq r9, (bh);
+        subq rsp, 8;
+        pushq r10;
         movq rax, (call_send_wrapper);
+        addq rsp, 16;
         call rax;
     }
     gen.xmm_restore(&using);
@@ -423,25 +426,20 @@ extern "C" fn call_send_wrapper(
     len: usize,                  // r8
     block: Option<BlockHandler>, // r9
 ) -> Option<Value> {
-    fn call_send(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        recv: Value,
-        args: Arg,
-        len: usize,
-        block: Option<BlockHandler>,
-    ) -> Result<Value> {
+    fn call_send(globals: &mut Globals, recv: Value, args: Arg, len: usize) -> Result<FuncData> {
         MonorubyErr::check_min_number_of_arguments(len, 1)?;
         let method = args[0].expect_symbol_or_string(globals)?;
-        vm.invoke_method_inner2(globals, method, recv, args + 1, len - 1, block)
+        let func_id = globals.find_method(recv, method, false)?;
+        Ok(globals.compile_on_demand(func_id).clone())
     }
-    match call_send(vm, globals, recv, args, len, block) {
-        Ok(v) => Some(v),
+    let data = match call_send(globals, recv, args, len) {
+        Ok(res) => res,
         Err(err) => {
             vm.set_error(err);
-            None
+            return None;
         }
-    }
+    };
+    (globals.codegen.method_invoker2)(vm, globals, &data, recv, args + 1, len - 1, block)
 }
 
 #[cfg(test)]
