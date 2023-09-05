@@ -384,7 +384,7 @@ fn object_send(
         ret,
         args,
         len,
-        block_func_id,
+        block_fid: block_func_id,
         ..
     } = *callsite;
     gen.fetch_slots(ctx, &[recv]);

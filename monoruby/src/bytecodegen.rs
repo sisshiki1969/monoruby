@@ -239,7 +239,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_func_id: Option<FuncId>,
+    block_fid: Option<FuncId>,
     /// *BcReg* of the first arguments.
     args: BcReg,
     /// Number of arguments.
@@ -489,7 +489,7 @@ impl BytecodeGen {
             pos_num,
             kw,
             splat_pos,
-            block_func_id,
+            block_fid: block_func_id,
             args,
             len,
             recv,

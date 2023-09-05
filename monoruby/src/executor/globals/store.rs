@@ -228,7 +228,7 @@ impl Store {
         kw_args: HashMap<IdentId, usize>,
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
-        block_func_id: Option<FuncId>,
+        block_fid: Option<FuncId>,
         args: SlotId,
         len: usize,
         recv: SlotId,
@@ -243,7 +243,7 @@ impl Store {
             kw_args,
             splat_pos,
             hash_splat_pos,
-            block_func_id,
+            block_fid,
             args,
             len: len as u16,
             recv,
@@ -329,7 +329,7 @@ pub(crate) struct CallSiteInfo {
     /// Position of hash splat arguments.
     pub hash_splat_pos: Vec<SlotId>,
     /// *FuncId* of passed block.
-    pub block_func_id: Option<FuncId>,
+    pub block_fid: Option<FuncId>,
     /// Position of the first argument.
     pub args: SlotId,
     /// Number of arguments.

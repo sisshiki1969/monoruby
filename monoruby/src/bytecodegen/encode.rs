@@ -21,7 +21,7 @@ impl BytecodeGen {
             pos_num,
             kw,
             splat_pos,
-            block_func_id,
+            block_fid: block_func_id,
             args,
             len,
             recv,

@@ -69,7 +69,7 @@ impl Codegen {
                 assert_eq!(0, len);
                 assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
-                assert!(store[callid].block_func_id.is_none());
+                assert!(store[callid].block_fid.is_none());
                 if cached.class_id.is_always_frozen() {
                     if let Some(ret) = ret {
                         monoasm!( &mut self.jit,
@@ -89,7 +89,7 @@ impl Codegen {
                 assert_eq!(1, len);
                 assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
-                assert!(store[callid].block_func_id.is_none());
+                assert!(store[callid].block_fid.is_none());
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
@@ -682,7 +682,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     fn set_block(&mut self, block: Option<SlotId>, callsite: &CallSiteInfo) {
-        if let Some(func_id) = callsite.block_func_id {
+        if let Some(func_id) = callsite.block_fid {
             let bh = BlockHandler::from(func_id);
             monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], (bh.0.id());
