@@ -76,13 +76,24 @@ impl BytecodeGen {
             self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
         } else {
             let (_, mother_args, outer) = self.mother.clone();
-            let len = mother_args.pos_num;
+            let pos_len = mother_args.pos_num;
+            let pos_start = if outer == 0 {
+                BcLocal(0).into()
+            } else {
+                let args = self.sp().into();
+                for i in 0..pos_len {
+                    let ret = self.push().into();
+                    let src = BcLocal(i as _).into();
+                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                }
+                args
+            };
             let kw_list = &mother_args.keyword_names;
             let kw = if kw_list.len() == 0 {
                 None
             } else {
                 let mut kw_args = HashMap::default();
-                let kw_pos = if outer == 0 {
+                let kw_start = if outer == 0 {
                     BcLocal(mother_args.pos_num as u16).into()
                 } else {
                     let ret = self.push().into();
@@ -94,25 +105,23 @@ impl BytecodeGen {
                     kw_args.insert(*name, id);
                 }
                 Some(KeywordArgs {
-                    kw_pos,
+                    kw_start,
                     kw_args,
                     hash_splat_pos: vec![],
                 })
             };
-            let args = if outer == 0 {
-                BcLocal(0).into()
-            } else {
-                let args = self.sp().into();
-                for i in 0..len {
-                    let ret = self.push().into();
-                    let src = BcLocal(i as _).into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
-                }
-                args
-            };
-            let callid =
-                self.add_callsite(None, len, kw, vec![], None, args, len, BcReg::Self_, ret);
-            (callid, args, len)
+            let callid = self.add_callsite(
+                None,
+                pos_len,
+                kw,
+                vec![],
+                None,
+                pos_start,
+                pos_len,
+                BcReg::Self_,
+                ret,
+            );
+            (callid, pos_start, pos_len)
         };
         self.temp = old;
         if ret_push_flag {
@@ -267,7 +276,7 @@ impl BytecodeGen {
             None
         } else {
             let mut kw_args = HashMap::default();
-            let kw_pos = self.sp().into();
+            let kw_start = self.sp().into();
             let mut hash_splat_pos = vec![];
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
                 self.push_expr(node)?;
@@ -277,7 +286,7 @@ impl BytecodeGen {
                 hash_splat_pos.push(self.push_expr(node)?.into());
             }
             Some(KeywordArgs {
-                kw_pos,
+                kw_start,
                 kw_args,
                 hash_splat_pos,
             })

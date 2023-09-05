@@ -256,7 +256,7 @@ struct CallSite {
 #[derive(Debug, Clone)]
 struct KeywordArgs {
     /// Position of the first keyword argument.
-    kw_pos: BcReg,
+    kw_start: BcReg,
     /// Names and positions of keyword arguments.
     kw_args: HashMap<IdentId, usize>,
     /// Positions of splat keyword arguments.

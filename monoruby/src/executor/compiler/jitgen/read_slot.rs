@@ -43,13 +43,13 @@ impl Codegen {
         }
     }
 
-    pub(super) fn fetch_callargs(
+    pub(crate) fn fetch_callargs(
         &mut self,
         ctx: &mut BBContext,
-        args: SlotId,
         len: u16,
         callsite: &CallSiteInfo,
     ) {
+        let args = callsite.args;
         let pos_kw_len = len as usize + callsite.kw_args.len();
         self.fetch_range(ctx, args, pos_kw_len as u16);
         callsite

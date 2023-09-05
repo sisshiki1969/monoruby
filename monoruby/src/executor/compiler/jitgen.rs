@@ -1195,15 +1195,9 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo {
-                        args,
-                        len,
-                        recv,
-                        ret,
-                        ..
-                    } = store[callid];
+                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, args, len, &store[callid]);
+                    self.fetch_callargs(&mut ctx, len, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1230,7 +1224,7 @@ impl Codegen {
                         ..
                     } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, args, len + 1, &store[callid]);
+                    self.fetch_callargs(&mut ctx, len + 1, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1252,15 +1246,9 @@ impl Codegen {
                     }
                 }
                 TraceIr::Super { callid, info, .. } => {
-                    let CallSiteInfo {
-                        args,
-                        len,
-                        recv,
-                        ret,
-                        ..
-                    } = store[callid];
+                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_range(&mut ctx, args, len);
+                    self.fetch_callargs(&mut ctx, len, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1278,7 +1266,7 @@ impl Codegen {
                     callsite,
                     ..
                 } => {
-                    self.fetch_slots(&mut ctx, &[store[callsite].recv]);
+                    //self.fetch_slots(&mut ctx, &[store[callsite].recv]);
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
@@ -1291,7 +1279,7 @@ impl Codegen {
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
-                    self.fetch_range(&mut ctx, args, len);
+                    self.fetch_callargs(&mut ctx, len, &store[callid]);
                     self.gen_yield(&ctx, store, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}

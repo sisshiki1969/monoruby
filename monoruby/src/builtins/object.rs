@@ -388,7 +388,7 @@ fn object_send(
         ..
     } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
-    gen.fetch_range(ctx, args, len);
+    gen.fetch_callargs(ctx, len, callsite);
     if let Some(ret) = ret {
         ctx.unlink_xmm(ret);
     }
