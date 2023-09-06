@@ -807,7 +807,7 @@ impl BytecodeGen {
     }
 
     fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
-        let (src, len, splat) = self.gen_args(nodes)?;
+        let (src, len, splat) = self.ordinary_args(nodes)?;
         self.popn(len);
         self.emit_array(ret, src, len, splat, loc);
         Ok(())

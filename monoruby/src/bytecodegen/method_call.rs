@@ -1,6 +1,62 @@
 use super::*;
 
 impl BytecodeGen {
+    pub(super) fn emit_call(
+        &mut self,
+        recv: BcReg,
+        callid: CallSiteId,
+        ret: Option<BcReg>,
+        with_block: bool,
+        has_splat: bool,
+        loc: Loc,
+    ) {
+        if with_block {
+            self.emit(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
+        } else {
+            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc)
+        };
+        let args = self[callid].args;
+        let len = self[callid].len;
+        self.emit(BcIr::MethodArgs(recv, args, len), loc);
+    }
+
+    pub(super) fn emit_yield(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
+        let args = self[callid].args;
+        let len = self[callid].len;
+        self.emit(
+            BcIr::Yield {
+                ret,
+                args,
+                len,
+                callid,
+            },
+            loc,
+        );
+    }
+
+    pub(super) fn emit_binary_op(
+        &mut self,
+        method: IdentId,
+        lhs: BcReg,
+        rhs: BcReg,
+        ret: Option<BcReg>,
+        loc: Loc,
+    ) {
+        let callid = self.add_callsite(method, 1, None, vec![], None, rhs, 1, lhs, ret);
+        self.emit_call(lhs, callid, ret, false, false, loc);
+    }
+
+    fn emit_super(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
+        self.emit(BcIr::Super(ret, callid), loc);
+        let args = self[callid].args;
+        let len = self[callid].len;
+        self.emit(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
+    }
+
+    pub(super) fn emit_method_assign(&mut self, callid: CallSiteId, receiver: BcReg, loc: Loc) {
+        self.emit_call(receiver, callid, None, false, false, loc);
+    }
+
     pub(super) fn gen_method_call(
         &mut self,
         method: IdentId,
@@ -43,13 +99,13 @@ impl BytecodeGen {
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
 
-        let (callid, args, len) = self.handle_arguments(arglist, method, recv, ret, loc)?;
+        let callid = self.handle_arguments(arglist, method, recv, ret, loc)?;
 
         self.temp = old_temp;
         if ret_pop_flag {
             self.push();
         }
-        self.emit_call(recv, callid, ret, args, len, with_block, has_splat, loc);
+        self.emit_call(recv, callid, ret, with_block, has_splat, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -71,7 +127,7 @@ impl BytecodeGen {
             (None, false)
         };
         let old = self.temp;
-        let (callid, args, len) = if let Some(arglist) = arglist {
+        let callid = if let Some(arglist) = arglist {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
         } else {
@@ -121,13 +177,13 @@ impl BytecodeGen {
                 BcReg::Self_,
                 ret,
             );
-            (callid, pos_start, pos_len)
+            callid
         };
         self.temp = old;
         if ret_push_flag {
             self.push();
         };
-        self.emit_super(callid, ret, args, len, loc);
+        self.emit_super(callid, ret, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -193,7 +249,7 @@ impl BytecodeGen {
             recv,
             ret,
         );
-        self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
+        self.emit_call(recv, callid, ret, true, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -229,34 +285,16 @@ impl BytecodeGen {
             ));
         }
 
-        let (callid, args, len) =
+        let callid =
             self.handle_arguments(arglist, IdentId::get_id("<block>"), BcReg::Self_, ret, loc)?;
+        self.emit_yield(callid, ret, loc);
 
-        self.emit(
-            BcIr::Yield {
-                ret,
-                args,
-                len,
-                callid,
-            },
-            loc,
-        );
         self.temp = old;
 
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
         Ok(())
-    }
-
-    pub(super) fn emit_method_assign(
-        &mut self,
-        callid: CallSiteId,
-        receiver: BcReg,
-        val: BcReg,
-        loc: Loc,
-    ) {
-        self.emit_call(receiver, callid, None, val, 1, false, false, loc);
     }
 
     fn handle_arguments(
@@ -266,31 +304,10 @@ impl BytecodeGen {
         recv: BcReg,
         ret: Option<BcReg>,
         loc: Loc,
-    ) -> Result<(CallSiteId, BcReg, usize)> {
-        let (args, len, splat_pos, block_func_id) =
-            self.handle_positional_arguments(&mut arglist, loc)?;
-        let kw_args_list = std::mem::take(&mut arglist.kw_args);
-        let hash_splat = std::mem::take(&mut arglist.hash_splat);
+    ) -> Result<CallSiteId> {
+        let (args, len, splat_pos, block_func_id) = self.positional_args(&mut arglist, loc)?;
 
-        let kw = if kw_args_list.len() == 0 && hash_splat.is_empty() {
-            None
-        } else {
-            let mut kw_args = HashMap::default();
-            let kw_start = self.sp().into();
-            let mut hash_splat_pos = vec![];
-            for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
-                self.push_expr(node)?;
-                kw_args.insert(IdentId::get_id_from_string(name), id);
-            }
-            for node in hash_splat {
-                hash_splat_pos.push(self.push_expr(node)?.into());
-            }
-            Some(KeywordArgs {
-                kw_start,
-                kw_args,
-                hash_splat_pos,
-            })
-        };
+        let kw = self.keyword_arg(&mut arglist)?;
 
         let callid = self.add_callsite(
             method,
@@ -303,20 +320,19 @@ impl BytecodeGen {
             recv,
             ret,
         );
-        Ok((callid, args, len))
+        Ok(callid)
     }
 
-    fn handle_positional_arguments(
+    ///
+    /// Handle ordinary arguments.
+    ///
+    fn positional_args(
         &mut self,
         arglist: &mut ArgList,
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>)> {
-        let with_block = arglist.block.is_some();
-        let args = self.sp().into();
-        let block_func_id = if with_block {
-            let block = std::mem::take(&mut arglist.block);
-            self.handle_block_param(block, loc)?
-        } else if arglist.args.len() == 1
+        if arglist.args.len() == 1
+            && arglist.block.is_some()
             && arglist.kw_args.is_empty()
             && arglist.hash_splat.is_empty()
             && !arglist.delegate
@@ -332,92 +348,72 @@ impl BytecodeGen {
                     return Ok((local, 1, vec![0], None));
                 }
             }
-            None
+        };
+        let args = self.sp().into();
+        let block_func_id = if let Some(box block) = std::mem::take(&mut arglist.block) {
+            self.block_arg(block, loc)?
         } else {
             None
         };
 
-        let (_, arg_len, splat_pos) = self.gen_args(std::mem::take(&mut arglist.args))?;
+        let (_, arg_len, splat_pos) = self.ordinary_args(std::mem::take(&mut arglist.args))?;
         Ok((args, arg_len, splat_pos, block_func_id))
     }
 
-    fn handle_block_param(&mut self, block: Option<Box<Node>>, loc: Loc) -> Result<Option<FuncId>> {
-        if let Some(box block) = block {
-            match block.kind {
-                NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
-                NodeKind::LocalVar(0, proc_local) => {
-                    let dst = self.push().into();
-                    if let Some(local) = self.refer_local(&proc_local) {
-                        self.emit_mov(dst, local.into());
-                    } else {
-                        self.emit(BcIr::BlockArgProxy(dst, 0), loc);
-                    }
-                }
-                NodeKind::LocalVar(outer, proc_local) => {
-                    let proc_local = IdentId::get_id_from_string(proc_local);
-                    let ret = self.push().into();
-                    if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
-                        let src = src.into();
-                        self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
-                    } else {
-                        assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
-                        self.emit(BcIr::BlockArgProxy(ret, outer), loc);
-                    }
-                }
-                _ => {
-                    return Err(MonorubyErr::unsupported_block_param(
-                        &block,
-                        self.sourceinfo.clone(),
-                    ))
+    fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {
+        let kw_args_list = std::mem::take(&mut arglist.kw_args);
+        let hash_splat = std::mem::take(&mut arglist.hash_splat);
+        if kw_args_list.len() == 0 && hash_splat.is_empty() {
+            Ok(None)
+        } else {
+            let mut kw_args = HashMap::default();
+            let kw_start = self.sp().into();
+            let mut hash_splat_pos = vec![];
+            for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
+                self.push_expr(node)?;
+                kw_args.insert(IdentId::get_id_from_string(name), id);
+            }
+            for node in hash_splat {
+                hash_splat_pos.push(self.push_expr(node)?.into());
+            }
+            Ok(Some(KeywordArgs {
+                kw_start,
+                kw_args,
+                hash_splat_pos,
+            }))
+        }
+    }
+
+    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
+        match block.kind {
+            NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
+            NodeKind::LocalVar(0, proc_local) => {
+                let dst = self.push().into();
+                if let Some(local) = self.refer_local(&proc_local) {
+                    self.emit_mov(dst, local.into());
+                } else {
+                    self.emit(BcIr::BlockArgProxy(dst, 0), loc);
                 }
             }
-        } else {
-            self.push_nil();
+            NodeKind::LocalVar(outer, proc_local) => {
+                let proc_local = IdentId::get_id_from_string(proc_local);
+                let ret = self.push().into();
+                if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
+                    let src = src.into();
+                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                } else {
+                    assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
+                    self.emit(BcIr::BlockArgProxy(ret, outer), loc);
+                }
+            }
+            _ => {
+                return Err(MonorubyErr::unsupported_block_param(
+                    &block,
+                    self.sourceinfo.clone(),
+                ))
+            }
         }
         Ok(None)
-    }
-
-    pub(super) fn emit_call(
-        &mut self,
-        recv: BcReg,
-        callid: CallSiteId,
-        ret: Option<BcReg>,
-        arg: BcReg,
-        len: usize,
-        with_block: bool,
-        has_splat: bool,
-        loc: Loc,
-    ) {
-        if with_block {
-            self.emit(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
-        } else {
-            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc)
-        };
-        self.emit(BcIr::MethodArgs(recv, arg, len), loc);
-    }
-
-    pub(super) fn emit_binary_op(
-        &mut self,
-        method: IdentId,
-        lhs: BcReg,
-        rhs: BcReg,
-        ret: Option<BcReg>,
-        loc: Loc,
-    ) {
-        let callid = self.add_callsite(method, 1, None, vec![], None, rhs, 1, lhs, ret);
-        self.emit_call(lhs, callid, ret, rhs, 1, false, false, loc);
-    }
-
-    fn emit_super(
-        &mut self,
-        callid: CallSiteId,
-        ret: Option<BcReg>,
-        args: BcReg,
-        len: usize,
-        loc: Loc,
-    ) {
-        self.emit(BcIr::Super(ret, callid), loc);
-        self.emit(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
     }
 
     fn handle_block(

@@ -430,6 +430,13 @@ impl std::ops::Index<Label> for BytecodeGen {
     }
 }
 
+impl std::ops::Index<CallSiteId> for BytecodeGen {
+    type Output = CallSite;
+    fn index(&self, index: CallSiteId) -> &Self::Output {
+        &self.callsites[index.0 as usize - self.callsite_offset]
+    }
+}
+
 impl BytecodeGen {
     fn new(
         info: &ISeqInfo,
@@ -1023,7 +1030,7 @@ impl BytecodeGen {
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit_method_assign(callid, recv, src, loc);
+                self.emit_method_assign(callid, recv, loc);
             }
             LvalueKind::LocalVar { dst } => {
                 if let Some(old_temp) = old_temp {
@@ -1067,10 +1074,12 @@ impl BytecodeGen {
     }
 
     ///
+    /// Handle ordinary arguments with/without splat operator.
+    ///
     /// ### return
     /// (start of reg: BcTemp, reg length: usize, splat position:Vec<usize>)
     ///
-    fn gen_args(&mut self, args: Vec<Node>) -> Result<(BcReg, usize, Vec<usize>)> {
+    fn ordinary_args(&mut self, args: Vec<Node>) -> Result<(BcReg, usize, Vec<usize>)> {
         let arg = self.sp().into();
         let mut splat_pos = vec![];
         let len = args.len();
