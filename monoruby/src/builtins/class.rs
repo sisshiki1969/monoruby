@@ -79,7 +79,7 @@ fn inline_class_new(
     let CallSiteInfo {
         recv,
         args,
-        len,
+        pos_num,
         ret,
         ..
     } = *callsite;
@@ -116,7 +116,7 @@ fn inline_class_new(
         movq rdx, rax;
         movq rcx, r15;
         lea r8, [r14 - (crate::executor::jitgen::conv(args))];
-        movl r9, (len);
+        movl r9, (pos_num);
         subq rsp, 16;
         movq [rsp], 0;
         movq rax, (gen.method_invoker2);

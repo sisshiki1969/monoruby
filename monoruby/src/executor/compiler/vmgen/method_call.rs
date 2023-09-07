@@ -25,7 +25,7 @@ impl Codegen {
     /// version:  class version
     /// func data: the data of the function
     /// ~~~
-    pub(super) fn vm_method_call(&mut self, with_block: bool, has_splat: bool) -> CodePtr {
+    pub(super) fn vm_method_call(&mut self, has_splat: bool) -> CodePtr {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
         let class_version = self.class_version;
@@ -47,7 +47,7 @@ impl Codegen {
         // [r13 +  4]: %recv
         // [r13 +  8]: FuncData
 
-        let label = self.vm_method_call_main(slow_path, exec, with_block, has_splat);
+        let label = self.vm_method_call_main(slow_path, exec, has_splat);
 
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
@@ -100,7 +100,7 @@ impl Codegen {
         let exec = self.jit.label();
         let class_version = self.class_version;
 
-        let label = self.vm_method_call_main(slow_path, exec, false, false);
+        let label = self.vm_method_call_main(slow_path, exec, false);
 
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
@@ -128,7 +128,6 @@ impl Codegen {
         &mut self,
         slow_path: DestLabel,
         exec: DestLabel,
-        with_block: bool,
         has_splat: bool,
     ) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -186,7 +185,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
             movl r8, [r13 - 16]; // CallSiteId
         };
-        self.set_frame(with_block, has_splat);
+        self.set_frame(has_splat);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
@@ -270,7 +269,7 @@ impl Codegen {
             movl r8, [r13 - 8];    // CallSiteId
         };
         self.set_block_self_outer();
-        self.set_frame(false, true);
+        self.set_frame(true);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
@@ -325,13 +324,9 @@ impl Codegen {
     /// - rcx
     /// - rdx
     /// - rsi
-    fn set_frame(&mut self, with_block: bool, has_splat: bool) {
-        self.vm_get_addr_rcx(); // rcx <- *args
-        if with_block {
-            monoasm! { &mut self.jit,
-                subq rcx, 8;
-            };
-        }
+    fn set_frame(&mut self, has_splat: bool) {
+        self.vm_get_addr_rcx();
+        // rcx <- *args
         self.set_arguments(has_splat);
     }
 

@@ -3,26 +3,34 @@ use super::*;
 impl BytecodeGen {
     pub(super) fn emit_call(
         &mut self,
-        recv: BcReg,
         callid: CallSiteId,
         ret: Option<BcReg>,
-        with_block: bool,
         has_splat: bool,
         loc: Loc,
     ) {
-        if with_block {
+        if self[callid].block_fid.is_some() {
             self.emit(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
         } else {
-            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc)
+            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc);
         };
+        self.emit_method_arg(callid, loc);
+    }
+
+    fn emit_super(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
+        self.emit(BcIr::Super(ret, callid), loc);
+        self.emit_method_arg(callid, loc);
+    }
+
+    fn emit_method_arg(&mut self, callid: CallSiteId, loc: Loc) {
+        let recv = self[callid].recv;
         let args = self[callid].args;
-        let len = self[callid].len;
+        let len = self[callid].pos_num;
         self.emit(BcIr::MethodArgs(recv, args, len), loc);
     }
 
     pub(super) fn emit_yield(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
         let args = self[callid].args;
-        let len = self[callid].len;
+        let len = self[callid].pos_num;
         self.emit(
             BcIr::Yield {
                 ret,
@@ -43,18 +51,11 @@ impl BytecodeGen {
         loc: Loc,
     ) {
         let callid = self.add_callsite_simple(method, 1, rhs, lhs, ret);
-        self.emit_call(lhs, callid, ret, false, false, loc);
+        self.emit_call(callid, ret, false, loc);
     }
 
-    fn emit_super(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
-        self.emit(BcIr::Super(ret, callid), loc);
-        let args = self[callid].args;
-        let len = self[callid].len;
-        self.emit(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
-    }
-
-    pub(super) fn emit_method_assign(&mut self, callid: CallSiteId, receiver: BcReg, loc: Loc) {
-        self.emit_call(receiver, callid, None, false, false, loc);
+    pub(super) fn emit_method_assign(&mut self, callid: CallSiteId, loc: Loc) {
+        self.emit_call(callid, None, false, loc);
     }
 
     pub(super) fn gen_method_call(
@@ -97,7 +98,6 @@ impl BytecodeGen {
             ));
         }
         let has_splat = arglist.splat;
-        let with_block = arglist.block.is_some();
 
         let callid = self.handle_arguments(arglist, method, recv, ret, loc)?;
 
@@ -105,7 +105,7 @@ impl BytecodeGen {
         if ret_pop_flag {
             self.push();
         }
-        self.emit_call(recv, callid, ret, with_block, has_splat, loc);
+        self.emit_call(callid, ret, has_splat, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -174,7 +174,6 @@ impl BytecodeGen {
                 None,
                 None,
                 pos_start,
-                pos_len,
                 BcReg::Self_,
                 ret,
             );
@@ -247,11 +246,10 @@ impl BytecodeGen {
             Some(block_func_id),
             None,
             arg.into(),
-            0,
             recv,
             ret,
         );
-        self.emit_call(recv, callid, ret, true, false, loc);
+        self.emit_call(callid, ret, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -307,13 +305,24 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSiteId> {
-        let (args, len, splat_pos, block_fid, block_arg) =
-            self.positional_args(&mut arglist, loc)?;
+        let (args, pos_num, splat_pos) = self.positional_args(&mut arglist)?;
 
         let kw = self.keyword_arg(&mut arglist)?;
 
+        let block_arg = self.sp().into();
+        let block_fid = if let Some(box block) = std::mem::take(&mut arglist.block) {
+            self.block_arg(block, loc)?
+        } else {
+            None
+        };
+        let block_arg = if block_arg == self.sp().into() {
+            None
+        } else {
+            Some(block_arg)
+        };
+
         let callid = self.add_callsite(
-            method, len, kw, splat_pos, block_fid, block_arg, args, len, recv, ret,
+            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, ret,
         );
         Ok(callid)
     }
@@ -321,11 +330,7 @@ impl BytecodeGen {
     ///
     /// Handle ordinary arguments.
     ///
-    fn positional_args(
-        &mut self,
-        arglist: &mut ArgList,
-        loc: Loc,
-    ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>, Option<BcReg>)> {
+    fn positional_args(&mut self, arglist: &mut ArgList) -> Result<(BcReg, usize, Vec<usize>)> {
         if arglist.args.len() == 1
             && arglist.block.is_some()
             && arglist.kw_args.is_empty()
@@ -335,29 +340,18 @@ impl BytecodeGen {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
                 let local = self.refer_local(ident).unwrap().into();
-                return Ok((local, 1, vec![], None, None));
+                return Ok((local, 1, vec![]));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
                     let local = self.refer_local(ident).unwrap().into();
-                    return Ok((local, 1, vec![0], None, None));
+                    return Ok((local, 1, vec![0]));
                 }
             }
         };
-        let args = self.sp().into();
-        let block_func_id = if let Some(box block) = std::mem::take(&mut arglist.block) {
-            self.block_arg(block, loc)?
-        } else {
-            None
-        };
-        let block_arg = if args == self.sp().into() {
-            None
-        } else {
-            Some(args)
-        };
 
-        let (_, arg_len, splat_pos) = self.ordinary_args(std::mem::take(&mut arglist.args))?;
-        Ok((args, arg_len, splat_pos, block_func_id, block_arg))
+        let (args, arg_len, splat_pos) = self.ordinary_args(std::mem::take(&mut arglist.args))?;
+        Ok((args, arg_len, splat_pos))
     }
 
     fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {
@@ -429,9 +423,6 @@ impl BytecodeGen {
             optional_params,
             block,
         );
-        let bh = BlockHandler::from(func_id);
-        let dst = self.push().into();
-        self.emit_literal(dst, bh.0);
         Ok(func_id)
     }
 }

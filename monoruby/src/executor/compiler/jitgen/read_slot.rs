@@ -44,24 +44,8 @@ impl Codegen {
     }
 
     pub(crate) fn fetch_callargs(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo {
-            args,
-            pos_num,
-            hash_splat_pos,
-            block_fid,
-            block_arg,
-            kw_args,
-            ..
-        } = callsite;
-        let len = *pos_num
-            + if block_arg.is_some() || block_fid.is_some() {
-                1
-            } else {
-                0
-            };
-        let pos_kw_len = len as usize + kw_args.len();
-        self.fetch_range(ctx, *args, pos_kw_len as u16);
-        hash_splat_pos.iter().for_each(|r| self.fetch_slot(ctx, *r));
+        let CallSiteInfo { args, len, .. } = callsite;
+        self.fetch_range(ctx, *args, *len as u16);
     }
 
     ///

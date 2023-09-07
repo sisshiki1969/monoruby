@@ -223,8 +223,8 @@ impl JitContext {
                     }
                 }
                 TraceIr::Array { ret, callid } => {
-                    let CallSiteInfo { args, len, .. } = store[callid];
-                    info.use_range(args, len);
+                    let CallSiteInfo { args, pos_num, .. } = store[callid];
+                    info.use_range(args, pos_num as u16);
                     info.def(ret);
                 }
                 TraceIr::Hash { ret, args, len } => {
@@ -404,8 +404,8 @@ impl JitContext {
                         ..
                     } = store[callid];
                     info.r#use(recv);
-                    info.use_range(args, len);
-                    //reg_info.unlink_locals(func);
+                    info.use_range(args, len as u16);
+                    //info.unlink_locals(func);
                     if let Some(ret) = ret {
                         info.def(ret);
                     }
@@ -419,7 +419,7 @@ impl JitContext {
                         ..
                     } = store[callid];
                     info.r#use(recv);
-                    info.use_range(args, len + 1);
+                    info.use_range(args, len as u16);
                     info.unlink_locals(func);
                     if let Some(ret) = ret {
                         info.def(ret);
@@ -815,7 +815,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
         ..
     } = *callsite;
     info.r#use(recv);
-    info.use_range(args, len);
+    info.use_range(args, len as u16);
     if let Some(ret) = ret {
         info.def(ret);
     }

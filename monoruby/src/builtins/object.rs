@@ -383,7 +383,7 @@ fn object_send(
         recv,
         ret,
         args,
-        len,
+        pos_num,
         block_fid: block_func_id,
         ..
     } = *callsite;
@@ -404,7 +404,7 @@ fn object_send(
         movq rsi, r12;
         movq rdx, [r14 - (conv(recv))];
         lea  rcx, [r14 - (conv(args))];
-        movq r8, (len);
+        movq r8, (pos_num);
         movq r9, (bh);
         subq rsp, 8;
         pushq r10;

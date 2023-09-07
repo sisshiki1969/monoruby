@@ -714,8 +714,8 @@ impl Codegen {
                     }
                 }
                 TraceIr::Array { ret, callid } => {
-                    let CallSiteInfo { args, len, .. } = store[callid];
-                    self.fetch_range(&mut ctx, args, len);
+                    let CallSiteInfo { args, pos_num, .. } = store[callid];
+                    self.fetch_range(&mut ctx, args, pos_num as u16);
                     ctx.unlink_xmm(ret);
                     monoasm!( &mut self.jit,
                         movl rdx, (callid.get());

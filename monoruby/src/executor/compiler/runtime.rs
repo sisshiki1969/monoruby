@@ -104,10 +104,10 @@ pub(super) extern "C" fn gen_array(
     ptr: *const Value,
 ) -> Option<Value> {
     let callsite = &globals.store[callid];
-    if callsite.len == 0 {
+    if callsite.pos_num == 0 {
         Some(Value::array_empty())
     } else {
-        let len = callsite.len as usize;
+        let len = callsite.pos_num;
         let src = unsafe { ptr.sub(callsite.args.0 as usize) };
         let iter = unsafe {
             std::slice::from_raw_parts(src.sub(len - 1), len)

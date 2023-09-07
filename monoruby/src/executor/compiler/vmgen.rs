@@ -226,10 +226,10 @@ impl Codegen {
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[28] = self.vm_load_svar();
-        self.dispatch[30] = self.vm_method_call(false, true);
-        self.dispatch[31] = self.vm_method_call(false, false);
-        self.dispatch[32] = self.vm_method_call(true, true);
-        self.dispatch[33] = self.vm_method_call(true, false);
+        self.dispatch[30] = self.vm_method_call(true);
+        self.dispatch[31] = self.vm_method_call(false);
+        self.dispatch[32] = self.vm_method_call(true);
+        self.dispatch[33] = self.vm_method_call(false);
         self.dispatch[34] = self.vm_super();
         self.dispatch[35] = self.vm_array();
 

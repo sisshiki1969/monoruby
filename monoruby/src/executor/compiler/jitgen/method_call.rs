@@ -647,16 +647,11 @@ impl Codegen {
     /// - caller save registers
     fn set_self_and_args(&mut self, has_splat: bool, callsite: &CallSiteInfo) {
         let CallSiteInfo {
-            mut args,
-            len,
+            args,
+            pos_num,
             recv,
-            block_fid,
-            block_arg,
             ..
         } = *callsite;
-        if block_fid.is_some() || block_arg.is_some() {
-            args = args + 1;
-        }
         // set self, len
         self.load_rax(recv);
         monoasm!( &mut self.jit,
@@ -677,7 +672,7 @@ impl Codegen {
                 movq [rsp - (16 + LBP_BLOCK)], 0;
             );
         }
-        self.jit_set_arguments(args, len, has_splat, callsite);
+        self.jit_set_arguments(args, pos_num as u16, has_splat, callsite);
     }
 
     /// Set arguments.
@@ -694,7 +689,7 @@ impl Codegen {
     fn jit_set_arguments(
         &mut self,
         args: SlotId,
-        len: u16,
+        pos_num: u16,
         has_splat: bool,
         callsite: &CallSiteInfo,
     ) {
@@ -702,10 +697,10 @@ impl Codegen {
         if has_splat {
             monoasm!( &mut self.jit,
                 lea r15, [rsp - (16 + LBP_ARG0)];
-                movq r8, (len);
+                movq r8, (pos_num);
                 subq rsp, 1024;
             );
-            for i in 0..len {
+            for i in 0..pos_num {
                 let reg = args + i;
                 if callsite.splat_pos.contains(&(i as usize)) {
                     self.load_rdi(reg);
@@ -734,7 +729,7 @@ impl Codegen {
                 movq rdi, r8;
             );
         } else {
-            for i in 0..len {
+            for i in 0..pos_num {
                 let reg = args + i;
                 self.load_rax(reg);
                 monoasm! { &mut self.jit,
@@ -742,7 +737,7 @@ impl Codegen {
                 }
             }
             monoasm!( &mut self.jit,
-                movq rdi, (len);
+                movq rdi, (pos_num);
             );
         }
     }

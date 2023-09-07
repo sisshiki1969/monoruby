@@ -42,12 +42,12 @@ impl BytecodeGen {
                 None
             };
             let (kw_pos, kw_args, hash_splat_pos) = if let Some(KeywordArgs {
-                kw_start: kw_pos,
+                kw_start,
                 kw_args,
                 hash_splat_pos,
             }) = kw
             {
-                let kw_pos = self.get_index(&kw_pos);
+                let kw_pos = self.get_index(&kw_start);
                 let hash_splat_pos = hash_splat_pos
                     .into_iter()
                     .map(|r| self.get_index(&r))

@@ -264,6 +264,12 @@ struct KeywordArgs {
     hash_splat_pos: Vec<BcReg>,
 }
 
+impl KeywordArgs {
+    fn len(&self) -> usize {
+        self.kw_args.len() + self.hash_splat_pos.len()
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Functions {
     Method {
@@ -487,12 +493,13 @@ impl BytecodeGen {
         block_fid: Option<FuncId>,
         block_arg: Option<BcReg>,
         args: BcReg,
-        len: usize,
         recv: BcReg,
         ret: Option<BcReg>,
     ) -> CallSiteId {
         let name = name.into();
         let id = self.callsite_offset + self.callsites.len();
+        let kw_len = kw.as_ref().map_or(0, |kw| kw.len());
+        let len = pos_num + kw_len + block_arg.is_some() as usize;
         self.callsites.push(CallSite {
             name,
             pos_num,
@@ -516,7 +523,7 @@ impl BytecodeGen {
         recv: BcReg,
         ret: Option<BcReg>,
     ) -> CallSiteId {
-        self.add_callsite(name, len, None, vec![], None, None, args, len, recv, ret)
+        self.add_callsite(name, len, None, vec![], None, None, args, recv, ret)
     }
 
     fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
@@ -794,7 +801,6 @@ impl BytecodeGen {
             None,
             None,
             src,
-            len,
             BcReg::Self_,
             Some(ret),
         );
@@ -1036,7 +1042,7 @@ impl BytecodeGen {
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit_method_assign(callid, recv, loc);
+                self.emit_method_assign(callid, loc);
             }
             LvalueKind::LocalVar { dst } => {
                 if let Some(old_temp) = old_temp {

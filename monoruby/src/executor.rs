@@ -985,8 +985,8 @@ impl BcPc {
                 format!("{:?} = literal[{}]", reg, globals.inspect(val))
             }
             TraceIr::Array { ret, callid } => {
-                let CallSiteInfo { args, len, .. } = globals.store[callid];
-                format!("{:?} = array[{:?}; {}]", ret, args, len)
+                let CallSiteInfo { args, pos_num, .. } = globals.store[callid];
+                format!("{:?} = array[{:?}; {}]", ret, args, pos_num)
             }
             TraceIr::Hash { ret, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", ret, args, len)
@@ -1216,7 +1216,7 @@ impl BcPc {
                 let CallSiteInfo {
                     recv,
                     args,
-                    len,
+                    pos_num,
                     ret,
                     block_fid,
                     block_arg,
@@ -1227,15 +1227,15 @@ impl BcPc {
                     "{} = {:?}.{name}({}{} &{:?}){} {:?}",
                     ret_str(ret),
                     recv,
-                    if len == 0 {
+                    if pos_num == 0 {
                         "".to_string()
                     } else {
-                        format!("{:?};{}", args, len)
+                        format!("{:?};{}", args, pos_num)
                     },
                     if kw_len == 0 {
                         "".to_string()
                     } else {
-                        format!(" kw:{:?};{}", args + len, kw_len)
+                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
                     block_arg,
                     if has_splat { "*" } else { "" },
@@ -1254,7 +1254,7 @@ impl BcPc {
                 let CallSiteInfo {
                     recv,
                     args,
-                    len,
+                    pos_num,
                     ret,
                     block_fid,
                     block_arg,
@@ -1265,15 +1265,15 @@ impl BcPc {
                     "{} = {:?}.{name}({}{} &{:?}){} {:?}",
                     ret_str(ret),
                     recv,
-                    if len == 0 {
+                    if pos_num == 0 {
                         "".to_string()
                     } else {
-                        format!("{:?};{}", args + 1, len)
+                        format!("{:?};{}", args, pos_num)
                     },
                     if kw_len == 0 {
                         "".to_string()
                     } else {
-                        format!(" kw:{:?};{}", args + len + 1, kw_len)
+                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
                     block_arg,
                     if has_splat { "*" } else { "" },
@@ -1283,20 +1283,22 @@ impl BcPc {
             }
             TraceIr::Super { callid, class, .. } => {
                 let callsite = &globals.store[callid];
-                let CallSiteInfo { args, len, ret, .. } = *callsite;
+                let CallSiteInfo {
+                    args, pos_num, ret, ..
+                } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = super({}{}){}",
                     ret_str(ret),
-                    if len == 0 {
+                    if pos_num == 0 {
                         "".to_string()
                     } else {
-                        format!("{:?};{}", args, len)
+                        format!("{:?};{}", args, pos_num)
                     },
                     if kw_len == 0 {
                         "".to_string()
                     } else {
-                        format!(" kw:{:?};{}", args + len, kw_len)
+                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
                     ""
                 );
@@ -1311,12 +1313,12 @@ impl BcPc {
                 let CallSiteInfo {
                     recv,
                     args,
-                    len,
+                    pos_num,
                     ret,
                     ..
                 } = globals.store[callsite];
                 let name = &globals.store.get_inline_info(inline_id).2;
-                let op1 = if len == 0 {
+                let op1 = if pos_num == 0 {
                     format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
                 } else {
                     format!(
@@ -1324,7 +1326,7 @@ impl BcPc {
                         ret_str(ret),
                         recv,
                         args,
-                        len,
+                        pos_num,
                     )
                 };
                 format!("{:36} [{}]", op1, class.get_name(globals))
