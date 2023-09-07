@@ -1195,9 +1195,9 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
+                    let CallSiteInfo { recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, len, &store[callid]);
+                    self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1216,9 +1216,9 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
+                    let CallSiteInfo { recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, len + 1, &store[callid]);
+                    self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1232,9 +1232,9 @@ impl Codegen {
                     }
                 }
                 TraceIr::Super { callid, info, .. } => {
-                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
+                    let CallSiteInfo { recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, len, &store[callid]);
+                    self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
@@ -1265,7 +1265,7 @@ impl Codegen {
                     if let Some(ret) = ret {
                         ctx.unlink_xmm(ret);
                     }
-                    self.fetch_callargs(&mut ctx, len, &store[callid]);
+                    self.fetch_callargs(&mut ctx, &store[callid]);
                     self.gen_yield(&ctx, store, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}

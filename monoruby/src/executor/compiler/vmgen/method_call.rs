@@ -328,16 +328,8 @@ impl Codegen {
     fn set_frame(&mut self, with_block: bool, has_splat: bool) {
         self.vm_get_addr_rcx(); // rcx <- *args
         if with_block {
-            // set block
             monoasm! { &mut self.jit,
-                movq rax, [rcx];
-                movq [rsp - (16 + LBP_BLOCK)], rax;
                 subq rcx, 8;
-            };
-        } else {
-            monoasm! { &mut self.jit,
-                // set block
-                movq [rsp - (16 + LBP_BLOCK)], 0;
             };
         }
         self.set_arguments(has_splat);
