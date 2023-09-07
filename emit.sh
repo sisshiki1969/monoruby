@@ -10,6 +10,8 @@ target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.disas > /
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas
 ruby benchmark/so_nbody.rb
+target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.disas > /dev/null
+
 
 cargo build --release --features emit-bc
 target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.bytecode > /dev/null
@@ -18,6 +20,7 @@ target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.bytecode >
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.bytecode > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.bytecode > /dev/null
+target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.bytecode > /dev/null
 
 cargo build --release
 ruby benchmark/app_aobench.rb > benchmark/ruby.ppm

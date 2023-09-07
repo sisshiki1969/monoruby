@@ -146,7 +146,7 @@ impl Codegen {
         // [r13 - 16]: CallSiteId
         // [r13 -  8]: class_id
         // [r13 -  4]: class_version
-        // [r13 +  0]; len
+        // [r13 +  0]; pos_num
         // [r13 +  2]; %args
         // [r13 +  4]: %recv
         // [r13 +  8]: FuncData
@@ -178,14 +178,16 @@ impl Codegen {
             movq r15, [r13 + 8];
             movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
-            movzxw rdi, [r13 + 0];  // rdi <- len
+            movzxw rdi, [r13 + 0];  // rdi <- pos_num
             movzxw rcx, [r13 + 2]; // rcx <- args
             // set self (= receiver)
             movq rax, [rsp];
             movq [rsp - (16 + LBP_SELF)], rax;
             movl r8, [r13 - 16]; // CallSiteId
         };
-        self.set_frame(has_splat);
+        self.vm_get_addr_rcx();
+        // rcx <- *args
+        self.set_arguments(has_splat);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
@@ -269,7 +271,9 @@ impl Codegen {
             movl r8, [r13 - 8];    // CallSiteId
         };
         self.set_block_self_outer();
-        self.set_frame(true);
+        self.vm_get_addr_rcx();
+        // rcx <- *args
+        self.set_arguments(true);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
@@ -304,30 +308,6 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
-    }
-
-    /// Set frame (BLOCK, arguments)
-    ///
-    /// ### in
-    ///
-    /// - rdi: arg len
-    /// - rcx: %args
-    /// - r8:  CallSiteId
-    ///
-    /// ### out
-    ///
-    /// - rdi: arg len
-    ///
-    /// ### destroy
-    ///
-    /// - rax
-    /// - rcx
-    /// - rdx
-    /// - rsi
-    fn set_frame(&mut self, has_splat: bool) {
-        self.vm_get_addr_rcx();
-        // rcx <- *args
-        self.set_arguments(has_splat);
     }
 
     /// Set arguments
