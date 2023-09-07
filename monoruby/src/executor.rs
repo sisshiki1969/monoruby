@@ -1210,40 +1210,8 @@ impl BcPc {
                 has_splat,
                 class,
                 ..
-            } => {
-                let callsite = &globals.store[callid];
-                let name = callsite.name.unwrap();
-                let CallSiteInfo {
-                    recv,
-                    args,
-                    pos_num,
-                    ret,
-                    block_fid,
-                    block_arg,
-                    ..
-                } = *callsite;
-                let kw_len = callsite.kw_args.len();
-                let op1 = format!(
-                    "{} = {:?}.{name}({}{} &{:?}){} {:?}",
-                    ret_str(ret),
-                    recv,
-                    if pos_num == 0 {
-                        "".to_string()
-                    } else {
-                        format!("{:?};{}", args, pos_num)
-                    },
-                    if kw_len == 0 {
-                        "".to_string()
-                    } else {
-                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
-                    },
-                    block_arg,
-                    if has_splat { "*" } else { "" },
-                    block_fid,
-                );
-                format!("{:36} [{}]", op1, class.get_name(globals))
             }
-            TraceIr::MethodCallBlock {
+            | TraceIr::MethodCallBlock {
                 callid,
                 has_splat,
                 class,
@@ -1262,29 +1230,40 @@ impl BcPc {
                 } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
-                    "{} = {:?}.{name}({}{} &{:?}){} {:?}",
+                    "{} = {:?}.{name}({}{}{}){}",
                     ret_str(ret),
                     recv,
                     if pos_num == 0 {
                         "".to_string()
                     } else {
-                        format!("{:?};{}", args, pos_num)
+                        format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
                     },
                     if kw_len == 0 {
                         "".to_string()
                     } else {
                         format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
-                    block_arg,
-                    if has_splat { "*" } else { "" },
-                    block_fid,
+                    if let Some(block_arg) = block_arg {
+                        format!(" &{:?}", block_arg)
+                    } else {
+                        "".to_string()
+                    },
+                    if let Some(block_fid) = block_fid {
+                        format!(" {{ {:?} }}", block_fid)
+                    } else {
+                        "".to_string()
+                    },
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::Super { callid, class, .. } => {
                 let callsite = &globals.store[callid];
                 let CallSiteInfo {
-                    args, pos_num, ret, ..
+                    args,
+                    pos_num,
+                    ret,
+                    block_fid,
+                    ..
                 } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
@@ -1300,7 +1279,11 @@ impl BcPc {
                     } else {
                         format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
-                    ""
+                    if let Some(block_fid) = block_fid {
+                        format!(" {{ {:?} }}", block_fid)
+                    } else {
+                        "".to_string()
+                    },
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
