@@ -436,7 +436,9 @@ pub(super) extern "C" fn jit_handle_hash_splat(
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         for hash in hash_splat_pos {
             unsafe {
-                let h = lfp.register(hash.0 as usize);
+                let h = lfp
+                    .register(hash.0 as usize)
+                    .expect("jit_handle_hash_splat(): not a Hash.");
                 // We must check whether h is a hash.
                 if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
                     *callee_reg.sub(callee_kw_pos + id) = Some(v);
@@ -926,7 +928,7 @@ pub(super) extern "C" fn handle_error(
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
-                    unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
+                    unsafe { lfp.set_register(err_reg, Some(err_val)) };
                 }
                 return ErrorReturn::goto(rescue);
             }

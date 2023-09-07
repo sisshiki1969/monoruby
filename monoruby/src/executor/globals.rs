@@ -613,12 +613,15 @@ impl Globals {
         );
         eprint!("    ");
         for r in 0..meta.reg_num() as usize {
-            let v = lfp.register(r);
             eprint!(
                 "%{}{}:[{}] ",
                 r,
                 if r == 0 { "(self)" } else { "" },
-                self.inspect(v)
+                if let Some(v) = lfp.register(r) {
+                    self.inspect(v)
+                } else {
+                    "None".to_string()
+                }
             );
         }
         eprintln!();

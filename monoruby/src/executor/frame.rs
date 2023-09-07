@@ -140,8 +140,9 @@ impl alloc::GC<RValue> for LFP {
         unsafe {
             let meta = self.meta();
             for r in 0..meta.reg_num() as usize {
-                let v = self.register(r);
-                v.mark(alloc);
+                if let Some(v) = self.register(r) {
+                    v.mark(alloc);
+                }
             }
             if let Some(v) = self.block() {
                 v.0.mark(alloc)
@@ -287,17 +288,17 @@ impl LFP {
     }
 
     ///
-    /// Get a value of register slot *index*.
+    /// Get a value of a register slot *index*.
     ///
-    pub unsafe fn register(&self, index: usize) -> Value {
-        *(self.sub(LBP_SELF + 8 * index as i64) as *const Value)
+    pub unsafe fn register(&self, index: usize) -> Option<Value> {
+        std::ptr::read(self.sub(LBP_SELF + 8 * index as i64) as _)
     }
 
     ///
-    /// Get a value of register slot *index*.
+    /// Set a value to a register slot *index*.
     ///
-    pub unsafe fn set_register(&mut self, index: usize, val: Value) {
-        *(self.sub(LBP_SELF + 8 * index as i64) as *mut Value) = val;
+    pub(crate) unsafe fn set_register(&mut self, index: SlotId, val: Option<Value>) {
+        std::ptr::write(self.sub(LBP_SELF + 8 * index.0 as i64) as _, val);
     }
 
     fn frame_bytes(&self) -> usize {
