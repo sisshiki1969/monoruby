@@ -468,6 +468,7 @@ impl Codegen {
                     self.single_arg_expand();
                 }
                 if info.pos_num() == info.req_num() {
+                    // no optional param, no rest param.
                     if info.key_num() != 0 {
                         let CallSiteInfo {
                             kw_pos, kw_args, ..
@@ -661,18 +662,6 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq [rsp - (16 + LBP_SELF)], rax;
         );
-        self.jit_set_arguments(args, len, has_splat, callsite);
-        self.set_block(callsite);
-    }
-
-    /// Set *self*, len, block, and arguments.
-    ///
-    /// ### out
-    /// - rdi <- the number of arguments
-    ///
-    /// ### destroy
-    /// - caller save registers
-    fn set_block(&mut self, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_fid {
             let bh = BlockHandler::from(func_id);
             monoasm!( &mut self.jit,
@@ -688,6 +677,7 @@ impl Codegen {
                 movq [rsp - (16 + LBP_BLOCK)], 0;
             );
         }
+        self.jit_set_arguments(args, len, has_splat, callsite);
     }
 
     /// Set arguments.

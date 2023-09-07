@@ -42,7 +42,7 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) {
-        let callid = self.add_callsite(method, 1, None, vec![], None, None, rhs, 1, lhs, ret);
+        let callid = self.add_callsite_simple(method, 1, rhs, lhs, ret);
         self.emit_call(lhs, callid, ret, false, false, loc);
     }
 

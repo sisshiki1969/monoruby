@@ -508,6 +508,17 @@ impl BytecodeGen {
         CallSiteId(id as u32)
     }
 
+    fn add_callsite_simple(
+        &mut self,
+        name: impl Into<Option<IdentId>>,
+        len: usize,
+        args: BcReg,
+        recv: BcReg,
+        ret: Option<BcReg>,
+    ) -> CallSiteId {
+        self.add_callsite(name, len, None, vec![], None, None, args, len, recv, ret)
+    }
+
     fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
         let id = self.functions_offset + self.functions.len();
         self.functions.push(Functions::Method { name, info });
@@ -1011,18 +1022,8 @@ impl BytecodeGen {
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
-                let callid = self.add_callsite(
-                    IdentId::_INDEX_ASSIGN,
-                    3,
-                    None,
-                    vec![],
-                    None,
-                    None,
-                    index1.into(),
-                    3,
-                    base,
-                    None,
-                );
+                let callid =
+                    self.add_callsite_simple(IdentId::_INDEX_ASSIGN, 3, index1.into(), base, None);
                 self.emit_mov((index1 + 2).into(), src);
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
@@ -1031,8 +1032,7 @@ impl BytecodeGen {
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid =
-                    self.add_callsite(method, 1, None, vec![], None, None, src, 1, recv, None);
+                let callid = self.add_callsite_simple(method, 1, src, recv, None);
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
