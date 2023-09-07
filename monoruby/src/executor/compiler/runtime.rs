@@ -370,8 +370,23 @@ fn handle_keyword(
         kw_pos,
         kw_args,
         hash_splat_pos,
+        block_fid,
+        block_arg,
         ..
     } = callsite;
+
+    let block_slot = unsafe { callee_reg.add((LBP_SELF - LBP_BLOCK) as usize / 8) };
+    let v = if let Some(block_fid) = block_fid {
+        let bh = BlockHandler::from(*block_fid);
+        Some(bh.0)
+    } else if let Some(block_arg) = block_arg {
+        unsafe { Some(*caller_reg.sub(block_arg.0 as usize)) }
+    } else {
+        None
+    };
+    assert_eq!(v.map(|v| v.id()), (unsafe { *block_slot }).map(|v| v.id()));
+    unsafe { *block_slot = v };
+
     let callee_kw_pos = info.args.pos_num + 1;
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {

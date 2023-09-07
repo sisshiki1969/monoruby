@@ -240,6 +240,7 @@ struct CallSite {
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
     block_fid: Option<FuncId>,
+    block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
     /// Number of arguments.
@@ -483,7 +484,8 @@ impl BytecodeGen {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_func_id: Option<FuncId>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<BcReg>,
         args: BcReg,
         len: usize,
         recv: BcReg,
@@ -496,7 +498,8 @@ impl BytecodeGen {
             pos_num,
             kw,
             splat_pos,
-            block_fid: block_func_id,
+            block_fid,
+            block_arg,
             args,
             len,
             recv,
@@ -778,6 +781,7 @@ impl BytecodeGen {
             None,
             splat,
             None,
+            None,
             src,
             len,
             BcReg::Self_,
@@ -1013,6 +1017,7 @@ impl BytecodeGen {
                     None,
                     vec![],
                     None,
+                    None,
                     index1.into(),
                     3,
                     base,
@@ -1026,7 +1031,8 @@ impl BytecodeGen {
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = self.add_callsite(method, 1, None, vec![], None, src, 1, recv, None);
+                let callid =
+                    self.add_callsite(method, 1, None, vec![], None, None, src, 1, recv, None);
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }

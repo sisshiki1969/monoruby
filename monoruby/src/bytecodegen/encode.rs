@@ -21,7 +21,8 @@ impl BytecodeGen {
             pos_num,
             kw,
             splat_pos,
-            block_fid: block_func_id,
+            block_fid,
+            block_arg,
             args,
             len,
             recv,
@@ -30,6 +31,11 @@ impl BytecodeGen {
         {
             let args = self.get_index(&args);
             let recv = self.get_index(&recv);
+            let block_arg = if let Some(slot) = block_arg {
+                Some(self.get_index(&slot))
+            } else {
+                None
+            };
             let ret = if let Some(slot) = ret {
                 Some(self.get_index(&slot))
             } else {
@@ -57,7 +63,8 @@ impl BytecodeGen {
                 kw_args,
                 splat_pos,
                 hash_splat_pos,
-                block_func_id,
+                block_fid,
+                block_arg,
                 args,
                 len,
                 recv,

@@ -42,7 +42,7 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) {
-        let callid = self.add_callsite(method, 1, None, vec![], None, rhs, 1, lhs, ret);
+        let callid = self.add_callsite(method, 1, None, vec![], None, None, rhs, 1, lhs, ret);
         self.emit_call(lhs, callid, ret, false, false, loc);
     }
 
@@ -172,6 +172,7 @@ impl BytecodeGen {
                 kw,
                 vec![],
                 None,
+                None,
                 pos_start,
                 pos_len,
                 BcReg::Self_,
@@ -244,6 +245,7 @@ impl BytecodeGen {
             None,
             vec![],
             Some(block_func_id),
+            None,
             arg.into(),
             0,
             recv,
@@ -305,20 +307,13 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSiteId> {
-        let (args, len, splat_pos, block_func_id) = self.positional_args(&mut arglist, loc)?;
+        let (args, len, splat_pos, block_fid, block_arg) =
+            self.positional_args(&mut arglist, loc)?;
 
         let kw = self.keyword_arg(&mut arglist)?;
 
         let callid = self.add_callsite(
-            method,
-            len,
-            kw,
-            splat_pos,
-            block_func_id,
-            args,
-            len,
-            recv,
-            ret,
+            method, len, kw, splat_pos, block_fid, block_arg, args, len, recv, ret,
         );
         Ok(callid)
     }
@@ -330,7 +325,7 @@ impl BytecodeGen {
         &mut self,
         arglist: &mut ArgList,
         loc: Loc,
-    ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>)> {
+    ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>, Option<BcReg>)> {
         if arglist.args.len() == 1
             && arglist.block.is_some()
             && arglist.kw_args.is_empty()
@@ -340,12 +335,12 @@ impl BytecodeGen {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
                 let local = self.refer_local(ident).unwrap().into();
-                return Ok((local, 1, vec![], None));
+                return Ok((local, 1, vec![], None, None));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
                     let local = self.refer_local(ident).unwrap().into();
-                    return Ok((local, 1, vec![0], None));
+                    return Ok((local, 1, vec![0], None, None));
                 }
             }
         };
@@ -355,9 +350,14 @@ impl BytecodeGen {
         } else {
             None
         };
+        let block_arg = if args == self.sp().into() {
+            None
+        } else {
+            Some(args)
+        };
 
         let (_, arg_len, splat_pos) = self.ordinary_args(std::mem::take(&mut arglist.args))?;
-        Ok((args, arg_len, splat_pos, block_func_id))
+        Ok((args, arg_len, splat_pos, block_func_id, block_arg))
     }
 
     fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {

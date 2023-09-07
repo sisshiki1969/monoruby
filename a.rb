@@ -1,10 +1,10 @@
-class C
-  def foo(*x)
-    puts "#{x}"
-  end
+class A < Array
 end
 
-c = C.new
-for i in 0..10
-  c.send(:foo, 1, 2)
+for i in 0..8 do
+mul = 3
+a = A.new(5) {|i| i * mul }
+a << 4
+a[2] = 5
+puts "#{a}"
 end

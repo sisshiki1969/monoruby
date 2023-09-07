@@ -229,6 +229,7 @@ impl Store {
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
         block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
         args: SlotId,
         len: usize,
         recv: SlotId,
@@ -244,6 +245,7 @@ impl Store {
             splat_pos,
             hash_splat_pos,
             block_fid,
+            block_arg,
             args,
             len: len as u16,
             recv,
@@ -318,24 +320,25 @@ pub(crate) struct CallSiteInfo {
     pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
+    /// Position of the receiver.
+    pub recv: SlotId,
+    /// Position of the first argument.
+    pub args: SlotId,
     /// Number of positional arguments.
     pub pos_num: usize,
+    /// Positions of splat arguments.
+    pub splat_pos: Vec<usize>,
+    /// *FuncId* of passed block.
+    pub block_fid: Option<FuncId>,
+    pub block_arg: Option<SlotId>,
+    /// Number of arguments.
+    pub len: u16,
     /// Postion of keyword arguments.
     pub kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
-    /// Positions of splat arguments.
-    pub splat_pos: Vec<usize>,
     /// Position of hash splat arguments.
     pub hash_splat_pos: Vec<SlotId>,
-    /// *FuncId* of passed block.
-    pub block_fid: Option<FuncId>,
-    /// Position of the first argument.
-    pub args: SlotId,
-    /// Number of arguments.
-    pub len: u16,
-    /// Position of the receiver.
-    pub recv: SlotId,
     /// Position where the result is to be stored to.
     pub ret: Option<SlotId>,
 }

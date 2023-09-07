@@ -1204,7 +1204,7 @@ impl Codegen {
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, None, pc + 1, has_splat);
+                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1216,13 +1216,7 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo {
-                        args,
-                        len,
-                        recv,
-                        ret,
-                        ..
-                    } = store[callid];
+                    let CallSiteInfo { len, recv, ret, .. } = store[callid];
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, len + 1, &store[callid]);
                     if let Some(ret) = ret {
@@ -1231,15 +1225,7 @@ impl Codegen {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(
-                            store,
-                            &mut ctx,
-                            func_data,
-                            callid,
-                            Some(args),
-                            pc + 1,
-                            has_splat,
-                        );
+                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1255,7 +1241,7 @@ impl Codegen {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, None, pc + 1, false);
+                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, false);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;

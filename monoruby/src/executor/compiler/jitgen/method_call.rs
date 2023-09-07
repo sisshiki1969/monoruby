@@ -20,15 +20,14 @@ impl Codegen {
         ctx: &BBContext,
         func_data: &FuncData,
         callid: CallSiteId,
-        block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
         let cached = InlineCached::new(pc);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
-            self.gen_call_not_cached(ctx, &store[callid], block, pc, has_splat);
+            self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
         } else {
-            self.gen_call_cached(store, ctx, callid, func_data, block, cached, pc, has_splat);
+            self.gen_call_cached(store, ctx, callid, func_data, cached, pc, has_splat);
         }
     }
 
@@ -41,7 +40,6 @@ impl Codegen {
         ctx: &BBContext,
         callid: CallSiteId,
         func_data: &FuncData,
-        block: Option<SlotId>,
         cached: InlineCached,
         pc: BcPc,
         has_splat: bool,
@@ -67,9 +65,9 @@ impl Codegen {
         match store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
                 assert!(store[callid].block_fid.is_none());
+                assert!(store[callid].block_arg.is_none());
                 if cached.class_id.is_always_frozen() {
                     if let Some(ret) = ret {
                         monoasm!( &mut self.jit,
@@ -87,9 +85,9 @@ impl Codegen {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
                 assert!(store[callid].block_fid.is_none());
+                assert!(store[callid].block_arg.is_none());
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
@@ -102,7 +100,6 @@ impl Codegen {
                     store,
                     callid,
                     func_data,
-                    block,
                     pc,
                     has_splat,
                     cached.class_id,
@@ -115,7 +112,6 @@ impl Codegen {
                     store,
                     callid,
                     func_data,
-                    block,
                     pc,
                     has_splat,
                     cached.class_id,
@@ -132,7 +128,6 @@ impl Codegen {
         &mut self,
         ctx: &BBContext,
         callsite: &CallSiteInfo,
-        block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -177,7 +172,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(block, has_splat, callsite);
+        self.set_self_and_args(has_splat, callsite);
 
         monoasm! { &mut self.jit,
             // set meta.
@@ -452,7 +447,6 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         func_data: &FuncData,
-        block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
         recv_classid: ClassId,
@@ -463,7 +457,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(block, has_splat, &store[callid]);
+        self.set_self_and_args(has_splat, &store[callid]);
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
@@ -650,19 +644,16 @@ impl Codegen {
     ///
     /// ### destroy
     /// - caller save registers
-    fn set_self_and_args(
-        &mut self,
-        block: Option<SlotId>,
-        has_splat: bool,
-        callsite: &CallSiteInfo,
-    ) {
+    fn set_self_and_args(&mut self, has_splat: bool, callsite: &CallSiteInfo) {
         let CallSiteInfo {
             mut args,
             len,
             recv,
+            block_fid,
+            block_arg,
             ..
         } = *callsite;
-        if block.is_some() {
+        if block_fid.is_some() || block_arg.is_some() {
             args = args + 1;
         }
         // set self, len
@@ -671,7 +662,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
         );
         self.jit_set_arguments(args, len, has_splat, callsite);
-        self.set_block(block, callsite);
+        self.set_block(callsite);
     }
 
     /// Set *self*, len, block, and arguments.
@@ -681,13 +672,13 @@ impl Codegen {
     ///
     /// ### destroy
     /// - caller save registers
-    fn set_block(&mut self, block: Option<SlotId>, callsite: &CallSiteInfo) {
+    fn set_block(&mut self, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_fid {
             let bh = BlockHandler::from(func_id);
             monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], (bh.0.id());
             );
-        } else if let Some(block) = block {
+        } else if let Some(block) = callsite.block_arg {
             self.load_rax(block);
             monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], rax;

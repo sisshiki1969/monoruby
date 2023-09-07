@@ -116,7 +116,7 @@ impl std::fmt::Debug for BlockHandler {
         } else if let Some(proc) = self.try_proc() {
             write!(f, "proc:{:?}", proc)
         } else {
-            write!(f, "unknown handler")
+            write!(f, "unknown handler {:016x}", self.0.id())
         }
     }
 }
@@ -1218,11 +1218,13 @@ impl BcPc {
                     args,
                     len,
                     ret,
+                    block_fid,
+                    block_arg,
                     ..
                 } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
-                    "{} = {:?}.{name}({}{}){}",
+                    "{} = {:?}.{name}({}{} &{:?}){} {:?}",
                     ret_str(ret),
                     recv,
                     if len == 0 {
@@ -1235,7 +1237,9 @@ impl BcPc {
                     } else {
                         format!(" kw:{:?};{}", args + len, kw_len)
                     },
-                    if has_splat { "*" } else { "" }
+                    block_arg,
+                    if has_splat { "*" } else { "" },
+                    block_fid,
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
@@ -1252,11 +1256,13 @@ impl BcPc {
                     args,
                     len,
                     ret,
+                    block_fid,
+                    block_arg,
                     ..
                 } = *callsite;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
-                    "{} = {:?}.{name}({}{} &{:?}){}",
+                    "{} = {:?}.{name}({}{} &{:?}){} {:?}",
                     ret_str(ret),
                     recv,
                     if len == 0 {
@@ -1269,8 +1275,9 @@ impl BcPc {
                     } else {
                         format!(" kw:{:?};{}", args + len + 1, kw_len)
                     },
-                    args,
-                    if has_splat { "*" } else { "" }
+                    block_arg,
+                    if has_splat { "*" } else { "" },
+                    block_fid,
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
