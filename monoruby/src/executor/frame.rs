@@ -271,6 +271,10 @@ impl LFP {
         unsafe { *(self.sub(LBP_BLOCK) as *const _) }
     }
 
+    pub fn set_block(&self, bh: Option<BlockHandler>) {
+        unsafe { *(self.sub(LBP_BLOCK) as *mut _) = bh }
+    }
+
     pub fn expect_block(&self) -> Result<BlockHandler> {
         if let Some(block) = self.block() {
             Ok(block)
@@ -287,18 +291,22 @@ impl LFP {
         }
     }
 
+    pub unsafe fn register_ptr(&self, index: usize) -> *mut Option<Value> {
+        self.sub(LBP_SELF + 8 * index as i64) as _
+    }
+
     ///
     /// Get a value of a register slot *index*.
     ///
     pub unsafe fn register(&self, index: usize) -> Option<Value> {
-        std::ptr::read(self.sub(LBP_SELF + 8 * index as i64) as _)
+        std::ptr::read(self.register_ptr(index))
     }
 
     ///
-    /// Set a value to a register slot *index*.
+    /// Set a value to a register *index*.
     ///
-    pub(crate) unsafe fn set_register(&mut self, index: SlotId, val: Option<Value>) {
-        std::ptr::write(self.sub(LBP_SELF + 8 * index.0 as i64) as _, val);
+    pub(crate) unsafe fn set_register(&mut self, index: usize, val: Option<Value>) {
+        std::ptr::write(self.register_ptr(index), val);
     }
 
     fn frame_bytes(&self) -> usize {

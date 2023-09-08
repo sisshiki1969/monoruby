@@ -235,7 +235,7 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
 
 #[repr(C)]
 pub(super) struct HandleArguments {
-    caller_reg: *const Value,
+    caller_lfp: LFP,
     callee: *const FuncData,
     callee_reg: *mut Option<Value>,
 }
@@ -256,7 +256,7 @@ pub(super) extern "C" fn vm_handle_arguments(
                 return None;
             };
             // keyword
-            handle_keyword(&info, &globals.store[callid], ha.caller_reg, ha.callee_reg);
+            handle_keyword(&info, &globals.store[callid], ha.caller_lfp, ha.callee_reg);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -271,7 +271,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         let bh = BlockHandler::from(*block_fid);
         Some(bh.0)
     } else if let Some(block_arg) = block_arg {
-        unsafe { Some(*ha.caller_reg.sub(block_arg.0 as usize)) }
+        unsafe { ha.caller_lfp.register(block_arg.0 as usize) }
     } else {
         None
     };
@@ -379,7 +379,7 @@ fn handle_req_opt_rest(
 fn handle_keyword(
     info: &ISeqInfo,
     callsite: &CallSiteInfo,
-    caller_reg: *const Value,
+    caller_lfp: LFP,
     callee_reg: *mut Option<Value>,
 ) {
     let CallSiteInfo {
@@ -393,15 +393,16 @@ fn handle_keyword(
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
             let ptr = callee_reg.sub(callee_kw_pos + id);
-            match kw_args.get(param_name) {
-                Some(id) => *ptr = Some(*caller_reg.sub(kw_pos.0 as usize + id)),
-                None => *ptr = None,
-            }
+            let v = match kw_args.get(param_name) {
+                Some(id) => Some(caller_lfp.register(kw_pos.0 as usize + id).unwrap()),
+                None => None,
+            };
+            *ptr = v;
         }
     }
     for h in hash_splat_pos
         .iter()
-        .map(|pos| unsafe { *caller_reg.sub(pos.0 as usize) })
+        .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
     {
         for (id, param_name) in info.args.keyword_names.iter().enumerate() {
             unsafe {
@@ -928,7 +929,7 @@ pub(super) extern "C" fn handle_error(
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
-                    unsafe { lfp.set_register(err_reg, Some(err_val)) };
+                    unsafe { lfp.set_register(err_reg.0 as _, Some(err_val)) };
                 }
                 return ErrorReturn::goto(rescue);
             }

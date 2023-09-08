@@ -676,8 +676,8 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq [rsp + 16], r9;    // callee_reg
             movq [rsp + 8], rcx;    // callee: &FuncData
-            lea  rax, [r14 - (LBP_SELF)];
-            movq [rsp], rax;        // caller_reg
+            //lea  rax, [r14 - (LBP_SELF)];
+            movq [rsp], r14;        // caller_lfp
             movq rcx, rsp;
             movq rax, (runtime::vm_handle_arguments);
             call rax;
