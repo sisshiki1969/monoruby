@@ -25,7 +25,7 @@ jit-debug = ["dump-bc"]
 log-jit = ["dump-bc"]
 gc-debug = []
 gc-stress = []
-profile = []
+profile = ["dump-bc"]
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }

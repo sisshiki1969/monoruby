@@ -372,6 +372,8 @@ fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
     )
 }
 
+const CACHE_SIZE: usize = 6;
+
 fn object_send(
     gen: &mut Codegen,
     ctx: &mut BBContext,
@@ -398,6 +400,7 @@ fn object_send(
         None => 0,
         Some(func_id) => BlockHandler::from(func_id).0.id(),
     };
+    let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
     gen.xmm_save(&using);
     monoasm! {&mut gen.jit,
         movq rdi, rbx;
@@ -407,15 +410,24 @@ fn object_send(
         movq r8, (pos_num);
         movq r9, (bh);
         subq rsp, 8;
+        lea  r10, [rip + cache];
         pushq r10;
         movq rax, (call_send_wrapper);
-        addq rsp, 16;
         call rax;
+        addq rsp, 16;
     }
     gen.xmm_restore(&using);
     if let Some(ret) = ret {
         gen.store_rax(ret);
     }
+}
+
+#[repr(C)]
+struct Cache {
+    class: ClassId,
+    version: u32,
+    method: Option<IdentId>,
+    fid: FuncId,
 }
 
 extern "C" fn call_send_wrapper(
@@ -425,14 +437,34 @@ extern "C" fn call_send_wrapper(
     args: Arg,                   // rcx
     len: usize,                  // r8
     block: Option<BlockHandler>, // r9
+    cache: &mut [Cache; CACHE_SIZE],
 ) -> Option<Value> {
-    fn call_send(globals: &mut Globals, recv: Value, args: Arg, len: usize) -> Result<FuncData> {
+    fn call_send(
+        globals: &mut Globals,
+        recv: Value,
+        args: Arg,
+        len: usize,
+        cache: &mut [Cache; CACHE_SIZE],
+    ) -> Result<FuncData> {
         MonorubyErr::check_min_number_of_arguments(len, 1)?;
         let method = args[0].expect_symbol_or_string(globals)?;
+        for i in 0..CACHE_SIZE {
+            if cache[i].method == Some(method) {
+                return Ok(globals.compile_on_demand(cache[i].fid).clone());
+            }
+        }
         let func_id = globals.find_method(recv, method, false)?;
-        Ok(globals.compile_on_demand(func_id).clone())
+        for i in 0..CACHE_SIZE {
+            if cache[i].method.is_none() {
+                cache[i].method = Some(method);
+                cache[i].fid = func_id;
+                break;
+            }
+        }
+        let data = globals.compile_on_demand(func_id);
+        Ok(data.clone())
     }
-    let data = match call_send(globals, recv, args, len) {
+    let data = match call_send(globals, recv, args, len, cache) {
         Ok(res) => res,
         Err(err) => {
             vm.set_error(err);
