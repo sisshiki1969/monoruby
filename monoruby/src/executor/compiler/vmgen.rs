@@ -570,7 +570,7 @@ impl Codegen {
     fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
             movq rsi, [rsp - (16 + LBP_META)];
-            lea  rdx, [rsp - (16 + LBP_SELF)];
+            lea  rdx, [rsp - 16];
             subq rsp, 1024;
             movq rcx, rdi; // arg_num
             movq rdi, r12; // &Globals

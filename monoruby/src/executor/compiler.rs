@@ -667,14 +667,14 @@ impl Codegen {
     ///  
     fn handle_arguments(&mut self) {
         monoasm! { &mut self.jit,
-            lea  r9, [rsp - (16 + LBP_SELF)];   // callee_reg
+            lea  r9, [rsp - 16];   // callee_lfp
             movq r8, rdi;
             subq rsp, 1024;
             pushq rdi;
             subq rsp, 24;
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
-            movq [rsp + 16], r9;    // callee_reg
+            movq [rsp + 16], r9;    // callee_lfp
             movq [rsp + 8], rcx;    // callee: &FuncData
             //lea  rax, [r14 - (LBP_SELF)];
             movq [rsp], r14;        // caller_lfp

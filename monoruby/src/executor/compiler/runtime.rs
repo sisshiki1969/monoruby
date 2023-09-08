@@ -237,7 +237,7 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
 pub(super) struct HandleArguments {
     caller_lfp: LFP,
     callee: *const FuncData,
-    callee_reg: *mut Option<Value>,
+    callee_lfp: LFP,
 }
 
 pub(super) extern "C" fn vm_handle_arguments(
@@ -251,12 +251,12 @@ pub(super) extern "C" fn vm_handle_arguments(
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             // required + optional + rest
-            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, ha.callee_reg) {
+            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, ha.callee_lfp) {
                 vm.err_wrong_number_of_arg_range(arg_num, range);
                 return None;
             };
             // keyword
-            handle_keyword(&info, &globals.store[callid], ha.caller_lfp, ha.callee_reg);
+            handle_keyword(&info, &globals.store[callid], ha.caller_lfp, ha.callee_lfp);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -266,38 +266,41 @@ pub(super) extern "C" fn vm_handle_arguments(
         ..
     } = &globals.store[callid];
 
-    let block_slot = unsafe { ha.callee_reg.add((LBP_SELF - LBP_BLOCK) as usize / 8) };
-    let v = if let Some(block_fid) = block_fid {
+    let bh = if let Some(block_fid) = block_fid {
         let bh = BlockHandler::from(*block_fid);
-        Some(bh.0)
+        Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe { ha.caller_lfp.register(block_arg.0 as usize) }
+        unsafe {
+            Some(BlockHandler(
+                ha.caller_lfp.register(block_arg.0 as usize).unwrap(),
+            ))
+        }
     } else {
         None
     };
-    unsafe { *block_slot = v };
+    ha.callee_lfp.set_block(bh);
     Some(Value::nil())
 }
 
 pub(super) extern "C" fn handle_invoker_arguments(
     globals: &Globals,
     callee_meta: Meta,
-    callee_reg: *mut Option<Value>,
+    callee_lfp: LFP,
     mut arg_num: usize,
 ) -> usize {
     let callee_func_id = callee_meta.func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => unsafe {
             // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_reg);
+            arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            handle_req_opt_rest(info, arg_num, callee_reg);
+            handle_req_opt_rest(info, arg_num, callee_lfp);
             // keyword
             let params = &info.args.keyword_names;
             let callee_kw_pos = info.args.pos_num + 1;
             for (id, _) in params.iter().enumerate() {
-                *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
+                *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
             }
         },
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
@@ -306,19 +309,15 @@ pub(super) extern "C" fn handle_invoker_arguments(
 }
 
 /// deconstruct array for block
-fn expand_array_for_block(
-    info: &ISeqInfo,
-    arg_num: usize,
-    callee_reg: *mut Option<Value>,
-) -> usize {
+fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
     let req_num = info.args.required_num;
     let reqopt_num = info.args.reqopt_num;
     if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
         unsafe {
-            let v = (*callee_reg.sub(1)).unwrap();
+            let v = callee_lfp.register(1).unwrap();
             if v.is_array().is_some() {
-                let ptr = callee_reg.sub(1) as _;
-                return block_expand_array(v, ptr, req_num);
+                let ptr = callee_lfp.register_ptr(1);
+                return block_expand_array(v, ptr as _, req_num);
             }
         }
     }
@@ -331,7 +330,7 @@ fn expand_array_for_block(
 fn handle_req_opt_rest(
     info: &ISeqInfo,
     arg_num: usize,
-    callee_reg: *mut Option<Value>,
+    callee_lfp: LFP,
 ) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
     let req_num = info.args.required_num;
     let reqopt_num = info.args.reqopt_num;
@@ -342,46 +341,41 @@ fn handle_req_opt_rest(
         if arg_num > reqopt_num {
             if is_rest {
                 let len = arg_num - reqopt_num;
-                let ptr = callee_reg.sub(arg_num);
+                let ptr = callee_lfp.register_ptr(arg_num);
                 let iter = std::slice::from_raw_parts(ptr, len)
                     .iter()
                     .rev()
                     .map(|v| v.unwrap());
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_from_iter(iter));
+                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_from_iter(iter));
             } else if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
         } else if arg_num >= req_num {
             let len = reqopt_num - arg_num;
-            let ptr = callee_reg.sub(reqopt_num);
+            let ptr = callee_lfp.register_ptr(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_empty());
+                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_empty());
             }
         } else {
             if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
             let len = req_num - arg_num;
-            let ptr = callee_reg.sub(req_num);
+            let ptr = callee_lfp.register_ptr(req_num);
             fill(ptr, len, Some(Value::nil()));
             let len = reqopt_num - req_num;
-            let ptr = callee_reg.sub(reqopt_num);
+            let ptr = callee_lfp.register_ptr(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_empty());
+                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_empty());
             }
         }
     }
     None
 }
 
-fn handle_keyword(
-    info: &ISeqInfo,
-    callsite: &CallSiteInfo,
-    caller_lfp: LFP,
-    callee_reg: *mut Option<Value>,
-) {
+fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, callee_lfp: LFP) {
     let CallSiteInfo {
         kw_pos,
         kw_args,
@@ -392,7 +386,7 @@ fn handle_keyword(
     let callee_kw_pos = info.args.pos_num + 1;
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
-            let ptr = callee_reg.sub(callee_kw_pos + id);
+            let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
             let v = match kw_args.get(param_name) {
                 Some(id) => Some(caller_lfp.register(kw_pos.0 as usize + id).unwrap()),
                 None => None,
@@ -406,7 +400,7 @@ fn handle_keyword(
     {
         for (id, param_name) in info.args.keyword_names.iter().enumerate() {
             unsafe {
-                let ptr = callee_reg.sub(callee_kw_pos + id);
+                let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                 let sym = Value::symbol(*param_name);
                 if let Some(v) = h.as_hash().get(sym) {
                     if (*ptr).is_some() {
