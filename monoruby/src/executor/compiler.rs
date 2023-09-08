@@ -658,7 +658,6 @@ impl Codegen {
     ///
     /// #### in
     /// - rdi: arg len
-    /// - rcx: &FuncData
     /// - rdx: CallSiteId
     ///
     /// #### out
@@ -669,21 +668,15 @@ impl Codegen {
         monoasm! { &mut self.jit,
             lea  r9, [rsp - 16];   // callee_lfp
             movq r8, rdi;
-            subq rsp, 1024;
+            subq rsp, 1016;
             pushq rdi;
-            subq rsp, 24;
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
-            movq [rsp + 16], r9;    // callee_lfp
-            movq [rsp + 8], rcx;    // callee: &FuncData
-            //lea  rax, [r14 - (LBP_SELF)];
-            movq [rsp], r14;        // caller_lfp
-            movq rcx, rsp;
+            movq rcx, r14; // caller_lfp
             movq rax, (runtime::vm_handle_arguments);
             call rax;
-            addq rsp, 24;
             popq rdi;
-            addq rsp, 1024;
+            addq rsp, 1016;
         }
     }
 

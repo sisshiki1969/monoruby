@@ -187,7 +187,6 @@ impl Codegen {
         self.block_arg_expand();
 
         monoasm! { &mut self.jit,
-            movq rcx, r15;
             movl rdx, (id.get()); // CallSiteId
         }
         self.handle_arguments();
@@ -458,6 +457,11 @@ impl Codegen {
         self.execute_gc();
         self.set_method_outer();
         self.set_self_and_args(has_splat, &store[callid]);
+        monoasm! { &mut self.jit,
+            // set meta.
+            movq rax, (func_data.meta.get());
+            movq [rsp - (16 + LBP_META)], rax;
+        }
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
@@ -511,7 +515,6 @@ impl Codegen {
                     }
                 } else {
                     monoasm! { &mut self.jit,
-                        movq rcx, (func_data as *const _ as u64);
                         movl rdx, (callid.get());
                     }
                     self.handle_arguments();
@@ -519,11 +522,6 @@ impl Codegen {
                 }
             }
             _ => {}
-        }
-        monoasm! { &mut self.jit,
-            // set meta.
-            movq rax, (func_data.meta.get());
-            movq [rsp - (16 + LBP_META)], rax;
         }
         if native {
             monoasm! { &mut self.jit,
@@ -592,7 +590,6 @@ impl Codegen {
         self.block_arg_expand();
 
         monoasm! { &mut self.jit,
-            movq rcx, r13;
             movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();

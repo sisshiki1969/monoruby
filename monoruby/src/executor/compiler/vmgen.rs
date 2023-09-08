@@ -569,10 +569,9 @@ impl Codegen {
 
     fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
-            movq rsi, [rsp - (16 + LBP_META)];
-            lea  rdx, [rsp - 16];
+            lea  rsi, [rsp - 16];
             subq rsp, 1024;
-            movq rcx, rdi; // arg_num
+            movq rdx, rdi; // arg_num
             movq rdi, r12; // &Globals
             movq rax, (runtime::handle_invoker_arguments);
             call rax;

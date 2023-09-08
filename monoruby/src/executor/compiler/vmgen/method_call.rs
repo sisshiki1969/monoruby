@@ -193,7 +193,6 @@ impl Codegen {
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
-            movq rcx, [r13 + 8];
             movl rdx, [r13 - 16]; // CallSiteId
         }
         self.handle_arguments();
@@ -279,7 +278,6 @@ impl Codegen {
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
-            movq rcx, r15;          // &FuncData
             movl rdx, [r13 - 8];    // CallSiteId
         }
         self.handle_arguments();

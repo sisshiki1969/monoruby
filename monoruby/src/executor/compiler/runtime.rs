@@ -233,30 +233,24 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
-#[repr(C)]
-pub(super) struct HandleArguments {
-    caller_lfp: LFP,
-    callee: *const FuncData,
-    callee_lfp: LFP,
-}
-
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
-    ha: &HandleArguments,
+    caller_lfp: LFP,
     arg_num: usize,
+    callee_lfp: LFP,
 ) -> Option<Value> {
-    let callee_func_id = unsafe { (*ha.callee).meta.func_id() };
+    let callee_func_id = callee_lfp.meta().func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             // required + optional + rest
-            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, ha.callee_lfp) {
+            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, callee_lfp) {
                 vm.err_wrong_number_of_arg_range(arg_num, range);
                 return None;
             };
             // keyword
-            handle_keyword(&info, &globals.store[callid], ha.caller_lfp, ha.callee_lfp);
+            handle_keyword(&info, &globals.store[callid], caller_lfp, callee_lfp);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -272,23 +266,22 @@ pub(super) extern "C" fn vm_handle_arguments(
     } else if let Some(block_arg) = block_arg {
         unsafe {
             Some(BlockHandler(
-                ha.caller_lfp.register(block_arg.0 as usize).unwrap(),
+                caller_lfp.register(block_arg.0 as usize).unwrap(),
             ))
         }
     } else {
         None
     };
-    ha.callee_lfp.set_block(bh);
+    callee_lfp.set_block(bh);
     Some(Value::nil())
 }
 
 pub(super) extern "C" fn handle_invoker_arguments(
     globals: &Globals,
-    callee_meta: Meta,
     callee_lfp: LFP,
     mut arg_num: usize,
 ) -> usize {
-    let callee_func_id = callee_meta.func_id();
+    let callee_func_id = callee_lfp.meta().func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => unsafe {
             // expand array for block
