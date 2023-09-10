@@ -372,7 +372,7 @@ fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
     )
 }
 
-const CACHE_SIZE: usize = 6;
+const CACHE_SIZE: usize = 8;
 
 fn object_send(
     gen: &mut Codegen,
@@ -424,10 +424,10 @@ fn object_send(
 
 #[repr(C)]
 struct Cache {
-    class: ClassId,
-    version: u32,
     method: Option<IdentId>,
+    version: u32,
     fid: FuncId,
+    counter: u32,
 }
 
 extern "C" fn call_send_wrapper(
@@ -448,19 +448,34 @@ extern "C" fn call_send_wrapper(
     ) -> Result<FuncData> {
         MonorubyErr::check_min_number_of_arguments(len, 1)?;
         let method = args[0].expect_symbol_or_string(globals)?;
+        let mut min_i = usize::MAX;
+        let mut min_count = u32::MAX;
         for i in 0..CACHE_SIZE {
+            if cache[i].method.is_none() || cache[i].version != globals.class_version() {
+                if min_count != 0 {
+                    min_count = 0;
+                    min_i = i;
+                }
+                continue;
+            }
             if cache[i].method == Some(method) {
+                cache[i].counter += 1;
                 return Ok(globals.compile_on_demand(cache[i].fid).clone());
+            }
+            if cache[i].counter < min_count {
+                min_count = cache[i].counter;
+                min_i = i;
             }
         }
         let func_id = globals.find_method(recv, method, false)?;
-        for i in 0..CACHE_SIZE {
-            if cache[i].method.is_none() {
-                cache[i].method = Some(method);
-                cache[i].fid = func_id;
-                break;
-            }
+        //eprintln!("cache miss:{:?} {:?}", cache as *mut _, method);
+        if cache[min_i].method.is_none() {
+            cache[min_i].method = Some(method);
+            cache[min_i].version = globals.class_version();
+            cache[min_i].fid = func_id;
+            cache[min_i].counter = 1;
         }
+
         let data = globals.compile_on_demand(func_id);
         Ok(data.clone())
     }

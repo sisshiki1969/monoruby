@@ -298,7 +298,7 @@ impl Globals {
         unsafe { *self.codegen.class_version_addr += 1 }
     }
 
-    fn class_version(&self) -> u32 {
+    pub fn class_version(&self) -> u32 {
         unsafe { *self.codegen.class_version_addr }
     }
 
