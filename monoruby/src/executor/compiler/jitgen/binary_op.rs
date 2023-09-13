@@ -13,73 +13,61 @@ impl Codegen {
         let deopt = self.gen_side_deopt(pc, ctx);
         match kind {
             BinOpK::Add => {
-                if let Some(ret) = ret {
-                    match mode {
-                        OpMode::RR(lhs, rhs) => {
-                            self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                subq rdi, 1;
-                                addq rdi, rsi;
-                                jo deopt;
-                            );
-                            self.store_rdi(ret);
-                        }
-                        OpMode::RI(lhs, rhs) => {
-                            self.load_guard_rdi_fixnum(lhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                addq rdi, (Value::i32(rhs as i32).id() - 1);
-                                jo deopt;
-                            );
-                            self.store_rdi(ret);
-                        }
-                        OpMode::IR(lhs, rhs) => {
-                            self.load_guard_rsi_fixnum(rhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                addq rsi, (Value::i32(lhs as i32).id() - 1);
-                                jo deopt;
-                            );
-                            self.store_rsi(ret);
-                        }
+                match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            subq rdi, 1;
+                            addq rdi, rsi;
+                            jo deopt;
+                        );
                     }
+                    OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
+                        self.load_guard_rdi_fixnum(slot, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            addq rdi, (Value::i32(i as i32).id() - 1);
+                            jo deopt;
+                        );
+                    }
+                }
+                if let Some(ret) = ret {
+                    self.store_rdi(ret);
                 }
             }
             BinOpK::Sub => {
-                if let Some(ret) = ret {
-                    match mode {
-                        OpMode::RR(lhs, rhs) => {
-                            self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                subq rdi, rsi;
-                                jo deopt;
-                                addq rdi, 1;
-                            );
-                            self.store_rdi(ret);
-                        }
-                        OpMode::RI(lhs, rhs) => {
-                            self.load_guard_rdi_fixnum(lhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                subq rdi, (Value::i32(rhs as i32).id() - 1);
-                                jo deopt;
-                            );
-                            self.store_rdi(ret);
-                        }
-                        OpMode::IR(lhs, rhs) => {
-                            self.load_guard_rsi_fixnum(rhs, deopt);
-                            monoasm!( &mut self.jit,
-                                // fastpath
-                                movq rdi, (Value::i32(lhs as i32).id());
-                                subq rdi, rsi;
-                                jo deopt;
-                                addq rdi, 1;
-                            );
-                            self.store_rdi(ret);
-                        }
+                match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            subq rdi, rsi;
+                            jo deopt;
+                            addq rdi, 1;
+                        );
                     }
+                    OpMode::RI(lhs, rhs) => {
+                        self.load_guard_rdi_fixnum(lhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            subq rdi, (Value::i32(rhs as i32).id() - 1);
+                            jo deopt;
+                        );
+                    }
+                    OpMode::IR(lhs, rhs) => {
+                        self.load_guard_rsi_fixnum(rhs, deopt);
+                        monoasm!( &mut self.jit,
+                            // fastpath
+                            movq rdi, (Value::i32(lhs as i32).id());
+                            subq rdi, rsi;
+                            jo deopt;
+                            addq rdi, 1;
+                        );
+                    }
+                }
+                if let Some(ret) = ret {
+                    self.store_rdi(ret);
                 }
             }
             BinOpK::Exp => {
@@ -101,77 +89,74 @@ impl Codegen {
                 self.load_binary_args_with_mode(&mode);
                 self.generic_binop(ctx, ret, kind, pc);
             }
-            BinOpK::Rem => {
-                match mode {
-                    OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                        self.load_guard_rdi_fixnum(lhs, deopt);
-                        if let Some(ret) = ret {
-                            monoasm!( &mut self.jit,
-                                andq rdi, (rhs * 2 - 1);
-                            );
-                            self.store_rdi(ret);
-                        }
-                    }
-                    _ => {
-                        self.load_binary_args_with_mode(&mode);
-                        self.generic_binop(ctx, ret, kind, pc);
+            BinOpK::Rem => match mode {
+                OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
+                    self.load_guard_rdi_fixnum(lhs, deopt);
+                    if let Some(ret) = ret {
+                        monoasm!( &mut self.jit,
+                            andq rdi, (rhs * 2 - 1);
+                        );
+                        self.store_rdi(ret);
                     }
                 }
-                /*match mode {
+                _ => {
+                    self.load_binary_args_with_mode(&mode);
+                    self.generic_binop(ctx, ret, kind, pc);
+                }
+            },
+            BinOpK::BitOr => {
+                match mode {
                     OpMode::RR(lhs, rhs) => {
                         self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            subq rdi, rsi;
-                            jo deopt;
-                            addq rdi, 1;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::RI(lhs, rhs) => {
-                        self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            subq rdi, (Value::i32(rhs as i32).id() - 1);
-                            jo deopt;
-                        );
-                        self.store_rdi(ret);
-                    }
-                    OpMode::IR(lhs, rhs) => {
-                        self.load_guard_rsi_fixnum(rhs, deopt);
-                        monoasm!( &mut self.jit,
-                            // fastpath
-                            movq rdi, (Value::i32(lhs as i32).id());
-                            subq rdi, rsi;
-                            jo deopt;
-                            addq rdi, 1;
-                        );
-                        self.store_rdi(ret);
-                    }
-                }*/
-            }
-            _ => {
-                match kind {
-                    BinOpK::BitOr => {
-                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         monoasm!( &mut self.jit,
                             orq rdi, rsi;
                         );
                     }
-                    BinOpK::BitAnd => {
-                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
+                    OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
+                        self.load_guard_rdi_fixnum(slot, deopt);
+                        monoasm!( &mut self.jit,
+                            orq rdi, (Value::i32(i as i32).id());
+                        );
+                    }
+                }
+                if let Some(ret) = ret {
+                    self.store_rdi(ret);
+                }
+            }
+            BinOpK::BitAnd => {
+                match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
                         monoasm!( &mut self.jit,
                             andq rdi, rsi;
                         );
                     }
-                    BinOpK::BitXor => {
-                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
+                    OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
+                        self.load_guard_rdi_fixnum(slot, deopt);
+                        monoasm!( &mut self.jit,
+                            andq rdi, (Value::i32(i as i32).id());
+                        );
+                    }
+                }
+                if let Some(ret) = ret {
+                    self.store_rdi(ret);
+                }
+            }
+            BinOpK::BitXor => {
+                match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
                         monoasm!( &mut self.jit,
                             xorq rdi, rsi;
                             addq rdi, 1;
                         );
                     }
-                    _ => unimplemented!(),
+                    OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
+                        self.load_guard_rdi_fixnum(slot, deopt);
+                        monoasm!( &mut self.jit,
+                            xorq rdi, (Value::i32(i as i32).id() - 1);
+                        );
+                    }
                 }
                 if let Some(ret) = ret {
                     self.store_rdi(ret);

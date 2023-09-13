@@ -16,3 +16,5 @@ echo
 
 monoruby -v
 monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
+
+rbenv local 3.3.0-dev
