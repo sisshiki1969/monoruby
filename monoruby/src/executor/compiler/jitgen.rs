@@ -687,19 +687,19 @@ impl Codegen {
                         break;
                     }
                 }
-                TraceIr::Integer(ret, i) => {
-                    ctx.link_literal(ret, Value::i32(i));
+                TraceIr::Integer(dst, i) => {
+                    ctx.link_literal(dst, Value::i32(i));
                 }
-                TraceIr::Symbol(ret, id) => {
-                    ctx.link_literal(ret, Value::symbol(id));
+                TraceIr::Symbol(dst, id) => {
+                    ctx.link_literal(dst, Value::symbol(id));
                 }
-                TraceIr::Nil(ret) => {
-                    ctx.link_literal(ret, Value::nil());
+                TraceIr::Nil(dst) => {
+                    ctx.link_literal(dst, Value::nil());
                 }
-                TraceIr::Literal(ret, val) => {
-                    ctx.release(ret);
+                TraceIr::Literal(dst, val) => {
+                    ctx.release(dst);
                     if val.is_packed_value() || val.class() == FLOAT_CLASS {
-                        ctx.link_literal(ret, val);
+                        ctx.link_literal(dst, val);
                     } else {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
@@ -710,13 +710,13 @@ impl Codegen {
                         );
                         self.xmm_restore(&xmm_using);
 
-                        self.store_rax(ret);
+                        self.store_rax(dst);
                     }
                 }
-                TraceIr::Array { ret, callid } => {
+                TraceIr::Array { dst, callid } => {
                     let CallSiteInfo { args, pos_num, .. } = store[callid];
                     self.fetch_range(&mut ctx, args, pos_num as u16);
-                    ctx.release(ret);
+                    ctx.release(dst);
                     monoasm!( &mut self.jit,
                         movl rdx, (callid.get());
                         lea  rcx, [r14 - (LBP_SELF)];
@@ -725,21 +725,21 @@ impl Codegen {
                         movq rax, (runtime::gen_array);
                         call rax;
                     );
-                    self.store_rax(ret);
+                    self.store_rax(dst);
                 }
-                TraceIr::Hash { ret, args, len } => {
+                TraceIr::Hash { dst, args, len } => {
                     self.fetch_range(&mut ctx, args, len * 2);
-                    ctx.release(ret);
+                    ctx.release(dst);
                     monoasm!( &mut self.jit,
                         lea  rdi, [r14 - (conv(args))];
                         movq rsi, (len);
                         movq rax, (runtime::gen_hash);
                         call rax;
                     );
-                    self.store_rax(ret);
+                    self.store_rax(dst);
                 }
                 TraceIr::Range {
-                    ret,
+                    dst,
                     start,
                     end,
                     exclude_end,
@@ -758,10 +758,10 @@ impl Codegen {
                     };
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
-                    self.store_rax(ret);
+                    self.store_rax(dst);
                 }
-                TraceIr::Index { ret, base, idx } => {
-                    self.jit_get_index(&mut ctx, ret, base, idx, pc);
+                TraceIr::Index { dst, base, idx } => {
+                    self.jit_get_index(&mut ctx, dst, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     self.jit_index_assign(&mut ctx, src, base, idx, pc);
@@ -864,46 +864,9 @@ impl Codegen {
                         return;
                     }
                 }
-                TraceIr::LoadGvar { dst: ret, name } => {
-                    ctx.release(ret);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(&xmm_using);
-                    monoasm! { &mut self.jit,
-                        movq rdi, r12;
-                        movl rsi, (name.get());
-                        movq rax, (runtime::get_global_var);
-                        call rax;
-                    };
-                    self.store_rax(ret);
-                    self.xmm_restore(&xmm_using);
-                }
-                TraceIr::StoreGvar { src: val, name } => {
-                    self.fetch_slots(&mut ctx, &[val]);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(&xmm_using);
-                    monoasm! { &mut self.jit,
-                        movq rdi, r12;
-                        movl rsi, (name.get());
-                        movq rdx, [r14 - (conv(val))];
-                        movq rax, (runtime::set_global_var);
-                        call rax;
-                    };
-                    self.xmm_restore(&xmm_using);
-                }
-                TraceIr::LoadSvar { dst: ret, id } => {
-                    ctx.release(ret);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(&xmm_using);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;
-                        movl rsi, r12;
-                        movl rdx, (id);
-                        movq rax, (runtime::get_special_var);
-                        call rax;
-                    };
-                    self.store_rax(ret);
-                    self.xmm_restore(&xmm_using);
-                }
+                TraceIr::LoadGvar { dst, name } => self.jit_load_gvar(&mut ctx, name, dst),
+                TraceIr::StoreGvar { src: val, name } => self.jit_store_gvar(&mut ctx, name, val),
+                TraceIr::LoadSvar { dst, id } => self.jit_load_svar(&mut ctx, id, dst),
                 TraceIr::LoadDynVar(ret, src) => {
                     ctx.release(ret);
                     monoasm!( &mut self.jit,
@@ -938,7 +901,7 @@ impl Codegen {
                         movq [rax - (offset)], rdi;
                     );
                 }
-                TraceIr::BitNot { ret, src } => {
+                TraceIr::BitNot { dst: ret, src } => {
                     self.fetch_slots(&mut ctx, &[src]);
                     ctx.release(ret);
                     if pc.classid1().0 == 0 {
@@ -954,14 +917,14 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                TraceIr::Not { ret, src } => {
+                TraceIr::Not { dst: ret, src } => {
                     self.fetch_slots(&mut ctx, &[src]);
                     ctx.release(ret);
                     self.load_rdi(src);
                     self.not_rdi_to_rax();
                     self.store_rax(ret);
                 }
-                TraceIr::Neg { ret, src } => {
+                TraceIr::Neg { dst: ret, src } => {
                     if pc.is_float1() {
                         let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(ret);
@@ -987,7 +950,7 @@ impl Codegen {
                         }
                     }
                 }
-                TraceIr::Pos { ret, src } => {
+                TraceIr::Pos { dst: ret, src } => {
                     if pc.is_float1() {
                         let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(ret);
@@ -1010,33 +973,33 @@ impl Codegen {
                     }
                 }
                 TraceIr::IBinOp {
-                    kind, ret, mode, ..
+                    kind, dst, mode, ..
                 } => {
                     self.fetch_binary(&mut ctx, &mode);
-                    ctx.release(ret);
-                    self.gen_binop_integer(pc, kind, ret, mode, &ctx);
+                    ctx.release(dst);
+                    self.gen_binop_integer(pc, kind, dst, mode, &ctx);
                 }
                 TraceIr::FBinOp {
-                    kind, ret, mode, ..
+                    kind, dst, mode, ..
                 } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);
-                            if let Some(ret) = ret {
+                            if let Some(ret) = dst {
                                 let fret = ctx.xmm_write(ret);
                                 self.gen_binop_float_rr(kind, &ctx, fret, flhs, frhs);
                             }
                         }
                         OpMode::RI(lhs, rhs) => {
                             let flhs = self.fetch_float_assume_float(&mut ctx, lhs, pc);
-                            if let Some(ret) = ret {
+                            if let Some(ret) = dst {
                                 let fret = ctx.xmm_write(ret);
                                 self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
                             }
                         }
                         OpMode::IR(lhs, rhs) => {
                             let frhs = self.fetch_float_assume_float(&mut ctx, rhs, pc);
-                            if let Some(ret) = ret {
+                            if let Some(ret) = dst {
                                 let fret = ctx.xmm_write(ret);
                                 self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
                             }
@@ -1044,7 +1007,10 @@ impl Codegen {
                     };
                 }
                 TraceIr::BinOp {
-                    kind, ret, mode, ..
+                    kind,
+                    dst: ret,
+                    mode,
+                    ..
                 } => {
                     self.fetch_binary(&mut ctx, &mode);
                     ctx.release(ret);

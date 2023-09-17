@@ -222,24 +222,24 @@ impl JitContext {
                         info.def(dst);
                     }
                 }
-                TraceIr::Array { ret, callid } => {
+                TraceIr::Array { dst, callid } => {
                     let CallSiteInfo { args, pos_num, .. } = store[callid];
                     info.use_range(args, pos_num as u16);
-                    info.def(ret);
+                    info.def(dst);
                 }
-                TraceIr::Hash { ret, args, len } => {
+                TraceIr::Hash { dst, args, len } => {
                     info.use_range(args, len * 2);
-                    info.def(ret);
+                    info.def(dst);
                 }
-                TraceIr::Index { ret, base, idx } => {
-                    info.def(ret);
+                TraceIr::Index { dst, base, idx } => {
+                    info.def(dst);
                     info.r#use(base);
                     info.r#use(idx);
                 }
                 TraceIr::Range {
-                    ret, start, end, ..
+                    dst, start, end, ..
                 } => {
-                    info.def(ret);
+                    info.def(dst);
                     info.r#use(start);
                     info.r#use(end);
                 }
@@ -286,20 +286,20 @@ impl JitContext {
                 | TraceIr::StoreGvar { src, .. } => {
                     info.r#use(src);
                 }
-                TraceIr::BitNot { ret, src } => {
+                TraceIr::BitNot { dst, src } => {
                     info.r#use(src);
-                    info.def(ret);
+                    info.def(dst);
                 }
-                TraceIr::Neg { ret, src } | TraceIr::Pos { ret, src } => {
+                TraceIr::Neg { dst, src } | TraceIr::Pos { dst, src } => {
                     let is_float = pc.is_float1();
                     info.use_as(src, is_float, pc.classid1() == FLOAT_CLASS);
-                    info.def_as(ret, is_float);
+                    info.def_as(dst, is_float);
                 }
-                TraceIr::Not { ret, src } => {
+                TraceIr::Not { dst, src } => {
                     info.r#use(src);
-                    info.def(ret);
+                    info.def(dst);
                 }
-                TraceIr::FBinOp { ret, mode, .. } => {
+                TraceIr::FBinOp { dst, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             info.use_as_float(lhs, pc.classid1() == FLOAT_CLASS);
@@ -309,48 +309,48 @@ impl JitContext {
                             info.use_as_float(reg, pc.classid2() == FLOAT_CLASS);
                         }
                     }
-                    if let Some(ret) = ret {
+                    if let Some(ret) = dst {
                         info.def_as_float(ret);
                     }
                 }
                 TraceIr::IBinOp {
-                    ret,
+                    dst,
                     mode: OpMode::RR(lhs, rhs),
                     ..
                 }
                 | TraceIr::BinOp {
-                    ret,
+                    dst,
                     mode: OpMode::RR(lhs, rhs),
                     ..
                 } => {
                     info.r#use(lhs);
                     info.r#use(rhs);
-                    if let Some(ret) = ret {
+                    if let Some(ret) = dst {
                         info.def(ret);
                     }
                 }
                 TraceIr::IBinOp {
-                    ret,
+                    dst,
                     mode: OpMode::RI(reg, _),
                     ..
                 }
                 | TraceIr::IBinOp {
-                    ret,
+                    dst,
                     mode: OpMode::IR(_, reg),
                     ..
                 }
                 | TraceIr::BinOp {
-                    ret,
+                    dst,
                     mode: OpMode::RI(reg, _),
                     ..
                 }
                 | TraceIr::BinOp {
-                    ret,
+                    dst,
                     mode: OpMode::IR(_, reg),
                     ..
                 } => {
                     info.r#use(reg);
-                    if let Some(ret) = ret {
+                    if let Some(ret) = dst {
                         info.def(ret);
                     }
                 }

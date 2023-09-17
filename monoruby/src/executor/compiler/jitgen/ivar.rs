@@ -175,6 +175,49 @@ impl Codegen {
         );
         self.jit.select_page(0);
     }
+
+    pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
+        ctx.release(dst);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movl rsi, (name.get());
+            movq rax, (runtime::get_global_var);
+            call rax;
+        };
+        self.xmm_restore(&xmm_using);
+        self.store_rax(dst);
+    }
+
+    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, val: SlotId) {
+        self.fetch_slots(ctx, &[val]);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movl rsi, (name.get());
+            movq rdx, [r14 - (conv(val))];
+            movq rax, (runtime::set_global_var);
+            call rax;
+        };
+        self.xmm_restore(&xmm_using);
+    }
+
+    pub(super) fn jit_load_svar(&mut self, ctx: &mut BBContext, id: u32, dst: SlotId) {
+        ctx.release(dst);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movl rsi, r12;
+            movl rdx, (id);
+            movq rax, (runtime::get_special_var);
+            call rax;
+        };
+        self.store_rax(dst);
+        self.xmm_restore(&xmm_using);
+    }
 }
 
 #[cfg(test)]

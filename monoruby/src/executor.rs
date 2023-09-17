@@ -970,13 +970,13 @@ impl BcPc {
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
             TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
             TraceIr::Range {
-                ret,
+                dst,
                 start,
                 end,
                 exclude_end,
             } => format!(
                 "{:?} = {:?} {} {:?}",
-                ret,
+                dst,
                 start,
                 if exclude_end { "..." } else { ".." },
                 end
@@ -984,15 +984,15 @@ impl BcPc {
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.inspect(val))
             }
-            TraceIr::Array { ret, callid } => {
+            TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = globals.store[callid];
-                format!("{:?} = array[{:?}; {}]", ret, args, pos_num)
+                format!("{:?} = array[{:?}; {}]", dst, args, pos_num)
             }
-            TraceIr::Hash { ret, args, len } => {
-                format!("{:?} = hash[{:?}; {}]", ret, args, len)
+            TraceIr::Hash { dst, args, len } => {
+                format!("{:?} = hash[{:?}; {}]", dst, args, len)
             }
-            TraceIr::Index { ret, base, idx } => {
-                let op1 = format!("{:?} = {:?}.[{:?}]", ret, base, idx);
+            TraceIr::Index { dst, base, idx } => {
+                let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1026,8 +1026,8 @@ impl BcPc {
                     }
                 )
             }
-            TraceIr::StoreConst(reg, id) => {
-                format!("const[{id}] = {:?}", reg)
+            TraceIr::StoreConst(src, id) => {
+                format!("const[{id}] = {:?}", src)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
                 format!("{:?} = block_proxy({outer})", dst)
@@ -1035,8 +1035,8 @@ impl BcPc {
             TraceIr::BlockArg(dst, outer) => {
                 format!("{:?} = block_arg({outer})", dst)
             }
-            TraceIr::LoadDynVar(ret, src) => {
-                format!("{:?} = {:?}", ret, src)
+            TraceIr::LoadDynVar(dst, src) => {
+                format!("{:?} = {:?}", dst, src)
             }
             TraceIr::StoreDynVar(dst, src) => {
                 format!("{:?} = {:?}", dst, src)
@@ -1084,38 +1084,38 @@ impl BcPc {
                 )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
-            TraceIr::BitNot { ret, src } => {
-                let op1 = format!("{:?} = ~{:?}", ret, src);
+            TraceIr::BitNot { dst, src } => {
+                let op1 = format!("{:?} = ~{:?}", dst, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
-            TraceIr::Pos { ret, src } => {
-                let op1 = format!("{:?} = +{:?}", ret, src);
+            TraceIr::Pos { dst, src } => {
+                let op1 = format!("{:?} = +{:?}", dst, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
-            TraceIr::Neg { ret, src } => {
-                let op1 = format!("{:?} = -{:?}", ret, src);
+            TraceIr::Neg { dst, src } => {
+                let op1 = format!("{:?} = -{:?}", dst, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
-            TraceIr::Not { ret, src } => {
-                let op1 = format!("{:?} = !{:?}", ret, src);
+            TraceIr::Not { dst, src } => {
+                let op1 = format!("{:?} = !{:?}", dst, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
             TraceIr::BinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RR(lhs, rhs),
             }
             | TraceIr::IBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RR(lhs, rhs),
             }
             | TraceIr::FBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RR(lhs, rhs),
             } => {
-                let op1 = format!("{} = {:?} {} {:?}", ret_str(ret), lhs, kind, rhs);
+                let op1 = format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1125,20 +1125,20 @@ impl BcPc {
             }
             TraceIr::BinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RI(lhs, rhs),
             }
             | TraceIr::IBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RI(lhs, rhs),
             }
             | TraceIr::FBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::RI(lhs, rhs),
             } => {
-                let op1 = format!("{} = {:?} {} {}: i16", ret_str(ret), lhs, kind, rhs,);
+                let op1 = format!("{} = {:?} {} {}: i16", ret_str(dst), lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -1148,20 +1148,20 @@ impl BcPc {
             }
             TraceIr::BinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::IR(lhs, rhs),
             }
             | TraceIr::IBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::IR(lhs, rhs),
             }
             | TraceIr::FBinOp {
                 kind,
-                ret,
+                dst,
                 mode: OpMode::IR(lhs, rhs),
             } => {
-                let op1 = format!("{} = {}: i16 {} {:?}", ret_str(ret), lhs, kind, rhs,);
+                let op1 = format!("{} = {}: i16 {} {:?}", ret_str(dst), lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
