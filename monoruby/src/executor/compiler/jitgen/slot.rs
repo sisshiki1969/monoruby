@@ -71,7 +71,7 @@ impl SlotState {
     }
 
     pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.unlink_xmm(reg);
+        self.release(reg);
         self[reg] = LinkMode::Xmm(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -83,7 +83,7 @@ impl SlotState {
     }
 
     pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.unlink_xmm(reg);
+        self.release(reg);
         self[reg] = LinkMode::Both(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -94,8 +94,8 @@ impl SlotState {
         freg
     }
 
-    pub(super) fn link_const(&mut self, reg: SlotId, v: Value) {
-        self.unlink_xmm(reg);
+    pub(super) fn link_literal(&mut self, reg: SlotId, v: Value) {
+        self.release(reg);
         self[reg] = LinkMode::Literal(v);
     }
 
@@ -112,7 +112,7 @@ impl SlotState {
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
-    pub(crate) fn unlink_xmm(&mut self, reg: impl Into<Option<SlotId>>) {
+    pub(crate) fn release(&mut self, reg: impl Into<Option<SlotId>>) {
         match reg.into() {
             Some(reg) => match self[reg] {
                 LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
@@ -129,9 +129,9 @@ impl SlotState {
         }
     }
 
-    pub(super) fn unlink_locals(&mut self) {
+    pub(super) fn release_locals(&mut self) {
         for reg in 1..1 + self.local_num as u16 {
-            self.unlink_xmm(SlotId(reg));
+            self.release(SlotId(reg));
         }
     }
 
@@ -159,7 +159,7 @@ impl SlotState {
                 freg
             }
             LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Literal(_) => {
-                self.unlink_xmm(reg);
+                self.release(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
                 freg
@@ -192,8 +192,8 @@ impl SlotState {
                     let x = self.alloc_xmm();
                     self.link_xmm(i, x);
                 }
-                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_const(i, *l),
-                _ => self.unlink_xmm(i),
+                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),
+                _ => self.release(i),
             };
         }
     }
@@ -220,7 +220,7 @@ impl SlotState {
                 }
             })
             .collect();
-        let constants = self
+        let literal = self
             .slots
             .iter()
             .enumerate()
@@ -229,7 +229,7 @@ impl SlotState {
                 _ => None,
             })
             .collect();
-        WriteBack::new(xmm, constants)
+        WriteBack::new(xmm, literal)
     }
 
     pub(super) fn get_locals_write_back(&self) -> WriteBack {
@@ -257,7 +257,7 @@ impl SlotState {
                 }
             })
             .collect();
-        let constants = self
+        let literal = self
             .slots
             .iter()
             .enumerate()
@@ -266,7 +266,7 @@ impl SlotState {
                 _ => None,
             })
             .collect();
-        WriteBack::new(xmm, constants)
+        WriteBack::new(xmm, literal)
     }
 
     pub(super) fn get_xmm_using(&self, sp: SlotId) -> Vec<Xmm> {

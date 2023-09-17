@@ -428,7 +428,7 @@ impl Codegen {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.fetch_float_binary(ctx, lhs, rhs, pc);
-                            ctx.unlink_xmm(ret);
+                            ctx.release(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), xmm(frhs.enc());
                             };
@@ -436,7 +436,7 @@ impl Codegen {
                         OpMode::RI(lhs, rhs) => {
                             let rhs_label = self.jit.const_f64(rhs as f64);
                             let flhs = self.fetch_float_assume_float(ctx, lhs, pc);
-                            ctx.unlink_xmm(ret);
+                            ctx.release(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), [rip + rhs_label];
                             };
@@ -445,8 +445,8 @@ impl Codegen {
                     }
                     self.condbr_float(kind, branch_dest, brkind);
                 } else {
-                    self.writeback_binary(ctx, &mode);
-                    ctx.unlink_xmm(ret);
+                    self.fetch_binary(ctx, &mode);
+                    ctx.release(ret);
                     if mode.is_integer_op(&pc) {
                         let deopt = self.gen_side_deopt(pc, ctx);
                         match mode {
@@ -564,17 +564,6 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(super) fn writeback_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                self.fetch_slots(ctx, &[*lhs, *rhs]);
-            }
-            OpMode::RI(r, _) | OpMode::IR(_, r) => {
-                self.fetch_slots(ctx, &[*r]);
-            }
-        }
-    }
-
     pub(crate) fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
         self.load_rdi(reg);
         self.guard_rdi_fixnum(deopt);

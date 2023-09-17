@@ -65,9 +65,7 @@ fn object_nil(
     let CallSiteInfo { recv, ret, .. } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
-    if let Some(ret) = ret {
-        ctx.unlink_xmm(ret);
-    }
+    ctx.release(ret);
     monoasm!( &mut gen.jit,
         movq rax, (FALSE_VALUE);
         movq rsi, (TRUE_VALUE);

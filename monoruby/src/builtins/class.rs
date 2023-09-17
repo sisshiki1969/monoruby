@@ -85,9 +85,7 @@ fn inline_class_new(
     } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
     gen.fetch_callargs(ctx, callsite);
-    if let Some(ret) = ret {
-        ctx.unlink_xmm(ret);
-    }
+    ctx.release(ret);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
     gen.load_rdi(recv);

@@ -195,11 +195,11 @@ impl Codegen {
                     LinkMode::Literal(v) => {
                         #[cfg(feature = "jit-debug")]
                         eprintln!("      wb: Literal({:?})->{:?}", v, reg);
-                        self.gen_write_back_constant(reg, v);
+                        self.fetch_literal(reg, v);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
                 }
-                src_ctx.unlink_xmm(reg);
+                src_ctx.release(reg);
             };
         }
 

@@ -17,7 +17,7 @@ impl Codegen {
             } else {
                 self.fetch_slots(ctx, &[base]);
             }
-            ctx.unlink_xmm(ret);
+            ctx.release(ret);
             let exit = self.jit.label();
             let out_range = self.jit.label();
             let heap = self.jit.label();
@@ -78,7 +78,7 @@ impl Codegen {
             self.jit.select_page(0);
         } else {
             self.fetch_slots(ctx, &[base, idx]);
-            ctx.unlink_xmm(ret);
+            ctx.release(ret);
             let xmm_using = ctx.get_xmm_using();
             self.generic_index(&xmm_using, base, idx, pc);
         }

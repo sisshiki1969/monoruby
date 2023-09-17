@@ -20,7 +20,7 @@ impl Codegen {
                 ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
-                self.gen_write_back_constant(reg, v);
+                self.fetch_literal(reg, v);
                 ctx[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
@@ -32,6 +32,17 @@ impl Codegen {
     ///
     pub(crate) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
         reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
+    }
+
+    pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
+        match mode {
+            OpMode::RR(lhs, rhs) => {
+                self.fetch_slots(ctx, &[*lhs, *rhs]);
+            }
+            OpMode::RI(r, _) | OpMode::IR(_, r) => {
+                self.fetch_slots(ctx, &[*r]);
+            }
+        }
     }
 
     ///

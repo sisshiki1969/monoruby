@@ -228,16 +228,12 @@ fn integer_shr(
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(ctx, &[recv]);
-        if let Some(ret) = ret {
-            ctx.unlink_xmm(ret);
-        }
+        ctx.release(ret);
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shr_imm(rhs);
     } else {
         gen.fetch_slots(ctx, &[recv, args]);
-        if let Some(ret) = ret {
-            ctx.unlink_xmm(ret);
-        }
+        ctx.release(ret);
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shr(deopt);
     }
@@ -277,16 +273,12 @@ fn integer_shl(
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(ctx, &[recv]);
-        if let Some(ret) = ret {
-            ctx.unlink_xmm(ret);
-        }
+        ctx.release(ret);
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shl_imm(rhs, deopt);
     } else {
         gen.fetch_slots(ctx, &[recv, args]);
-        if let Some(ret) = ret {
-            ctx.unlink_xmm(ret);
-        }
+        ctx.release(ret);
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shl(deopt);
     }

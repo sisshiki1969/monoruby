@@ -306,9 +306,7 @@ fn array_shl(
         recv, ret, args, ..
     } = *callsite;
     gen.fetch_slots(ctx, &[recv, args]);
-    if let Some(ret) = ret {
-        ctx.unlink_xmm(ret);
-    }
+    ctx.release(ret);
     gen.load_rdi(recv);
     gen.guard_class(ARRAY_CLASS, deopt);
     gen.load_rsi(args);

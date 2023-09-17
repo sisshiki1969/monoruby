@@ -59,9 +59,7 @@ fn object_object_id(
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
-    if let Some(ret) = ret {
-        ctx.unlink_xmm(ret);
-    }
+    ctx.release(ret);
     gen.load_rdi(recv);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
@@ -391,10 +389,7 @@ fn object_send(
     } = *callsite;
     gen.fetch_slots(ctx, &[recv]);
     gen.fetch_callargs(ctx, callsite);
-    if let Some(ret) = ret {
-        ctx.unlink_xmm(ret);
-    }
-    //gen.load_rdi(recv);
+    ctx.release(ret);
     let using = ctx.get_xmm_using();
     let bh = match block_func_id {
         None => 0,
