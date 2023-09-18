@@ -10,27 +10,20 @@ impl Codegen {
         pc: BcPc,
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            // flag for small positive integer
-            let spi = ctx.is_u16_literal(idx);
-            if spi.is_none() {
-                self.fetch_slots(ctx, &[base, idx]);
-            } else {
-                self.fetch_slots(ctx, &[base]);
-            }
-            ctx.release(ret);
             let exit = self.jit.label();
             let out_range = self.jit.label();
             let heap = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_rdi_guard_array(base, side_exit);
+            self.fetch_to_rdi(ctx, base);
+            self.guard_rdi_array(side_exit);
 
-            if let Some(i) = spi {
+            if let Some(i) = ctx.is_u16_literal(idx) {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
             } else {
                 let exit = self.jit.label();
-                self.load_rsi(idx);
+                self.fetch_to_rsi(ctx, idx);
                 monoasm! { &mut self.jit,
                     testq rsi, 0b01;
                     jeq side_exit;
@@ -46,6 +39,7 @@ impl Codegen {
                 exit:
                 }
             }
+            ctx.release(ret);
             monoasm! { &mut self.jit,
                 movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                 cmpq rax, (ARRAY_INLINE_CAPA);
@@ -113,31 +107,22 @@ impl Codegen {
         pc: BcPc,
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            // flag for small positive integer
-            let spi = ctx.is_u16_literal(idx);
-            if spi.is_none() {
-                self.fetch_slots(ctx, &[base, idx]);
-            } else {
-                self.fetch_slots(ctx, &[base]);
-            }
-            self.fetch_to_rax(ctx, src);
-            monoasm! { &mut self.jit,
-                movq r15, rax;
-            }
             let xmm_using = ctx.get_xmm_using();
             let store = self.jit.label();
             let exit = self.jit.label();
             let heap = self.jit.label();
             let generic = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_rdi_guard_array(base, side_exit);
+            self.fetch_to_rdi(ctx, base);
+            self.guard_rdi_array(side_exit);
+            self.fetch_to_r15(ctx, src);
 
-            if let Some(i) = spi {
+            if let Some(i) = ctx.is_u16_literal(idx) {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
             } else {
-                self.load_rsi(idx);
+                self.fetch_to_rsi(ctx, idx);
                 monoasm! { &mut self.jit,
                     testq rsi, 0b01;
                     jeq side_exit;
@@ -147,6 +132,7 @@ impl Codegen {
                     jlt generic;
                 }
             }
+
             monoasm! { &mut self.jit,
                 movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                 cmpq rax, (ARRAY_INLINE_CAPA);
@@ -201,8 +187,8 @@ impl Codegen {
     /// #### out
     /// - rdi: ptr to Array.
     ///
-    fn load_rdi_guard_array(&mut self, base: SlotId, side_exit: DestLabel) {
-        self.load_rdi(base);
+    fn guard_rdi_array(&mut self, side_exit: DestLabel) {
+        //self.load_rdi(base);
         self.guard_class(ARRAY_CLASS, side_exit);
         monoasm! { &mut self.jit,
             cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);

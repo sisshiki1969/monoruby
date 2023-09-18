@@ -87,6 +87,90 @@ impl Codegen {
     }
 
     ///
+    /// Fetch *arg* and store in *rdi*.
+    ///
+    pub(super) fn fetch_to_rdi(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        if reg >= ctx.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
+            panic!();
+        };
+        match ctx[reg] {
+            LinkMode::Xmm(freg) => {
+                let f64_to_val = self.f64_to_val;
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(freg.enc());
+                    call f64_to_val;
+                    movq rdi, rax;
+                );
+            }
+            LinkMode::Literal(v) => {
+                monoasm!(&mut self.jit,
+                    movq rdi, (v.id());
+                );
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                self.load_rdi(reg);
+            }
+        }
+    }
+
+    ///
+    /// Fetch *arg* and store in *rsi*.
+    ///
+    pub(super) fn fetch_to_rsi(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        if reg >= ctx.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
+            panic!();
+        };
+        match ctx[reg] {
+            LinkMode::Xmm(freg) => {
+                let f64_to_val = self.f64_to_val;
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(freg.enc());
+                    call f64_to_val;
+                    movq rsi, rax;
+                );
+            }
+            LinkMode::Literal(v) => {
+                monoasm!(&mut self.jit,
+                    movq rsi, (v.id());
+                );
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                self.load_rsi(reg);
+            }
+        }
+    }
+
+    ///
+    /// Fetch *arg* and store in *r15*.
+    ///
+    pub(super) fn fetch_to_r15(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        if reg >= ctx.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
+            panic!();
+        };
+        match ctx[reg] {
+            LinkMode::Xmm(freg) => {
+                let f64_to_val = self.f64_to_val;
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(freg.enc());
+                    call f64_to_val;
+                    movq r15, rax;
+                );
+            }
+            LinkMode::Literal(v) => {
+                monoasm!(&mut self.jit,
+                    movq r15, (v.id());
+                );
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                self.load_r15(reg);
+            }
+        }
+    }
+
+    ///
     /// Fetch *lhs* and *rhs* as f64, and store in xmm registers.
     ///
     /// ### destroy
