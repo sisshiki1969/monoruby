@@ -196,6 +196,7 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    #[cfg(feature = "perf")]
     pub(crate) perf_file: std::fs::File,
 }
 
@@ -287,6 +288,7 @@ impl Codegen {
             fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            #[cfg(feature = "perf")]
             perf_file: {
                 let pid = std::process::id();
                 let temp_file = format!("/tmp/perf-{pid}.map");
@@ -391,6 +393,7 @@ impl Codegen {
 
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
 
+        #[cfg(feature = "perf")]
         self.perf_info(entry, "entry-point");
     }
 
@@ -1028,14 +1031,19 @@ impl Globals {
             );
             self[func_id].dump_bc(self);
         }
+
+        #[cfg(feature = "perf")]
         let codeptr = self.codegen.jit.get_current_address();
+
         let _sourcemap =
             self.codegen
                 .compile(&self.store, func_id, self_value, position, entry_label);
-
-        let desc = self.store.func_description(func_id);
-        self.codegen.perf_info(codeptr, &desc);
-
+        #[cfg(feature = "perf")]
+        {
+            let class_name = self_value.class().get_name(self);
+            let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
+            self.codegen.perf_info(codeptr, &desc);
+        }
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);
     }

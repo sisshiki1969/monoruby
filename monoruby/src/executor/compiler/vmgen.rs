@@ -1,3 +1,4 @@
+#[cfg(feature = "perf")]
 use std::io::Write;
 
 use super::*;
@@ -59,6 +60,7 @@ impl Codegen {
     /// Generate interpreter.
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
+        #[cfg(feature = "perf")]
         let vm_start_addr = self.jit.get_current_address();
         let entry = self.jit.label();
         //
@@ -334,6 +336,7 @@ impl Codegen {
         self.dispatch[207] = rem_rr;
         self.dispatch[208] = pow_rr;
 
+        #[cfg(feature = "perf")]
         self.perf_info(vm_start_addr, "monoruby-vm");
 
         // method invoker.
@@ -355,6 +358,7 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "method-invoker");
 
         // method invoker.
@@ -376,6 +380,7 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "method-invoker2");
 
         // block invoker.
@@ -393,6 +398,7 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "block-invoker");
 
         let codeptr = self.jit.get_current_address();
@@ -409,6 +415,7 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "block-invoker-with-self");
 
         let codeptr = self.jit.get_current_address();
@@ -444,6 +451,7 @@ impl Codegen {
             ret;
         };
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "fiber-invoker");
 
         let codeptr = self.jit.get_current_address();
@@ -479,6 +487,7 @@ impl Codegen {
             ret;
         };
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "fiber-invoker-with-self");
 
         // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
@@ -496,6 +505,7 @@ impl Codegen {
             ret;
         };
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "resume-fiber");
 
         // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
@@ -513,9 +523,11 @@ impl Codegen {
             ret;
         };
 
+        #[cfg(feature = "perf")]
         self.perf_info(codeptr, "yield-fiber");
     }
 
+    #[cfg(feature = "perf")]
     pub(crate) fn perf_info(&mut self, start: CodePtr, func_name: &str) {
         let size = self.jit.get_current_address() - start;
         self.perf_file
