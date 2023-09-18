@@ -13,17 +13,18 @@ impl Codegen {
             let exit = self.jit.label();
             let out_range = self.jit.label();
             let heap = self.jit.label();
-            let side_exit = self.gen_side_deopt(pc, ctx);
-            self.fetch_to_rdi(ctx, base);
-            self.guard_rdi_array(side_exit);
 
-            if let Some(i) = ctx.is_u16_literal(idx) {
+            self.fetch_to_rdi(ctx, base);
+
+            let side_exit = if let Some(i) = ctx.is_u16_literal(idx) {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
+                self.gen_side_deopt(pc, ctx)
             } else {
                 let exit = self.jit.label();
                 self.fetch_to_rsi(ctx, idx);
+                let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm! { &mut self.jit,
                     testq rsi, 0b01;
                     jeq side_exit;
@@ -36,10 +37,14 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     addq rsi, rax;
                     js   out_range;
-                exit:
+                    exit:
                 }
-            }
+                side_exit
+            };
             ctx.release(ret);
+
+            self.guard_rdi_array(side_exit);
+
             monoasm! { &mut self.jit,
                 movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                 cmpq rax, (ARRAY_INLINE_CAPA);
@@ -112,17 +117,17 @@ impl Codegen {
             let exit = self.jit.label();
             let heap = self.jit.label();
             let generic = self.jit.label();
-            let side_exit = self.gen_side_deopt(pc, ctx);
             self.fetch_to_rdi(ctx, base);
-            self.guard_rdi_array(side_exit);
             self.fetch_to_r15(ctx, src);
 
-            if let Some(i) = ctx.is_u16_literal(idx) {
+            let side_exit = if let Some(i) = ctx.is_u16_literal(idx) {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
+                self.gen_side_deopt(pc, ctx)
             } else {
                 self.fetch_to_rsi(ctx, idx);
+                let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm! { &mut self.jit,
                     testq rsi, 0b01;
                     jeq side_exit;
@@ -130,8 +135,10 @@ impl Codegen {
                     // lower range check
                     cmpq rsi, 0;
                     jlt generic;
-                }
-            }
+                };
+                side_exit
+            };
+            self.guard_rdi_array(side_exit);
 
             monoasm! { &mut self.jit,
                 movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];

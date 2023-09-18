@@ -74,6 +74,8 @@ impl Codegen {
                     movq xmm0, xmm(freg.enc());
                     call f64_to_val;
                 );
+                self.store_rax(reg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
@@ -102,6 +104,8 @@ impl Codegen {
                     call f64_to_val;
                     movq rdi, rax;
                 );
+                self.store_rax(reg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
@@ -130,6 +134,8 @@ impl Codegen {
                     call f64_to_val;
                     movq rsi, rax;
                 );
+                self.store_rax(reg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
@@ -158,6 +164,8 @@ impl Codegen {
                     call f64_to_val;
                     movq r15, rax;
                 );
+                self.store_rax(reg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
