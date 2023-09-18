@@ -1,13 +1,20 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_store_constant(&mut self, ctx: &BBContext, id: IdentId, src: SlotId) {
+    ///
+    /// Store constant.
+    ///
+    /// #### in
+    /// - rax: src: Value
+    ///
+    pub(super) fn jit_store_constant(&mut self, ctx: &mut BBContext, id: IdentId, src: SlotId) {
         let const_version = self.const_version;
         let xmm_using = ctx.get_xmm_using();
+        self.fetch_to_rax(ctx, src);
         self.xmm_save(&xmm_using);
         monoasm!( &mut self.jit,
           movq rdx, (id.get());  // name: IdentId
-          movq rcx, [r14 - (conv(src))];  // val: Value
+          movq rcx, rax;  // val: Value
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals
           addq [rip + const_version], 1;

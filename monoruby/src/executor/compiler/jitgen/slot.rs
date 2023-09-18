@@ -19,6 +19,7 @@ impl std::fmt::Debug for SlotState {
                 LinkMode::Literal(v) => Some(format!("%{i}:Literal({:?}) ", v)),
                 LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
                 LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
+                LinkMode::R15 => Some(format!("%{i}:R15 ")),
             })
             .collect();
         write!(f, "[{s}]")
@@ -109,6 +110,16 @@ impl SlotState {
         &self.xmm[i.0 as usize]
     }
 
+    pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
+        for (i, mode) in self.slots.iter_mut().enumerate() {
+            if *mode == LinkMode::R15 {
+                *mode = LinkMode::Stack;
+                return Some(SlotId(i as _));
+            }
+        }
+        None
+    }
+
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
@@ -120,7 +131,7 @@ impl SlotState {
                     self.xmm[freg.0 as usize].retain(|e| *e != reg);
                     self[reg] = LinkMode::Stack;
                 }
-                LinkMode::Literal(_) => {
+                LinkMode::Literal(_) | LinkMode::R15 => {
                     self[reg] = LinkMode::Stack;
                 }
                 LinkMode::Stack => {}
@@ -145,7 +156,7 @@ impl SlotState {
                     *x = l;
                 }
             }
-            LinkMode::Stack | LinkMode::Literal(_) => {}
+            LinkMode::Stack | LinkMode::Literal(_) | LinkMode::R15 => {}
         });
     }
 
@@ -158,7 +169,11 @@ impl SlotState {
                 assert_eq!(reg, self.xmm[freg.0 as usize][0]);
                 freg
             }
-            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Literal(_) => {
+            LinkMode::Xmm(_)
+            | LinkMode::Both(_)
+            | LinkMode::Stack
+            | LinkMode::Literal(_)
+            | LinkMode::R15 => {
                 self.release(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);

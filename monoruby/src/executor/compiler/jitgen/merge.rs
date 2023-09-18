@@ -77,7 +77,7 @@ impl Codegen {
             let mut const_vec = vec![];
             for (reg, coerced) in use_set {
                 match template[reg] {
-                    LinkMode::Stack => {}
+                    LinkMode::Stack | LinkMode::R15 => {}
                     LinkMode::Literal(v) => {
                         if v.class() == FLOAT_CLASS {
                             const_vec.push(reg);
@@ -184,6 +184,7 @@ impl Codegen {
             self.jit.select_page(1);
             self.jit.bind_label(entry);
         }
+        self.clear_r15(&mut src_ctx);
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx[reg] == LinkMode::Stack {
@@ -198,6 +199,7 @@ impl Codegen {
                         self.fetch_literal(reg, v);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
+                    LinkMode::R15 => unreachable!(),
                 }
                 src_ctx.release(reg);
             };

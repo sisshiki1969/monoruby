@@ -330,6 +330,10 @@ impl BBContext {
     fn get_write_back(&self) -> WriteBack {
         self.slot_state.get_write_back(self.sp)
     }
+
+    pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
+        self.slot_state.clear_r15()
+    }
 }
 
 #[derive(Debug)]
@@ -379,9 +383,13 @@ pub(crate) enum LinkMode {
     ///
     Stack,
     ///
-    /// Constant.
+    /// Literal.
     ///
     Literal(Value),
+    ///
+    /// On R15 register.
+    ///
+    R15,
 }
 
 #[cfg(any(feature = "log-jit", feature = "profile"))]
@@ -643,6 +651,16 @@ impl Codegen {
             LinkMode::Literal(v) => {
                 ctx.link_literal(dst, v);
             }
+            LinkMode::R15 => {
+                ctx.release(dst);
+                self.store_r15(dst);
+            }
+        }
+    }
+
+    fn clear_r15(&mut self, ctx: &mut BBContext) {
+        if let Some(slot) = ctx.clear_r15() {
+            self.store_r15(slot);
         }
     }
 
@@ -782,8 +800,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::StoreConst(src, id) => {
-                    self.fetch_slots(&mut ctx, &[src]);
-                    self.jit_store_constant(&ctx, id, src);
+                    self.jit_store_constant(&mut ctx, id, src);
                 }
                 TraceIr::BlockArgProxy(dst, outer) => {
                     ctx.release(dst);
@@ -884,7 +901,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::StoreDynVar(dst, src) => {
-                    self.fetch_slots(&mut ctx, &[src]);
+                    self.fetch_to_rdi(&mut ctx, src);
                     monoasm!( &mut self.jit,
                         movq rax, [r14 - (LBP_OUTER)];
                     );
@@ -894,13 +911,13 @@ impl Codegen {
                         );
                     }
                     let offset = conv(dst.reg) - LBP_OUTER;
-                    self.load_rdi(src);
+                    //self.load_rdi(src);
                     monoasm!( &mut self.jit,
                         movq [rax - (offset)], rdi;
                     );
                 }
                 TraceIr::BitNot { dst: ret, src } => {
-                    self.fetch_slots(&mut ctx, &[src]);
+                    self.fetch_to_rdi(&mut ctx, src);
                     ctx.release(ret);
                     if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -908,7 +925,7 @@ impl Codegen {
                     } else {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
-                        self.load_rdi(src);
+                        //self.load_rdi(src);
                         self.call_unop(bitnot_value as _);
                         self.xmm_restore(&xmm_using);
                         self.jit_handle_error(&ctx, pc);
@@ -916,9 +933,9 @@ impl Codegen {
                     }
                 }
                 TraceIr::Not { dst: ret, src } => {
-                    self.fetch_slots(&mut ctx, &[src]);
+                    self.fetch_to_rdi(&mut ctx, src);
                     ctx.release(ret);
-                    self.load_rdi(src);
+                    //self.load_rdi(src);
                     self.not_rdi_to_rax();
                     self.store_rax(ret);
                 }
@@ -932,7 +949,7 @@ impl Codegen {
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
                     } else {
-                        self.fetch_slots(&mut ctx, &[src]);
+                        self.fetch_to_rdi(&mut ctx, src);
                         ctx.release(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -940,7 +957,7 @@ impl Codegen {
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
-                            self.load_rdi(src);
+                            //self.load_rdi(src);
                             self.call_unop(neg_value as _);
                             self.xmm_restore(&xmm_using);
                             self.jit_handle_error(&ctx, pc);
@@ -954,7 +971,7 @@ impl Codegen {
                         let fdst = ctx.xmm_write(ret);
                         self.xmm_mov(fsrc, fdst);
                     } else {
-                        self.fetch_slots(&mut ctx, &[src]);
+                        self.fetch_to_rdi(&mut ctx, src);
                         ctx.release(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -962,7 +979,7 @@ impl Codegen {
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
-                            self.load_rdi(src);
+                            //self.load_rdi(src);
                             self.call_unop(pos_value as _);
                             self.xmm_restore(&xmm_using);
                             self.jit_handle_error(&ctx, pc);
@@ -1160,6 +1177,7 @@ impl Codegen {
                     ..
                 } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
+                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
@@ -1181,6 +1199,7 @@ impl Codegen {
                     ..
                 } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
+                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
@@ -1197,6 +1216,7 @@ impl Codegen {
                 }
                 TraceIr::Super { callid, info, .. } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
+                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
                     if let Some(ret) = ret {
@@ -1217,6 +1237,7 @@ impl Codegen {
                     ..
                 } => {
                     //self.fetch_slots(&mut ctx, &[store[callsite].recv]);
+                    self.clear_r15(&mut ctx);
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
@@ -1226,6 +1247,7 @@ impl Codegen {
                     len,
                     callid,
                 } => {
+                    self.clear_r15(&mut ctx);
                     if let Some(ret) = ret {
                         ctx.release(ret);
                     }
@@ -1266,13 +1288,13 @@ impl Codegen {
                     name,
                     func_id,
                 } => {
-                    self.jit_class_def(&ctx, ret, superclass, name, func_id, false, pc);
+                    self.jit_class_def(&mut ctx, ret, superclass, name, func_id, false, pc);
                 }
                 TraceIr::ModuleDef { ret, name, func_id } => {
-                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id, true, pc);
+                    self.jit_class_def(&mut ctx, ret, SlotId::new(0), name, func_id, true, pc);
                 }
                 TraceIr::SingletonClassDef { ret, base, func_id } => {
-                    self.jit_singleton_class_def(&ctx, ret, base, func_id, pc);
+                    self.jit_singleton_class_def(&mut ctx, ret, base, func_id, pc);
                 }
                 TraceIr::DefinedYield { ret } => {
                     ctx.release(ret);
