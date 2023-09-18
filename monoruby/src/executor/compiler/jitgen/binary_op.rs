@@ -6,9 +6,9 @@ impl Codegen {
         &mut self,
         pc: BcPc,
         kind: BinOpK,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         mode: OpMode,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
     ) {
         let deopt = self.gen_side_deopt(pc, ctx);
         match kind {
@@ -32,8 +32,9 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(ret) = ret {
-                    self.store_rdi(ret);
+                if let Some(dst) = dst {
+                    //self.store_rdi(ret);
+                    self.save_rdi_to_r15(ctx, dst);
                 }
             }
             BinOpK::Sub => {
@@ -66,8 +67,9 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(ret) = ret {
-                    self.store_rdi(ret);
+                if let Some(dst) = dst {
+                    //self.store_rdi(ret);
+                    self.save_rdi_to_r15(ctx, dst);
                 }
             }
             BinOpK::Exp => {
@@ -81,27 +83,29 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                if let Some(ret) = ret {
-                    self.store_rax(ret);
+                if let Some(dst) = dst {
+                    //self.store_rax(dst);
+                    self.save_rax_to_r15(ctx, dst);
                 }
             }
             BinOpK::Mul | BinOpK::Div => {
                 self.load_binary_args_with_mode(&mode);
-                self.generic_binop(ctx, ret, kind, pc);
+                self.generic_binop(ctx, dst, kind, pc);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     self.load_guard_rdi_fixnum(lhs, deopt);
-                    if let Some(ret) = ret {
+                    if let Some(dst) = dst {
                         monoasm!( &mut self.jit,
                             andq rdi, (rhs * 2 - 1);
                         );
-                        self.store_rdi(ret);
+                        //self.store_rdi(ret);
+                        self.save_rdi_to_r15(ctx, dst);
                     }
                 }
                 _ => {
                     self.load_binary_args_with_mode(&mode);
-                    self.generic_binop(ctx, ret, kind, pc);
+                    self.generic_binop(ctx, dst, kind, pc);
                 }
             },
             BinOpK::BitOr => {
@@ -119,8 +123,9 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(ret) = ret {
-                    self.store_rdi(ret);
+                if let Some(dst) = dst {
+                    //self.store_rdi(ret);
+                    self.save_rdi_to_r15(ctx, dst);
                 }
             }
             BinOpK::BitAnd => {
@@ -138,8 +143,9 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(ret) = ret {
-                    self.store_rdi(ret);
+                if let Some(dst) = dst {
+                    //self.store_rdi(dst);
+                    self.save_rdi_to_r15(ctx, dst);
                 }
             }
             BinOpK::BitXor => {
@@ -158,8 +164,9 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(ret) = ret {
-                    self.store_rdi(ret);
+                if let Some(dst) = dst {
+                    //self.store_rdi(dst);
+                    self.save_rdi_to_r15(ctx, dst);
                 }
             }
         }
@@ -385,7 +392,7 @@ impl Codegen {
 
     pub(super) fn gen_generic_binop(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         pc: BcPc,
         kind: BinOpK,
         ret: Option<SlotId>,
@@ -764,15 +771,16 @@ impl Codegen {
         );
     }
 
-    fn generic_binop(&mut self, ctx: &BBContext, ret: Option<SlotId>, kind: BinOpK, pc: BcPc) {
+    fn generic_binop(&mut self, ctx: &mut BBContext, ret: Option<SlotId>, kind: BinOpK, pc: BcPc) {
         let func = kind.generic_func();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(ret) = ret {
-            self.store_rax(ret);
+        if let Some(dst) = ret {
+            //self.store_rax(ret);
+            self.save_rax_to_r15(ctx, dst);
         }
     }
 }

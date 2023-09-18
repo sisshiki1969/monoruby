@@ -227,11 +227,16 @@ pub(crate) fn conv(reg: SlotId) -> i64 {
 struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
+    r15: Option<SlotId>,
 }
 
 impl WriteBack {
-    fn new(xmm: Vec<(Xmm, Vec<SlotId>)>, literal: Vec<(Value, SlotId)>) -> Self {
-        Self { xmm, literal }
+    fn new(
+        xmm: Vec<(Xmm, Vec<SlotId>)>,
+        literal: Vec<(Value, SlotId)>,
+        r15: Option<SlotId>,
+    ) -> Self {
+        Self { xmm, literal, r15 }
     }
 }
 
@@ -653,6 +658,8 @@ impl Codegen {
             }
             LinkMode::R15 => {
                 ctx.release(dst);
+                self.store_r15(src);
+                ctx[src] = LinkMode::Stack;
                 self.store_r15(dst);
             }
         }
@@ -662,6 +669,22 @@ impl Codegen {
         if let Some(slot) = ctx.clear_r15() {
             self.store_r15(slot);
         }
+    }
+
+    fn save_rdi_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
+        self.clear_r15(ctx);
+        monoasm! { &mut self.jit,
+            movq r15, rdi;
+        }
+        ctx.slot_state[dst] = LinkMode::R15;
+    }
+
+    fn save_rax_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
+        self.clear_r15(ctx);
+        monoasm! { &mut self.jit,
+            movq r15, rax;
+        }
+        ctx.slot_state[dst] = LinkMode::R15;
     }
 
     fn compile_bb(
@@ -939,10 +962,10 @@ impl Codegen {
                     self.not_rdi_to_rax();
                     self.store_rax(ret);
                 }
-                TraceIr::Neg { dst: ret, src } => {
+                TraceIr::Neg { dst, src } => {
                     if pc.is_float1() {
                         let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
-                        let fdst = ctx.xmm_write(ret);
+                        let fdst = ctx.xmm_write(dst);
                         self.xmm_mov(fsrc, fdst);
                         let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         monoasm!( &mut self.jit,
@@ -950,7 +973,7 @@ impl Codegen {
                         );
                     } else {
                         self.fetch_to_rdi(&mut ctx, src);
-                        ctx.release(ret);
+                        ctx.release(dst);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                             return;
@@ -961,7 +984,7 @@ impl Codegen {
                             self.call_unop(neg_value as _);
                             self.xmm_restore(&xmm_using);
                             self.jit_handle_error(&ctx, pc);
-                            self.store_rax(ret);
+                            self.store_rax(dst);
                         }
                     }
                 }
@@ -992,7 +1015,7 @@ impl Codegen {
                 } => {
                     self.fetch_binary(&mut ctx, &mode);
                     ctx.release(dst);
-                    self.gen_binop_integer(pc, kind, dst, mode, &ctx);
+                    self.gen_binop_integer(pc, kind, dst, mode, &mut ctx);
                 }
                 TraceIr::FBinOp {
                     kind, dst, mode, ..
@@ -1034,7 +1057,7 @@ impl Codegen {
                         return;
                     } else {
                         self.load_binary_args_with_mode(&mode);
-                        self.gen_generic_binop(&ctx, pc, kind, ret);
+                        self.gen_generic_binop(&mut ctx, pc, kind, ret);
                     }
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
@@ -1535,6 +1558,9 @@ impl Codegen {
         }
         for (v, slot) in &wb.literal {
             self.fetch_literal(*slot, *v);
+        }
+        if let Some(slot) = wb.r15 {
+            self.store_r15(slot);
         }
     }
 

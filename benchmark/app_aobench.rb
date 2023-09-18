@@ -97,7 +97,6 @@ class Plane
   end
 
   def intersect(ray, isect)
-    #puts "plane intersect"
     d = -@p.vdot(@n)
     v = ray.dir.vdot(@n)
     v0 = v

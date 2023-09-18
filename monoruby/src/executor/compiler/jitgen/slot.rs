@@ -111,13 +111,26 @@ impl SlotState {
     }
 
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
+        let mut res = None;
         for (i, mode) in self.slots.iter_mut().enumerate() {
             if *mode == LinkMode::R15 {
                 *mode = LinkMode::Stack;
-                return Some(SlotId(i as _));
+                assert!(res.is_none());
+                res = Some(SlotId(i as _));
             }
         }
-        None
+        res
+    }
+
+    pub(super) fn get_r15(&self) -> Option<SlotId> {
+        let mut res = None;
+        for (i, mode) in self.slots.iter().enumerate() {
+            if *mode == LinkMode::R15 {
+                assert!(res.is_none());
+                res = Some(SlotId(i as _));
+            }
+        }
+        res
     }
 
     ///
@@ -244,7 +257,8 @@ impl SlotState {
                 _ => None,
             })
             .collect();
-        WriteBack::new(xmm, literal)
+        let r15 = self.get_r15();
+        WriteBack::new(xmm, literal, r15)
     }
 
     pub(super) fn get_locals_write_back(&self) -> WriteBack {
@@ -281,7 +295,11 @@ impl SlotState {
                 _ => None,
             })
             .collect();
-        WriteBack::new(xmm, literal)
+        let r15 = match self.get_r15() {
+            Some(slot) if slot.0 as usize <= local_num => Some(slot),
+            _ => None,
+        };
+        WriteBack::new(xmm, literal, r15)
     }
 
     pub(super) fn get_xmm_using(&self, sp: SlotId) -> Vec<Xmm> {

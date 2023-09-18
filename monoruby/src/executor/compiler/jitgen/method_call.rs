@@ -17,7 +17,7 @@ impl Codegen {
     pub(super) fn gen_call(
         &mut self,
         store: &Store,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         func_data: &FuncData,
         callid: CallSiteId,
         pc: BcPc,
@@ -37,7 +37,7 @@ impl Codegen {
     fn gen_call_cached(
         &mut self,
         store: &Store,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         callid: CallSiteId,
         func_data: &FuncData,
         cached: InlineCached,
@@ -444,7 +444,7 @@ impl Codegen {
 
     fn method_call_cached(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
         func_data: &FuncData,
@@ -543,8 +543,9 @@ impl Codegen {
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(ret) = ret {
-            self.store_rax(ret);
+        if let Some(dst) = ret {
+            self.save_rax_to_r15(ctx, dst);
+            //self.store_rax(dst);
         }
     }
 
