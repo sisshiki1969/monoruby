@@ -74,13 +74,11 @@ impl Codegen {
                     movq xmm0, xmm(freg.enc());
                     call f64_to_val;
                 );
-                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
                 monoasm!(&mut self.jit,
                     movq rax, (v.id());
                 );
-                ctx[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.load_rax(reg);

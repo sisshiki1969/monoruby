@@ -761,10 +761,10 @@ impl Codegen {
                     self.store_rax(dst);
                 }
                 TraceIr::Index { dst, base, idx } => {
-                    self.jit_get_index(&mut ctx, dst, base, idx, pc);
+                    self.jit_get_array_index(&mut ctx, dst, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    self.jit_index_assign(&mut ctx, src, base, idx, pc);
+                    self.jit_array_index_assign(&mut ctx, src, base, idx, pc);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.release(dst);
@@ -1648,41 +1648,17 @@ impl Codegen {
     ///
     /// #### in
     ///
-    /// - rdi: &RValue
-    ///
+    /// - rdi: base: &mut RValue
     /// - rsi: IvarId
+    /// - rdx: src: Value
     ///
     /// #### destroy
     ///
     /// - caller-save registers
     ///
-    fn set_ivar(&mut self, src: SlotId, using: &[Xmm]) {
+    fn set_ivar(&mut self, using: &[Xmm]) {
         self.xmm_save(using);
         monoasm!( &mut self.jit,
-            movq rdx, [r14 - (conv(src))];   // val: Value
-            movq rax, (RValue::set_ivar);
-            call rax;
-        );
-        self.xmm_restore(using);
-    }
-
-    ///
-    /// Set an instance variable.
-    ///
-    /// #### in
-    ///
-    /// - rdi: &RValue
-    /// - rsi: IvarId
-    /// - r15: src: Value
-    ///
-    /// #### destroy
-    ///
-    /// - caller-save registers
-    ///
-    fn set_ivar2(&mut self, using: &[Xmm]) {
-        self.xmm_save(using);
-        monoasm!( &mut self.jit,
-            movq rdx, r15;
             movq rax, (RValue::set_ivar);
             call rax;
         );

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_get_index(
+    pub(super) fn jit_get_array_index(
         &mut self,
         ctx: &mut BBContext,
         ret: SlotId,
@@ -22,7 +22,7 @@ impl Codegen {
             let out_range = self.jit.label();
             let heap = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_guard_array(base, side_exit);
+            self.load_rdi_guard_array(base, side_exit);
 
             if let Some(i) = spi {
                 monoasm! { &mut self.jit,
@@ -104,7 +104,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn jit_index_assign(
+    pub(super) fn jit_array_index_assign(
         &mut self,
         ctx: &mut BBContext,
         src: SlotId,
@@ -116,9 +116,13 @@ impl Codegen {
             // flag for small positive integer
             let spi = ctx.is_u16_literal(idx);
             if spi.is_none() {
-                self.fetch_slots(ctx, &[base, idx, src]);
+                self.fetch_slots(ctx, &[base, idx]);
             } else {
-                self.fetch_slots(ctx, &[base, src]);
+                self.fetch_slots(ctx, &[base]);
+            }
+            self.fetch_to_rax(ctx, src);
+            monoasm! { &mut self.jit,
+                movq r15, rax;
             }
             let xmm_using = ctx.get_xmm_using();
             let store = self.jit.label();
@@ -126,7 +130,7 @@ impl Codegen {
             let heap = self.jit.label();
             let generic = self.jit.label();
             let side_exit = self.gen_side_deopt(pc, ctx);
-            self.load_guard_array(base, side_exit);
+            self.load_rdi_guard_array(base, side_exit);
 
             if let Some(i) = spi {
                 monoasm! { &mut self.jit,
@@ -154,8 +158,7 @@ impl Codegen {
                 jle  generic;
                 lea  rdi, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
             store:
-                movq rax, [r14 - (conv(src))];
-                movq [rdi], rax;
+                movq [rdi], r15;
             exit:
             };
 
@@ -175,7 +178,7 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rdx, rbx;
                 movq rcx, r12;
-                movq r8, [r14 - (conv(src))];
+                movq r8, r15;
                 movq rax, (runtime::set_array_integer_index);
                 call rax;
             };
@@ -192,7 +195,13 @@ impl Codegen {
         self.jit_handle_error(ctx, pc);
     }
 
-    fn load_guard_array(&mut self, base: SlotId, side_exit: DestLabel) {
+    ///
+    /// Load *base* to `rdi` as Array. If not, go *side_exit*.
+    ///
+    /// #### out
+    /// - rdi: ptr to Array.
+    ///
+    fn load_rdi_guard_array(&mut self, base: SlotId, side_exit: DestLabel) {
         self.load_rdi(base);
         self.guard_class(ARRAY_CLASS, side_exit);
         monoasm! { &mut self.jit,

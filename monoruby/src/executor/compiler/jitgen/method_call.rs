@@ -366,29 +366,28 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
+            monoasm!( &mut self.jit,
+                movl rsi, (ivar_id.get());
+                movq rdx, [r14 - (conv(args))];
+            );
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
-                    movl rsi, (ivar_id.get());
                     // we don't know ty of the receiver in a compile time.
                     cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
-                    movq rax, [r14 - (conv(args))];  //val: Value
-                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rax;
+                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rdx;
                 exit:
                 );
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
-                self.set_ivar(args, &xmm_using);
+                self.set_ivar(&xmm_using);
                 self.jit_handle_error(ctx, pc);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
-                monoasm!( &mut self.jit,
-                    movl rsi, (ivar_id.get());
-                );
-                self.set_ivar(args, &xmm_using);
+                self.set_ivar(&xmm_using);
                 self.jit_handle_error(ctx, pc);
             }
         } else {
@@ -428,7 +427,10 @@ impl Codegen {
             );
 
             self.jit.bind_label(no_inline);
-            self.set_ivar(args, &xmm_using);
+            monoasm!( &mut self.jit,
+                movq rdx, [r14 - (conv(args))];   // val: Value
+            );
+            self.set_ivar(&xmm_using);
             self.jit_handle_error(ctx, pc);
             monoasm!( &mut self.jit,
                 jmp exit;
