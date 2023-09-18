@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
@@ -57,6 +59,7 @@ impl Codegen {
     /// Generate interpreter.
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
+        let vm_start_addr = self.jit.get_current_address();
         let entry = self.jit.label();
         //
         // VM entry
@@ -331,9 +334,11 @@ impl Codegen {
         self.dispatch[207] = rem_rr;
         self.dispatch[208] = pow_rr;
 
+        self.perf_info(vm_start_addr, "monoruby-vm");
+
         // method invoker.
-        self.method_invoker =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let codeptr = self.jit.get_current_address();
+        self.method_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &FuncData
@@ -350,9 +355,11 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        self.perf_info(codeptr, "method-invoker");
+
         // method invoker.
-        self.method_invoker2 =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let codeptr = self.jit.get_current_address();
+        self.method_invoker2 = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &FuncData
@@ -369,9 +376,11 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
+        self.perf_info(codeptr, "method-invoker2");
+
         // block invoker.
-        self.block_invoker =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let codeptr = self.jit.get_current_address();
+        self.block_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -384,8 +393,10 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
-        self.block_invoker_with_self =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.perf_info(codeptr, "block-invoker");
+
+        let codeptr = self.jit.get_current_address();
+        self.block_invoker_with_self = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -398,8 +409,10 @@ impl Codegen {
         self.invoker_call();
         self.gen_invoker_epilogue();
 
-        self.fiber_invoker =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.perf_info(codeptr, "block-invoker-with-self");
+
+        let codeptr = self.jit.get_current_address();
+        self.fiber_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -431,8 +444,10 @@ impl Codegen {
             ret;
         };
 
-        self.fiber_invoker_with_self =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.perf_info(codeptr, "fiber-invoker");
+
+        let codeptr = self.jit.get_current_address();
+        self.fiber_invoker_with_self = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -464,8 +479,11 @@ impl Codegen {
             ret;
         };
 
+        self.perf_info(codeptr, "fiber-invoker-with-self");
+
         // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
-        self.resume_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let codeptr = self.jit.get_current_address();
+        self.resume_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -478,8 +496,11 @@ impl Codegen {
             ret;
         };
 
+        self.perf_info(codeptr, "resume-fiber");
+
         // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
-        self.yield_fiber = unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let codeptr = self.jit.get_current_address();
+        self.yield_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -491,6 +512,22 @@ impl Codegen {
             movq rax, rsi;
             ret;
         };
+
+        self.perf_info(codeptr, "yield-fiber");
+    }
+
+    pub(crate) fn perf_info(&mut self, start: CodePtr, func_name: &str) {
+        let size = self.jit.get_current_address() - start;
+        self.perf_file
+            .write_all(
+                format!(
+                    "{:x} {:x} {func_name}\n",
+                    start.as_ptr() as usize,
+                    size as usize
+                )
+                .as_bytes(),
+            )
+            .unwrap();
     }
 
     fn push_callee_save(&mut self) {

@@ -3,13 +3,14 @@ use super::*;
 impl Codegen {
     pub(super) fn jit_load_ivar(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         id: IdentId,
         ret: SlotId,
         cached_class: ClassId,
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
+        ctx.release(ret);
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
@@ -48,7 +49,7 @@ impl Codegen {
 
     pub(super) fn jit_store_ivar(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         id: IdentId,
         src: SlotId,
         pc: BcPc,
@@ -58,6 +59,7 @@ impl Codegen {
         assert!(!cached_class.is_always_frozen());
         let exit = self.jit.label();
         let using = ctx.get_xmm_using();
+        self.fetch_slots(ctx, &[src]);
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );

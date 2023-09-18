@@ -288,7 +288,8 @@ impl Globals {
     pub(crate) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
         if self[func_id].data.codeptr.is_none() {
             let kind = self[func_id].kind.clone();
-            let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
+            let codeptr = self.codegen.jit.get_current_address();
+            self.codegen.gen_wrapper(kind, self.no_jit);
             self[func_id].data.codeptr = Some(codeptr);
         }
         &self[func_id].data

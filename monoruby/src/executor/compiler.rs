@@ -138,7 +138,7 @@ pub struct Codegen {
     /// - rax: Value
     ///
     /// ### destroy
-    /// - caller saved registers except rdi
+    /// - rcx
     ///
     f64_to_val: DestLabel,
     ///
@@ -196,6 +196,7 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) perf_file: std::fs::File,
 }
 
 impl Codegen {
@@ -286,6 +287,15 @@ impl Codegen {
             fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            perf_file: {
+                let pid = std::process::id();
+                let temp_file = format!("/tmp/perf-{pid}.map");
+                let file = match std::fs::File::create(&temp_file) {
+                    Err(why) => panic!("couldn't create {}: {}", temp_file, why),
+                    Ok(file) => file,
+                };
+                file
+            },
         };
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
@@ -380,6 +390,8 @@ impl Codegen {
         };
 
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
+
+        self.perf_info(entry, "entry-point");
     }
 
     ///
@@ -862,7 +874,7 @@ impl Codegen {
     /// - rax: Value
     ///
     /// ### destroy
-    /// - rax, rcx
+    /// - rcx
     ///
     pub(super) fn f64_to_val(jit: &mut JitMemory) {
         let normal = jit.label();
@@ -1016,9 +1028,13 @@ impl Globals {
             );
             self[func_id].dump_bc(self);
         }
+        let codeptr = self.codegen.jit.get_current_address();
         let _sourcemap =
             self.codegen
                 .compile(&self.store, func_id, self_value, position, entry_label);
+
+        let desc = self.store.func_description(func_id);
+        self.codegen.perf_info(codeptr, &desc);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);

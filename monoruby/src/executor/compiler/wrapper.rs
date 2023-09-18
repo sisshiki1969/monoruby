@@ -1,8 +1,8 @@
 use super::*;
 
 impl Codegen {
-    pub(in crate::executor) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
-        let codeptr = match kind {
+    pub(in crate::executor) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) {
+        match kind {
             FuncKind::ISeq(_) => {
                 if !no_jit {
                     self.gen_jit_stub()
@@ -15,7 +15,6 @@ impl Codegen {
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
         };
         self.jit.finalize();
-        codeptr
     }
 
     ///
@@ -37,9 +36,8 @@ impl Codegen {
     ///    +-------------------------------+
     ///
     /// ```
-    fn gen_jit_stub(&mut self) -> CodePtr {
+    fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry;
-        let codeptr = self.jit.get_current_address();
         let counter = self.jit.const_i32(5);
         let entry = self.jit.label();
         let next = self.jit.label();
@@ -59,16 +57,13 @@ impl Codegen {
             addq rsp, 1032;
             jmp entry;
         );
-        codeptr
     }
 
-    fn gen_vm_stub(&mut self) -> CodePtr {
+    fn gen_vm_stub(&mut self) {
         let vm_entry = self.vm_entry;
-        let codeptr = self.jit.get_current_address();
         monoasm!( &mut self.jit,
             jmp vm_entry;
         );
-        codeptr
     }
 
     ///
@@ -108,8 +103,7 @@ impl Codegen {
     ///   r13: pc (dummy for builtin funcions)
     /// ~~~
     ///
-    fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
-        let label = self.jit.get_current_address();
+    fn wrap_native_func(&mut self, abs_address: u64) {
         // calculate stack offset
         monoasm!( &mut self.jit,
             pushq rbp;
@@ -133,7 +127,6 @@ impl Codegen {
             leave;
             ret;
         );
-        label
     }
 
     ///
@@ -156,8 +149,7 @@ impl Codegen {
     ///
     /// Generate attr_reader.
     ///
-    fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
-        let label = self.jit.get_current_address();
+    fn gen_attr_reader(&mut self, ivar_name: IdentId) {
         let cache = self.jit.const_i64(-1);
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // self: Value
@@ -170,14 +162,12 @@ impl Codegen {
             addq rsp, 8;
             ret;
         );
-        label
     }
 
     ///
     /// Generate attr_writer.
     ///
-    fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
-        let label = self.jit.get_current_address();
+    fn gen_attr_writer(&mut self, ivar_name: IdentId) {
         let cache = self.jit.const_i64(-1);
         monoasm!( &mut self.jit,
             movq rdi, rbx; //&mut Executor
@@ -192,6 +182,5 @@ impl Codegen {
             addq rsp, 8;
             ret;
         );
-        label
     }
 }

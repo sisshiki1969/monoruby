@@ -848,8 +848,7 @@ impl Codegen {
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     if let Some(cached_class) = cached_class {
-                        ctx.release(ret);
-                        self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
+                        self.jit_load_ivar(&mut ctx, id, ret, cached_class, cached_ivarid);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -857,8 +856,7 @@ impl Codegen {
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
                     if let Some(cached_class) = cached_class {
-                        self.fetch_slots(&mut ctx, &[src]);
-                        self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
+                        self.jit_store_ivar(&mut ctx, id, src, pc, cached_class, cached_ivarid);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1662,6 +1660,29 @@ impl Codegen {
         self.xmm_save(using);
         monoasm!( &mut self.jit,
             movq rdx, [r14 - (conv(src))];   // val: Value
+            movq rax, (RValue::set_ivar);
+            call rax;
+        );
+        self.xmm_restore(using);
+    }
+
+    ///
+    /// Set an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    /// - rsi: IvarId
+    /// - r15: src: Value
+    ///
+    /// #### destroy
+    ///
+    /// - caller-save registers
+    ///
+    fn set_ivar2(&mut self, using: &[Xmm]) {
+        self.xmm_save(using);
+        monoasm!( &mut self.jit,
+            movq rdx, r15;
             movq rax, (RValue::set_ivar);
             call rax;
         );
