@@ -4,12 +4,14 @@ use ruruby_parse::CmpKind;
 impl Codegen {
     pub(super) fn gen_binop_integer(
         &mut self,
+        ctx: &mut BBContext,
         pc: BcPc,
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
-        ctx: &mut BBContext,
     ) {
+        self.fetch_binary(ctx, &mode);
+        ctx.release(dst);
         let deopt = self.gen_side_deopt(pc, ctx);
         match kind {
             BinOpK::Add => {

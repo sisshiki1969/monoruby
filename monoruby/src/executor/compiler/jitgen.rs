@@ -339,6 +339,10 @@ impl BBContext {
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
         self.slot_state.clear_r15()
     }
+
+    pub(super) fn clear(&mut self) {
+        self.slot_state.clear(self.sp);
+    }
 }
 
 #[derive(Debug)]
@@ -1013,9 +1017,7 @@ impl Codegen {
                 TraceIr::IBinOp {
                     kind, dst, mode, ..
                 } => {
-                    self.fetch_binary(&mut ctx, &mode);
-                    ctx.release(dst);
-                    self.gen_binop_integer(pc, kind, dst, mode, &mut ctx);
+                    self.gen_binop_integer(&mut ctx, pc, kind, dst, mode);
                 }
                 TraceIr::FBinOp {
                     kind, dst, mode, ..
@@ -1431,11 +1433,10 @@ impl Codegen {
                     return;
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
-                    self.fetch_slots(&mut ctx, &[cond_]);
                     let dest_idx = bb_pos + 1 + disp;
                     let branch_dest = self.jit.label();
+                    self.fetch_to_rax(&mut ctx, cond_);
                     cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
-                    self.load_rax(cond_);
                     monoasm!( &mut self.jit,
                         orq rax, 0x10;
                         cmpq rax, (FALSE_VALUE);
@@ -1458,6 +1459,7 @@ impl Codegen {
                 }
             }
             ctx.sp = func.get_sp(bb_pos);
+            ctx.clear();
         }
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {

@@ -110,6 +110,12 @@ impl SlotState {
         &self.xmm[i.0 as usize]
     }
 
+    pub(super) fn clear(&mut self, sp: SlotId) {
+        for i in sp..SlotId(self.slots.len() as u16) {
+            self.release(i)
+        }
+    }
+
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
         let mut res = None;
         for (i, mode) in self.slots.iter_mut().enumerate() {
