@@ -24,6 +24,7 @@ impl Codegen {
         has_splat: bool,
     ) {
         let cached = InlineCached::new(pc);
+        self.clear_r15(ctx);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
             self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
         } else {
@@ -245,10 +246,10 @@ impl Codegen {
 
     fn attr_reader(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
@@ -316,8 +317,8 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(ret) = ret {
-            self.store_rax(ret);
+        if let Some(dst) = dst {
+            self.save_rax_to_r15(ctx, dst);
         }
     }
 
@@ -354,10 +355,10 @@ impl Codegen {
 
     fn attr_writer(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         args: SlotId,
         pc: BcPc,
     ) {
@@ -437,8 +438,8 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(ret) = ret {
-            self.store_rax(ret);
+        if let Some(dst) = dst {
+            self.save_rax_to_r15(ctx, dst);
         }
     }
 
@@ -454,7 +455,7 @@ impl Codegen {
         native: bool,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        let ret = store[callid].ret;
+        let dst = store[callid].ret;
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
@@ -543,22 +544,24 @@ impl Codegen {
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(dst) = ret {
+        if let Some(dst) = dst {
             self.save_rax_to_r15(ctx, dst);
-            //self.store_rax(dst);
         }
     }
 
     pub(super) fn gen_yield(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         store: &Store,
         args: SlotId,
         len: u16,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         callid: CallSiteId,
         pc: BcPc,
     ) {
+        self.fetch_callargs(ctx, &store[callid]);
+        ctx.release(dst);
+        self.clear_r15(ctx);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { &mut self.jit,
@@ -614,8 +617,8 @@ impl Codegen {
         self.call_rax();
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(ret) = ret {
-            self.store_rax(ret);
+        if let Some(dst) = dst {
+            self.save_rax_to_r15(ctx, dst);
         }
     }
 }

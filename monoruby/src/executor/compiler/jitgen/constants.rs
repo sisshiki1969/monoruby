@@ -26,7 +26,7 @@ impl Codegen {
 
     pub(super) fn load_generic_constant(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         dst: SlotId,
         pc: BcPc,
         v: Value,
@@ -47,7 +47,7 @@ impl Codegen {
 
     pub(super) fn load_float_constant(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         dst: SlotId,
         fdst: Xmm,
         pc: BcPc,
@@ -69,18 +69,4 @@ impl Codegen {
         );
         self.store_rax(dst);
     }
-
-    /*fn get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm!( &mut self.jit,
-            movq rdx, (id.0);  // name: ConstSiteId
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::get_constant);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-    }*/
 }

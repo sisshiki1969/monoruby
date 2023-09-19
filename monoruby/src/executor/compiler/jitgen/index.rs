@@ -4,7 +4,7 @@ impl Codegen {
     pub(super) fn jit_get_array_index(
         &mut self,
         ctx: &mut BBContext,
-        ret: SlotId,
+        dst: SlotId,
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
@@ -41,7 +41,7 @@ impl Codegen {
                 }
                 side_exit
             };
-            ctx.release(ret);
+            ctx.release(dst);
 
             self.guard_rdi_array(side_exit);
 
@@ -77,12 +77,12 @@ impl Codegen {
             self.jit.select_page(0);
         } else {
             self.fetch_slots(ctx, &[base, idx]);
-            ctx.release(ret);
+            ctx.release(dst);
             let xmm_using = ctx.get_xmm_using();
             self.generic_index(&xmm_using, base, idx, pc);
         }
         self.jit_handle_error(ctx, pc);
-        self.store_rax(ret);
+        self.save_rax_to_r15(ctx, dst);
     }
 
     ///

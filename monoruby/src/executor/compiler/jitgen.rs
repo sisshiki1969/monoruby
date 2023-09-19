@@ -249,6 +249,7 @@ pub(crate) struct BBContext {
     slot_state: SlotState,
     /// Stack top register.
     sp: SlotId,
+    next_sp: SlotId,
     self_value: Value,
     local_num: usize,
 }
@@ -271,6 +272,7 @@ impl BBContext {
         Self {
             slot_state: SlotState::new(cc),
             sp: SlotId(cc.local_num as u16),
+            next_sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,
             local_num: cc.local_num,
         }
@@ -350,7 +352,7 @@ impl BBContext {
     }
 
     pub(super) fn clear(&mut self) {
-        self.slot_state.clear(self.sp);
+        self.slot_state.clear(self.next_sp);
     }
 }
 
@@ -685,6 +687,7 @@ impl Codegen {
     }
 
     fn save_rdi_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
+        ctx.clear();
         self.clear_r15(ctx);
         monoasm! { &mut self.jit,
             movq r15, rdi;
@@ -693,6 +696,7 @@ impl Codegen {
     }
 
     fn save_rax_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
+        ctx.clear();
         self.clear_r15(ctx);
         monoasm! { &mut self.jit,
             movq r15, rax;
@@ -726,6 +730,7 @@ impl Codegen {
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
                 .push((bb_pos, self.jit.get_current() - cc.start_codepos));
+            ctx.next_sp = func.get_sp(bb_pos);
             match pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::LoopStart(_) => {
@@ -763,7 +768,6 @@ impl Codegen {
                           call rax;
                         );
                         self.xmm_restore(&xmm_using);
-
                         self.store_rax(dst);
                     }
                 }
@@ -779,7 +783,7 @@ impl Codegen {
                         movq rax, (runtime::gen_array);
                         call rax;
                     );
-                    self.store_rax(dst);
+                    self.save_rax_to_r15(&mut ctx, dst);
                 }
                 TraceIr::Hash { dst, args, len } => {
                     self.fetch_range(&mut ctx, args, len * 2);
@@ -790,7 +794,7 @@ impl Codegen {
                         movq rax, (runtime::gen_hash);
                         call rax;
                     );
-                    self.store_rax(dst);
+                    self.save_rax_to_r15(&mut ctx, dst);
                 }
                 TraceIr::Range {
                     dst,
@@ -812,7 +816,7 @@ impl Codegen {
                     };
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
-                    self.store_rax(dst);
+                    self.save_rax_to_r15(&mut ctx, dst);
                 }
                 TraceIr::Index { dst, base, idx } => {
                     self.jit_get_array_index(&mut ctx, dst, base, idx, pc);
@@ -826,9 +830,9 @@ impl Codegen {
                     if let (version, Some(v)) = store[id].cache {
                         if let Some(f) = v.try_float() {
                             let fdst = ctx.link_new_both(dst);
-                            self.load_float_constant(&ctx, dst, fdst, pc, f, version);
+                            self.load_float_constant(&mut ctx, dst, fdst, pc, f, version);
                         } else {
-                            self.load_generic_constant(&ctx, dst, pc, v, version);
+                            self.load_generic_constant(&mut ctx, dst, pc, v, version);
                         }
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1208,12 +1212,9 @@ impl Codegen {
                     ..
                 } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
-                    if let Some(ret) = ret {
-                        ctx.release(ret);
-                    }
+                    ctx.release(ret);
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
@@ -1230,12 +1231,9 @@ impl Codegen {
                     ..
                 } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
-                    if let Some(ret) = ret {
-                        ctx.release(ret);
-                    }
+                    ctx.release(ret);
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
@@ -1247,12 +1245,9 @@ impl Codegen {
                 }
                 TraceIr::Super { callid, info, .. } => {
                     let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.clear_r15(&mut ctx);
                     self.fetch_slots(&mut ctx, &[recv]);
                     self.fetch_callargs(&mut ctx, &store[callid]);
-                    if let Some(ret) = ret {
-                        ctx.release(ret);
-                    }
+                    ctx.release(ret);
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
@@ -1267,7 +1262,6 @@ impl Codegen {
                     callsite,
                     ..
                 } => {
-                    //self.fetch_slots(&mut ctx, &[store[callsite].recv]);
                     self.clear_r15(&mut ctx);
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
@@ -1278,12 +1272,7 @@ impl Codegen {
                     len,
                     callid,
                 } => {
-                    self.clear_r15(&mut ctx);
-                    if let Some(ret) = ret {
-                        ctx.release(ret);
-                    }
-                    self.fetch_callargs(&mut ctx, &store[callid]);
-                    self.gen_yield(&ctx, store, args, len, ret, callid, pc);
+                    self.gen_yield(&mut ctx, store, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {
@@ -1464,8 +1453,8 @@ impl Codegen {
                     );
                 }
             }
-            ctx.sp = func.get_sp(bb_pos);
             ctx.clear();
+            ctx.sp = ctx.next_sp;
         }
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
