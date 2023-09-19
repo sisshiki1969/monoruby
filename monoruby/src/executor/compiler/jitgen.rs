@@ -310,6 +310,15 @@ impl BBContext {
         merge_ctx
     }
 
+    fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
+        if let LinkMode::Literal(v) = self[slot] {
+            let i = v.try_fixnum()?;
+            i16::try_from(i).ok()
+        } else {
+            None
+        }
+    }
+
     fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::Literal(v) = self[slot] {
             let i = v.try_fixnum()?;
@@ -1047,19 +1056,16 @@ impl Codegen {
                     };
                 }
                 TraceIr::BinOp {
-                    kind,
-                    dst: ret,
-                    mode,
-                    ..
+                    kind, dst, mode, ..
                 } => {
                     self.fetch_binary(&mut ctx, &mode);
-                    ctx.release(ret);
+                    ctx.release(dst);
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
                     } else {
                         self.load_binary_args_with_mode(&mode);
-                        self.gen_generic_binop(&mut ctx, pc, kind, ret);
+                        self.generic_binop(&mut ctx, dst, kind, pc);
                     }
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
@@ -1606,12 +1612,6 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    /*fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
-        let entry = self.jit.label();
-        self.gen_side_deopt_with_label(pc, None, entry);
-        entry
-    }*/
-
     fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
