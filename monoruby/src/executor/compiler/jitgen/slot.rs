@@ -5,6 +5,7 @@ pub(crate) struct SlotState {
     slots: Vec<LinkMode>,
     /// Information for xmm registers.
     xmm: [Vec<SlotId>; 14],
+    r15: Option<SlotId>,
     local_num: usize,
 }
 
@@ -47,6 +48,7 @@ impl SlotState {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
                 v.try_into().unwrap()
             },
+            r15: None,
             local_num: cc.local_num,
         }
     }
@@ -62,6 +64,9 @@ impl SlotState {
     ///
     /// Allocate a new xmm register.
     ///
+    /// ### Panics
+    /// If there is no vacant xmm register.
+    ///
     fn alloc_xmm(&mut self) -> Xmm {
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
@@ -71,33 +76,55 @@ impl SlotState {
         unreachable!("no xmm reg is vacant.")
     }
 
+    ///
+    /// Link the slot *reg* to the given xmm register *freg*.
+    ///
     pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
         self.release(reg);
         self[reg] = LinkMode::Xmm(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
 
+    ///
+    /// Link the slot *reg* to a new xmm register.
+    ///
     pub(super) fn link_new_xmm(&mut self, reg: SlotId) -> Xmm {
         let freg = self.alloc_xmm();
         self.link_xmm(reg, freg);
         freg
     }
 
+    ///
+    /// Link the slot *reg* to both of the stack and the given xmm register *freg*.
+    ///
     pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
         self.release(reg);
         self[reg] = LinkMode::Both(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
 
+    ///
+    /// Link the slot *reg* to both of the stack and a new xmm register.
+    ///
     pub(super) fn link_new_both(&mut self, reg: SlotId) -> Xmm {
         let freg = self.alloc_xmm();
         self.link_both(reg, freg);
         freg
     }
 
+    ///
+    /// Link the slot *reg* to a literal value *v*.
+    ///
     pub(super) fn link_literal(&mut self, reg: SlotId, v: Value) {
         self.release(reg);
         self[reg] = LinkMode::Literal(v);
+    }
+
+    pub(super) fn link_r15(&mut self, reg: SlotId) {
+        assert!(self.r15.is_none());
+        self.release(reg);
+        self[reg] = LinkMode::R15;
+        self.r15 = Some(reg);
     }
 
     pub(super) fn xmm_to_both(&mut self, freg: Xmm) {
@@ -106,10 +133,16 @@ impl SlotState {
         }
     }
 
+    ///
+    /// Get all slots linked to the given xmm register *freg*.
+    ///
     pub(super) fn xmm_slots(&self, i: Xmm) -> &[SlotId] {
         &self.xmm[i.0 as usize]
     }
 
+    ///
+    /// Clear slots above *sp*.
+    ///
     pub(super) fn clear(&mut self, sp: SlotId) {
         for i in sp..SlotId(self.slots.len() as u16) {
             self.release(i)
@@ -117,30 +150,22 @@ impl SlotState {
     }
 
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
-        let mut res = None;
-        for (i, mode) in self.slots.iter_mut().enumerate() {
-            if *mode == LinkMode::R15 {
-                *mode = LinkMode::Stack;
-                assert!(res.is_none());
-                res = Some(SlotId(i as _));
-            }
+        let res = self.r15;
+        if let Some(r) = res {
+            self.release(r);
         }
+        assert!(!self.slots.iter().any(|f| matches!(f, LinkMode::R15)));
         res
     }
 
     pub(super) fn get_r15(&self) -> Option<SlotId> {
-        let mut res = None;
-        for (i, mode) in self.slots.iter().enumerate() {
-            if *mode == LinkMode::R15 {
-                assert!(res.is_none());
-                res = Some(SlotId(i as _));
-            }
-        }
-        res
+        self.r15
     }
 
     ///
-    /// Deallocate an xmm register corresponding to the stack slot *reg*.
+    /// Link slot *reg* to the stack.
+    ///
+    /// xmm registers corresponding to *reg* are deallocated.
     ///
     pub(crate) fn release(&mut self, reg: impl Into<Option<SlotId>>) {
         match reg.into() {
@@ -150,7 +175,11 @@ impl SlotState {
                     self.xmm[freg.0 as usize].retain(|e| *e != reg);
                     self[reg] = LinkMode::Stack;
                 }
-                LinkMode::Literal(_) | LinkMode::R15 => {
+                LinkMode::Literal(_) => {
+                    self[reg] = LinkMode::Stack;
+                }
+                LinkMode::R15 => {
+                    self.r15 = None;
                     self[reg] = LinkMode::Stack;
                 }
                 LinkMode::Stack => {}
@@ -180,7 +209,7 @@ impl SlotState {
     }
 
     ///
-    /// Allocate new xmm register to the given stack slot for read/write f64.
+    /// Allocate new xmm register to the slot *reg* for read/write f64.
     ///
     pub(super) fn xmm_write(&mut self, reg: SlotId) -> Xmm {
         match self[reg] {
@@ -192,12 +221,7 @@ impl SlotState {
             | LinkMode::Both(_)
             | LinkMode::Stack
             | LinkMode::Literal(_)
-            | LinkMode::R15 => {
-                self.release(reg);
-                let freg = self.alloc_xmm();
-                self.link_xmm(reg, freg);
-                freg
-            }
+            | LinkMode::R15 => self.link_new_xmm(reg),
         }
     }
 
@@ -215,16 +239,14 @@ impl SlotState {
                     self.link_both(i, *l)
                 }
                 (LinkMode::Literal(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
-                    let x = self.alloc_xmm();
-                    self.link_both(i, x);
+                    self.link_new_both(i);
                 }
                 (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
                 (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.class() == FLOAT_CLASS => {
                     self.link_xmm(i, *l)
                 }
                 (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
-                    let x = self.alloc_xmm();
-                    self.link_xmm(i, x);
+                    self.link_new_xmm(i);
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),
                 _ => self.release(i),

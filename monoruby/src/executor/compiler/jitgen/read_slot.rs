@@ -25,7 +25,7 @@ impl Codegen {
             }
             LinkMode::R15 => {
                 self.store_r15(reg);
-                ctx[reg] = LinkMode::Stack;
+                ctx.release(reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
@@ -250,7 +250,6 @@ impl Codegen {
             LinkMode::R15 => {
                 let freg = ctx.link_new_both(reg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
-                //self.load_rdi(reg);
                 monoasm! {&mut self.jit,
                     movq rdi, r15;
                 }

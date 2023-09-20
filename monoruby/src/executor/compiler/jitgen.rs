@@ -672,10 +672,9 @@ impl Codegen {
                 ctx.link_literal(dst, v);
             }
             LinkMode::R15 => {
-                ctx.release(dst);
                 self.store_r15(src);
-                ctx[src] = LinkMode::Stack;
-                ctx[dst] = LinkMode::R15;
+                ctx.release(src);
+                ctx.link_r15(dst);
             }
         }
     }
@@ -694,7 +693,7 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq r15, rdi;
             }
-            ctx.slot_state[dst] = LinkMode::R15;
+            ctx.link_r15(dst);
         }
     }
 
@@ -706,7 +705,7 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq r15, rax;
             }
-            ctx.slot_state[dst] = LinkMode::R15;
+            ctx.link_r15(dst);
         }
     }
 
