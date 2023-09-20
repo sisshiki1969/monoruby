@@ -405,8 +405,8 @@ fn object_send(
         movq r8, (pos_num);
         movq r9, (bh);
         subq rsp, 8;
-        lea  r10, [rip + cache];
-        pushq r10;
+        lea  rax, [rip + cache];
+        pushq rax;
         movq rax, (call_send_wrapper);
         call rax;
         addq rsp, 16;

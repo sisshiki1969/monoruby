@@ -3,7 +3,7 @@ use super::*;
 impl Codegen {
     pub(super) fn jit_class_def(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ret: Option<SlotId>,
         superclass: SlotId,
         name: IdentId,
@@ -45,7 +45,7 @@ impl Codegen {
 
     pub(super) fn jit_singleton_class_def(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ret: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
@@ -67,11 +67,12 @@ impl Codegen {
 
     fn jit_class_def_sub(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         func_id: FuncId,
         ret: Option<SlotId>,
         pc: BcPc,
     ) {
+        self.writeback_acc(ctx);
         monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self

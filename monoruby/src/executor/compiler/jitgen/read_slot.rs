@@ -23,6 +23,10 @@ impl Codegen {
                 self.fetch_literal(reg, v);
                 ctx[reg] = LinkMode::Stack;
             }
+            LinkMode::R15 => {
+                self.store_r15(reg);
+                ctx.release(reg);
+            }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
     }
@@ -85,6 +89,11 @@ impl Codegen {
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.load_rax(reg);
             }
+            LinkMode::R15 => {
+                monoasm! {&mut self.jit,
+                    movq rax, r15;
+                }
+            }
         }
     }
 
@@ -114,6 +123,11 @@ impl Codegen {
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.load_rdi(reg);
+            }
+            LinkMode::R15 => {
+                monoasm!(&mut self.jit,
+                    movq rdi, r15;
+                );
             }
         }
     }
@@ -145,6 +159,11 @@ impl Codegen {
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.load_rsi(reg);
             }
+            LinkMode::R15 => {
+                monoasm!(&mut self.jit,
+                    movq rsi, r15;
+                );
+            }
         }
     }
 
@@ -158,6 +177,7 @@ impl Codegen {
         };
         match ctx[reg] {
             LinkMode::Xmm(freg) => {
+                self.writeback_acc(ctx);
                 let f64_to_val = self.f64_to_val;
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(freg.enc());
@@ -168,13 +188,16 @@ impl Codegen {
                 ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
+                self.writeback_acc(ctx);
                 monoasm!(&mut self.jit,
                     movq r15, (v.id());
                 );
             }
             LinkMode::Both(_) | LinkMode::Stack => {
+                self.writeback_acc(ctx);
                 self.load_r15(reg);
             }
+            LinkMode::R15 => {}
         }
     }
 
@@ -221,6 +244,15 @@ impl Codegen {
                 let freg = ctx.link_new_both(reg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
+                self.unbox_float(freg.enc(), side_exit);
+                freg
+            }
+            LinkMode::R15 => {
+                let freg = ctx.link_new_both(reg);
+                let side_exit = self.gen_side_deopt(pc, ctx);
+                monoasm! {&mut self.jit,
+                    movq rdi, r15;
+                }
                 self.unbox_float(freg.enc(), side_exit);
                 freg
             }
@@ -291,6 +323,15 @@ impl Codegen {
                 let freg = ctx.link_new_both(reg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
+                self.integer_to_f64(freg.enc(), side_exit);
+                freg
+            }
+            LinkMode::R15 => {
+                let freg = ctx.link_new_both(reg);
+                let side_exit = self.gen_side_deopt(pc, ctx);
+                monoasm! {&mut self.jit,
+                    movq rdi, r15;
+                }
                 self.integer_to_f64(freg.enc(), side_exit);
                 freg
             }

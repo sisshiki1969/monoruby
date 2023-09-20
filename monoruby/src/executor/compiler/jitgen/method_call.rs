@@ -9,6 +9,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         let (_, version) = pc.class_version();
+        self.writeback_acc(ctx);
         let deopt = self.gen_side_deopt(pc, ctx);
         self.guard_version(version, deopt);
         inline_gen(self, ctx, callsite, pc, deopt);
@@ -17,7 +18,7 @@ impl Codegen {
     pub(super) fn gen_call(
         &mut self,
         store: &Store,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         func_data: &FuncData,
         callid: CallSiteId,
         pc: BcPc,
@@ -37,7 +38,7 @@ impl Codegen {
     fn gen_call_cached(
         &mut self,
         store: &Store,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         callid: CallSiteId,
         func_data: &FuncData,
         cached: InlineCached,
@@ -126,7 +127,7 @@ impl Codegen {
     ///
     fn gen_call_not_cached(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         callsite: &CallSiteInfo,
         pc: BcPc,
         has_splat: bool,
@@ -140,6 +141,7 @@ impl Codegen {
         let raise = self.jit.label();
         let global_class_version = self.class_version;
         let xmm_using = ctx.get_xmm_using();
+        self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         // class guard
         // r15 <- recv's class
@@ -245,10 +247,10 @@ impl Codegen {
 
     fn attr_reader(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
@@ -316,9 +318,7 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(ret) = ret {
-            self.store_rax(ret);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     ///
@@ -354,10 +354,10 @@ impl Codegen {
 
     fn attr_writer(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         args: SlotId,
         pc: BcPc,
     ) {
@@ -437,14 +437,12 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(ret) = ret {
-            self.store_rax(ret);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     fn method_call_cached(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
         func_data: &FuncData,
@@ -454,7 +452,8 @@ impl Codegen {
         native: bool,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        let ret = store[callid].ret;
+        let dst = store[callid].ret;
+        self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
@@ -543,21 +542,22 @@ impl Codegen {
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(ret) = ret {
-            self.store_rax(ret);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     pub(super) fn gen_yield(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         store: &Store,
         args: SlotId,
         len: u16,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         callid: CallSiteId,
         pc: BcPc,
     ) {
+        self.fetch_callargs(ctx, &store[callid]);
+        ctx.release(dst);
+        self.writeback_acc(ctx);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { &mut self.jit,
@@ -613,9 +613,7 @@ impl Codegen {
         self.call_rax();
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(ret) = ret {
-            self.store_rax(ret);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 }
 
@@ -683,7 +681,6 @@ impl Codegen {
     /// ### destroy
     ///
     /// - caller save registers
-    /// - r15
     ///
     fn jit_set_arguments(
         &mut self,
@@ -695,9 +692,11 @@ impl Codegen {
         // set arguments
         if has_splat {
             monoasm!( &mut self.jit,
-                lea r15, [rsp - (16 + LBP_ARG0)];
+                lea r8, [rsp - (16 + LBP_ARG0)];
+                subq rsp, 1016;
+                pushq r15;
+                movq r15, r8;
                 movq r8, (pos_num);
-                subq rsp, 1024;
             );
             for i in 0..pos_num {
                 let reg = args + i;
@@ -724,7 +723,8 @@ impl Codegen {
                 }
             }
             monoasm!( &mut self.jit,
-                addq rsp, 1024;
+                popq r15;
+                addq rsp, 1016;
                 movq rdi, r8;
             );
         } else {
