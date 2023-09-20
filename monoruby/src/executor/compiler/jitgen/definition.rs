@@ -72,7 +72,7 @@ impl Codegen {
         ret: Option<SlotId>,
         pc: BcPc,
     ) {
-        self.clear_r15(ctx);
+        self.writeback_acc(ctx);
         monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self

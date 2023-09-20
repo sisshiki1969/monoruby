@@ -31,9 +31,7 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(dst) = dst {
-                    self.save_rdi_to_r15(ctx, dst);
-                }
+                self.save_rdi_to_acc(ctx, dst);
             }
             BinOpK::Sub => {
                 match mode {
@@ -65,9 +63,7 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(dst) = dst {
-                    self.save_rdi_to_r15(ctx, dst);
-                }
+                self.save_rdi_to_acc(ctx, dst);
             }
             BinOpK::Exp => {
                 self.fetch_fixnum_mode(ctx, mode, dst, pc);
@@ -80,9 +76,7 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                if let Some(dst) = dst {
-                    self.save_rax_to_r15(ctx, dst);
-                }
+                self.save_rax_to_acc(ctx, dst);
             }
             BinOpK::Mul | BinOpK::Div => {
                 self.fetch_fixnum_mode(ctx, mode, dst, pc);
@@ -91,12 +85,10 @@ impl Codegen {
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     self.fetch_fixnum_rdi(ctx, lhs, dst, pc);
-                    if let Some(dst) = dst {
-                        monoasm!( &mut self.jit,
-                            andq rdi, (rhs * 2 - 1);
-                        );
-                        self.save_rdi_to_r15(ctx, dst);
-                    }
+                    monoasm!( &mut self.jit,
+                        andq rdi, (rhs * 2 - 1);
+                    );
+                    self.save_rdi_to_acc(ctx, dst);
                 }
                 _ => {
                     self.fetch_fixnum_mode(ctx, mode, dst, pc);
@@ -118,9 +110,7 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(dst) = dst {
-                    self.save_rdi_to_r15(ctx, dst);
-                }
+                self.save_rdi_to_acc(ctx, dst);
             }
             BinOpK::BitAnd => {
                 match mode {
@@ -137,9 +127,7 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(dst) = dst {
-                    self.save_rdi_to_r15(ctx, dst);
-                }
+                self.save_rdi_to_acc(ctx, dst);
             }
             BinOpK::BitXor => {
                 match mode {
@@ -157,9 +145,7 @@ impl Codegen {
                         );
                     }
                 }
-                if let Some(dst) = dst {
-                    self.save_rdi_to_r15(ctx, dst);
-                }
+                self.save_rdi_to_acc(ctx, dst);
             }
         }
     }
@@ -849,9 +835,7 @@ impl Codegen {
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(dst) = dst {
-            self.save_rax_to_r15(ctx, dst);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 }
 

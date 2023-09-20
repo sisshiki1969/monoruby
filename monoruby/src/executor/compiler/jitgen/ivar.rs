@@ -41,7 +41,7 @@ impl Codegen {
             );
             self.xmm_restore(&xmm_using);
         }
-        self.save_rax_to_r15(ctx, ret);
+        self.save_rax_to_acc(ctx, ret);
     }
 
     pub(super) fn jit_store_ivar(
@@ -183,7 +183,7 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(&xmm_using);
-        self.save_rax_to_r15(ctx, dst);
+        self.save_rax_to_acc(ctx, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, val: SlotId) {
@@ -212,7 +212,7 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(&xmm_using);
-        self.save_rax_to_r15(ctx, dst);
+        self.save_rax_to_acc(ctx, dst);
     }
 }
 

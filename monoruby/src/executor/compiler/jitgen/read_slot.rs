@@ -177,7 +177,7 @@ impl Codegen {
         };
         match ctx[reg] {
             LinkMode::Xmm(freg) => {
-                self.clear_r15(ctx);
+                self.writeback_acc(ctx);
                 let f64_to_val = self.f64_to_val;
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(freg.enc());
@@ -188,13 +188,13 @@ impl Codegen {
                 ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
-                self.clear_r15(ctx);
+                self.writeback_acc(ctx);
                 monoasm!(&mut self.jit,
                     movq r15, (v.id());
                 );
             }
             LinkMode::Both(_) | LinkMode::Stack => {
-                self.clear_r15(ctx);
+                self.writeback_acc(ctx);
                 self.load_r15(reg);
             }
             LinkMode::R15 => {}

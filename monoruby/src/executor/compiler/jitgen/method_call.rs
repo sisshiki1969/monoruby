@@ -9,6 +9,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         let (_, version) = pc.class_version();
+        self.writeback_acc(ctx);
         let deopt = self.gen_side_deopt(pc, ctx);
         self.guard_version(version, deopt);
         inline_gen(self, ctx, callsite, pc, deopt);
@@ -24,7 +25,6 @@ impl Codegen {
         has_splat: bool,
     ) {
         let cached = InlineCached::new(pc);
-        self.clear_r15(ctx);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
             self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
         } else {
@@ -127,7 +127,7 @@ impl Codegen {
     ///
     fn gen_call_not_cached(
         &mut self,
-        ctx: &BBContext,
+        ctx: &mut BBContext,
         callsite: &CallSiteInfo,
         pc: BcPc,
         has_splat: bool,
@@ -141,6 +141,7 @@ impl Codegen {
         let raise = self.jit.label();
         let global_class_version = self.class_version;
         let xmm_using = ctx.get_xmm_using();
+        self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         // class guard
         // r15 <- recv's class
@@ -317,9 +318,7 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(dst) = dst {
-            self.save_rax_to_r15(ctx, dst);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     ///
@@ -438,9 +437,7 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        if let Some(dst) = dst {
-            self.save_rax_to_r15(ctx, dst);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     fn method_call_cached(
@@ -456,6 +453,7 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         let dst = store[callid].ret;
+        self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
@@ -544,9 +542,7 @@ impl Codegen {
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(dst) = dst {
-            self.save_rax_to_r15(ctx, dst);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 
     pub(super) fn gen_yield(
@@ -561,7 +557,7 @@ impl Codegen {
     ) {
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(dst);
-        self.clear_r15(ctx);
+        self.writeback_acc(ctx);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { &mut self.jit,
@@ -617,9 +613,7 @@ impl Codegen {
         self.call_rax();
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        if let Some(dst) = dst {
-            self.save_rax_to_r15(ctx, dst);
-        }
+        self.save_rax_to_acc(ctx, dst);
     }
 }
 
@@ -687,7 +681,6 @@ impl Codegen {
     /// ### destroy
     ///
     /// - caller save registers
-    /// - r15
     ///
     fn jit_set_arguments(
         &mut self,
@@ -699,9 +692,11 @@ impl Codegen {
         // set arguments
         if has_splat {
             monoasm!( &mut self.jit,
-                lea r15, [rsp - (16 + LBP_ARG0)];
+                lea r8, [rsp - (16 + LBP_ARG0)];
+                subq rsp, 1016;
+                pushq r15;
+                movq r15, r8;
                 movq r8, (pos_num);
-                subq rsp, 1024;
             );
             for i in 0..pos_num {
                 let reg = args + i;
@@ -728,7 +723,8 @@ impl Codegen {
                 }
             }
             monoasm!( &mut self.jit,
-                addq rsp, 1024;
+                popq r15;
+                addq rsp, 1016;
                 movq rdi, r8;
             );
         } else {

@@ -675,33 +675,39 @@ impl Codegen {
                 ctx.release(dst);
                 self.store_r15(src);
                 ctx[src] = LinkMode::Stack;
-                self.store_r15(dst);
+                ctx[dst] = LinkMode::R15;
             }
         }
     }
 
-    fn clear_r15(&mut self, ctx: &mut BBContext) {
+    fn writeback_acc(&mut self, ctx: &mut BBContext) {
         if let Some(slot) = ctx.clear_r15() {
             self.store_r15(slot);
         }
     }
 
-    fn save_rdi_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
-        ctx.clear();
-        self.clear_r15(ctx);
-        monoasm! { &mut self.jit,
-            movq r15, rdi;
+    fn save_rdi_to_acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+        let dst = dst.into();
+        if let Some(dst) = dst {
+            ctx.clear();
+            self.writeback_acc(ctx);
+            monoasm! { &mut self.jit,
+                movq r15, rdi;
+            }
+            ctx.slot_state[dst] = LinkMode::R15;
         }
-        ctx.slot_state[dst] = LinkMode::R15;
     }
 
-    fn save_rax_to_r15(&mut self, ctx: &mut BBContext, dst: SlotId) {
-        ctx.clear();
-        self.clear_r15(ctx);
-        monoasm! { &mut self.jit,
-            movq r15, rax;
+    fn save_rax_to_acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+        let dst = dst.into();
+        if let Some(dst) = dst {
+            ctx.clear();
+            self.writeback_acc(ctx);
+            monoasm! { &mut self.jit,
+                movq r15, rax;
+            }
+            ctx.slot_state[dst] = LinkMode::R15;
         }
-        ctx.slot_state[dst] = LinkMode::R15;
     }
 
     fn compile_bb(
@@ -783,7 +789,7 @@ impl Codegen {
                         movq rax, (runtime::gen_array);
                         call rax;
                     );
-                    self.save_rax_to_r15(&mut ctx, dst);
+                    self.save_rax_to_acc(&mut ctx, dst);
                 }
                 TraceIr::Hash { dst, args, len } => {
                     self.fetch_range(&mut ctx, args, len * 2);
@@ -794,7 +800,7 @@ impl Codegen {
                         movq rax, (runtime::gen_hash);
                         call rax;
                     );
-                    self.save_rax_to_r15(&mut ctx, dst);
+                    self.save_rax_to_acc(&mut ctx, dst);
                 }
                 TraceIr::Range {
                     dst,
@@ -816,7 +822,7 @@ impl Codegen {
                     };
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
-                    self.save_rax_to_r15(&mut ctx, dst);
+                    self.save_rax_to_acc(&mut ctx, dst);
                 }
                 TraceIr::Index { dst, base, idx } => {
                     self.jit_get_array_index(&mut ctx, dst, base, idx, pc);
@@ -1262,7 +1268,6 @@ impl Codegen {
                     callsite,
                     ..
                 } => {
-                    self.clear_r15(&mut ctx);
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }

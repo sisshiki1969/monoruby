@@ -82,7 +82,7 @@ impl Codegen {
             self.generic_index(&xmm_using, base, idx, pc);
         }
         self.jit_handle_error(ctx, pc);
-        self.save_rax_to_r15(ctx, dst);
+        self.save_rax_to_acc(ctx, dst);
     }
 
     ///

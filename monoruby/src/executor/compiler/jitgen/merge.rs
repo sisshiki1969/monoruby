@@ -184,7 +184,7 @@ impl Codegen {
             self.jit.select_page(1);
             self.jit.bind_label(entry);
         }
-        self.clear_r15(&mut src_ctx);
+        self.writeback_acc(&mut src_ctx);
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx[reg] == LinkMode::Stack {
