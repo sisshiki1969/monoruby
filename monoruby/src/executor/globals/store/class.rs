@@ -104,12 +104,33 @@ impl ClassId {
         }
         let class = self.get_module(globals);
         match globals.store[self].name {
-            Some(id) => id.to_string(),
+            Some(_) => {
+                let v: Vec<_> = self
+                    .get_parents(globals)
+                    .into_iter()
+                    .rev()
+                    .map(|name| name.to_string())
+                    .collect();
+                v.join("::")
+            }
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
                 Some(base) => format!("#<Class:{}>", globals.to_s(base)),
             },
         }
+    }
+
+    fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
+        let mut class = self;
+        let mut parents = vec![globals.store[self].name.unwrap()];
+        while let Some(parent) = globals.store[class].parent {
+            if parent == OBJECT_CLASS {
+                break;
+            }
+            parents.push(globals.store[parent].name.unwrap());
+            class = parent;
+        }
+        parents
     }
 
     /// Get class name(IdentId) of *ClassId*.
@@ -130,15 +151,30 @@ impl ClassId {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassInfo {
+    ///
     /// the constant name which this class object is bound.
+    /// if this class object is not bound to any constant, this is None.
+    ///
     name: Option<IdentId>,
+    ///
+    /// the parent class of this class.
+    ///
+    parent: Option<ClassId>,
+    ///
     /// corresponding class object.
+    ///
     object: Option<Module>,
+    ///
     /// method table.
+    ///
     methods: HashMap<IdentId, MethodTableEntry>,
+    ///
     /// constants table.
+    ///
     constants: HashMap<IdentId, Value>,
+    ///
     /// instance variable table.
+    ///
     ivar_names: HashMap<IdentId, IvarId>,
 }
 
@@ -155,6 +191,7 @@ impl ClassInfo {
     pub(super) fn new() -> Self {
         Self {
             name: None,
+            parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -165,6 +202,7 @@ impl ClassInfo {
     pub(super) fn copy(&self) -> Self {
         Self {
             name: None,
+            parent: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -291,6 +329,7 @@ impl Globals {
         };
         self.store[class_id].object = Some(class_obj.as_class());
         self.store[class_id].name = Some(name_id);
+        self.store[class_id].parent = Some(parent);
         self.set_constant(parent, name_id, class_obj);
         class_obj.as_class()
     }

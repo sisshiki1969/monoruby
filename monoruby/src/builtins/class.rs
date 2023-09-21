@@ -200,4 +200,21 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn class_with_parents() {
+        run_test(
+            r#"
+        class A
+            class B
+                class C
+                end
+                $x = C
+            end
+        end
+        $x
+        "#,
+        );
+        run_test("Math::DomainError");
+    }
 }

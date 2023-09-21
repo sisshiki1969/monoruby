@@ -873,9 +873,23 @@ impl Value {
             } => {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
-                assert_eq!(0, prefix.len());
-                let constant = IdentId::get_id(name);
-                globals.get_constant(OBJECT_CLASS, constant).unwrap()
+                //assert_eq!(0, prefix.len());
+                if prefix.len() == 0 {
+                    let constant = IdentId::get_id(name);
+                    globals.get_constant(OBJECT_CLASS, constant).unwrap()
+                } else {
+                    let mut module = globals
+                        .get_constant(OBJECT_CLASS, IdentId::get_id(&prefix[0]))
+                        .unwrap();
+                    for id in &prefix[1..] {
+                        module = globals
+                            .get_constant(module.is_class_or_module().unwrap(), IdentId::get_id(id))
+                            .unwrap();
+                    }
+                    globals
+                        .get_constant(module.is_class_or_module().unwrap(), IdentId::get_id(name))
+                        .unwrap()
+                }
             }
             NodeKind::Range {
                 box start,
