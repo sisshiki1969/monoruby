@@ -1,6 +1,7 @@
 use crate::RValue;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct RurubyAlloc;
@@ -33,6 +34,7 @@ const DATA_LEN: usize = 64 * (SIZE - 1);
 const THRESHOLD: usize = 64 * (SIZE - 2);
 const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
+const MAX_PAGES: usize = 2048;
 
 pub trait GC<T: GCBox> {
     fn mark(&self, alloc: &mut Allocator<T>);
@@ -55,22 +57,24 @@ pub trait GCBox: PartialEq {
 }
 
 pub struct Allocator<T> {
+    /// Current page.
+    current_page: PageRef<T>,
+    /// Topmost page.
+    head_page: PageRef<T>,
+    /// Info for allocated pages.
+    pages: Vec<PageRef<T>>,
     /// Allocated number of objects in current page.
     used_in_current: usize,
     /// Total allocated objects.
     allocated: usize,
     /// Total blocks in free list.
     free_list_count: usize,
-    /// Current page.
-    current: PageRef<T>,
-    /// Info for allocated pages.
-    pages: Vec<PageRef<T>>,
     /// Counter of marked objects,
     mark_counter: usize,
     /// List of free objects.
     free: Option<std::ptr::NonNull<T>>,
     /// Deallocated pages.
-    free_pages: Vec<PageRef<T>>,
+    free_pages: VecDeque<PageRef<T>>,
     /// Counter of GC execution.
     count: usize,
     /// Flag for GC timing.
@@ -85,21 +89,31 @@ impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
-        let ptr = Page::alloc_page();
+        let layout = Layout::from_size_align(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE).unwrap();
+        let ptr = unsafe { System.alloc(layout) };
+        let ptr = std::ptr::Unique::new(ptr as _).unwrap();
         Allocator {
+            current_page: ptr,
+            head_page: ptr,
+            pages: vec![],
             used_in_current: 0,
             allocated: 0,
             free_list_count: 0,
-            current: ptr,
-            pages: vec![],
             mark_counter: 0,
             free: None,
-            free_pages: vec![],
+            free_pages: VecDeque::new(),
             count: 0,
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
         }
+    }
+
+    fn new_page(&mut self) -> PageRef<T> {
+        let ptr = unsafe { (self.head_page.as_ptr() as *mut u8).add(ALLOC_SIZE) } as _;
+        let ptr = std::ptr::Unique::new(ptr).unwrap();
+        self.head_page = ptr;
+        ptr
     }
 
     ///
@@ -189,15 +203,18 @@ impl<T: GCBox> Allocator<T> {
         let gcbox = if self.used_in_current == DATA_LEN {
             // Allocate new page.
             self.used_in_current = 1;
-            self.pages.push(self.current);
-            self.current = self.free_pages.pop().unwrap_or_else(|| Page::alloc_page());
-            unsafe { self.current.as_ref().get_first_cell() }
+            self.pages.push(self.current_page);
+            self.current_page = self
+                .free_pages
+                .pop_front()
+                .unwrap_or_else(|| self.new_page());
+            unsafe { self.current_page.as_ref().get_first_cell() }
         } else {
             // Bump allocation.
             if self.used_in_current == THRESHOLD {
                 self.set_alloc_flag();
             }
-            let ptr = unsafe { self.current.as_ref().get_cell(self.used_in_current) };
+            let ptr = unsafe { self.current_page.as_ref().get_cell(self.used_in_current) };
             self.used_in_current += 1;
             ptr
         };
@@ -253,12 +270,12 @@ impl<T: GCBox> Allocator<T> {
     /// If not yet, mark it and return false.
     pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
         let ptr = ptr as *const T;
-        let mut page_ptr = self.get_page(ptr);
+        let page_ptr = self.get_page(ptr);
 
-        let index = unsafe { page_ptr.as_ref().get_index(ptr) };
+        let index = unsafe { (*page_ptr).get_index(ptr) };
         assert!(index < DATA_LEN);
         let bit_mask = 1 << (index % 64);
-        let bitmap = unsafe { &mut page_ptr.as_mut().mark_bits[index / 64] };
+        let bitmap = unsafe { &mut (*page_ptr).mark_bits[index / 64] };
 
         let is_marked = (*bitmap & bit_mask) != 0;
         *bitmap |= bit_mask;
@@ -275,7 +292,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     fn clear_mark(&mut self) {
         unsafe {
-            self.current.as_mut().clear_bits();
+            self.current_page.as_mut().clear_bits();
             self.pages
                 .iter_mut()
                 .for_each(|heap| heap.as_mut().clear_bits());
@@ -284,16 +301,17 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
-    /// Salbage empty pages and put into `free_pages`.
+    /// Salvage empty pages and put into `free_pages`.
     ///
     fn salvage_empty_pages(&mut self) {
         let len = self.pages.len();
         for i in 0..len {
             unsafe {
+                // We must check from the last page, because the page can be removed during iteration.
                 if self.pages[len - i - 1].as_ref().all_dead() {
                     let mut page = self.pages.remove(len - i - 1);
                     page.as_mut().drop_inner_cells();
-                    self.free_pages.push(page);
+                    self.free_pages.push_back(page);
                     #[cfg(feature = "gc-debug")]
                     eprintln!("salvage: {:?}", page);
                 }
@@ -344,11 +362,11 @@ impl<T: GCBox> Allocator<T> {
             }
         }
 
-        let mut ptr = unsafe { self.current.as_ref().get_first_cell() };
+        let mut ptr = unsafe { self.current_page.as_ref().get_first_cell() };
         assert!(self.used_in_current <= DATA_LEN);
         let i = self.used_in_current / 64;
         let bit = self.used_in_current % 64;
-        let bitmap = unsafe { self.current.as_mut().mark_bits };
+        let bitmap = unsafe { self.current_page.as_mut().mark_bits };
 
         for map in bitmap.iter().take(i) {
             c += sweep_bits(64, *map, &mut ptr, head);
@@ -365,27 +383,22 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Get heap page from a pointer to T.
     ///
-    fn get_page(&self, ptr: *const T) -> PageRef<T> {
-        let page_ptr = std::ptr::Unique::new((ptr as usize & !(ALLOC_SIZE - 1)) as _).unwrap();
+    fn get_page(&self, ptr: *const T) -> *mut Page<T> {
+        let page_ptr: *mut Page<T> = (ptr as usize & !(ALLOC_SIZE - 1)) as _;
 
         #[cfg(feature = "gc-debug")]
         {
-            if self
-                .pages
-                .iter()
-                .any(|heap| heap.as_ptr() == page_ptr.as_ptr())
-            {
+            if self.current_page.as_ptr() == page_ptr {
                 return page_ptr;
             };
-            if self.current.as_ptr() == page_ptr.as_ptr() {
+            if self.pages.iter().any(|heap| heap.as_ptr() == page_ptr) {
                 return page_ptr;
             };
             eprintln!("dump heap pages");
             self.pages.iter().for_each(|x| eprintln!("{:?}", x));
-            eprintln!("{:?}", self.current);
+            eprintln!("{:?}", self.current_page);
             panic!("The ptr is not in heap pages. {:?}", ptr);
         }
-
         #[cfg(not(feature = "gc-debug"))]
         page_ptr
     }
@@ -460,23 +473,6 @@ impl<T: GCBox> std::fmt::Debug for Page<T> {
 type PageRef<T> = std::ptr::Unique<Page<T>>;
 
 impl<T: GCBox> Page<T> {
-    ///
-    /// Allocate heap page with `ALLOC_SIZE`.
-    ///
-    fn alloc_page() -> PageRef<T> {
-        let layout = Layout::from_size_align(ALLOC_SIZE, ALLOC_SIZE).unwrap();
-        let ptr = unsafe { System.alloc(layout) };
-        std::ptr::Unique::new(ptr as _).unwrap()
-    }
-
-    /*
-    fn dealloc_page(&self) {
-        use std::alloc::{dealloc, Layout};
-        let layout = Layout::from_size_align(ALLOC_SIZE, ALLOC_SIZE).unwrap();
-        unsafe { dealloc(self.as_ptr() as *mut u8, layout) };
-    }
-    */
-
     ///
     /// Drop all T in the page.
     ///
