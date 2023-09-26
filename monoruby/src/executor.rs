@@ -244,6 +244,12 @@ impl Executor {
         len
     }
 
+    pub fn temp_extend_form_slice(&mut self, slice: &[Value]) -> usize {
+        let len = self.temp_stack.len();
+        self.temp_stack.extend_from_slice(slice);
+        len
+    }
+
     pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }

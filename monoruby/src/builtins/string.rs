@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_);
     globals.define_builtin_func(STRING_CLASS, "sub", sub);
     globals.define_builtin_func(STRING_CLASS, "sub!", sub_);
+    globals.define_builtin_func(STRING_CLASS, "scan", scan);
     globals.define_builtin_func(STRING_CLASS, "match", string_match);
     globals.define_builtin_func(STRING_CLASS, "to_s", tos);
     globals.define_builtin_func(STRING_CLASS, "length", length);
@@ -784,6 +785,60 @@ fn gsub_main(
 }
 
 ///
+/// ### String#scan
+///
+/// - scan(pattern) -> [String] | [[String]]
+/// - scan(pattern) {|s| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scan.html]
+#[monoruby_builtin]
+fn scan(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let given = lfp.self_val().expect_string(globals)?;
+    let arg0 = arg[0];
+    let vec = if let Some(s) = arg0.is_string() {
+        let re = RegexpInner::from_escaped(globals, &s)?;
+        RegexpInner::find_all(vm, &re, &given)?
+    } else if let Some(re) = arg0.is_regex() {
+        RegexpInner::find_all(vm, re, &given)?
+    } else {
+        return Err(MonorubyErr::argumenterr(
+            "1st arg must be RegExp or String.",
+        ));
+    };
+    match lfp.block() {
+        None => Ok(Value::array_from_vec(vec)),
+        Some(block) => {
+            let temp_len = vm.temp_extend_form_slice(&vec);
+            let res = scan_inner(vm, globals, block, vec);
+            vm.temp_clear(temp_len);
+            res?;
+            Ok(lfp.self_val())
+        }
+    }
+}
+
+fn scan_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    block: BlockHandler,
+    vec: Vec<Value>,
+) -> Result<()> {
+    let data = globals.get_block_data(vm.cfp(), block);
+    for arg in vec {
+        match arg.is_array() {
+            Some(ary) => {
+                vm.invoke_block(globals, &data, &ary)?;
+            }
+            None => {
+                vm.invoke_block(globals, &data, &[arg])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+///
 /// ### String#match
 ///
 /// - match(regexp, pos = 0) -> MatchData | nil
@@ -1256,6 +1311,20 @@ mod test {
             r##"
         s = "abcdefghdefr"
         s.sub!(/def1/, "!!")
+        "##,
+        );
+    }
+
+    #[test]
+    fn scan() {
+        run_test(r##""foobar".scan(/../)"##);
+        run_test(r##""foobar".scan("o")"##);
+        run_test(r##""foobarbazfoobarbaz".scan(/ba./)"##);
+        run_test(
+            r##"
+        a = []
+        "foobarbazfoobarbaz".scan(/ba./) {|s| a << s.upcase }
+        a
         "##,
         );
     }

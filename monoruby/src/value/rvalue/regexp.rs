@@ -271,12 +271,7 @@ impl RegexpInner {
         }
     }
 
-    /*pub(crate) fn find_all(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        re: &Regex,
-        given: &str,
-    ) -> Option<Vec<Value>> {
+    pub(crate) fn find_all(vm: &mut Executor, re: &Regex, given: &str) -> Result<Vec<Value>> {
         let mut ary = vec![];
         let mut idx = 0;
         let mut last_captures = None;
@@ -288,7 +283,7 @@ impl RegexpInner {
                     idx = m.end();
                     match captures.len() {
                         1 => {
-                            let val = Value::new_string_from_str(&given[m.start()..m.end()]);
+                            let val = Value::string_from_str(&given[m.start()..m.end()]);
                             ary.push(val);
                         }
                         len => {
@@ -296,31 +291,33 @@ impl RegexpInner {
                             for i in 1..len {
                                 match captures.get(i) {
                                     Some(m) => {
-                                        vec.push(Value::new_string_from_str(
+                                        vec.push(Value::string_from_str(
                                             &given[m.start()..m.end()],
                                         ));
                                     }
                                     None => vec.push(Value::nil()),
                                 }
                             }
-                            let val = Value::new_array_from_vec(vec);
+                            let val = Value::array_from_vec(vec);
                             ary.push(val);
                         }
                     }
                     last_captures = Some(captures);
                 }
                 Err(err) => {
-                    globals.err_internal(format!("Capture failed. {:?}", err));
-                    return None;
+                    return Err(MonorubyErr::internalerr(format!(
+                        "Capture failed. {:?}",
+                        err
+                    )));
                 }
             };
         }
         match last_captures {
-            Some(c) => vm.get_captures(&c, given),
+            Some(c) => vm.save_captures(&c, given),
             None => {}
         }
-        Some(ary)
-    }*/
+        Ok(ary)
+    }
 }
 
 impl RegexpInner {
