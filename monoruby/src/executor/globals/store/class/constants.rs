@@ -88,14 +88,15 @@ impl Globals {
         current_func: FuncId,
         base: Option<Value>,
     ) -> Result<Value> {
-        assert!(base.is_none());
         let ConstSiteInfo {
             name,
             toplevel,
             mut prefix,
             ..
         } = self.store[id].clone();
-        let mut parent = if toplevel {
+        let mut parent = if let Some(base) = base {
+            base.expect_class_or_module(self)?
+        } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
             return self.search_constant_checked(name, current_func);

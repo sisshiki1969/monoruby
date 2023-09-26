@@ -1029,8 +1029,9 @@ impl Globals {
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
-            self[func_id].dump_bc(self);
         }
+        #[cfg(feature = "emit-asm")]
+        self[func_id].dump_bc(self);
 
         #[cfg(feature = "perf")]
         let codeptr = self.codegen.jit.get_current_address();
