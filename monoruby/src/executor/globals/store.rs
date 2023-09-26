@@ -265,12 +265,14 @@ impl Store {
 
     pub(crate) fn add_constsite(
         &mut self,
+        base: Option<SlotId>,
         name: IdentId,
         prefix: Vec<IdentId>,
         toplevel: bool,
     ) -> ConstSiteId {
         let info = ConstSiteInfo {
             name,
+            base,
             prefix,
             toplevel,
             cache: (usize::MAX, None),
@@ -306,10 +308,12 @@ impl Store {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
+    /// The slot of base object.
+    pub base: Option<SlotId>,
     /// Qualifier.
     pub prefix: Vec<IdentId>,
     /// Is toplevel?. (e.g. ::Foo)
