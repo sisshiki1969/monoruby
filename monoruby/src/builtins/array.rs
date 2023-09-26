@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a);
     globals.define_builtin_func(ARRAY_CLASS, "+", add);
+    globals.define_builtin_func(ARRAY_CLASS, "-", sub);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis::v_v_v);
     globals.define_builtin_func(ARRAY_CLASS, "==", eq);
@@ -165,6 +166,8 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
 fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let mut lhs = Array::dup(lfp.self_val().as_array());
     let rhs = match arg[0].is_array() {
         Some(v) => v,
@@ -178,6 +181,43 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
     };
     lhs.extend_from_slice(&*rhs);
     Ok(lhs.into())
+}
+
+///
+/// ### Array#-
+///
+/// - self - other -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2d.html]
+#[monoruby_builtin]
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    let lhs_v = lfp.self_val();
+    let rhs = match arg[0].is_array() {
+        Some(ary) => ary,
+        None => {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg[0],
+                ARRAY_CLASS,
+            ))
+        }
+    };
+    let mut v = vec![];
+    for lhs in lhs_v.as_array().iter() {
+        let mut flag = true;
+        for rhs in rhs.iter() {
+            if vm.eq_values_bool(globals, *lhs, *rhs)? {
+                flag = false;
+                break;
+            }
+        }
+        if flag {
+            v.push(*lhs)
+        }
+    }
+    Ok(Value::array_from_vec(v))
 }
 
 ///
@@ -1193,6 +1233,18 @@ mod test {
             r##"
         a = [1,2,3]
         res = a + [4,5,6,7,8]
+        [a, res]
+        "##,
+        );
+    }
+
+    #[test]
+    fn sub() {
+        run_test(r##"[1,2,3] - [2,5]"##);
+        run_test(
+            r##"
+        a = [:a,:b,:c]
+        res = a - [:b,:d]
         [a, res]
         "##,
         );
