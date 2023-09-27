@@ -26,6 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill);
+    globals.define_builtin_func(ARRAY_CLASS, "drop", drop);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject);
     globals.define_builtin_func(ARRAY_CLASS, "join", join);
@@ -480,6 +481,32 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
     let mut ary: Array = lfp.self_val().into();
     ary.fill(arg[0]);
     Ok(ary.into())
+}
+
+///
+/// ### Array#drop
+///
+/// - drop(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/drop.html]
+#[monoruby_builtin]
+fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let self_ = lfp.self_val();
+    let aref = self_.as_array();
+    let num = arg[0].coerce_to_i64(globals)?;
+    if num < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "Attempt to drop negative size. {}",
+            num
+        )));
+    };
+    let num = num as usize;
+    if num >= aref.len() {
+        return Ok(Value::array_empty());
+    };
+    let ary = &aref[num..];
+    Ok(Value::array_from_iter(ary.iter().cloned()))
 }
 
 ///
@@ -1362,6 +1389,16 @@ mod test {
             r##"
             a = [2, 3, 4, 5]
             a.fill(100)
+            a"##,
+        );
+    }
+
+    #[test]
+    fn drop() {
+        run_test(
+            r##"
+            a = [2, 3, 4, 5]
+            [a.drop(2), a.drop(100), a]
             a"##,
         );
     }
