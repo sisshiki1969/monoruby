@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map);
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect);
+    globals.define_builtin_func(ARRAY_CLASS, "grep", grep);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_);
@@ -857,6 +858,32 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 }
 
 ///
+/// #### Enumerable#grep
+///
+/// - grep(pattern) -> [object]
+/// - grep(pattern) {|item| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
+#[monoruby_builtin]
+fn grep(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let ary: Array = lfp.self_val().into();
+    let ary: Vec<_> = match lfp.block() {
+        None => {
+            let mut res = vec![];
+            for v in ary.iter() {
+                if cmp_teq_values_bool(vm, globals, arg[0], *v)? {
+                    res.push(*v)
+                }
+            }
+            res
+        }
+        _ => unimplemented!(),
+    };
+    Ok(Value::array_from_vec(ary))
+}
+
+///
 /// #### Array#include?
 ///
 /// - include?(val) -> bool
@@ -1579,6 +1606,12 @@ mod test {
     fn detect() {
         run_test(r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#);
         run_test(r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#);
+    }
+
+    #[test]
+    fn grep() {
+        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#);
+        //run_test(r#"Array.instance_methods.grep(/gr/)"#);
     }
 
     #[test]

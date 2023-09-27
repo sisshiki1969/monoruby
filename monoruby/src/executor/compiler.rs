@@ -683,7 +683,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             lea  r9, [rsp - 16];   // callee_lfp
             movq r8, rdi;
-            subq rsp, 1016;
+            subq rsp, 4088;
             pushq rdi;
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
@@ -691,7 +691,7 @@ impl Codegen {
             movq rax, (runtime::vm_handle_arguments);
             call rax;
             popq rdi;
-            addq rsp, 1016;
+            addq rsp, 4088;
         }
     }
 

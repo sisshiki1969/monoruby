@@ -479,6 +479,37 @@ pub(super) extern "C" fn cmp_teq_values(
     Some(Value::bool(b))
 }
 
+pub(crate) fn cmp_teq_values_bool(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Result<bool> {
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Nil, RV::Nil) => true,
+        (RV::Nil, _) => false,
+        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs == rhs,
+        (RV::Symbol(_), _) => false,
+        (RV::Bool(lhs), RV::Bool(rhs)) => lhs == rhs,
+        (RV::Bool(_), _) => false,
+        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
+        (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        _ => {
+            return vm
+                .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None)
+                .map(|v| v.as_bool());
+        }
+    };
+    Ok(b)
+}
+
 pub(super) extern "C" fn cmp_cmp_values(
     vm: &mut Executor,
     globals: &mut Globals,
