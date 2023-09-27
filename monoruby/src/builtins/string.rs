@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with);
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func(STRING_CLASS, "split", split);
+    globals.define_builtin_func(STRING_CLASS, "chomp", chomp);
     globals.define_builtin_func(STRING_CLASS, "gsub", gsub);
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_);
     globals.define_builtin_func(STRING_CLASS, "sub", sub);
@@ -672,6 +673,47 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     } else {
         Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
     }
+}
+
+///
+/// ### String#chomp
+/// - chomp(rs = $/) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
+#[monoruby_builtin]
+fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 0..=1)?;
+    let rs = if lfp.arg_len() == 0 {
+        "\n".to_string()
+    } else {
+        let arg = arg[0];
+        if arg.is_nil() {
+            return Ok(lfp.self_val());
+        }
+        arg.expect_string(globals)?
+    };
+
+    let self_ = lfp.self_val().expect_string(globals)?;
+    let res = if rs.is_empty() {
+        let mut s = self_.as_str();
+        let mut len = s.len();
+        loop {
+            s = s.trim_end_matches("\r\n");
+            if s.ends_with('\n') {
+                s = &s[0..s.len() - 1];
+            }
+            if len == s.len() {
+                break;
+            }
+            len = s.len();
+        }
+        s.to_string()
+    } else if rs == "\n" {
+        self_.trim_end_matches(&['\n', '\r']).to_string()
+    } else {
+        self_.trim_end_matches(&rs).to_string()
+    };
+    Ok(Value::string(res))
 }
 
 ///
@@ -1434,6 +1476,17 @@ mod test {
         run_test(r##""a,b,c,d,e".split(/,/, 6)"##);
         run_test(r##""a,b,c,d,e".split(/,/, 7)"##);
         run_test(r##""a,b,c,d,e".split(/,/, -1)"##);
+    }
+
+    #[test]
+    fn chomp() {
+        run_test(r##""foo\n".chomp"##);
+        run_test(r##""foo\n".chomp("\n")"##);
+        run_test(r##""foo\r\n".chomp("\r\n")"##);
+        run_test(r##""string\n".chomp(nil)"##);
+        run_test(r##""foo\r\n\n".chomp("")"##);
+        run_test(r##""foo\n\r\n".chomp("")"##);
+        run_test(r##""foo\n\r\r".chomp("")"##);
     }
 
     #[test]
