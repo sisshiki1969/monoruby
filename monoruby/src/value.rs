@@ -751,6 +751,18 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_array(&self, globals: &mut Globals) -> Result<Array> {
+        if let Some(ary) = self.is_array() {
+            Ok(ary)
+        } else {
+            Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                ARRAY_CLASS,
+            ))
+        }
+    }
+
     pub(crate) fn expect_hash(&self, globals: &mut Globals) -> Result<&HashInner> {
         if let Some(h) = self.is_hash() {
             Ok(h)

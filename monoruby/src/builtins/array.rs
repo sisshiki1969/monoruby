@@ -27,6 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop);
+    globals.define_builtin_func(ARRAY_CLASS, "zip", zip);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject);
     globals.define_builtin_func(ARRAY_CLASS, "join", join);
@@ -507,6 +508,46 @@ fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     };
     let ary = &aref[num..];
     Ok(Value::array_from_iter(ary.iter().cloned()))
+}
+
+///
+/// ### Array#zip
+///
+/// - zip(*lists) -> [[object]]
+/// - zip(*lists) {|v1, v2, ...| ...} -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/zip.html]
+#[monoruby_builtin]
+fn zip(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let self_ary = self_.as_array();
+    let mut args_ary = vec![];
+    for a in lfp.iter() {
+        args_ary.push(a.expect_array(globals)?.to_vec());
+    }
+    let mut ary = vec![];
+    for (i, val) in self_ary.iter().enumerate() {
+        let mut vec = vec![*val];
+        for args in &args_ary {
+            if i < args.len() {
+                vec.push(args[i]);
+            } else {
+                vec.push(Value::nil());
+            }
+        }
+        let zip = Value::array_from_vec(vec);
+        ary.push(zip);
+    }
+    match lfp.block() {
+        None => Ok(Value::array_from_vec(ary)),
+        Some(block) => {
+            let temp_len = vm.temp_extend_form_slice(&ary);
+            let res = vm.invoke_block_map1(globals, block, ary.iter().cloned());
+            vm.temp_clear(temp_len);
+            res?;
+            Ok(Value::nil())
+        }
+    }
 }
 
 ///
@@ -1400,6 +1441,20 @@ mod test {
             a = [2, 3, 4, 5]
             [a.drop(2), a.drop(100), a]
             a"##,
+        );
+    }
+
+    #[test]
+    fn zip() {
+        run_test(r##"[1,2,3].zip([4,5,6], [7,8,9])"##);
+        run_test(r##"[1,2].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
+        run_test(r##"[1,2,3,4,5].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
+        run_test(
+            r##"
+            a = []
+            [1,2,3].zip([4,5,6], [7,8,9]) { |ary| a << ary }
+            a
+        "##,
         );
     }
 
