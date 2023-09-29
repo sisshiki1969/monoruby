@@ -227,31 +227,30 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 /// ### Array#*
 ///
 /// - self * times -> Array
-/// - [NOT SUPPORTED]self * sep -> String
+/// - self * sep -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
 fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let self_val = lfp.self_val();
-    let lhs = self_val.as_array();
-    let rhs = match arg[0].try_fixnum() {
-        Some(v) => {
-            if v < 0 {
-                return Err(MonorubyErr::negative_argument());
-            } else {
-                v as usize
-            }
+    let lhs: Array = self_val.into();
+    if let Some(v) = arg[0].try_fixnum() {
+        if v < 0 {
+            return Err(MonorubyErr::negative_argument());
         }
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                arg[0],
-                INTEGER_CLASS,
-            ));
-        }
-    };
-    let vec = lhs.repeat(rhs);
-    Ok(Value::array_from_vec(vec))
+        let rhs = v as usize;
+        let vec = lhs.repeat(rhs);
+        Ok(Value::array_from_vec(vec))
+    } else if let Some(sep) = arg[0].is_string() {
+        let res = array_join(globals, lhs, &sep);
+        Ok(Value::string(res))
+    } else {
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            arg[0],
+            INTEGER_CLASS,
+        ))
+    }
 }
 
 ///
@@ -590,21 +589,15 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
         arg[0].expect_string(globals)?
     };
     let ary: Array = lfp.self_val().into();
-    let mut res = String::new();
-    array_join(globals, &mut res, ary, &sep);
+    let res = array_join(globals, ary, &sep);
     Ok(Value::string(res))
 }
 
-fn array_join(globals: &Globals, res: &mut String, aref: Array, sep: &str) {
-    for elem in &**aref {
-        let s = globals.to_s(*elem);
-        if res.is_empty() {
-            *res = s;
-        } else {
-            *res += sep;
-            *res += &s;
-        }
-    }
+fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
+    ary.iter()
+        .map(|v| globals.to_s(*v))
+        .collect::<Vec<_>>()
+        .join(&sep)
 }
 
 ///
@@ -1355,6 +1348,9 @@ mod test {
         [a, res]
         "##,
         );
+        run_test(r##"[] * "|""##);
+        run_test(r##"[1] * "|""##);
+        run_test(r##"[1,2,3,4] * "|""##);
     }
 
     #[test]

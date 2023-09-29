@@ -636,7 +636,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             if count == lim {
                 break 'l;
             } else {
-                res.push(&string[cursor..m.start()]);
+                if cursor != 0 || cursor != m.start() || m.range().len() != 0 {
+                    res.push(&string[cursor..m.start()]);
+                }
             }
             while let Some(m) = iter.next() {
                 count += 1;
