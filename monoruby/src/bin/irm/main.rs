@@ -1,4 +1,4 @@
-use ruruby_parse::ParseErrKind;
+use ruruby_parse::{DummyFrame, ParseErrKind};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -53,7 +53,7 @@ fn main() {
                     buf.clone(),
                     std::path::Path::new(&format!("(irm):{script_line}")).into(),
                     context.clone(),
-                    None,
+                    None::<DummyFrame>,
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;
