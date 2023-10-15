@@ -254,7 +254,7 @@ impl Executor {
         self.temp_stack.truncate(len);
     }
 
-    fn temp_tear(&mut self, len: usize) -> Vec<Value> {
+    pub fn temp_tear(&mut self, len: usize) -> Vec<Value> {
         self.temp_stack.drain(len..).collect()
     }
 

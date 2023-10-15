@@ -94,12 +94,12 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         self_val: Enumerator,
     ) -> Result<Value> {
         loop {
-            let (ary, is_return) = internal.enum_yield_values(vm, globals, self_val)?;
-            let v = ary.peel();
-            if is_return {
+            let v = internal.enum_yield_values(vm, globals, self_val)?;
+            if internal.is_terminated() {
                 return Ok(v);
             }
-            vm.invoke_block(globals, block_data, &[v])?;
+            let a: Array = v.into();
+            vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
     let len = lfp.arg_len();
@@ -137,12 +137,12 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         self_val: Enumerator,
     ) -> Result<Value> {
         loop {
-            let (ary, is_return) = internal.enum_yield_values(vm, globals, self_val)?;
-            let v = ary.peel();
-            if is_return {
+            let v = internal.enum_yield_values(vm, globals, self_val)?;
+            if internal.is_terminated() {
                 return Ok(v);
             }
-            vm.invoke_block(globals, block_data, &[v, count])?;
+            let a: Array = v.into();
+            vm.invoke_block(globals, block_data, &[a.peel(), count])?;
             match count.unpack() {
                 RV::Fixnum(i) => count = Value::integer(i + 1),
                 RV::BigInt(i) => count = Value::bigint(i + 1),
@@ -265,12 +265,12 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
     ) -> Result<Value> {
         let yielder = Value::yielder_object();
         loop {
-            let (ary, is_return) = internal.generator_yield_values(vm, globals, yielder)?;
-            let v = ary.peel();
-            if is_return {
+            let v = internal.generator_yield_values(vm, globals, yielder)?;
+            if internal.is_terminated() {
                 return Ok(v);
             }
-            vm.invoke_block(globals, block_data, &[v])?;
+            let a: Array = v.into();
+            vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
     let len = lfp.arg_len();

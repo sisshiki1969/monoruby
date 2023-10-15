@@ -21,8 +21,6 @@ const FIBER_STACK_SIZE: usize = 8192 * 8;
 impl Drop for FiberInner {
     fn drop(&mut self) {
         use std::alloc::*;
-        //let _ = unsafe { Box::from_raw(self.handle.unwrap().as_ptr()) };
-        //self.handle = None;
         if let Some(stack) = self.stack {
             let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
             unsafe {
@@ -58,6 +56,10 @@ impl Fiber {
         self.handle.fiber_state()
     }
 
+    pub fn is_terminated(&self) -> bool {
+        self.handle.fiber_state() == FiberState::Terminated
+    }
+
     pub fn func_id(&self) -> FuncId {
         self.proc.func_id()
     }
@@ -66,9 +68,6 @@ impl Fiber {
         let len = lfp.arg_len();
         match self.state() {
             FiberState::Created => self.invoke_fiber(vm, globals, lfp.as_arg(), len),
-            FiberState::Terminated => Err(MonorubyErr::fibererr(
-                "attempt to resume a terminated fiber".to_string(),
-            )),
             FiberState::Suspended => {
                 let val = if len == 0 {
                     Value::nil()
@@ -79,6 +78,9 @@ impl Fiber {
                 };
                 self.resume_fiber(vm, globals, val)
             }
+            FiberState::Terminated => Err(MonorubyErr::fibererr(
+                "attempt to resume a terminated fiber".to_string(),
+            )),
         }
     }
 
@@ -87,7 +89,7 @@ impl Fiber {
         vm: &mut Executor,
         globals: &mut Globals,
         self_val: Enumerator,
-    ) -> Result<(Array, bool)> {
+    ) -> Result<Value> {
         let v = match self.state() {
             FiberState::Created => {
                 let arg = Arg::from(&Value::nil());
@@ -100,11 +102,7 @@ impl Fiber {
                 ))
             }
         };
-        if self.state() == FiberState::Terminated {
-            Ok((Value::array1(v).into(), true))
-        } else {
-            Ok((v.into(), false))
-        }
+        Ok(v)
     }
 
     pub fn generator_yield_values(
@@ -112,23 +110,18 @@ impl Fiber {
         vm: &mut Executor,
         globals: &mut Globals,
         yielder: Value,
-    ) -> Result<(Array, bool)> {
-        let v = match self.state() {
+    ) -> Result<Value> {
+        match self.state() {
             FiberState::Created => {
                 let arg = Arg::from(&yielder);
-                self.invoke_fiber(vm, globals, arg, 1)?
+                self.invoke_fiber(vm, globals, arg, 1)
             }
-            FiberState::Suspended => self.resume_fiber(vm, globals, yielder)?,
+            FiberState::Suspended => self.resume_fiber(vm, globals, yielder),
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
                 ))
             }
-        };
-        if self.state() == FiberState::Terminated {
-            Ok((Value::array1(v).into(), true))
-        } else {
-            Ok((v.into(), false))
         }
     }
 
