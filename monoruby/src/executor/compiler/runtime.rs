@@ -786,7 +786,8 @@ pub(super) extern "C" fn defined_method(
     recv: Value,
     name: IdentId,
 ) {
-    if globals.find_method(recv, name, false).is_err() {
+    let is_func_call = _vm.cfp().lfp().self_val() == recv;
+    if globals.find_method(recv, name, is_func_call).is_err() {
         unsafe { *reg = Value::nil() }
     }
 }
