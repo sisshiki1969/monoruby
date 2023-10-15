@@ -359,7 +359,7 @@ impl ISeqInfo {
         info
     }
 
-    #[cfg(feature = "dump-bc")]
+    #[cfg(feature = "emit-asm")]
     pub(super) fn get_exception_map(
         &self,
     ) -> Vec<(

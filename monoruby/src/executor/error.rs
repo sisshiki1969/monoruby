@@ -249,7 +249,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod,
             format!(
                 "undefined method `{name}' for {}:{}",
-                globals.to_s(obj),
+                globals.inspect(obj),
                 obj.get_real_class_name(globals)
             ),
         )

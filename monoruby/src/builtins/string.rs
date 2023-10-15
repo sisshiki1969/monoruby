@@ -21,10 +21,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with);
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func(STRING_CLASS, "split", split);
+    globals.define_builtin_func(STRING_CLASS, "chomp", chomp);
     globals.define_builtin_func(STRING_CLASS, "gsub", gsub);
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_);
     globals.define_builtin_func(STRING_CLASS, "sub", sub);
     globals.define_builtin_func(STRING_CLASS, "sub!", sub_);
+    globals.define_builtin_func(STRING_CLASS, "scan", scan);
     globals.define_builtin_func(STRING_CLASS, "match", string_match);
     globals.define_builtin_func(STRING_CLASS, "to_s", tos);
     globals.define_builtin_func(STRING_CLASS, "length", length);
@@ -634,7 +636,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             if count == lim {
                 break 'l;
             } else {
-                res.push(&string[cursor..m.start()]);
+                if cursor != 0 || cursor != m.start() || m.range().len() != 0 {
+                    res.push(&string[cursor..m.start()]);
+                }
             }
             while let Some(m) = iter.next() {
                 count += 1;
@@ -671,6 +675,47 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     } else {
         Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
     }
+}
+
+///
+/// ### String#chomp
+/// - chomp(rs = $/) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
+#[monoruby_builtin]
+fn chomp(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 0..=1)?;
+    let rs = if lfp.arg_len() == 0 {
+        "\n".to_string()
+    } else {
+        let arg = arg[0];
+        if arg.is_nil() {
+            return Ok(lfp.self_val());
+        }
+        arg.expect_string(globals)?
+    };
+
+    let self_ = lfp.self_val().expect_string(globals)?;
+    let res = if rs.is_empty() {
+        let mut s = self_.as_str();
+        let mut len = s.len();
+        loop {
+            s = s.trim_end_matches("\r\n");
+            if s.ends_with('\n') {
+                s = &s[0..s.len() - 1];
+            }
+            if len == s.len() {
+                break;
+            }
+            len = s.len();
+        }
+        s.to_string()
+    } else if rs == "\n" {
+        self_.trim_end_matches(&['\n', '\r']).to_string()
+    } else {
+        self_.trim_end_matches(&rs).to_string()
+    };
+    Ok(Value::string(res))
 }
 
 ///
@@ -781,6 +826,60 @@ fn gsub_main(
             RegexpInner::replace_all_block(vm, globals, args[0], &given, bh)
         }
     }
+}
+
+///
+/// ### String#scan
+///
+/// - scan(pattern) -> [String] | [[String]]
+/// - scan(pattern) {|s| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scan.html]
+#[monoruby_builtin]
+fn scan(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let given = lfp.self_val().expect_string(globals)?;
+    let arg0 = arg[0];
+    let vec = if let Some(s) = arg0.is_string() {
+        let re = RegexpInner::from_escaped(globals, &s)?;
+        RegexpInner::find_all(vm, &re, &given)?
+    } else if let Some(re) = arg0.is_regex() {
+        RegexpInner::find_all(vm, re, &given)?
+    } else {
+        return Err(MonorubyErr::argumenterr(
+            "1st arg must be RegExp or String.",
+        ));
+    };
+    match lfp.block() {
+        None => Ok(Value::array_from_vec(vec)),
+        Some(block) => {
+            let temp_len = vm.temp_extend_form_slice(&vec);
+            let res = scan_inner(vm, globals, block, vec);
+            vm.temp_clear(temp_len);
+            res?;
+            Ok(lfp.self_val())
+        }
+    }
+}
+
+fn scan_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    block: BlockHandler,
+    vec: Vec<Value>,
+) -> Result<()> {
+    let data = globals.get_block_data(vm.cfp(), block);
+    for arg in vec {
+        match arg.is_array() {
+            Some(ary) => {
+                vm.invoke_block(globals, &data, &ary)?;
+            }
+            None => {
+                vm.invoke_block(globals, &data, &[arg])?;
+            }
+        }
+    }
+    Ok(())
 }
 
 ///
@@ -1261,6 +1360,20 @@ mod test {
     }
 
     #[test]
+    fn scan() {
+        run_test(r##""foobar".scan(/../)"##);
+        run_test(r##""foobar".scan("o")"##);
+        run_test(r##""foobarbazfoobarbaz".scan(/ba./)"##);
+        run_test(
+            r##"
+        a = []
+        "foobarbazfoobarbaz".scan(/ba./) {|s| a << s.upcase }
+        a
+        "##,
+        );
+    }
+
+    #[test]
     fn set_match() {
         run_test(
             r##"
@@ -1365,6 +1478,17 @@ mod test {
         run_test(r##""a,b,c,d,e".split(/,/, 6)"##);
         run_test(r##""a,b,c,d,e".split(/,/, 7)"##);
         run_test(r##""a,b,c,d,e".split(/,/, -1)"##);
+    }
+
+    #[test]
+    fn chomp() {
+        run_test(r##""foo\n".chomp"##);
+        run_test(r##""foo\n".chomp("\n")"##);
+        run_test(r##""foo\r\n".chomp("\r\n")"##);
+        run_test(r##""string\n".chomp(nil)"##);
+        run_test(r##""foo\r\n\n".chomp("")"##);
+        run_test(r##""foo\n\r\n".chomp("")"##);
+        run_test(r##""foo\n\r\r".chomp("")"##);
     }
 
     #[test]

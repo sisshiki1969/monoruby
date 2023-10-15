@@ -167,10 +167,17 @@ impl BytecodeGen {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
+                parent,
                 prefix,
             } => {
-                self.emit_load_const(dst.into(), toplevel, name, prefix, loc);
+                let base: Option<BcReg> = if let Some(box parent) = parent {
+                    let base = self.sp().into();
+                    self.gen_temp_expr(parent)?;
+                    Some(base)
+                } else {
+                    None
+                };
+                self.emit_load_const(dst.into(), base, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_id_from_string(name);

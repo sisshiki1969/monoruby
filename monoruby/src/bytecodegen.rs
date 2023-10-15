@@ -821,6 +821,7 @@ impl BytecodeGen {
     fn emit_load_const(
         &mut self,
         dst: Option<BcReg>,
+        base: Option<BcReg>,
         toplevel: bool,
         name: String,
         prefix: Vec<String>,
@@ -831,10 +832,11 @@ impl BytecodeGen {
             .into_iter()
             .map(IdentId::get_id_from_string)
             .collect();
-        let ret = self.get_reg(dst);
+        let dst = self.get_reg(dst);
         self.emit(
             BcIr::LoadConst {
-                ret,
+                dst,
+                base,
                 toplevel,
                 prefix,
                 name,
@@ -850,7 +852,7 @@ impl BytecodeGen {
 
     fn emit_load_gvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
-        self.emit(BcIr::LoadGvar { ret, name }, loc);
+        self.emit(BcIr::LoadGvar { dst: ret, name }, loc);
     }
 
     fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {

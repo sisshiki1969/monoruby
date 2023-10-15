@@ -244,6 +244,12 @@ impl Executor {
         len
     }
 
+    pub fn temp_extend_form_slice(&mut self, slice: &[Value]) -> usize {
+        let len = self.temp_stack.len();
+        self.temp_stack.extend_from_slice(slice);
+        len
+    }
+
     pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }
@@ -381,8 +387,11 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Result<Value> {
+        let base = globals.store[site_id]
+            .base
+            .map(|base| unsafe { self.cfp().lfp().register(base.0 as usize) }.unwrap());
         let current_func = self.method_func_id();
-        globals.find_constant(site_id, current_func)
+        globals.find_constant(site_id, current_func, base)
     }
 
     fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
@@ -1006,6 +1015,7 @@ impl BcPc {
             TraceIr::LoadConst(reg, id) => {
                 let ConstSiteInfo {
                     name,
+                    base,
                     prefix,
                     toplevel,
                     ..
@@ -1016,7 +1026,16 @@ impl BcPc {
                     const_name += "::";
                 }
                 name.append_to(&mut const_name);
-                let op1 = format!("{:?} = const[{}]", reg, const_name);
+                let op1 = format!(
+                    "{:?} = {}const[{}]",
+                    reg,
+                    if let Some(base) = base {
+                        format!("{:?}::", base)
+                    } else {
+                        "".to_string()
+                    },
+                    const_name
+                );
                 format!(
                     "{:36} [{}]",
                     op1,
