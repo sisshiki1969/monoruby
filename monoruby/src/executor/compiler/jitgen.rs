@@ -1216,10 +1216,6 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, &store[callid]);
-                    ctx.release(ret);
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
@@ -1235,10 +1231,6 @@ impl Codegen {
                     info,
                     ..
                 } => {
-                    let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, &store[callid]);
-                    ctx.release(ret);
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
@@ -1249,10 +1241,6 @@ impl Codegen {
                     }
                 }
                 TraceIr::Super { callid, info, .. } => {
-                    let CallSiteInfo { recv, ret, .. } = store[callid];
-                    self.fetch_slots(&mut ctx, &[recv]);
-                    self.fetch_callargs(&mut ctx, &store[callid]);
-                    ctx.release(ret);
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {

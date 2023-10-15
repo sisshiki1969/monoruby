@@ -24,6 +24,10 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
     ) {
+        let CallSiteInfo { recv, ret, .. } = store[callid];
+        self.fetch_slots(ctx, &[recv]);
+        self.fetch_callargs(ctx, &store[callid]);
+        ctx.release(ret);
         let cached = InlineCached::new(pc);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
             self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);

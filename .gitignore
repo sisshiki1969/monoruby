@@ -4,6 +4,8 @@
 *.disas
 *.bytecode
 *.jpg
+*.perf
+perf.data
 .vscode
 .ruby-version
 out.*
