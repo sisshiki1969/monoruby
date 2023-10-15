@@ -226,14 +226,15 @@ pub(super) enum BcIr {
     Index(BcReg, BcReg, BcReg),      // ret, base, index
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst {
-        ret: BcReg,
+        dst: BcReg,
+        base: Option<BcReg>,
         toplevel: bool,
         prefix: Vec<IdentId>,
         name: IdentId,
     },
     StoreConst(BcReg, IdentId),
     LoadGvar {
-        ret: BcReg,
+        dst: BcReg,
         name: IdentId,
     },
     StoreGvar {

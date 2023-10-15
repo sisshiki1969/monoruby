@@ -37,8 +37,8 @@ impl Globals {
         None
     }
 
-    pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Result<Value> {
-        let mut class = OBJECT_CLASS;
+    pub(crate) fn get_qualified_constant(&mut self, base: ClassId, name: &[&str]) -> Result<Value> {
+        let mut class = base;
         for name in name {
             let name = IdentId::get_id(name);
             class = match self.get_constant(class, name) {
@@ -82,14 +82,21 @@ impl Globals {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    pub(crate) fn find_constant(&mut self, id: ConstSiteId, current_func: FuncId) -> Result<Value> {
+    pub(crate) fn find_constant(
+        &mut self,
+        id: ConstSiteId,
+        current_func: FuncId,
+        base: Option<Value>,
+    ) -> Result<Value> {
         let ConstSiteInfo {
+            name,
             toplevel,
             mut prefix,
-            name,
             ..
         } = self.store[id].clone();
-        let mut parent = if toplevel {
+        let mut parent = if let Some(base) = base {
+            base.expect_class_or_module(self)?
+        } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
             return self.search_constant_checked(name, current_func);

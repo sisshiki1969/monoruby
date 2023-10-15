@@ -172,13 +172,15 @@ impl BytecodeGen {
                 Bc::from(enc_wl(9, op1.0, name.get()))
             }
             BcIr::LoadConst {
-                ret,
+                dst,
+                base,
                 toplevel,
                 prefix,
                 name,
             } => {
-                let op1 = self.get_index(ret);
-                let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
+                let op1 = self.get_index(dst);
+                let base = base.map(|base| self.get_index(&base));
+                let op2 = store.add_constsite(base, *name, prefix.clone(), *toplevel);
                 Bc::from(enc_wl(10, op1.0, op2.0))
             }
             BcIr::StoreConst(reg, name) => {
@@ -240,8 +242,8 @@ impl BytecodeGen {
                 let op1 = self.get_index(dst);
                 Bc::from(enc_wl(23, op1.0, *outer as u32))
             }
-            BcIr::LoadGvar { ret, name } => {
-                let op1 = self.get_index(ret);
+            BcIr::LoadGvar { dst, name } => {
+                let op1 = self.get_index(dst);
                 Bc::from(enc_wl(25, op1.0, name.get()))
             }
             BcIr::StoreGvar { val, name } => {
@@ -300,7 +302,7 @@ impl BytecodeGen {
                 name,
             } => {
                 let op1 = self.get_index(ret);
-                let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
+                let op2 = store.add_constsite(None, *name, prefix.clone(), *toplevel);
                 Bc::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
             }
             BcIr::DefinedMethod { ret, recv, name } => {

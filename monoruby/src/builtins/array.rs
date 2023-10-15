@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a);
     globals.define_builtin_func(ARRAY_CLASS, "+", add);
+    globals.define_builtin_func(ARRAY_CLASS, "-", sub);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis::v_v_v);
     globals.define_builtin_func(ARRAY_CLASS, "==", eq);
@@ -25,6 +26,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear);
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill);
+    globals.define_builtin_func(ARRAY_CLASS, "drop", drop);
+    globals.define_builtin_func(ARRAY_CLASS, "zip", zip);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject);
     globals.define_builtin_func(ARRAY_CLASS, "join", join);
@@ -40,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map);
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect);
+    globals.define_builtin_func(ARRAY_CLASS, "grep", grep);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_);
@@ -165,6 +169,8 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
 fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let mut lhs = Array::dup(lfp.self_val().as_array());
     let rhs = match arg[0].is_array() {
         Some(v) => v,
@@ -181,34 +187,70 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
 }
 
 ///
+/// ### Array#-
+///
+/// - self - other -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2d.html]
+#[monoruby_builtin]
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    let lhs_v = lfp.self_val();
+    let rhs = match arg[0].is_array() {
+        Some(ary) => ary,
+        None => {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg[0],
+                ARRAY_CLASS,
+            ))
+        }
+    };
+    let mut v = vec![];
+    for lhs in lhs_v.as_array().iter() {
+        let mut flag = true;
+        for rhs in rhs.iter() {
+            if vm.eq_values_bool(globals, *lhs, *rhs)? {
+                flag = false;
+                break;
+            }
+        }
+        if flag {
+            v.push(*lhs)
+        }
+    }
+    Ok(Value::array_from_vec(v))
+}
+
+///
 /// ### Array#*
 ///
 /// - self * times -> Array
-/// - [NOT SUPPORTED]self * sep -> String
+/// - self * sep -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
 fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let self_val = lfp.self_val();
-    let lhs = self_val.as_array();
-    let rhs = match arg[0].try_fixnum() {
-        Some(v) => {
-            if v < 0 {
-                return Err(MonorubyErr::negative_argument());
-            } else {
-                v as usize
-            }
+    let lhs: Array = self_val.into();
+    if let Some(v) = arg[0].try_fixnum() {
+        if v < 0 {
+            return Err(MonorubyErr::negative_argument());
         }
-        None => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                arg[0],
-                INTEGER_CLASS,
-            ));
-        }
-    };
-    let vec = lhs.repeat(rhs);
-    Ok(Value::array_from_vec(vec))
+        let rhs = v as usize;
+        let vec = lhs.repeat(rhs);
+        Ok(Value::array_from_vec(vec))
+    } else if let Some(sep) = arg[0].is_string() {
+        let res = array_join(globals, lhs, &sep);
+        Ok(Value::string(res))
+    } else {
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            arg[0],
+            INTEGER_CLASS,
+        ))
+    }
 }
 
 ///
@@ -443,6 +485,72 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 }
 
 ///
+/// ### Array#drop
+///
+/// - drop(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/drop.html]
+#[monoruby_builtin]
+fn drop(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let self_ = lfp.self_val();
+    let aref = self_.as_array();
+    let num = arg[0].coerce_to_i64(globals)?;
+    if num < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "Attempt to drop negative size. {}",
+            num
+        )));
+    };
+    let num = num as usize;
+    if num >= aref.len() {
+        return Ok(Value::array_empty());
+    };
+    let ary = &aref[num..];
+    Ok(Value::array_from_iter(ary.iter().cloned()))
+}
+
+///
+/// ### Array#zip
+///
+/// - zip(*lists) -> [[object]]
+/// - zip(*lists) {|v1, v2, ...| ...} -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/zip.html]
+#[monoruby_builtin]
+fn zip(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let self_ary = self_.as_array();
+    let mut args_ary = vec![];
+    for a in lfp.iter() {
+        args_ary.push(a.expect_array(globals)?.to_vec());
+    }
+    let mut ary = vec![];
+    for (i, val) in self_ary.iter().enumerate() {
+        let mut vec = vec![*val];
+        for args in &args_ary {
+            if i < args.len() {
+                vec.push(args[i]);
+            } else {
+                vec.push(Value::nil());
+            }
+        }
+        let zip = Value::array_from_vec(vec);
+        ary.push(zip);
+    }
+    match lfp.block() {
+        None => Ok(Value::array_from_vec(ary)),
+        Some(block) => {
+            let temp_len = vm.temp_extend_form_slice(&ary);
+            let res = vm.invoke_block_map1(globals, block, ary.iter().cloned());
+            vm.temp_clear(temp_len);
+            res?;
+            Ok(Value::nil())
+        }
+    }
+}
+
+///
 /// ### Array#inject
 ///
 /// - inject(init = self.first) {|result, item| ... } -> object
@@ -481,21 +589,15 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
         arg[0].expect_string(globals)?
     };
     let ary: Array = lfp.self_val().into();
-    let mut res = String::new();
-    array_join(globals, &mut res, ary, &sep);
+    let res = array_join(globals, ary, &sep);
     Ok(Value::string(res))
 }
 
-fn array_join(globals: &Globals, res: &mut String, aref: Array, sep: &str) {
-    for elem in &**aref {
-        let s = globals.to_s(*elem);
-        if res.is_empty() {
-            *res = s;
-        } else {
-            *res += sep;
-            *res += &s;
-        }
-    }
+fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
+    ary.iter()
+        .map(|v| globals.to_s(*v))
+        .collect::<Vec<_>>()
+        .join(&sep)
 }
 
 ///
@@ -746,6 +848,32 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
         };
     }
     Ok(Value::nil())
+}
+
+///
+/// #### Enumerable#grep
+///
+/// - grep(pattern) -> [object]
+/// - grep(pattern) {|item| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
+#[monoruby_builtin]
+fn grep(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let ary: Array = lfp.self_val().into();
+    let ary: Vec<_> = match lfp.block() {
+        None => {
+            let mut res = vec![];
+            for v in ary.iter() {
+                if cmp_teq_values_bool(vm, globals, arg[0], *v)? {
+                    res.push(*v)
+                }
+            }
+            res
+        }
+        _ => unimplemented!(),
+    };
+    Ok(Value::array_from_vec(ary))
 }
 
 ///
@@ -1199,6 +1327,18 @@ mod test {
     }
 
     #[test]
+    fn sub() {
+        run_test(r##"[1,2,3] - [2,5]"##);
+        run_test(
+            r##"
+        a = [:a,:b,:c]
+        res = a - [:b,:d]
+        [a, res]
+        "##,
+        );
+    }
+
+    #[test]
     fn mul() {
         run_test(r##"[1,2,3] * 4"##);
         run_test(
@@ -1208,6 +1348,9 @@ mod test {
         [a, res]
         "##,
         );
+        run_test(r##"[] * "|""##);
+        run_test(r##"[1] * "|""##);
+        run_test(r##"[1,2,3,4] * "|""##);
     }
 
     #[test]
@@ -1311,6 +1454,30 @@ mod test {
             a = [2, 3, 4, 5]
             a.fill(100)
             a"##,
+        );
+    }
+
+    #[test]
+    fn drop() {
+        run_test(
+            r##"
+            a = [2, 3, 4, 5]
+            [a.drop(2), a.drop(100), a]
+            a"##,
+        );
+    }
+
+    #[test]
+    fn zip() {
+        run_test(r##"[1,2,3].zip([4,5,6], [7,8,9])"##);
+        run_test(r##"[1,2].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
+        run_test(r##"[1,2,3,4,5].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
+        run_test(
+            r##"
+            a = []
+            [1,2,3].zip([4,5,6], [7,8,9]) { |ary| a << ary }
+            a
+        "##,
         );
     }
 
@@ -1435,6 +1602,12 @@ mod test {
     fn detect() {
         run_test(r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#);
         run_test(r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#);
+    }
+
+    #[test]
+    fn grep() {
+        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#);
+        //run_test(r#"Array.instance_methods.grep(/gr/)"#);
     }
 
     #[test]
