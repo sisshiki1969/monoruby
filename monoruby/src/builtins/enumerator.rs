@@ -295,9 +295,9 @@ mod test {
         run_test(
             r##"
             a = Enumerator.new do |y|
-            3.times do |i|
-                y << i
-            end
+                3.times do |i|
+                    y << i
+                end
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
             "##,

@@ -88,15 +88,14 @@ impl Enumerator {
         if self.internal.is_none() {
             self.rewind();
         }
-        let v = self
-            .internal
-            .unwrap()
-            .enum_yield_values(vm, globals, *self)?;
-        if let Some(ary) = v.is_array() {
-            Ok(ary)
-        } else {
-            Ok(Value::array1(v).into())
+        let mut internal = self.internal.unwrap();
+        let v = internal.enum_yield_values(vm, globals, *self)?;
+        if internal.is_terminated() {
+            return Err(MonorubyErr::stopiterationerr(
+                "iteration reached an end".to_string(),
+            ));
         }
+        Ok(v.into())
     }
 }
 
@@ -139,21 +138,4 @@ impl GeneratorInner {
     pub fn rewind(&mut self) {
         self.internal = self.create_internal();
     }
-
-    /*
-    ///
-    /// Yield next value from the enumerator.
-    ///
-    /// If the enumerator has been exhausted, return StopIteration error.
-    ///
-    fn yield_next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
-        let (ary, is_return) = self.internal.enum_yield_values(vm, globals, self.yielder)?;
-        if is_return {
-            Err(MonorubyErr::stopiterationerr(
-                "iteration reached an end".to_string(),
-            ))
-        } else {
-            Ok(ary)
-        }
-    }*/
 }
