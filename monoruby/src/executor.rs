@@ -292,7 +292,7 @@ impl Executor {
     /// Execute top level method.
     ///
     /// *main* object is set to *self*.
-    pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+    pub fn execute(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let main_data = globals.compile_on_demand(func_id).clone();
 
         #[cfg(feature = "emit-bc")]
@@ -310,7 +310,7 @@ impl Executor {
     ) -> Result<Value> {
         globals
             .compile_script(code, path)
-            .and_then(|fid| self.eval(globals, fid))
+            .and_then(|fid| self.execute(globals, fid))
     }
 
     pub(crate) fn enter_class_context(&mut self) {

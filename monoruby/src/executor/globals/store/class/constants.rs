@@ -18,7 +18,7 @@ impl Globals {
     ///
     /// Get a value of a constant with *name* in the class of *class_id*.
     ///
-    /// If not found, simply return None with no error.
+    /// If not found, return None.
     ///
     pub(crate) fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
         self.store[class_id].constants.get(&name).cloned()
@@ -80,7 +80,7 @@ impl Globals {
     ///
     /// Get a value of a constant specified by ConstSiteId *id*.
     ///
-    /// If not found, set uninitialized constant error and return None.
+    /// If not found, return uninitialized constant error.
     ///
     pub(crate) fn find_constant(
         &mut self,

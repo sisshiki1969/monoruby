@@ -87,7 +87,7 @@ fn main() {
 
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
-                match executor.eval(&mut globals, main_fid) {
+                match executor.execute(&mut globals, main_fid) {
                     Ok(val) => eprintln!("=> {}", globals.inspect(val)),
                     Err(err) => err.show_error_message_and_all_loc(),
                 };

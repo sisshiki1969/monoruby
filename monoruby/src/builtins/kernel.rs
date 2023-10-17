@@ -482,7 +482,11 @@ fn eval(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result
         .path
         .clone();
     let fid = globals.compile_script_with_binding(expr, path, None, None)?;
-    vm.eval(globals, fid)
+    let func_data = globals.compile_on_demand(fid).clone();
+    #[cfg(feature = "emit-bc")]
+    globals.dump_bc();
+    let proc = ProcInner::from(vm.cfp().prev().unwrap().lfp(), func_data);
+    vm.invoke_block(globals, &proc, &[])
 }
 
 fn prepare_command_arg(input: String) -> (String, Vec<String>) {
