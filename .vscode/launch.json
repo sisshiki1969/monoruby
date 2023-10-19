@@ -19,7 +19,7 @@
           "kind": "bin"
         }
       },
-      "args": ["benchmark/app_aobench.rb"],
+      "args": ["../optcarrot/bin/optcarrot", "--opt", "-b", "../optcarrot/examples/Lan_Master.nes"],
       "cwd": "${workspaceFolder}"
     },
     {

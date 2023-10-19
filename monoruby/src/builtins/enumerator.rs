@@ -136,13 +136,16 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         mut count: Value,
         self_val: Enumerator,
     ) -> Result<Value> {
+        let len = vm.temp_len();
         loop {
             let v = internal.enum_yield_values(vm, globals, self_val)?;
             if internal.is_terminated() {
-                return Ok(v);
+                let res = Value::array_from_vec(vm.temp_tear(len));
+                return Ok(res);
             }
             let a: Array = v.into();
-            vm.invoke_block(globals, block_data, &[a.peel(), count])?;
+            let res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
+            vm.temp_push(res);
             match count.unpack() {
                 RV::Fixnum(i) => count = Value::integer(i + 1),
                 RV::BigInt(i) => count = Value::bigint(i + 1),
