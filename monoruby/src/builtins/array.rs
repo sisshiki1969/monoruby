@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::*;
 use smallvec::smallvec;
 
@@ -18,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "*", mul);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, array_shl, analysis::v_v_v);
     globals.define_builtin_func(ARRAY_CLASS, "==", eq);
+    globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign);
     globals.define_builtin_func(ARRAY_CLASS, "shift", shift);
@@ -36,6 +39,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum);
     globals.define_builtin_func(ARRAY_CLASS, "min", min);
     globals.define_builtin_func(ARRAY_CLASS, "max", max);
+    globals.define_builtin_func(ARRAY_CLASS, "sort", sort);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_);
     globals.define_builtin_func(ARRAY_CLASS, "each", each);
     globals.define_builtin_func(ARRAY_CLASS, "map", map);
@@ -389,6 +393,37 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
         }
     }
     Ok(Value::bool(true))
+}
+
+///
+/// ### Array#<=>
+///
+/// - self <=> other -> -1 | 0 | 1 | nil
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Array/i/=3c=3d=3e.html]
+#[monoruby_builtin]
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let lhs: Array = lfp.self_val().into();
+    let rhs = if let Some(rhs) = lfp.arg(0).is_array() {
+        rhs
+    } else {
+        return Ok(Value::nil());
+    };
+    for (i, lhs) in lhs.iter().enumerate() {
+        if let Some(rhs) = rhs.get(i) {
+            let res = vm.compare_values(globals, *lhs, *rhs)?;
+            if res != Ordering::Equal {
+                return Ok(Value::integer(res as i64));
+            }
+        } else {
+            return Ok(Value::integer(Ordering::Greater as i64));
+        }
+    }
+    if rhs.len() > lhs.len() {
+        return Ok(Value::integer(Ordering::Less as i64));
+    }
+    Ok(Value::integer(Ordering::Equal as i64))
 }
 
 ///
@@ -758,6 +793,23 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().into();
+    vm.sort_by(globals, &mut ary, Executor::compare_values)?;
+    Ok(ary.into())
+}
+
+///
+/// ### Array#sort
+///
+/// - sort -> Array
+/// - [NOT SUPPORTED] sort {|a, b| ... } -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
+#[monoruby_builtin]
+fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let mut ary: Array = lfp.self_val().dup().into();
     vm.sort_by(globals, &mut ary, Executor::compare_values)?;
     Ok(ary.into())
 }
@@ -1364,6 +1416,10 @@ mod test {
         run_test(r##"["a","c"] == ["a","c",7]"##);
         run_test(r##"["a","c",7] == ["a","c",7]"##);
         run_test(r##"["a","c",7] == ["a","c","7"]"##);
+        run_test(r##"[ 1, 2, 3 ] <=> [ 1, 3, 2 ] "##);
+        run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2, 3 ] "##);
+        run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2 ] "##);
+        run_test(r##"[ 1, 2 ] <=> [ 1, 2, 3 ] "##);
     }
 
     #[test]
@@ -1569,8 +1625,17 @@ mod test {
             res
             "##,
         );
+        run_test(
+            r##"
+            a = [999999999999999999999999999999, -42.4242, 100, 100.001, -555, 0.0, 100, 76543, 100.0]
+            res = a.sort
+            [res, a]
+            "##,
+        );
         run_test_error("[1,:hh].sort!");
+        run_test_error("[1,:hh].sort");
         run_test_error("[Float::NAN, Float::NAN].sort!");
+        run_test_error("[Float::NAN, Float::NAN].sort");
     }
 
     #[test]

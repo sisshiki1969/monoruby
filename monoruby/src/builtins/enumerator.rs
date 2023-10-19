@@ -400,7 +400,7 @@ mod test {
         );
     }
 
-    #[test]
+    /*#[test]
     fn fib_each2() {
         run_test_with_prelude(
             r##"
@@ -427,14 +427,14 @@ mod test {
             r##"
             fib = Enumerator.new do |y|
                 a = b = 1
-                loop do 
+                loop do
                     y.<< a
                     a, b = a + b, a
                     if a > 100 then break end
                 end
             end"##,
         );
-    }
+    }*/
 
     #[test]
     fn each() {

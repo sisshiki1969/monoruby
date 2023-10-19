@@ -304,6 +304,10 @@ impl Value {
         Value::array(ArrayInner::from(smallvec::smallvec![elem]))
     }
 
+    pub fn array2(v1: Value, v2: Value) -> Self {
+        Value::array(ArrayInner::from(smallvec::smallvec![v1, v2]))
+    }
+
     pub fn array_empty() -> Self {
         Value::array(ArrayInner::new())
     }

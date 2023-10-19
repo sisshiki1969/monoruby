@@ -25,6 +25,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "member?", include);
     globals.define_builtin_func(HASH_CLASS, "to_s", inspect);
     globals.define_builtin_func(HASH_CLASS, "inspect", inspect);
+    globals.define_builtin_func(HASH_CLASS, "sort", sort);
+    globals.define_builtin_func(HASH_CLASS, "invert", invert);
     globals.define_builtin_func(HASH_CLASS, "merge", merge);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity);
 
@@ -216,6 +218,49 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 }
 
 ///
+/// ### Enumerable#sort
+///
+/// - sort -> [object]
+/// - [NOT SUPPORTED] sort {|a, b| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
+#[monoruby_builtin]
+fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let self_val = lfp.self_val();
+    let inner = self_val.as_hash();
+    let mut ary = inner.keys();
+    vm.sort_by(globals, &mut ary, Executor::compare_values)?;
+    let res: Vec<_> = ary
+        .into_iter()
+        .map(|k| Value::array2(k, inner.get(k).unwrap()))
+        .collect();
+    Ok(Value::array_from_vec(res))
+}
+
+///
+/// ### Hash#invert
+///
+/// - invert -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/invert.html]
+#[monoruby_builtin]
+fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let self_val = lfp.self_val();
+    let inner = self_val.as_hash();
+    let mut map = IndexMap::default();
+    for (k, v) in inner.iter() {
+        map.insert(HashKey(v), k);
+    }
+    Ok(Value::hash(map))
+}
+
+///
 /// ### Hash#merge
 ///
 /// - merge(*others) -> Hash
@@ -399,6 +444,24 @@ mod test {
             a << k
         }
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn invert() {
+        run_test(
+            r##"
+        {5 => "5", 1 => "1", 2 => "2", 3 => "3"}.invert
+        "##,
+        );
+    }
+
+    #[test]
+    fn sort() {
+        run_test(
+            r##"
+        {5 => "5", 1 => "1", 2 => "2", 3 => "3"}.sort
         "##,
         );
     }
