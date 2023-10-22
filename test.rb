@@ -3,7 +3,7 @@ fib = Enumerator.new do |y|
     loop do
         y.<< a
         a, b = a + b, a
-        if a > 100 then break end
+        if a > 100 then break -1 end
     end
 end
 puts(fib.with_index do |x,i|

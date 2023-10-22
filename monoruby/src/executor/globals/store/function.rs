@@ -284,7 +284,7 @@ impl Funcs {
 
 #[derive(Debug, Clone)]
 pub(crate) enum FuncKind {
-    ISeq(ISeqInfo),
+    ISeq(Box<ISeqInfo>),
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
@@ -337,7 +337,7 @@ impl FuncInfo {
                 pc: None,
                 meta: Meta::vm_method(func_id, 0),
             },
-            kind: FuncKind::ISeq(info),
+            kind: FuncKind::ISeq(Box::new(info)),
             jit_entry: Default::default(),
         }
     }
@@ -358,7 +358,7 @@ impl FuncInfo {
                 pc: None,
                 meta: Meta::vm_method(func_id, 0),
             },
-            kind: FuncKind::ISeq(info),
+            kind: FuncKind::ISeq(Box::new(info)),
             jit_entry: Default::default(),
         }
     }
@@ -377,7 +377,7 @@ impl FuncInfo {
                 pc: None,
                 meta: Meta::vm_classdef(func_id, 0),
             },
-            kind: FuncKind::ISeq(info),
+            kind: FuncKind::ISeq(Box::new(info)),
             jit_entry: Default::default(),
         }
     }
