@@ -1,7 +1,8 @@
 use super::*;
 
 impl Codegen {
-    pub(in crate::executor) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) {
+    pub(in crate::executor) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
+        let codeptr = self.jit.get_current_address();
         match kind {
             FuncKind::ISeq(_) => {
                 if !no_jit {
@@ -15,6 +16,7 @@ impl Codegen {
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
         };
         self.jit.finalize();
+        codeptr
     }
 
     ///

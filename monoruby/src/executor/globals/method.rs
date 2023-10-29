@@ -9,6 +9,7 @@ impl Globals {
         visi: Visibility,
     ) -> FuncId {
         let func_id = self.store.add_builtin_func(name.to_string(), address);
+        self.gen_wrapper(func_id);
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, visi);
         func_id
@@ -39,6 +40,7 @@ impl Globals {
         address: BuiltinFn,
     ) -> FuncId {
         let func_id = self.store.add_builtin_func(name.to_string(), address);
+        self.gen_wrapper(func_id);
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Private);
         let class_id = self.get_metaclass(class_id).id();
@@ -113,6 +115,7 @@ impl Globals {
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let func_id = self.store.add_attr_reader(method_name, ivar_name);
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name
@@ -130,6 +133,7 @@ impl Globals {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let method_name = IdentId::add_assign_postfix(method_name);
         let func_id = self.store.add_attr_writer(method_name, ivar_name);
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name

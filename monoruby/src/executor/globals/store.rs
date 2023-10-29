@@ -158,7 +158,7 @@ impl Store {
     }
 
     pub(crate) fn add_main(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
-        self.functions.add_method(
+        self.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],

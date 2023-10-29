@@ -19,12 +19,12 @@ pub fn compile_script(
     ast: Node,
     sourceinfo: SourceInfoRef,
 ) -> Result<FuncId> {
-    let store = &mut globals.store;
-    let main_fid = store.add_main(ast, sourceinfo)?;
+    let main_fid = globals.store.add_main(ast, sourceinfo)?;
     let mut fid = main_fid;
 
-    while store.func_len() > fid.get() as usize {
-        compile_func(store, fid)?;
+    while globals.store.func_len() > fid.get() as usize {
+        compile_func(&mut globals.store, fid)?;
+        globals.gen_wrapper(fid);
         fid = FuncId::new(fid.get() + 1);
     }
 

@@ -123,6 +123,14 @@ impl Globals {
             #[cfg(feature = "emit-bc")]
             startup_flag: false,
         };
+        assert_eq!(
+            FuncId::new(1),
+            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder)
+        );
+        assert_eq!(
+            FuncId::new(2),
+            globals.define_builtin_func(OBJECT_CLASS, "", yielder)
+        );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
         globals
@@ -190,7 +198,7 @@ impl Globals {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
-            let func_data = self.compile_on_demand(func_id).clone();
+            let func_data = self.get_func_data(func_id).clone();
             ProcInner::from(cfp.lfp(), func_data)
         } else {
             bh.as_proc().clone()
@@ -297,15 +305,16 @@ impl Globals {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
+    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
+        let kind = self[func_id].kind.clone();
+        let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
+        self[func_id].data.codeptr = Some(codeptr);
+    }
 
-    pub(crate) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
-        if self[func_id].data.codeptr.is_none() {
-            let kind = self[func_id].kind.clone();
-            let codeptr = self.codegen.jit.get_current_address();
-            self.codegen.gen_wrapper(kind, self.no_jit);
-            self[func_id].data.codeptr = Some(codeptr);
-        }
-        &self[func_id].data
+    pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
+        let data = &self[func_id].data;
+        assert!(data.codeptr.is_some());
+        data
     }
 
     pub(super) fn class_version_inc(&mut self) {

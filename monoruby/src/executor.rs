@@ -293,7 +293,7 @@ impl Executor {
     ///
     /// *main* object is set to *self*.
     pub fn execute(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let main_data = globals.compile_on_demand(func_id).clone();
+        let main_data = globals.get_func_data(func_id).clone();
 
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
@@ -419,7 +419,7 @@ impl Executor {
                 return None;
             }
         };
-        let data = globals.compile_on_demand(func_id).clone();
+        let data = globals.get_func_data(func_id).clone();
         (globals.codegen.method_invoker)(
             self,
             globals,
@@ -443,7 +443,7 @@ impl Executor {
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        let data = globals.compile_on_demand(func_id).clone();
+        let data = globals.get_func_data(func_id).clone();
         match (globals.codegen.method_invoker)(
             self,
             globals,
@@ -471,7 +471,7 @@ impl Executor {
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        let data = globals.compile_on_demand(func_id).clone();
+        let data = globals.get_func_data(func_id).clone();
         match (globals.codegen.method_invoker2)(
             self,
             globals,
@@ -633,7 +633,7 @@ impl Executor {
         len: usize,
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
-        let data = globals.compile_on_demand(func_id).clone();
+        let data = globals.get_func_data(func_id).clone();
         let bh = bh.map(|bh| bh.delegate());
         (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, bh)
             .ok_or_else(|| self.take_error())
@@ -650,7 +650,7 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Option<Value> {
-        let data = globals.compile_on_demand(func_id).clone();
+        let data = globals.get_func_data(func_id).clone();
         let bh = bh.map(|bh| bh.delegate());
         (globals.codegen.method_invoker)(
             self,
@@ -732,7 +732,7 @@ impl Executor {
         obj: Value,
         args: Vec<Value>,
     ) -> Result<Value> {
-        let func_data = globals.compile_on_demand(FuncId::new(1)).clone();
+        let func_data = globals.get_func_data(FuncId::new(1)).clone();
         let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
         let proc = Proc::from(outer_lfp, func_data);
         let e = Value::new_enumerator(obj, method, proc, args);

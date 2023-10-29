@@ -455,7 +455,7 @@ extern "C" fn call_send_wrapper(
             }
             if cache[i].method == Some(method) {
                 cache[i].counter += 1;
-                return Ok(globals.compile_on_demand(cache[i].fid).clone());
+                return Ok(globals.get_func_data(cache[i].fid).clone());
             }
             if cache[i].counter < min_count {
                 min_count = cache[i].counter;
@@ -471,7 +471,7 @@ extern "C" fn call_send_wrapper(
             cache[min_i].counter = 1;
         }
 
-        let data = globals.compile_on_demand(func_id);
+        let data = globals.get_func_data(func_id);
         Ok(data.clone())
     }
     let data = match call_send(globals, recv, args, len, cache) {

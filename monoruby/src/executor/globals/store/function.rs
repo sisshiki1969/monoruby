@@ -45,16 +45,6 @@ impl std::default::Default for Funcs {
     fn default() -> Self {
         let mut info = Vec::with_capacity(2048);
         info.push(FuncInfo::default());
-        info.push(FuncInfo::new_native(
-            FuncId::new(1),
-            "".to_string(),
-            enum_yielder,
-        ));
-        info.push(FuncInfo::new_native(
-            FuncId::new(2),
-            "".to_string(),
-            yielder,
-        ));
         Self {
             info,
             compile_info: Vec::with_capacity(2048),

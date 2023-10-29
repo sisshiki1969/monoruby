@@ -24,7 +24,7 @@ pub(crate) extern "C" fn find_method(
                 return None;
             }
         };
-    let func_data = globals.compile_on_demand(func_id);
+    let func_data = globals.get_func_data(func_id);
     Some(func_data.as_ptr())
 }
 
@@ -33,7 +33,7 @@ pub(crate) extern "C" fn check_initializer(
     receiver: Value,
 ) -> Option<FuncDataPtr> {
     let func_id = globals.check_method(receiver, IdentId::INITIALIZE)?;
-    let data = globals.compile_on_demand(func_id);
+    let data = globals.get_func_data(func_id);
     Some(data.as_ptr())
 }
 
@@ -47,7 +47,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     let mut lexical_context = globals[current_func].as_ruby_func().lexical_context.clone();
     lexical_context.push(self_value);
     globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
-    globals.compile_on_demand(func_id)
+    globals.get_func_data(func_id)
 }
 
 pub(super) extern "C" fn get_super_data(
@@ -65,7 +65,7 @@ pub(super) extern "C" fn get_super_data(
         }
     };
 
-    let func_data = globals.compile_on_demand(super_id);
+    let func_data = globals.get_func_data(super_id);
     Some(func_data.as_ptr())
 }
 
