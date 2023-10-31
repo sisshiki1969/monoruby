@@ -35,7 +35,7 @@ pub(crate) extern "C" fn check_initializer(
     globals.check_method(receiver, IdentId::INITIALIZE)
 }
 
-pub(super) extern "C" fn get_classdef_data<'a>(
+pub(super) extern "C" fn enter_classdef<'a>(
     vm: &mut Executor,
     globals: &'a mut Globals,
     func_id: FuncId,
@@ -667,7 +667,7 @@ pub(super) extern "C" fn define_singleton_class(
     Some(self_val.as_val())
 }
 
-pub(super) extern "C" fn pop_class_context(vm: &mut Executor, _globals: &mut Globals) {
+pub(super) extern "C" fn exit_classdef(vm: &mut Executor, _globals: &mut Globals) {
     vm.pop_class_context();
 }
 

@@ -79,7 +79,7 @@ impl Codegen {
             movl rdx, (func_id.get());  // rdx <- func_id
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::get_classdef_data);
+            movq rax, (runtime::enter_classdef);
             call rax; // rax <- &FuncData
 
             movq r8, rax;
@@ -103,7 +103,7 @@ impl Codegen {
             movq r13, rax;
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq rax, (runtime::pop_class_context);
+            movq rax, (runtime::exit_classdef);
             call rax;
             movq rax, r13;
         }

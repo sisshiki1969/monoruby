@@ -1657,19 +1657,19 @@ impl Codegen {
             movl rdx, [r13 - 4];  // rdx <- func_id
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::get_classdef_data);
+            movq rax, (runtime::enter_classdef);
             call rax; // rax <- &FuncData
 
-            movq r8, rax;
-            movq rdi, [r8 + (FUNCDATA_META)];
+            movq r13, rax;
+            movq rdi, [r13 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
             movq [rsp - (16 + LBP_BLOCK)], 0;
             movq [rsp - (16 + LBP_SELF)], r15;
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movq r13 , [r8 + (FUNCDATA_PC)];
-            movq rax, [r8 + (FUNCDATA_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_CODEPTR)];
+            movq r13 , [r13 + (FUNCDATA_PC)];
             xorq rdx, rdx;
         };
         self.call_rax();
@@ -1678,7 +1678,7 @@ impl Codegen {
             movq r15, rax;
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq rax, (runtime::pop_class_context);
+            movq rax, (runtime::exit_classdef);
             call rax;
             movq rax, r15;
         );
