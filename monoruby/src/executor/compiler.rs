@@ -9,12 +9,12 @@ mod wrapper;
 use super::*;
 //use runtime::*;
 
-type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, &FuncData) -> Option<Value>;
+type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
 type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    &FuncData,
+    FuncId,
     Value,
     *const Value,
     usize,
@@ -24,7 +24,7 @@ type MethodInvoker = extern "C" fn(
 type MethodInvoker2 = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    &FuncData,
+    FuncId,
     Value,
     Arg,
     usize,
@@ -312,7 +312,7 @@ impl Codegen {
     }
 
     fn gen_entry_point(&mut self, main_object: Value) {
-        // "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>
+        // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
         let entry = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             pushq rbx;
@@ -327,9 +327,11 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
-            movq r13, rdx;
+        }
+        self.get_func_data();
+        monoasm! { &mut self.jit,
             // set meta func_id
-            movq rax, [r13 + (FUNCDATA_META)];  // r13: *const FuncData
+            movq rax, [rdx + (FUNCDATA_META)];  // r13: *const FuncData
             movq [r14 - (LBP_META)], rax;
             // set block
             movq [r14 - (LBP_BLOCK)], 0;
@@ -342,7 +344,7 @@ impl Codegen {
         let l2 = self.jit.label();
         monoasm! { &mut self.jit,
             lea  rax, [r14 - (LBP_ARG0)];
-            movzxw rdi, [r13 + (FUNCDATA_REGNUM)];
+            movzxw rdi, [rdx + (FUNCDATA_REGNUM)];
         l1:
             subq rdi, 1;
             je   l2;
@@ -373,9 +375,9 @@ impl Codegen {
             // set self
             movq rax, (main_object.id());
             movq [r14 - (LBP_SELF)], rax;
-            movq rax, [r13 + (FUNCDATA_CODEPTR)];
+            movq rax, [rdx + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_PC)];
+            movq r13, [rdx + (FUNCDATA_PC)];
             // set arg len
             xorq rdx, rdx;
             call rax;
@@ -440,6 +442,36 @@ impl Codegen {
         );
     }
 
+    /// Pop control frame
+    fn pop_frame(&mut self) {
+        monoasm!( &mut self.jit,
+            // pop cfp
+            lea  r14, [rbp - (BP_PREV_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], r14;
+            // restore lfp
+            movq r14, [rbp - (BP_LFP)];
+        );
+    }
+
+    ///
+    /// Get FuncData.
+    ///
+    /// ### in
+    /// - r12: &Globals
+    /// - rdx: FuncId
+    ///
+    /// ### out
+    /// - rdx: &FuncData
+    ///
+    fn get_func_data(&mut self) {
+        monoasm! { &mut self.jit,
+            movl rdx, rdx;
+            shlq rdx, 6;
+            addq rdx, [r12 + (GLOBALS_FUNCINFO)];
+            lea  rdx, [rdx + (FUNCINFO_DATA)];
+        };
+    }
+
     /// Set outer and self for block.
     ///
     /// ### in
@@ -478,17 +510,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [rsp - (16 + LBP_OUTER)], 0;
         };
-    }
-
-    /// Pop control frame
-    fn pop_frame(&mut self) {
-        monoasm!( &mut self.jit,
-            // pop cfp
-            lea  r14, [rbp - (BP_PREV_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], r14;
-            // restore lfp
-            movq r14, [rbp - (BP_LFP)];
-        );
     }
 
     /// Set lfp(r14) for callee.

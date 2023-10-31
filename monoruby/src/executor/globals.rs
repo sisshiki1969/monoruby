@@ -32,6 +32,9 @@ impl MethodTableEntry {
     }
 }
 
+pub const GLOBALS_FUNCINFO: usize =
+    std::mem::offset_of!(Globals, store) + STORE_FUNCTION + FUNCS_INFO;
+
 ///
 /// Global state.
 ///
@@ -71,6 +74,23 @@ pub struct Globals {
     dumped_bc: usize,
     #[cfg(feature = "emit-bc")]
     pub(super) startup_flag: bool,
+}
+
+#[test]
+fn test() {
+    let mut globals = Globals::new(0, false);
+    unsafe {
+        let g = &mut globals as *mut Globals as *mut u8;
+        let v = g.add(GLOBALS_FUNCINFO);
+        let ptr = *(v as *const *const FuncInfo);
+        let cap = *(v.add(8) as *const usize);
+        let len = *(v.add(16) as *const usize);
+        eprintln!("{}", std::mem::size_of::<FuncInfo>());
+        dbg!(cap);
+        dbg!(len);
+        dbg!(&*(ptr.add(10)));
+        dbg!(&*((ptr.add(10) as *const u8).add(FUNCINFO_DATA) as *const FuncData));
+    }
 }
 
 impl std::ops::Index<FuncId> for Globals {

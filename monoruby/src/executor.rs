@@ -293,12 +293,10 @@ impl Executor {
     ///
     /// *main* object is set to *self*.
     pub fn execute(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let main_data = globals.get_func_data(func_id).clone();
-
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let res = (globals.codegen.entry_point)(self, globals, &main_data);
+        let res = (globals.codegen.entry_point)(self, globals, func_id);
         res.ok_or_else(|| self.take_error())
     }
 
@@ -419,11 +417,10 @@ impl Executor {
                 return None;
             }
         };
-        let data = globals.get_func_data(func_id).clone();
         (globals.codegen.method_invoker)(
             self,
             globals,
-            &data,
+            func_id,
             receiver,
             args.as_ptr(),
             args.len(),
@@ -443,11 +440,10 @@ impl Executor {
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        let data = globals.get_func_data(func_id).clone();
         match (globals.codegen.method_invoker)(
             self,
             globals,
-            &data,
+            func_id,
             receiver,
             args.as_ptr(),
             args.len(),
@@ -471,11 +467,10 @@ impl Executor {
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        let data = globals.get_func_data(func_id).clone();
         match (globals.codegen.method_invoker2)(
             self,
             globals,
-            &data,
+            func_id,
             receiver,
             args,
             len,
@@ -633,9 +628,8 @@ impl Executor {
         len: usize,
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
-        let data = globals.get_func_data(func_id).clone();
         let bh = bh.map(|bh| bh.delegate());
-        (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, bh)
+        (globals.codegen.method_invoker2)(self, globals, func_id, receiver, args, len, bh)
             .ok_or_else(|| self.take_error())
     }
 
@@ -650,12 +644,11 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Option<Value> {
-        let data = globals.get_func_data(func_id).clone();
         let bh = bh.map(|bh| bh.delegate());
         (globals.codegen.method_invoker)(
             self,
             globals,
-            &data,
+            func_id,
             receiver,
             args.as_ptr(),
             args.len(),

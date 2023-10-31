@@ -23,6 +23,8 @@ impl FuncId {
     }
 }
 
+pub const FUNCS_INFO: usize = std::mem::offset_of!(Funcs, info);
+
 pub(super) struct Funcs {
     info: Vec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
@@ -294,6 +296,8 @@ impl std::default::Default for FuncKind {
     }
 }
 
+pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
+
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// name of this function.
@@ -301,7 +305,8 @@ pub struct FuncInfo {
     pub(in crate::executor) data: FuncData,
     pub(in crate::executor) kind: FuncKind,
     /// JIT code entries for each class of *self*.
-    jit_entry: HashMap<ClassId, DestLabel>,
+    jit_entry: Box<HashMap<ClassId, DestLabel>>,
+    _padding: usize,
 }
 
 impl alloc::GC<RValue> for FuncInfo {
@@ -311,6 +316,21 @@ impl alloc::GC<RValue> for FuncInfo {
 }
 
 impl FuncInfo {
+    fn new(name: impl Into<Option<IdentId>>, kind: FuncKind, meta: Meta) -> Self {
+        let name = name.into();
+        Self {
+            name,
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta,
+            },
+            kind,
+            jit_entry: Default::default(),
+            _padding: 0,
+        }
+    }
+
     fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
@@ -320,16 +340,11 @@ impl FuncInfo {
     ) -> Self {
         let name = name.into();
         let info = ISeqInfo::new_method(func_id, name, args, loc, sourceinfo);
-        Self {
+        Self::new(
             name,
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::vm_method(func_id, 0),
-            },
-            kind: FuncKind::ISeq(Box::new(info)),
-            jit_entry: Default::default(),
-        }
+            FuncKind::ISeq(Box::new(info)),
+            Meta::vm_method(func_id, 0),
+        )
     }
 
     fn new_block_iseq(
@@ -341,16 +356,11 @@ impl FuncInfo {
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let info = ISeqInfo::new_block(func_id, mother, outer, args, loc, sourceinfo);
-        Self {
-            name: None,
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::vm_method(func_id, 0),
-            },
-            kind: FuncKind::ISeq(Box::new(info)),
-            jit_entry: Default::default(),
-        }
+        Self::new(
+            None,
+            FuncKind::ISeq(Box::new(info)),
+            Meta::vm_method(func_id, 0),
+        )
     }
 
     fn new_classdef_iseq(
@@ -360,57 +370,37 @@ impl FuncInfo {
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
-        Self {
+        Self::new(
             name,
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::vm_classdef(func_id, 0),
-            },
-            kind: FuncKind::ISeq(Box::new(info)),
-            jit_entry: Default::default(),
-        }
+            FuncKind::ISeq(Box::new(info)),
+            Meta::vm_classdef(func_id, 0),
+        )
     }
 
     fn new_native(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
-        Self {
-            name: Some(IdentId::get_id_from_string(name)),
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::native(func_id),
-            },
-            kind: FuncKind::Builtin {
+        Self::new(
+            IdentId::get_id_from_string(name),
+            FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            jit_entry: Default::default(),
-        }
+            Meta::native(func_id),
+        )
     }
 
     fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
-        Self {
-            name: Some(name),
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::native(func_id),
-            },
-            kind: FuncKind::AttrReader { ivar_name },
-            jit_entry: Default::default(),
-        }
+        Self::new(
+            name,
+            FuncKind::AttrReader { ivar_name },
+            Meta::native(func_id),
+        )
     }
 
     fn new_attr_writer(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
-        Self {
-            name: Some(name),
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta: Meta::native(func_id),
-            },
-            kind: FuncKind::AttrWriter { ivar_name },
-            jit_entry: Default::default(),
-        }
+        Self::new(
+            name,
+            FuncKind::AttrWriter { ivar_name },
+            Meta::native(func_id),
+        )
     }
 
     pub(crate) fn name(&self) -> Option<IdentId> {

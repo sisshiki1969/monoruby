@@ -344,7 +344,7 @@ impl Codegen {
         self.method_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: &FuncData
+        // rdx: FuncId
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -366,7 +366,7 @@ impl Codegen {
         self.method_invoker2 = unsafe { std::mem::transmute(codeptr.as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: &FuncData
+        // rdx: FuncId
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
@@ -583,7 +583,7 @@ impl Codegen {
     ///
     /// ### in
     /// - `rcx`: `self` (if *specify_self* is true)
-    /// - `rdx`: &FuncData (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
+    /// - `rdx`: FuncId (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
     ///
     fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
@@ -600,6 +600,7 @@ impl Codegen {
                 };
             }
         } else {
+            self.get_func_data();
             monoasm! { &mut self.jit,
                 // set block
                 movq [rsp - (16 + LBP_BLOCK)], r11;

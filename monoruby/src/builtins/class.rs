@@ -90,11 +90,10 @@ fn inline_class_new(
     gen.xmm_save(&using);
     gen.load_rdi(recv);
     let cached_version = gen.jit.const_i32(-1);
-    let cached_funcdata = gen.jit.const_i64(-1);
+    let cached_funcid = gen.jit.const_i32(-1);
     let class_version = gen.class_version;
     let slow_path = gen.jit.label();
     let checked = gen.jit.label();
-    let no_error = gen.jit.label();
     let exit = gen.jit.label();
     monoasm!( &mut gen.jit,
         movq rax, (allocate_instance);
@@ -103,8 +102,8 @@ fn inline_class_new(
         movl rax, [rip + class_version];
         cmpl rax, [rip + cached_version];
         jne  slow_path;
+        movl rax, [rip + cached_funcid];
     checked:
-        movq rax, [rip + cached_funcdata];
         testq rax, rax;
         je  exit;
     );
@@ -119,11 +118,10 @@ fn inline_class_new(
         movq [rsp], 0;
         movq rax, (gen.method_invoker2);
         call rax;
-        testq rax, rax;
-        jne  no_error;
-        xorq r15, r15;
-    no_error:
         addq rsp, 16;
+        testq rax, rax;
+        jne  exit;
+        xorq r15, r15;
     exit:
         movq rax, r15;
     );
@@ -140,9 +138,9 @@ fn inline_class_new(
         movq rsi, r15;
         movq rax, (runtime::check_initializer);
         call rax;
-        movq [rip + cached_funcdata], rax;
-        movl rax, [rip + class_version];
-        movl [rip + cached_version], rax;
+        movl [rip + cached_funcid], rax;
+        movl rdi, [rip + class_version];
+        movl [rip + cached_version], rdi;
         jmp  checked;
     );
     gen.jit.select_page(0);

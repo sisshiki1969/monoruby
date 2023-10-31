@@ -440,7 +440,7 @@ extern "C" fn call_send_wrapper(
         args: Arg,
         len: usize,
         cache: &mut [Cache; CACHE_SIZE],
-    ) -> Result<FuncData> {
+    ) -> Result<FuncId> {
         MonorubyErr::check_min_number_of_arguments(len, 1)?;
         let method = args[0].expect_symbol_or_string(globals)?;
         let mut min_i = usize::MAX;
@@ -455,33 +455,32 @@ extern "C" fn call_send_wrapper(
             }
             if cache[i].method == Some(method) {
                 cache[i].counter += 1;
-                return Ok(globals.get_func_data(cache[i].fid).clone());
+                return Ok(cache[i].fid);
             }
             if cache[i].counter < min_count {
                 min_count = cache[i].counter;
                 min_i = i;
             }
         }
-        let func_id = globals.find_method(recv, method, false)?;
+        let fid = globals.find_method(recv, method, false)?;
         //eprintln!("cache miss:{:?} {:?}", cache as *mut _, method);
         if cache[min_i].method.is_none() {
             cache[min_i].method = Some(method);
             cache[min_i].version = globals.class_version();
-            cache[min_i].fid = func_id;
+            cache[min_i].fid = fid;
             cache[min_i].counter = 1;
         }
 
-        let data = globals.get_func_data(func_id);
-        Ok(data.clone())
+        Ok(fid)
     }
-    let data = match call_send(globals, recv, args, len, cache) {
+    let fid = match call_send(globals, recv, args, len, cache) {
         Ok(res) => res,
         Err(err) => {
             vm.set_error(err);
             return None;
         }
     };
-    (globals.codegen.method_invoker2)(vm, globals, &data, recv, args + 1, len - 1, block)
+    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, block)
 }
 
 #[cfg(test)]

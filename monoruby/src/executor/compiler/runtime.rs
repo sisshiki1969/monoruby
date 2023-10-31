@@ -31,10 +31,8 @@ pub(crate) extern "C" fn find_method(
 pub(crate) extern "C" fn check_initializer(
     globals: &mut Globals,
     receiver: Value,
-) -> Option<FuncDataPtr> {
-    let func_id = globals.check_method(receiver, IdentId::INITIALIZE)?;
-    let data = globals.get_func_data(func_id);
-    Some(data.as_ptr())
+) -> Option<FuncId> {
+    globals.check_method(receiver, IdentId::INITIALIZE)
 }
 
 pub(super) extern "C" fn get_classdef_data<'a>(

@@ -13,6 +13,8 @@ pub use class::*;
 pub use function::*;
 pub(crate) use iseq::ISeqInfo;
 
+pub const STORE_FUNCTION: usize = std::mem::offset_of!(Store, functions);
+
 #[derive(Default)]
 pub(crate) struct Store {
     /// function info.
