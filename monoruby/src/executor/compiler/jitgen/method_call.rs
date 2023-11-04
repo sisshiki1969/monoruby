@@ -28,7 +28,7 @@ impl Codegen {
         self.fetch_slots(ctx, &[recv]);
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(ret);
-        let cached = InlineCached::new(pc);
+        let cached = InlineCached::new(pc + 1);
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
             self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
         } else {
@@ -56,7 +56,7 @@ impl Codegen {
             ret,
             ..
         } = store[callid];
-        let deopt = self.gen_side_deopt(pc - 1, ctx);
+        let deopt = self.gen_side_deopt(pc, ctx);
         let mut self_in_rdi_flag = false;
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
@@ -163,7 +163,7 @@ impl Codegen {
             );
         }
         monoasm! { &mut self.jit,
-            movq r13, (pc.get_u64());
+            movq r13, ((pc + 1).get_u64());
             // check inline cache
             cmpq [r13 + 8], 0;
             jeq  slow_path;
@@ -243,7 +243,7 @@ impl Codegen {
         // raise error.
         monoasm!( &mut self.jit,
         raise:
-            movq r13, ((pc + 2).get_u64());
+            movq r13, ((pc + 1).get_u64());
             jmp raise;
         );
         self.jit.select_page(0);

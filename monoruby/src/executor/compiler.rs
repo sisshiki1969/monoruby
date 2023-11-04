@@ -122,7 +122,7 @@ pub struct Codegen {
     /// Raise error.
     ///
     /// ### in
-    /// - r13: PC
+    /// - r13: PC + 1
     ///
     /// ### destroy
     /// - caller saved registers
@@ -659,7 +659,7 @@ impl Codegen {
     ///
     /// #### in
     /// - rax: return value
-    /// - r13: pc
+    /// - r13: pc + 1
     ///
     fn method_return(&mut self) {
         let raise = self.entry_raise;

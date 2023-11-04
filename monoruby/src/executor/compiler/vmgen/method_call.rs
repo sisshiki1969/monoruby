@@ -207,10 +207,9 @@ impl Codegen {
             //   r13: pc
             //
             movq rdx, rdi;
-            movq r13, [r13 + 8];
-            movq rax, [r13 + (FUNCDATA_CODEPTR)];
+            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_PC)];    // r13: BcPc
+            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
         };
         self.call_rax();
         monoasm! { &mut self.jit,

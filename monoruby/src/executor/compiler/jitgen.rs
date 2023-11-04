@@ -898,11 +898,11 @@ impl Codegen {
                         );
                     }
                     monoasm! { &mut self.jit,
-                    movq rdx, [rax - (LBP_BLOCK)];
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rax, (runtime::block_arg);
-                    call rax;
+                        movq rdx, [rax - (LBP_BLOCK)];
+                        movq rdi, rbx;
+                        movq rsi, r12;
+                        movq rax, (runtime::block_arg);
+                        call rax;
                     };
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
@@ -1219,7 +1219,7 @@ impl Codegen {
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, has_splat);
+                        self.gen_call(store, &mut ctx, func_data, callid, pc, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1234,7 +1234,7 @@ impl Codegen {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, has_splat);
+                        self.gen_call(store, &mut ctx, func_data, callid, pc, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1244,7 +1244,7 @@ impl Codegen {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc + 1, false);
+                        self.gen_call(store, &mut ctx, func_data, callid, pc, false);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1259,12 +1259,12 @@ impl Codegen {
                     self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
                 }
                 TraceIr::Yield {
-                    ret,
+                    ret: dst,
                     args,
                     len,
                     callid,
                 } => {
-                    self.gen_yield(&mut ctx, store, args, len, ret, callid, pc);
+                    self.gen_yield(&mut ctx, store, args, len, dst, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {
@@ -1502,6 +1502,11 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// Handle error in JIT code.
+    ///
+    /// - pc: current PC
+    ///
     pub(crate) fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
         let raise = self.entry_raise;
         let wb = ctx.get_write_back();
