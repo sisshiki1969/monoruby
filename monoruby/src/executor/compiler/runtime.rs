@@ -5,7 +5,7 @@ use super::*;
 //
 
 ///
-/// Get *const FuncData of the given method.
+/// Get FuncId of the given method.
 ///
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
 ///
@@ -14,18 +14,15 @@ pub(crate) extern "C" fn find_method(
     globals: &mut Globals,
     callid: CallSiteId,
     receiver: Value,
-) -> Option<FuncDataPtr> {
+) -> Option<FuncId> {
     let func_name = globals.store[callid].name.unwrap();
-    let func_id =
-        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
-            Ok(id) => id,
-            Err(err) => {
-                vm.set_error(err);
-                return None;
-            }
-        };
-    let func_data = globals.get_func_data(func_id);
-    Some(func_data.as_ptr())
+    match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
+        Ok(id) => Some(id),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(crate) extern "C" fn check_initializer(
@@ -52,19 +49,16 @@ pub(super) extern "C" fn get_super_data(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
-) -> Option<FuncDataPtr> {
+) -> Option<FuncId> {
     let func_id = vm.method_func_id();
     let func_name = globals.store[func_id].name().unwrap();
-    let super_id = match globals.check_super(self_val, func_name) {
-        Some(entry) => entry.func_id(),
+    match globals.check_super(self_val, func_name) {
+        Some(entry) => Some(entry.func_id()),
         None => {
             vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
-            return None;
+            None
         }
-    };
-
-    let func_data = globals.get_func_data(super_id);
-    Some(func_data.as_ptr())
+    }
 }
 
 ///

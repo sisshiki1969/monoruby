@@ -1,7 +1,7 @@
 use ruruby_parse::CmpKind;
 
 use crate::{
-    bytecodegen::inst::{BrKind, DynVar, FnInitInfo, MethodInfo},
+    bytecodegen::inst::{BrKind, DynVar, FnInitInfo},
     *,
 };
 
@@ -130,7 +130,7 @@ pub(crate) enum TraceIr {
     MethodCall {
         callid: CallSiteId,
         has_splat: bool,
-        info: MethodInfo,
+        cached_fid: Option<FuncId>,
         #[allow(dead_code)]
         class: ClassId,
         #[allow(dead_code)]
@@ -139,7 +139,7 @@ pub(crate) enum TraceIr {
     MethodCallBlock {
         callid: CallSiteId,
         has_splat: bool,
-        info: MethodInfo,
+        cached_fid: Option<FuncId>,
         #[allow(dead_code)]
         class: ClassId,
         #[allow(dead_code)]
@@ -147,7 +147,7 @@ pub(crate) enum TraceIr {
     },
     Super {
         callid: CallSiteId,
-        info: MethodInfo,
+        cached_fid: Option<FuncId>,
         #[allow(dead_code)]
         class: ClassId,
         #[allow(dead_code)]
@@ -168,7 +168,7 @@ pub(crate) enum TraceIr {
         callid: CallSiteId,
     },
     /// func call 2nd opecode(%recv, %args, len)
-    MethodArgs(MethodInfo),
+    MethodArgs,
     /// method definition(method_name, func_id)
     MethodDef {
         name: IdentId,
@@ -322,18 +322,13 @@ impl TraceIr {
                 },
                 30..=31 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
-                        Self::MethodArgs(info) => info,
-                        _ => unreachable!(),
-                    };
+                    let cached_fid = (pc + 1).func_id();
                     let has_splat = opcode == 30;
 
-                    if let Some(func_data) = info.func_data {
+                    if let Some(fid) = cached_fid {
                         if !has_splat {
                             if let Some(inline_id) =
-                                crate::executor::inline::InlineTable::get_inline(
-                                    func_data.func_id(),
-                                )
+                                crate::executor::inline::InlineTable::get_inline(fid)
                             {
                                 return Self::InlineCall {
                                     inline_id,
@@ -347,34 +342,26 @@ impl TraceIr {
                     Self::MethodCall {
                         callid: op2.into(),
                         has_splat,
-                        info,
+                        cached_fid,
                         class,
                         version,
                     }
                 }
                 32..=33 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
-                        Self::MethodArgs(info) => info,
-                        _ => unreachable!(),
-                    };
                     Self::MethodCallBlock {
                         callid: op2.into(),
                         has_splat: opcode == 32,
-                        info,
+                        cached_fid: (pc + 1).func_id(),
                         class,
                         version,
                     }
                 }
                 34 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
-                        Self::MethodArgs(info) => info,
-                        _ => unreachable!(),
-                    };
                     Self::Super {
                         callid: op2.into(),
-                        info,
+                        cached_fid: (pc + 1).func_id(),
                         class,
                         version,
                     }
@@ -430,7 +417,7 @@ impl TraceIr {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
-                130 => Self::MethodArgs(MethodInfo::new(pc.func_data())),
+                130 => Self::MethodArgs,
                 132 => Self::Index {
                     dst: SlotId::new(op1),
                     base: SlotId::new(op2),

@@ -150,24 +150,13 @@ impl Bc {
         (self.op2.0 >> (id * 16)) as u16
     }
 
-    pub fn func_data(&self) -> Option<&'static FuncData> {
-        let op = self.op2.0;
+    pub fn func_id(&self) -> Option<FuncId> {
+        let op = self.op2.0 as u32;
         if op == 0 {
             None
         } else {
-            Some(unsafe { &*(op as *const FuncData) })
+            Some(FuncId::new(op))
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct MethodInfo {
-    pub func_data: Option<&'static FuncData>,
-}
-
-impl MethodInfo {
-    pub fn new(func_data: Option<&'static FuncData>) -> Self {
-        MethodInfo { func_data }
     }
 }
 

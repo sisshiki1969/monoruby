@@ -10,7 +10,7 @@ impl Codegen {
     /// +---+---+---+---++---+---+---+---+
     /// MethodArgs
     /// +---+---+---+---++---+---+---+---+
-    /// | op|rcv|arg|len||   func data   |
+    /// | op|rcv|arg|len||  fid  |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -34,7 +34,7 @@ impl Codegen {
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
         //      +------+------+------+------+
-        // r13->| MethodArgs  |  FuncData   |
+        // r13->| MethodArgs  |FuncId|      |
         //      +------+------+------+------+
         //
         // rdi: IdentId
@@ -57,11 +57,11 @@ impl Codegen {
             movq rdx, [r13 - 16];  // CallSiteId
             movq rcx, [rsp]; // receiver:Value
             movq rax, (runtime::find_method);
-            call rax;   // rax <- Option<&FuncData>
+            call rax;   // rax <- Option<FuncId>
         );
         self.vm_handle_error();
         monoasm!( &mut self.jit,
-            movq [r13 + 8], rax;    // FuncData
+            movl [r13 + 8], rax;    // FuncId
             movl [r13 - 8], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;    // class_version
@@ -81,7 +81,7 @@ impl Codegen {
     /// +---+---+---+---++---+---+---+---+
     /// MethodArgs
     /// +---+---+---+---++---+---+---+---+
-    /// | op| - |arg|len||   func data   |
+    /// | op| - |arg|len||  fid  |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -109,11 +109,11 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, [rsp];
             movq rax, (runtime::get_super_data);
-            call rax;   // rax <- Option<&FuncData>
+            call rax;   // rax <- Option<FuncId>
         );
         self.vm_handle_error();
         monoasm!( &mut self.jit,
-            movq [r13 + 8], rax;    // FuncData
+            movl [r13 + 8], rax;    // FuncId
             movl [r13 - 8], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;    // class_version
@@ -138,7 +138,7 @@ impl Codegen {
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
         //      +------+------+------+------+
-        // r13->| MethodArgs  |  FuncData   |
+        // r13->| MethodArgs  | fid  |      |
         //      +------+------+------+------+
         //
         // rdi: IdentId
@@ -174,8 +174,12 @@ impl Codegen {
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,
+            movl rdx, [r13 + 8];
+        }
+        self.get_func_data();
+        monoasm! { &mut self.jit,
             // set meta
-            movq r15, [r13 + 8];
+            movq r15, rdx;
             movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rdi, [r13 + 0];  // rdi <- pos_num

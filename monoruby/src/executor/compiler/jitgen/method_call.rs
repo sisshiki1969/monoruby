@@ -19,7 +19,7 @@ impl Codegen {
         &mut self,
         store: &Store,
         ctx: &mut BBContext,
-        func_data: &FuncData,
+        fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
         has_splat: bool,
@@ -32,7 +32,7 @@ impl Codegen {
         if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
             self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
         } else {
-            self.gen_call_cached(store, ctx, callid, func_data, cached, pc, has_splat);
+            self.gen_call_cached(store, ctx, callid, fid, cached, pc, has_splat);
         }
     }
 
@@ -44,7 +44,7 @@ impl Codegen {
         store: &Store,
         ctx: &mut BBContext,
         callid: CallSiteId,
-        func_data: &FuncData,
+        fid: FuncId,
         cached: InlineCached,
         pc: BcPc,
         has_splat: bool,
@@ -66,8 +66,7 @@ impl Codegen {
             self.guard_class(cached.class_id, deopt);
         }
         self.guard_version(cached.version, deopt);
-        let func_id = func_data.meta.func_id();
-        match store[func_id].kind {
+        match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(store[callid].kw_args.is_empty());
@@ -104,7 +103,7 @@ impl Codegen {
                     ctx,
                     store,
                     callid,
-                    func_data,
+                    fid,
                     pc,
                     has_splat,
                     cached.class_id,
@@ -116,7 +115,7 @@ impl Codegen {
                     ctx,
                     store,
                     callid,
-                    func_data,
+                    fid,
                     pc,
                     has_splat,
                     cached.class_id,
@@ -181,8 +180,12 @@ impl Codegen {
         self.set_self_and_args(has_splat, callsite);
 
         monoasm! { &mut self.jit,
+        movq rdx, [r13 + 8];    // FuncId
+        }
+        self.get_func_data();
+        monoasm! { &mut self.jit,
+            movq r15, rdx;
             // set meta.
-            movq r15, [r13 + 8];    // &FuncData
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rax;
         }
@@ -229,10 +232,10 @@ impl Codegen {
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
             movq rax, (runtime::find_method);
             call rax;
-            // absolute address was returned to rax.
+            // FuncId was returned to rax.
             testq rax, rax;
             jeq raise;
-            movq [r13 + 8], rax;
+            movl [r13 + 8], rax;
 
             movl rax, [rip + global_class_version];
             movl [r13 - 4], rax;
@@ -449,7 +452,7 @@ impl Codegen {
         ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
-        func_data: &FuncData,
+        callee_func_id: FuncId,
         pc: BcPc,
         has_splat: bool,
         recv_classid: ClassId,
@@ -462,6 +465,7 @@ impl Codegen {
         self.execute_gc();
         self.set_method_outer();
         self.set_self_and_args(has_splat, &store[callid]);
+        let func_data = &store[callee_func_id].data;
         monoasm! { &mut self.jit,
             // set meta.
             movq rax, (func_data.meta.get());
@@ -469,7 +473,6 @@ impl Codegen {
         }
         // argument registers:
         //   rdi: args len
-        let callee_func_id = func_data.meta.func_id();
         match &store[callee_func_id].kind {
             FuncKind::ISeq(info) => {
                 let callsite = &store[callid];

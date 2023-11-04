@@ -1213,13 +1213,13 @@ impl Codegen {
                 TraceIr::MethodCall {
                     callid,
                     has_splat,
-                    info,
+                    cached_fid,
                     ..
                 } => {
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
-                    if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc, has_splat);
+                    if let Some(fid) = cached_fid {
+                        self.gen_call(store, &mut ctx, fid, callid, pc, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1228,23 +1228,27 @@ impl Codegen {
                 TraceIr::MethodCallBlock {
                     callid,
                     has_splat,
-                    info,
+                    cached_fid,
                     ..
                 } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
-                    if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc, has_splat);
+                    if let Some(fid) = cached_fid {
+                        self.gen_call(store, &mut ctx, fid, callid, pc, has_splat);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
                     }
                 }
-                TraceIr::Super { callid, info, .. } => {
+                TraceIr::Super {
+                    callid,
+                    cached_fid: info,
+                    ..
+                } => {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
-                    if let Some(func_data) = info.func_data {
-                        self.gen_call(store, &mut ctx, func_data, callid, pc, false);
+                    if let Some(fid) = info {
+                        self.gen_call(store, &mut ctx, fid, callid, pc, false);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1266,7 +1270,7 @@ impl Codegen {
                 } => {
                     self.gen_yield(&mut ctx, store, args, len, dst, callid, pc);
                 }
-                TraceIr::MethodArgs(_) => {}
+                TraceIr::MethodArgs => {}
                 TraceIr::MethodDef { name, func_id } => {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);

@@ -1338,7 +1338,7 @@ impl BcPc {
                     format!("{} = yield({:?}; {})", ret_str(ret), args, len)
                 }
             }
-            TraceIr::MethodArgs(..) => return None,
+            TraceIr::MethodArgs => return None,
             TraceIr::MethodDef { name, func_id } => {
                 format!("method_def {name}: {:?}", func_id)
             }
@@ -1765,8 +1765,6 @@ impl Meta {
     }
 }
 
-type FuncDataPtr = std::ptr::NonNull<FuncData>;
-
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct FuncData {
     /// address of function.
@@ -1788,10 +1786,6 @@ impl FuncData {
 
     fn set_reg_num(&mut self, reg_num: i64) {
         self.meta.set_reg_num(reg_num);
-    }
-
-    fn as_ptr(&self) -> FuncDataPtr {
-        std::ptr::NonNull::new(self as *const _ as _).unwrap()
     }
 
     pub fn func_id(&self) -> FuncId {

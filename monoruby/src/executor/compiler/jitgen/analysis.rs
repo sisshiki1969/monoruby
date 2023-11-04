@@ -425,7 +425,7 @@ impl JitContext {
                         info.def(ret);
                     }
                 }
-                TraceIr::MethodArgs(..) => {}
+                TraceIr::MethodArgs => {}
                 TraceIr::InlineCall {
                     inline_id,
                     callsite,
