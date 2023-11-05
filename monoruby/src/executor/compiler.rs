@@ -228,7 +228,7 @@ impl Codegen {
         };
     }
 
-    pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
+    pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(1);
         let const_version = jit.const_i64(1);
@@ -702,13 +702,12 @@ impl Codegen {
     ///  
     fn handle_arguments(&mut self) {
         monoasm! { &mut self.jit,
-            lea  r9, [rsp - 16];   // callee_lfp
-            movq r8, rdi;
+            lea  r8, [rsp - 16];   // callee_lfp
+            movq rcx, rdi;
             subq rsp, 4088;
             pushq rdi;
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
-            movq rcx, r14; // caller_lfp
             movq rax, (runtime::vm_handle_arguments);
             call rax;
             popq rdi;

@@ -12,28 +12,10 @@ pub struct MonorubyErr {
     trace: Vec<(Loc, SourceInfoRef)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum MonorubyErrKind {
-    MethodReturn(Value, LFP),
-    NotMethod,
-    Arguments,
-    Syntax,
-    Unimplemented,
-    Name,
-    DivideByZero,
-    LocalJump,
-    Range,
-    Type,
-    Index,
-    Frozen,
-    Load,
-    Internal,
-    Regex,
-    Runtime,
-    Key,
-    Fiber,
-    StopIteration,
-    Exception,
+impl MonorubyErr {
+    pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        self.trace.push((loc, sourceinfo));
+    }
 }
 
 impl MonorubyErr {
@@ -287,7 +269,7 @@ impl MonorubyErr {
         ))
     }
 
-    fn wrong_number_of_arg_range(
+    pub fn wrong_number_of_arg_range(
         given: usize,
         range: std::ops::RangeInclusive<usize>,
     ) -> MonorubyErr {
@@ -521,59 +503,28 @@ impl MonorubyErr {
     }
 }
 
-//
-// error handlers
-//
-impl Executor {
-    pub fn set_error(&mut self, err: MonorubyErr) {
-        self.exception = Some(err);
-    }
-
-    pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
-        self.exception.as_ref()
-    }
-
-    pub(crate) fn take_error(&mut self) -> MonorubyErr {
-        std::mem::take(&mut self.exception).unwrap()
-    }
-
-    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
-        let err = self.take_error();
-        self.exception_to_val(globals, err)
-    }
-
-    pub(crate) fn err_divide_by_zero(&mut self) {
-        self.set_error(MonorubyErr::divide_by_zero());
-    }
-
-    pub(crate) fn err_wrong_number_of_arg_range(
-        &mut self,
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) {
-        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
-    }
-
-    ///
-    /// Set FrozenError with message "can't modify frozen Integer: 5".
-    ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
-    }
-
-    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
-        match &mut self.exception {
-            Some(err) => {
-                err.trace.push((loc, sourceinfo));
-            }
-            None => unreachable!(),
-        };
-    }
-
-    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
-        let class_id = globals.get_error_class(&err);
-        Value::new_exception_from_err(err, class_id)
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub enum MonorubyErrKind {
+    MethodReturn(Value, LFP),
+    NotMethod,
+    Arguments,
+    Syntax,
+    Unimplemented,
+    Name,
+    DivideByZero,
+    LocalJump,
+    Range,
+    Type,
+    Index,
+    Frozen,
+    Load,
+    Internal,
+    Regex,
+    Runtime,
+    Key,
+    Fiber,
+    StopIteration,
+    Exception,
 }
 
 #[cfg(test)]

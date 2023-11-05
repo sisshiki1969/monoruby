@@ -1,3 +1,5 @@
+use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
+
 use super::*;
 
 ///
@@ -23,6 +25,201 @@ impl FuncId {
     }
 }
 
+pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
+pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
+pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + std::mem::offset_of!(Meta, reg_num) as u64;
+pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct FuncData {
+    /// address of function.
+    codeptr: Option<monoasm::CodePtr>,
+    /// metadata of this function.
+    meta: Meta,
+    /// the address of program counter
+    pc: Option<BcPc>,
+}
+
+impl FuncData {
+    pub fn pc(&self) -> BcPc {
+        self.pc.unwrap()
+    }
+
+    pub(super) fn set_pc(&mut self, pc: BcPc) {
+        self.pc = Some(pc);
+    }
+
+    pub(super) fn set_reg_num(&mut self, reg_num: i64) {
+        self.meta.set_reg_num(reg_num);
+    }
+
+    pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
+        self.codeptr = Some(codeptr);
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.meta.func_id()
+    }
+
+    pub fn meta(&self) -> Meta {
+        self.meta
+    }
+
+    pub fn codeptr(&self) -> Option<monoasm::CodePtr> {
+        self.codeptr
+    }
+}
+
+///
+/// Metadata.
+///
+/// ~~~text
+///   7   6   5   4    3   2    1    0
+/// +-------+-------+---------+----+----+
+/// |    FuncId     | reg_num |kind|mode|
+/// +-------+-------+---------+----+----+
+///
+/// kind:   0 VM
+///         1 JIT
+///         2 NATIVE
+///
+/// mode:   0 method
+///         1 class def
+/// ~~~
+///
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct Meta {
+    func_id: Option<FuncId>,
+    reg_num: u16,
+    ///bit 7:  0:on_stack 1:on_heap
+    ///bit 1:  0:Ruby 1:native
+    ///bit 0:
+    kind: u8,
+    /// bit 2-1: public:0 private:1 protected:2
+    /// bit 0: method:0 class_def:1
+    mode: u8,
+}
+
+impl std::fmt::Debug for Meta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "on_stack:{:?} kind:{} mode:{} {:?} regs:{}",
+            self.on_stack(),
+            match self.kind() {
+                0 => "Ruby",
+                1 => "NATIVE",
+                _ => "INVALID",
+            },
+            if self.is_class_def() {
+                "class_def"
+            } else {
+                "method"
+            },
+            self.func_id(),
+            self.reg_num()
+        )
+    }
+}
+
+impl Meta {
+    pub fn new(func_id: Option<FuncId>, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
+        Self {
+            func_id,
+            reg_num,
+            kind,
+            mode: is_class_def as u8,
+        }
+    }
+
+    pub fn get(&self) -> u64 {
+        unsafe { std::mem::transmute(*self) }
+    }
+
+    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
+        // kind = VM, mode = method
+        let reg_num = reg_num as i16 as u16;
+        Self::new(func_id.into(), reg_num, 0, false)
+    }
+
+    fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
+        // kind = VM, mode = classdef
+        let reg_num = reg_num as i16 as u16;
+        Self::new(func_id.into(), reg_num, 0, true)
+    }
+
+    fn native(func_id: FuncId) -> Self {
+        // kind = NATIVE, mode = method
+        //let reg_num = reg_num as i16 as u16;
+        Self::new(Some(func_id), 1, 2, false)
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.func_id.unwrap()
+    }
+
+    pub fn reg_num(&self) -> i64 {
+        self.reg_num as i16 as i64
+    }
+
+    /// 0:Ruby 1:native
+    fn kind(&self) -> u8 {
+        (self.kind & 0b10) >> 1
+    }
+
+    pub fn is_native(&self) -> bool {
+        self.kind() == 1
+    }
+
+    pub fn on_stack(&self) -> bool {
+        self.kind & 0b1000_0000 == 0
+    }
+
+    pub fn set_on_heap(&mut self) {
+        self.kind |= 0b1000_0000;
+    }
+
+    /// method:0 class_def:1
+    pub fn is_class_def(&self) -> bool {
+        (self.mode & 0b1) == 1
+    }
+
+    ///
+    /// Set the number of registers in Meta.
+    ///
+    pub fn set_reg_num(&mut self, reg_num: i64) {
+        self.reg_num = reg_num as i16 as u16;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn meta_test() {
+        let meta = Meta::vm_method(FuncId::new(12), 42);
+        assert_eq!(FuncId::new(12), meta.func_id());
+        assert_eq!(42, meta.reg_num());
+        assert_eq!(false, meta.is_class_def());
+        let mut meta = Meta::vm_method(FuncId::new(42), -1);
+        assert_eq!(FuncId::new(42), meta.func_id());
+        assert_eq!(-1, meta.reg_num());
+        meta.set_reg_num(12);
+        assert_eq!(FuncId::new(42), meta.func_id());
+        assert_eq!(12, meta.reg_num());
+        let mut meta = Meta::vm_classdef(FuncId::new(12), 42);
+        assert_eq!(true, meta.is_class_def());
+        meta.set_reg_num(12);
+        assert_eq!(true, meta.is_class_def());
+        assert_eq!(8, std::mem::size_of::<i64>());
+        assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());
+        assert_eq!(8, std::mem::size_of::<BcPc>());
+        assert_eq!(8, std::mem::size_of::<Meta>());
+    }
+}
+
 pub const FUNCS_INFO: usize = std::mem::offset_of!(Funcs, info);
 
 pub(super) struct Funcs {
@@ -45,11 +242,10 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl std::default::Default for Funcs {
     fn default() -> Self {
-        let mut info = Vec::with_capacity(2048);
-        info.push(FuncInfo::default());
+        let info = vec![FuncInfo::default()];
         Self {
             info,
-            compile_info: Vec::with_capacity(2048),
+            compile_info: vec![],
         }
     }
 }
@@ -262,14 +458,14 @@ impl Funcs {
             for_param_info,
             loc,
         );
-        let params_info = ParamsInfo {
+        let params_info = ParamsInfo::new(
+            required_num,
+            reqopt_num,
+            reqopt_num + rest,
             args_names,
             keyword_names,
-            pos_num: reqopt_num + rest,
-            reqopt_num,
-            required_num,
             block_param,
-        };
+        );
         Ok((params_info, compile_info))
     }
 }
@@ -302,8 +498,8 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 pub struct FuncInfo {
     /// name of this function.
     name: Option<IdentId>,
-    pub(in crate::executor) data: FuncData,
-    pub(in crate::executor) kind: FuncKind,
+    pub(crate) data: FuncData,
+    pub(crate) kind: FuncKind,
     /// JIT code entries for each class of *self*.
     jit_entry: Box<HashMap<ClassId, DestLabel>>,
     _padding: usize,

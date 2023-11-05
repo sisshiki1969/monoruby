@@ -1,4 +1,5 @@
 use fancy_regex::Regex;
+use monoasm::DestLabel;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -7,17 +8,17 @@ use std::rc::Rc;
 
 use super::*;
 
+mod error;
 mod method;
 mod prng;
 mod store;
-pub use compiler::*;
 pub use error::*;
 use prng::*;
 pub use store::*;
 
-pub(in crate::executor) type InlineGen =
+pub(crate) type InlineGen =
     fn(&mut Codegen, &mut jitgen::BBContext, &CallSiteInfo, BcPc, DestLabel);
-pub(in crate::executor) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
+pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
@@ -328,12 +329,12 @@ impl Globals {
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
-        self[func_id].data.codeptr = Some(codeptr);
+        self[func_id].data.set_codeptr(codeptr);
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
         let data = &self[func_id].data;
-        assert!(data.codeptr.is_some());
+        assert!(data.codeptr().is_some());
         data
     }
 
@@ -629,7 +630,7 @@ impl Globals {
         }
     }
 
-    pub(in crate::executor) unsafe fn dump_frame_info(&mut self, lfp: LFP) {
+    pub(crate) unsafe fn dump_frame_info(&mut self, lfp: LFP) {
         let meta = lfp.meta();
         let outer = lfp.outer();
         let func_id = meta.func_id();
@@ -724,6 +725,63 @@ impl Globals {
                 class_id.get_name(self),
                 count
             );
+        }
+    }
+}
+
+#[cfg(any(feature = "log-jit", feature = "profile"))]
+pub(crate) extern "C" fn log_deoptimize(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    func_id: FuncId,
+    pc: BcPc,
+    #[cfg(feature = "log-jit")] v: Option<Value>,
+) {
+    use crate::jitgen::trace_ir::TraceIr;
+
+    let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
+    let index = pc - bc_begin;
+
+    if let TraceIr::LoopEnd = pc.get_ir() {
+        // normal exit from jit'ed loop
+        #[cfg(feature = "log-jit")]
+        {
+            let name = globals.store.func_description(func_id);
+            let fmt = pc.format(globals, index).unwrap_or_default();
+            eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt}", index);
+        }
+    } else {
+        #[cfg(feature = "profile")]
+        {
+            match globals.deopt_stats.get_mut(&(func_id, index)) {
+                Some(c) => *c = *c + 1,
+                None => {
+                    globals.deopt_stats.insert((func_id, index), 1);
+                }
+            }
+        }
+        #[cfg(feature = "log-jit")]
+        {
+            let trace_ir = pc.get_ir();
+            let name = globals.store.func_description(func_id);
+            let fmt = pc.format(globals, index).unwrap_or_default();
+            match trace_ir {
+                TraceIr::LoadConst(..)          // inline constant cache miss
+                | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)
+                | TraceIr::LoadIvar(..)         // inline ivar cache miss
+                | TraceIr::StoreIvar(..) => {
+                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt}", index);
+                },
+                _ => if let Some(v) = v {
+                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
+                } else {
+                    eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
+                    eprintln!("    [{:05}] {fmt}", index);
+                },
+            }
         }
     }
 }

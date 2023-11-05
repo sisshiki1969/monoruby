@@ -11,7 +11,7 @@ mod function;
 mod iseq;
 pub use class::*;
 pub use function::*;
-pub(crate) use iseq::ISeqInfo;
+pub(crate) use iseq::*;
 
 pub const STORE_FUNCTION: usize = std::mem::offset_of!(Store, functions);
 
@@ -125,7 +125,7 @@ impl Store {
 }
 
 impl Store {
-    pub(in crate::executor) fn add_inline_info(
+    pub(super) fn add_inline_info(
         &mut self,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
@@ -136,7 +136,7 @@ impl Store {
         InlineMethodId::new(id)
     }
 
-    pub(in crate::executor) fn get_inline_info(
+    pub(crate) fn get_inline_info(
         &self,
         id: InlineMethodId,
     ) -> &(InlineGen, InlineAnalysis, String) {
@@ -155,7 +155,7 @@ impl Store {
         self.functions.function_len()
     }
 
-    pub(crate) fn get_compile_info(&mut self) -> CompileInfo {
+    pub(crate) fn get_compile_info(&mut self) -> bytecodegen::CompileInfo {
         self.functions.get_compile_info()
     }
 
@@ -197,7 +197,7 @@ impl Store {
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
-        optional_params: Vec<(usize, BcLocal, IdentId)>,
+        optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,

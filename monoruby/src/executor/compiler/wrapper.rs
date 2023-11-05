@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(in crate::executor) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
+    pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
         let codeptr = self.jit.get_current_address();
         match kind {
             FuncKind::ISeq(_) => {

@@ -1,5 +1,27 @@
 use super::*;
 
+extern "C" fn vm_get_constant(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+    const_version: usize,
+) -> Option<Value> {
+    let (cached_version, val) = &globals.store[site_id].cache;
+    if *cached_version == const_version {
+        return *val;
+    };
+    match vm.find_constant(globals, site_id) {
+        Ok(val) => {
+            globals.store[site_id].cache = (const_version, Some(val));
+            Some(val)
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 impl Codegen {
     //
     // +---+---+---+---++---+---+---+---+

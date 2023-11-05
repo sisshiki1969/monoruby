@@ -26,7 +26,7 @@ impl InlineTable {
         INLINE_INFO.read().unwrap().get(func_id)
     }
 
-    pub(super) fn add_inline(func_id: FuncId, id: InlineMethodId) {
+    pub(crate) fn add_inline(func_id: FuncId, id: InlineMethodId) {
         INLINE_INFO.write().unwrap().add(func_id, id);
     }
 

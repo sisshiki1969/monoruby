@@ -1,5 +1,5 @@
 use super::*;
-use crate::executor::compiler::jitgen::BasicBlockInfo;
+use crate::{bytecodegen::Bc, executor::compiler::jitgen::BasicBlockInfo};
 
 ///
 /// Information of instruction sequences.
@@ -93,7 +93,7 @@ impl alloc::GC<RValue> for ISeqInfo {
 }
 
 impl ISeqInfo {
-    pub(in crate::executor) fn new(
+    fn new(
         id: FuncId,
         mother: (FuncId, usize),
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
@@ -124,7 +124,7 @@ impl ISeqInfo {
         }
     }
 
-    pub(in crate::executor) fn new_block(
+    pub(super) fn new_block(
         id: FuncId,
         mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
@@ -135,7 +135,7 @@ impl ISeqInfo {
         Self::new(id, mother, outer.1, None, args, loc, sourceinfo, true)
     }
 
-    pub(in crate::executor) fn new_method(
+    pub(super) fn new_method(
         id: FuncId,
         name: Option<IdentId>,
         args: ParamsInfo,
@@ -175,6 +175,10 @@ impl ISeqInfo {
     ///
     pub(crate) fn key_num(&self) -> usize {
         self.args.keyword_names.len()
+    }
+
+    pub(crate) fn required_num(&self) -> usize {
+        self.args.required_num
     }
 
     ///
@@ -241,7 +245,7 @@ impl ISeqInfo {
     ///
     /// Get a reference of bytecode.
     ///
-    pub(in crate::executor) fn bytecode(&self) -> &[Bc] {
+    pub(crate) fn bytecode(&self) -> &[Bc] {
         self.bytecode.as_ref().unwrap()
     }
 
@@ -255,14 +259,14 @@ impl ISeqInfo {
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub(in crate::executor) fn get_top_pc(&self) -> BcPc {
+    pub(crate) fn get_top_pc(&self) -> BcPc {
         BcPc::from(&self.bytecode()[0])
     }
 
     ///
     /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
     ///
-    pub(in crate::executor) fn get_pc_index(&self, pc: Option<BcPc>) -> BcIndex {
+    pub(crate) fn get_pc_index(&self, pc: Option<BcPc>) -> BcIndex {
         let i = if let Some(pos) = pc {
             pos - self.get_top_pc()
         } else {
@@ -271,11 +275,11 @@ impl ISeqInfo {
         BcIndex::from(i)
     }
 
-    pub(in crate::executor) fn get_sp(&self, i: BcIndex) -> SlotId {
+    pub(crate) fn get_sp(&self, i: BcIndex) -> SlotId {
         self.sp[i.0 as usize]
     }
 
-    pub(in crate::executor) fn get_location(&self) -> String {
+    pub(crate) fn get_location(&self) -> String {
         let loc = self.loc;
         format!(
             "{}:{}",
@@ -287,7 +291,7 @@ impl ISeqInfo {
     ///
     /// Explore exception table for pc(*BcPc*) and return error handler's pc(*BcPc*) and the slot where an error object is to be stored.
     ///
-    pub(in crate::executor) fn get_exception_dest(
+    pub(crate) fn get_exception_dest(
         &self,
         pc: BcPc,
     ) -> Option<(Option<BcPc>, Option<BcPc>, Option<SlotId>)> {
@@ -378,5 +382,41 @@ impl ISeqInfo {
                 (start..end, rescue, ensure, *err_reg)
             })
             .collect::<Vec<_>>()
+    }
+}
+
+///
+/// Parameters information in *ISeqInfo*.
+///
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ParamsInfo {
+    required_num: usize,
+    // required + optional
+    reqopt_num: usize,
+    // required + optional + rest
+    pub pos_num: usize,
+    // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
+    pub args_names: Vec<Option<IdentId>>,
+    pub keyword_names: Vec<IdentId>,
+    block_param: Option<IdentId>,
+}
+
+impl ParamsInfo {
+    pub fn new(
+        required_num: usize,
+        reqopt_num: usize,
+        pos_num: usize,
+        args_names: Vec<Option<IdentId>>,
+        keyword_names: Vec<IdentId>,
+        block_param: Option<IdentId>,
+    ) -> Self {
+        ParamsInfo {
+            required_num,
+            reqopt_num,
+            pos_num,
+            args_names,
+            keyword_names,
+            block_param,
+        }
     }
 }

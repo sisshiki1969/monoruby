@@ -468,7 +468,7 @@ impl Codegen {
         let func_data = &store[callee_func_id].data;
         monoasm! { &mut self.jit,
             // set meta.
-            movq rax, (func_data.meta.get());
+            movq rax, (func_data.meta().get());
             movq [rsp - (16 + LBP_META)], rax;
         }
         // argument registers:
@@ -535,7 +535,7 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rdx, rdi;
             }
-            self.call_codeptr(func_data.codeptr.unwrap());
+            self.call_codeptr(func_data.codeptr().unwrap());
         } else {
             monoasm! { &mut self.jit,
                 // set pc.
@@ -543,7 +543,7 @@ impl Codegen {
             }
             match store[callee_func_id].get_jit_code(recv_classid) {
                 Some(dest) => self.call_label(dest),
-                None => self.call_codeptr(func_data.codeptr.unwrap()),
+                None => self.call_codeptr(func_data.codeptr().unwrap()),
             };
         }
 

@@ -14,6 +14,7 @@ mod alloc;
 mod builtins;
 pub mod bytecodegen;
 pub mod executor;
+pub mod globals;
 mod id_table;
 #[cfg(test)]
 mod tests;
@@ -26,6 +27,7 @@ use fxhash::FxHashSet as HashSet;
 pub use monoruby_attr::*;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 pub type IndexSet<T> = indexmap::IndexSet<T>;
+pub use globals::*;
 use id_table::*;
 pub use value::*;
 

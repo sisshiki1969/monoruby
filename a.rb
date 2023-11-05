@@ -1,10 +1,18 @@
-class A < Array
+module M
+  def initialize
+    puts self.class::C
+  end
 end
 
-for i in 0..8 do
-mul = 3
-a = A.new(5) {|i| i * mul }
-a << 4
-a[2] = 5
-puts "#{a}"
+class A
+  include M
+  C = 100
 end
+
+class B
+  include M
+  C = 200
+end
+
+A.new # => 100
+B.new # => 200

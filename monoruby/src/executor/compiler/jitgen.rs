@@ -412,61 +412,6 @@ pub(crate) enum LinkMode {
     R15,
 }
 
-#[cfg(any(feature = "log-jit", feature = "profile"))]
-extern "C" fn log_deoptimize(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    func_id: FuncId,
-    pc: BcPc,
-    #[cfg(feature = "log-jit")] v: Option<Value>,
-) {
-    let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
-    let index = pc - bc_begin;
-
-    if let TraceIr::LoopEnd = pc.get_ir() {
-        // normal exit from jit'ed loop
-        #[cfg(feature = "log-jit")]
-        {
-            let name = globals.store.func_description(func_id);
-            let fmt = pc.format(globals, index).unwrap_or_default();
-            eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt}", index);
-        }
-    } else {
-        #[cfg(feature = "profile")]
-        {
-            match globals.deopt_stats.get_mut(&(func_id, index)) {
-                Some(c) => *c = *c + 1,
-                None => {
-                    globals.deopt_stats.insert((func_id, index), 1);
-                }
-            }
-        }
-        #[cfg(feature = "log-jit")]
-        {
-            let trace_ir = pc.get_ir();
-            let name = globals.store.func_description(func_id);
-            let fmt = pc.format(globals, index).unwrap_or_default();
-            match trace_ir {
-                TraceIr::LoadConst(..)          // inline constant cache miss
-                | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)
-                | TraceIr::LoadIvar(..)         // inline ivar cache miss
-                | TraceIr::StoreIvar(..) => {
-                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", index);
-                },
-                _ => if let Some(v) = v {
-                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
-                } else {
-                    eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", index);
-                },
-            }
-        }
-    }
-}
-
 impl Codegen {
     pub(super) fn compile(
         &mut self,
@@ -1621,7 +1566,7 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, [r14 - (LBP_META)];
             movq rcx, r13;
-            movq rax, (log_deoptimize);
+            movq rax, (crate::globals::log_deoptimize);
             call rax;
         );
         monoasm!( &mut self.jit,

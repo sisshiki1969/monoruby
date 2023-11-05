@@ -229,7 +229,6 @@ pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
-    caller_lfp: LFP,
     arg_num: usize,
     callee_lfp: LFP,
 ) -> Option<Value> {
@@ -242,7 +241,7 @@ pub(super) extern "C" fn vm_handle_arguments(
                 return None;
             };
             // keyword
-            handle_keyword(&info, &globals.store[callid], caller_lfp, callee_lfp);
+            handle_keyword(&info, &globals.store[callid], vm.cfp().lfp(), callee_lfp);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -258,7 +257,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     } else if let Some(block_arg) = block_arg {
         unsafe {
             Some(BlockHandler(
-                caller_lfp.register(block_arg.0 as usize).unwrap(),
+                vm.cfp().lfp().register(block_arg.0 as usize).unwrap(),
             ))
         }
     } else {
@@ -295,8 +294,8 @@ pub(super) extern "C" fn handle_invoker_arguments(
 
 /// deconstruct array for block
 fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
-    let req_num = info.args.required_num;
-    let reqopt_num = info.args.reqopt_num;
+    let req_num = info.required_num();
+    let reqopt_num = info.reqopt_num();
     if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
         unsafe {
             let v = callee_lfp.register(1).unwrap();
@@ -317,8 +316,8 @@ fn handle_req_opt_rest(
     arg_num: usize,
     callee_lfp: LFP,
 ) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
-    let req_num = info.args.required_num;
-    let reqopt_num = info.args.reqopt_num;
+    let req_num = info.required_num();
+    let reqopt_num = info.reqopt_num();
     let pos_num = info.args.pos_num;
     let is_rest = pos_num != reqopt_num;
     let is_block_style = info.is_block_style;

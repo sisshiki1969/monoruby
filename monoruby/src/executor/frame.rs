@@ -238,7 +238,7 @@ impl LFP {
     ///
     /// Get Meta.
     ///
-    pub(in crate::executor) fn meta(&self) -> &Meta {
+    pub(crate) fn meta(&self) -> &Meta {
         unsafe { &*(self.sub(LBP_META) as *const Meta) }
     }
 
@@ -254,7 +254,7 @@ impl LFP {
     /// Get the length of arguments for a native function.
     ///
     pub fn arg_len(&self) -> usize {
-        self.meta().reg_num as usize - 1
+        self.meta().reg_num() as usize - 1
     }
 
     ///
@@ -310,7 +310,7 @@ impl LFP {
     }
 
     fn frame_bytes(&self) -> usize {
-        LBP_SELF as usize + 8 * self.meta().reg_num as usize
+        LBP_SELF as usize + 8 * self.meta().reg_num() as usize
     }
 
     fn frame_ref(&self) -> &[u8] {

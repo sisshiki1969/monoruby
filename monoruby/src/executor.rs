@@ -1,20 +1,20 @@
 use super::*;
 use monoasm::*;
-use ruruby_parse::Node;
 
-mod compiler;
-mod error;
+pub(crate) mod compiler;
 mod frame;
-mod globals;
 pub mod inline;
 pub mod op;
 pub use builtins::*;
 use bytecodegen::*;
 use compiler::jitgen::trace_ir::*;
+pub use compiler::Codegen;
+pub use compiler::*;
 use fancy_regex::Captures;
 pub use frame::*;
 pub use globals::*;
 pub use op::*;
+use ruruby_parse::{Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
@@ -37,11 +37,6 @@ pub const LBP_ARG0: i64 = LBP_SELF + 8;
 const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
 const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
-
-const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
-const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
-const FUNCDATA_REGNUM: u64 = FUNCDATA_META + std::mem::offset_of!(Meta, reg_num) as u64;
-const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 
 ///
 /// Bytecode interpreter.
@@ -260,6 +255,61 @@ impl Executor {
 
     pub fn parent_fiber(&self) -> Option<NonNull<Executor>> {
         self.parent_fiber
+    }
+}
+
+//
+// error handlers
+//
+impl Executor {
+    pub fn set_error(&mut self, err: MonorubyErr) {
+        self.exception = Some(err);
+    }
+
+    pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
+        self.exception.as_ref()
+    }
+
+    pub(crate) fn take_error(&mut self) -> MonorubyErr {
+        std::mem::take(&mut self.exception).unwrap()
+    }
+
+    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+        let err = self.take_error();
+        self.exception_to_val(globals, err)
+    }
+
+    pub(crate) fn err_divide_by_zero(&mut self) {
+        self.set_error(MonorubyErr::divide_by_zero());
+    }
+
+    pub(crate) fn err_wrong_number_of_arg_range(
+        &mut self,
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) {
+        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
+    }
+
+    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        match &mut self.exception {
+            Some(err) => {
+                err.push_trace(loc, sourceinfo);
+            }
+            None => unreachable!(),
+        };
+    }
+
+    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
+        let class_id = globals.get_error_class(&err);
+        Value::new_exception_from_err(err, class_id)
     }
 }
 
@@ -840,7 +890,7 @@ impl BcPc {
         (self.op1 >> 48) as u16
     }
 
-    fn from(bc: &Bc) -> Self {
+    pub fn from(bc: &Bc) -> Self {
         Self(std::ptr::NonNull::from(bc))
     }
 
@@ -901,7 +951,7 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    fn get_ir(&self) -> TraceIr {
+    pub fn get_ir(&self) -> TraceIr {
         TraceIr::from_bc(*self)
     }
 
@@ -1642,157 +1692,6 @@ impl Visibility {
     }
 }
 
-///
-/// Metadata.
-///
-/// ~~~text
-///   7   6   5   4    3   2    1    0
-/// +-------+-------+---------+----+----+
-/// |    FuncId     | reg_num |kind|mode|
-/// +-------+-------+---------+----+----+
-///
-/// kind:   0 VM
-///         1 JIT
-///         2 NATIVE
-///
-/// mode:   0 method
-///         1 class def
-/// ~~~
-///
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-#[repr(C)]
-struct Meta {
-    func_id: Option<FuncId>,
-    reg_num: u16,
-    ///bit 7:  0:on_stack 1:on_heap
-    ///bit 1:  0:Ruby 1:native
-    ///bit 0:
-    kind: u8,
-    /// bit 2-1: public:0 private:1 protected:2
-    /// bit 0: method:0 class_def:1
-    mode: u8,
-}
-
-impl std::fmt::Debug for Meta {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "on_stack:{:?} kind:{} mode:{} {:?} regs:{}",
-            self.on_stack(),
-            match self.kind() {
-                0 => "Ruby",
-                1 => "NATIVE",
-                _ => "INVALID",
-            },
-            if self.is_class_def() {
-                "class_def"
-            } else {
-                "method"
-            },
-            self.func_id(),
-            self.reg_num()
-        )
-    }
-}
-
-impl Meta {
-    fn new(func_id: Option<FuncId>, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
-        Self {
-            func_id,
-            reg_num,
-            kind,
-            mode: is_class_def as u8,
-        }
-    }
-
-    fn get(&self) -> u64 {
-        unsafe { std::mem::transmute(*self) }
-    }
-
-    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
-        // kind = VM, mode = method
-        let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, 0, false)
-    }
-
-    fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
-        // kind = VM, mode = classdef
-        let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, 0, true)
-    }
-
-    fn native(func_id: FuncId) -> Self {
-        // kind = NATIVE, mode = method
-        //let reg_num = reg_num as i16 as u16;
-        Self::new(Some(func_id), 1, 2, false)
-    }
-
-    pub fn func_id(&self) -> FuncId {
-        self.func_id.unwrap()
-    }
-
-    fn reg_num(&self) -> i64 {
-        self.reg_num as i16 as i64
-    }
-
-    /// 0:Ruby 1:native
-    fn kind(&self) -> u8 {
-        (self.kind & 0b10) >> 1
-    }
-
-    fn is_native(&self) -> bool {
-        self.kind() == 1
-    }
-
-    fn on_stack(&self) -> bool {
-        self.kind & 0b1000_0000 == 0
-    }
-
-    fn set_on_heap(&mut self) {
-        self.kind |= 0b1000_0000;
-    }
-
-    /// method:0 class_def:1
-    fn is_class_def(&self) -> bool {
-        (self.mode & 0b1) == 1
-    }
-
-    ///
-    /// Set the number of registers in Meta.
-    ///
-    fn set_reg_num(&mut self, reg_num: i64) {
-        self.reg_num = reg_num as i16 as u16;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct FuncData {
-    /// address of function.
-    codeptr: Option<monoasm::CodePtr>,
-    /// metadata of this function.
-    meta: Meta,
-    /// the address of program counter
-    pc: Option<BcPc>,
-}
-
-impl FuncData {
-    fn pc(&self) -> BcPc {
-        self.pc.unwrap()
-    }
-
-    fn set_pc(&mut self, pc: BcPc) {
-        self.pc = Some(pc);
-    }
-
-    fn set_reg_num(&mut self, reg_num: i64) {
-        self.meta.set_reg_num(reg_num);
-    }
-
-    pub fn func_id(&self) -> FuncId {
-        self.meta.func_id()
-    }
-}
-
 extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     func_id: FuncId,
@@ -1837,49 +1736,6 @@ extern "C" fn exec_jit_partial_compile(
     globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
     let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn meta_test() {
-        let meta = Meta::vm_method(FuncId::new(12), 42);
-        assert_eq!(FuncId::new(12), meta.func_id());
-        assert_eq!(42, meta.reg_num());
-        assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId::new(42), -1);
-        assert_eq!(FuncId::new(42), meta.func_id());
-        assert_eq!(-1, meta.reg_num());
-        meta.set_reg_num(12);
-        assert_eq!(FuncId::new(42), meta.func_id());
-        assert_eq!(12, meta.reg_num());
-        let mut meta = Meta::vm_classdef(FuncId::new(12), 42);
-        assert_eq!(true, meta.is_class_def());
-        meta.set_reg_num(12);
-        assert_eq!(true, meta.is_class_def());
-        assert_eq!(8, std::mem::size_of::<i64>());
-        assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());
-        assert_eq!(8, std::mem::size_of::<BcPc>());
-        assert_eq!(8, std::mem::size_of::<Meta>());
-    }
-}
-
-///
-/// Parameters information in *ISeqInfo*.
-///
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ParamsInfo {
-    required_num: usize,
-    // required + optional
-    reqopt_num: usize,
-    // required + optional + rest
-    pub pos_num: usize,
-    // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
-    pub args_names: Vec<Option<IdentId>>,
-    pub keyword_names: Vec<IdentId>,
-    block_param: Option<IdentId>,
 }
 
 struct Root<'a, 'b> {
