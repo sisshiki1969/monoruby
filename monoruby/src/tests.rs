@@ -1306,6 +1306,35 @@ mod test {
     }
 
     #[test]
+    fn test_const3() {
+        run_test_with_prelude(
+            r#"
+            $res = []
+            A.new # => 100
+            B.new # => 200
+            $res
+            "#,
+            r#"
+            module M
+              def initialize
+                $res << self.class::C
+              end
+            end
+
+            class A
+              include M
+              C = 100
+            end
+
+            class B
+              include M
+              C = 200
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn test_string() {
         run_test(
             r##"

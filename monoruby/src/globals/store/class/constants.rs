@@ -87,7 +87,7 @@ impl Globals {
         id: ConstSiteId,
         current_func: FuncId,
         base: Option<Value>,
-    ) -> Result<Value> {
+    ) -> Result<(Value, Option<Value>)> {
         let ConstSiteInfo {
             name,
             toplevel,
@@ -99,7 +99,8 @@ impl Globals {
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
-            return self.search_constant_checked(name, current_func);
+            let v = self.search_constant_checked(name, current_func)?;
+            return Ok((v, None));
         } else {
             let parent = prefix.remove(0);
             self.search_constant_checked(parent, current_func)?
@@ -110,7 +111,8 @@ impl Globals {
                 .get_constant_checked(parent, constant)?
                 .expect_class_or_module(self)?;
         }
-        self.get_constant_checked(parent, name)
+        let v = self.get_constant_checked(parent, name)?;
+        Ok((v, base))
     }
 
     ///
