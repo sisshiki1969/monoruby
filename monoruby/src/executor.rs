@@ -434,7 +434,14 @@ impl Executor {
     ///
     /// Find Constant in current class context.
     ///
-    fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Result<Value> {
+    /// This fn returns the value of the constant and the class id of the base object.
+    /// It is necessary to check the base class for confirmation of cache consistency.
+    ///
+    fn find_constant(
+        &self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+    ) -> Result<(Value, Option<Value>)> {
         let base = globals.store[site_id]
             .base
             .map(|base| unsafe { self.cfp().lfp().register(base.0 as usize) }.unwrap());

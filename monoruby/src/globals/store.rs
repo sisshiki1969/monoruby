@@ -277,7 +277,7 @@ impl Store {
             base,
             prefix,
             toplevel,
-            cache: (usize::MAX, None),
+            cache: (usize::MAX, None, None),
         };
         let id = self.constsite_info.len();
         self.constsite_info.push(info);
@@ -321,7 +321,7 @@ pub(crate) struct ConstSiteInfo {
     /// Is toplevel?. (e.g. ::Foo)
     pub toplevel: bool,
     /// Inline constant cache.
-    pub cache: (usize, Option<Value>), //(version, value)
+    pub cache: (usize, Option<Value>, Option<Value>), //(version, base_class, value)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

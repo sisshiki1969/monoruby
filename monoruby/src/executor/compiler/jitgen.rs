@@ -777,13 +777,20 @@ impl Codegen {
                 TraceIr::LoadConst(dst, id) => {
                     ctx.release(dst);
 
-                    if let (version, Some(v)) = store[id].cache {
+                    if let (version, base_class, Some(v)) = store[id].cache {
+                        let base_slot = store[id].base;
+                        let deopt = self.gen_side_deopt(pc, &ctx);
                         if let Some(f) = v.try_float() {
                             let fdst = ctx.link_new_both(dst);
-                            self.load_float_constant(&mut ctx, dst, fdst, pc, f, version);
+                            self.load_float_constant(
+                                &mut ctx, fdst, deopt, f, version, base_class, base_slot,
+                            );
                         } else {
-                            self.load_generic_constant(&mut ctx, dst, pc, v, version);
+                            self.load_generic_constant(
+                                &mut ctx, deopt, v, version, base_class, base_slot,
+                            );
                         }
+                        self.store_rax(dst);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;

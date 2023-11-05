@@ -24,7 +24,7 @@ impl alloc::GC<RValue> for Module {
 }
 
 impl Module {
-    pub(in crate::value) fn new(val: Value) -> Self {
+    pub(crate) fn new(val: Value) -> Self {
         match val.rvalue().ty() {
             ObjKind::CLASS | ObjKind::MODULE => Self(val),
             _ => unreachable!(),

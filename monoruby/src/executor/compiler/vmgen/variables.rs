@@ -6,13 +6,16 @@ extern "C" fn vm_get_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
-    let (cached_version, val) = &globals.store[site_id].cache;
-    if *cached_version == const_version {
-        return *val;
+    let (cached_version, cached_base_class, cache_val) = &globals.store[site_id].cache;
+    let base_class = globals.store[site_id]
+        .base
+        .map(|base| unsafe { vm.cfp().lfp().register(base.0 as usize) }.unwrap());
+    if *cached_version == const_version && *cached_base_class == base_class {
+        return *cache_val;
     };
     match vm.find_constant(globals, site_id) {
-        Ok(val) => {
-            globals.store[site_id].cache = (const_version, Some(val));
+        Ok((val, base_class)) => {
+            globals.store[site_id].cache = (const_version, base_class, Some(val));
             Some(val)
         }
         Err(err) => {
