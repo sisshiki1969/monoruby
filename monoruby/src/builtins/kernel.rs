@@ -489,7 +489,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result
     vm.invoke_block(globals, &proc, &[])
 }
 
-fn prepare_command_arg(input: String) -> (String, Vec<String>) {
+fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
     let mut args = vec![];
     let include_meta = input.contains([
         '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
@@ -497,7 +497,7 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
     ]);
     let program = if include_meta {
         args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
-        args.push(input);
+        args.push(input.to_string());
         if cfg!(windows) {
             "cmd"
         } else {
@@ -528,8 +528,8 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
     use std::process::Command;
     let len = lfp.arg_len();
     MonorubyErr::check_min_number_of_arguments(len, 1)?;
-    let input = arg[0].as_string();
-    let (program, mut args) = prepare_command_arg(input);
+    let arg0 = arg[0];
+    let (program, mut args) = prepare_command_arg(&arg0.as_str());
     if len > 1 {
         let iter = lfp.iter();
         //iter.take(1);
@@ -552,8 +552,8 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
 #[monoruby_builtin]
 fn command(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     use std::process::Command;
-    let input = arg[0].as_string();
-    let (program, args) = prepare_command_arg(input);
+    let arg0 = arg[0];
+    let (program, args) = prepare_command_arg(&arg0.as_str());
     match Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
@@ -575,7 +575,7 @@ fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     if len == 1 {
-        match arg[0].is_string() {
+        match arg[0].is_str() {
             Some(s) => eprintln!("{}", s),
             None => {
                 return Err(MonorubyErr::no_implicit_conversion(

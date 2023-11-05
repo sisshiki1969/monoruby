@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "*", mul);
     globals.define_builtin_func(STRING_CLASS, "==", eq);
     globals.define_builtin_func(STRING_CLASS, "===", eq);
+    globals.define_builtin_func(STRING_CLASS, "<=>", cmp);
     globals.define_builtin_func(STRING_CLASS, "!=", ne);
     globals.define_builtin_func(STRING_CLASS, "%", rem);
     globals.define_builtin_func(STRING_CLASS, "=~", match_);
@@ -91,7 +92,7 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let b = match lfp.arg(0).is_string() {
+    let b = match lfp.arg(0).is_str() {
         Some(rhs) => rhs == lhs,
         None => false,
     };
@@ -109,11 +110,29 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let b = match lfp.arg(0).is_string() {
+    let b = match lfp.arg(0).is_str() {
         Some(rhs) => rhs == lhs,
         None => false,
     };
     Ok(Value::bool(!b))
+}
+
+///
+/// ### String#<=>
+///
+/// - self <=> other -> -1 | 0 | 1 | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3d=3e.html]
+#[monoruby_builtin]
+fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
+    let self_ = lfp.self_val();
+    let lhs = self_.as_bytes();
+    let b = match lfp.arg(0).is_bytes() {
+        Some(rhs) => lhs.string_cmp(rhs),
+        None => return Ok(Value::nil()),
+    };
+    Ok(Value::from_ord(b))
 }
 
 fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
@@ -230,7 +249,7 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     let mut format_str = String::new();
     let self_ = lfp.self_val();
     let self_str = self_.as_str();
-    let mut chars = self_str.as_ref().chars();
+    let mut chars = self_str.chars();
     let mut ch = match chars.next() {
         Some(ch) => ch,
         None => {
@@ -555,8 +574,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let self_ = lfp.self_val();
     let string = self_.expect_string(globals)?;
-    let arg0 = arg[0];
-    if let Some(sep) = arg0.is_string() {
+    //let arg0 = arg[0];
+    if let Some(sep) = arg[0].is_str() {
         let lim = if len > 1 {
             arg[1].coerce_to_i64(globals)?
         } else {
@@ -592,9 +611,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
                     .collect()
             }
         } else if lim < 0 {
-            string.split(&sep).map(Value::string_from_str).collect()
+            string.split(&*sep).map(Value::string_from_str).collect()
         } else if lim == 0 {
-            let mut vec: Vec<&str> = string.split(&sep).collect();
+            let mut vec: Vec<&str> = string.split(&*sep).collect();
             while let Some(s) = vec.last() {
                 if s.is_empty() {
                     vec.pop().unwrap();
@@ -605,7 +624,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             vec.into_iter().map(Value::string_from_str).collect()
         } else {
             string
-                .splitn(lim as usize, &sep)
+                .splitn(lim as usize, &*sep)
                 .map(Value::string_from_str)
                 .collect()
         };
@@ -618,7 +637,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             }
             None => Ok(Value::array_from_vec(v)),
         }
-    } else if let Some(re) = arg0.is_regex() {
+    } else if let Some(re) = arg[0].is_regex() {
         let lim = if len > 1 {
             arg[1].coerce_to_i64(globals)?
         } else {
@@ -673,7 +692,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             None => Ok(Value::array_from_iter(iter)),
         }
     } else {
-        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
+        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg[0]))
     }
 }
 
@@ -839,11 +858,10 @@ fn gsub_main(
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(lfp.arg_len(), 1)?;
     let given = lfp.self_val().expect_string(globals)?;
-    let arg0 = arg[0];
-    let vec = if let Some(s) = arg0.is_string() {
+    let vec = if let Some(s) = arg[0].is_str() {
         let re = RegexpInner::from_escaped(globals, &s)?;
         RegexpInner::find_all(vm, &re, &given)?
-    } else if let Some(re) = arg0.is_regex() {
+    } else if let Some(re) = arg[0].is_regex() {
         RegexpInner::find_all(vm, re, &given)?
     } else {
         return Err(MonorubyErr::argumenterr(
@@ -1123,7 +1141,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
-    let sym = Value::symbol(IdentId::get_id(self_val.as_str().as_ref()));
+    let sym = Value::symbol(IdentId::get_id(&self_val.as_str()));
     Ok(sym)
 }
 
@@ -1138,7 +1156,7 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
-    let s = self_val.as_str().as_ref().to_uppercase();
+    let s = self_val.as_str().to_uppercase();
     Ok(Value::string_from_vec(s.into_bytes()))
 }
 
@@ -1153,7 +1171,7 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
-    let s = self_val.as_str().as_ref().to_lowercase();
+    let s = self_val.as_str().to_lowercase();
     Ok(Value::string_from_vec(s.into_bytes()))
 }
 
@@ -1194,7 +1212,7 @@ fn sum(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let self_val = lfp.self_val();
     let bytes = self_val.as_bytes();
     let mut sum = 0;
-    for b in bytes {
+    for b in bytes.as_bytes() {
         sum += *b as u64;
     }
     Ok(Value::integer((sum & ((1 << bits) - 1)) as i64))
@@ -1228,6 +1246,18 @@ mod test {
         run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##);
         run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDAM""##);
         run_test(r##""機動戦士GUNDOM" == :abs"##);
+    }
+
+    #[test]
+    fn string_cmp() {
+        run_test(r##""aaa" <=> "xxx""##);
+        run_test(r##""aaa" <=> "aaa""##);
+        run_test(r##""xxx" <=> "aaa""##);
+        run_test(r##""aaaa" <=> "aaa""##);
+        run_test(r##""aaaa" <=> "xxx""##);
+        run_test(r##""xxx" <=> "aaaa""##);
+        run_test(r##""aaa" <=> "aaaa""##);
+        run_test(r##""aaaa" <=> "aaa""##);
     }
 
     #[test]

@@ -736,8 +736,8 @@ impl Value {
     pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Result<RegexpInner> {
         if let Some(re) = self.is_regex() {
             Ok(re.clone())
-        } else if let Some(string) = self.is_string() {
-            RegexpInner::from_string(globals, string)
+        } else if let Some(s) = self.is_str() {
+            RegexpInner::from_string(globals, s)
         } else {
             Err(MonorubyErr::is_not_regexp_nor_string(globals, *self))
         }
@@ -777,27 +777,30 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &StringInner {
         assert_eq!(ObjKind::BYTES, self.rvalue().ty());
         self.rvalue().as_bytes()
     }
 
-    pub(crate) fn is_string(&self) -> Option<String> {
+    pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::BYTES => Some(rv.as_string()),
+            ObjKind::BYTES => Some(rv.as_bytes()),
             _ => None,
         }
-    }
-
-    pub(crate) fn as_string(&self) -> String {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
-        self.rvalue().as_string()
     }
 
     pub(crate) fn as_str(&self) -> Cow<'_, str> {
         assert_eq!(ObjKind::BYTES, self.rvalue().ty());
         self.rvalue().as_str()
+    }
+
+    pub(crate) fn is_str(&self) -> Option<Cow<'_, str>> {
+        let rv = self.try_rvalue()?;
+        match rv.ty() {
+            ObjKind::BYTES => Some(rv.as_str()),
+            _ => None,
+        }
     }
 
     pub(crate) fn replace_string(&mut self, replace: String) {

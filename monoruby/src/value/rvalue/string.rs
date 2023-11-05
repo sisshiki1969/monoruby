@@ -2,14 +2,22 @@ use std::borrow::Cow;
 
 use crate::*;
 use smallvec::SmallVec;
+use std::cmp::Ordering;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
 impl std::fmt::Display for StringInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", String::from_utf8_lossy(self.as_bytes()))
+    }
+}
+
+impl std::ops::Deref for StringInner {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
     }
 }
 
@@ -38,7 +46,29 @@ impl StringInner {
         self.0.repeat(len)
     }
 
-    /*pub fn to_string(&self) -> String {
-        String::from_utf8_lossy(self.as_bytes()).to_string()
-    }*/
+    pub fn string_cmp(&self, other: &Self) -> Ordering {
+        let lhs = self.as_bytes();
+        let rhs = other.as_bytes();
+        if lhs.len() >= rhs.len() {
+            for (r, l) in rhs.iter().zip(lhs.iter()) {
+                match l.cmp(r) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                }
+            }
+            if lhs.len() == rhs.len() {
+                Ordering::Equal
+            } else {
+                Ordering::Greater
+            }
+        } else {
+            for (l, r) in lhs.iter().zip(rhs.iter()) {
+                match l.cmp(r) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                }
+            }
+            Ordering::Less
+        }
+    }
 }

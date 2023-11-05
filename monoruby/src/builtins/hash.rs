@@ -312,7 +312,7 @@ fn compare_by_identity(
 #[monoruby_builtin]
 fn env_index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let key = arg[0];
-    if key.is_string().is_none() {
+    if key.is_str().is_none() {
         return Err(MonorubyErr::no_implicit_conversion(
             globals,
             key,

@@ -31,7 +31,8 @@ impl RegexpInner {
     /// Create `RegexpInfo` from `reg_str`.
     /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
     /// between fancy_regex crate and Regexp class of Ruby.
-    pub(crate) fn from_string(globals: &mut Globals, mut reg_str: String) -> Result<Self> {
+    pub(crate) fn from_string(globals: &mut Globals, reg_str: impl Into<String>) -> Result<Self> {
+        let mut reg_str = reg_str.into();
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
@@ -75,7 +76,7 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
-        if let Some(s) = re_val.is_string() {
+        if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(globals, &s)?;
             re.replace_once(vm, given, replace)
                 .map(|(s, c)| (s, c.is_some()))
@@ -126,7 +127,7 @@ impl RegexpInner {
             Ok((res, true))
         }
 
-        if let Some(s) = re_val.is_string() {
+        if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(globals, &s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
@@ -146,7 +147,7 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
-        if let Some(s) = regexp.is_string() {
+        if let Some(s) = regexp.is_str() {
             let re = Self::from_escaped(globals, &s)?;
             re.replace_repeat(vm, given, replace)
         } else if let Some(re) = regexp.is_regex() {
@@ -205,7 +206,7 @@ impl RegexpInner {
             Ok((res, !range.is_empty()))
         }
 
-        if let Some(s) = re_val.is_string() {
+        if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(globals, &s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {

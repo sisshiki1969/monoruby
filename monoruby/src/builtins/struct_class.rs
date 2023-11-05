@@ -14,7 +14,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = class.as_class_id();
-    match arg[0].is_string() {
+    match arg[0].is_str() {
         None => {}
         Some(s) => {
             match s.chars().nth(0) {

@@ -763,12 +763,8 @@ impl RValue {
         unsafe { &self.kind.bignum }
     }
 
-    pub(super) fn as_bytes(&self) -> &[u8] {
-        unsafe { self.kind.string.as_bytes() }
-    }
-
-    pub(super) fn as_string(&self) -> String {
-        unsafe { self.kind.string.to_string() }
+    pub(super) fn as_bytes(&self) -> &StringInner {
+        unsafe { &self.kind.string }
     }
 
     pub(super) fn as_str(&self) -> std::borrow::Cow<'_, str> {

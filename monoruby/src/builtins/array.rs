@@ -245,7 +245,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
         let rhs = v as usize;
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
-    } else if let Some(sep) = arg[0].is_string() {
+    } else if let Some(sep) = arg[0].is_str() {
         let res = array_join(globals, lhs, &sep);
         Ok(Value::string(res))
     } else {
