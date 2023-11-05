@@ -16,6 +16,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "+", add);
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, integer_shr, analysis::v_v_v);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, integer_shl, analysis::v_v_v);
+    globals.define_builtin_func(INTEGER_CLASS, "==", eq);
+    globals.define_builtin_func(INTEGER_CLASS, "===", eq);
+    globals.define_builtin_func(INTEGER_CLASS, ">=", ge);
+    globals.define_builtin_func(INTEGER_CLASS, "<=", le);
+    globals.define_builtin_func(INTEGER_CLASS, "!=", ne);
     globals.define_builtin_func(INTEGER_CLASS, "[]", index);
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_);
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_);
@@ -190,6 +195,70 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
     MonorubyErr::check_number_of_arguments(len, 1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
         Some(val) => Ok(val),
+        None => {
+            let err = vm.take_error();
+            Err(err)
+        }
+    }
+}
+
+///
+/// ### Integer#==
+///
+/// - self == other -> bool
+/// - self === other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
+#[monoruby_builtin]
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    let b = vm.eq_values_bool(globals, lfp.self_val(), arg[0])?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### Integer#!=
+///
+/// - self != other -> bool
+///
+#[monoruby_builtin]
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    let b = vm.ne_values_bool(globals, lfp.self_val(), arg[0])?;
+    Ok(Value::bool(b))
+}
+
+///
+/// ### Integer#>=
+///
+/// - self >= other -> bool
+///
+#[monoruby_builtin]
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), arg[0]) {
+        Some(res) => Ok(res),
+        None => {
+            let err = vm.take_error();
+            Err(err)
+        }
+    }
+}
+
+///
+/// ### Integer#<=
+///
+/// - self <= other -> bool
+///
+#[monoruby_builtin]
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), arg[0]) {
+        Some(res) => Ok(res),
         None => {
             let err = vm.take_error();
             Err(err)
@@ -430,5 +499,22 @@ mod test {
         run_test("-100.odd?");
         run_test("10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?");
         run_test("-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?");
+    }
+
+    #[test]
+    fn cmp() {
+        run_test("100.send(:==, 100)");
+        run_test("100.send(:!=, 100)");
+        run_test("100.send(:>=, 100)");
+        run_test("100.send(:<=, 100)");
+
+        run_test("100.==(100)");
+        run_test("100.==(50)");
+        run_test("100.==(100.0)");
+        run_test(r#"100.==("100")"#);
+        run_test("100.!=(100)");
+        run_test("100.!=(50)");
+        run_test("100.!=(100.0)");
+        run_test(r#"100.!=("100")"#);
     }
 }
