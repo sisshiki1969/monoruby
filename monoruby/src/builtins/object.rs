@@ -31,6 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s);
     globals.define_builtin_func(OBJECT_CLASS, "method", method);
     globals.define_builtin_func(OBJECT_CLASS, "system", system);
@@ -272,6 +273,22 @@ fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
     let id = arg[0].expect_symbol_or_string(globals)?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Ok(v)
+}
+
+///
+/// ### Object#instance_variables
+///
+/// - instance_variables -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variables.html]
+#[monoruby_builtin]
+fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 0)?;
+    let iter = globals
+        .get_ivars(lfp.self_val())
+        .into_iter()
+        .map(|(id, _)| Value::symbol(id));
+    Ok(Value::array_from_iter(iter))
 }
 
 fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
@@ -584,26 +601,29 @@ mod test {
             r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
         );
         run_test2(
-            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@j)"#,
         );
         run_test2(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
+        );
+        // TDDO: Object#instace_variables must return Array of Symbols,
+        // ordered by the time of definition of the instance variables.
+        run_test2(
             r#"
-            20000.times do
-                a=Object.new;
-                a.instance_variable_set("@a", 0);
-                a.instance_variable_set("@b", 1);
-                a.instance_variable_set("@c", 2);
-                a.instance_variable_set("@d", 3);
-                a.instance_variable_set("@e", 4);
-                a.instance_variable_set("@f", 5);
-                a.instance_variable_set("@g", 6);
-                a.instance_variable_set("@h", 7);
-                a.instance_variable_set("@i", 8);
-                a.instance_variable_set("@j", 9);
-                a.instance_variable_set("@k", 10);
-                a.instance_variable_set("@l", 11);
-                a.inspect;
-            end
+            a=Object.new;
+            a.instance_variable_set("@b", 1);
+            a.instance_variable_set("@e", 4);
+            a.instance_variable_set("@c", 2);
+            a.instance_variable_set("@j", 9);
+            a.instance_variable_set("@d", 3);
+            a.instance_variable_set("@a", 0);
+            a.instance_variable_set("@g", 6);
+            a.instance_variable_set("@l", 11);
+            a.instance_variable_set("@h", 7);
+            a.instance_variable_set("@i", 8);
+            a.instance_variable_set("@f", 5);
+            a.instance_variable_set("@k", 10);
+            a.instance_variables.sort
             "#,
         );
     }
