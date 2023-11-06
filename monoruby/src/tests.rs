@@ -1669,22 +1669,24 @@ mod test {
 
     #[test]
     fn keyword_to_hash() {
-        run_test2(
+        run_test_with_prelude(
+            r##"
+        f("a", 42, 1000, x:100, y:200)
+        "##,
             r##"
         def f(a, b, *c)
           "a:#{a} b:#{b} c:#{c}"
         end
-
-        f("a", 42, 1000, x:100, y:200)
         "##,
         );
-        run_test2(
+        run_test_with_prelude(
+            r##"
+        f do |a,b,*c| "a:#{a} b:#{b} c:#{c}" end
+        "##,
             r##"
         def f
           yield 1,2,3,x:100,y:200
         end
-        
-        f do |a,b,*c| "a:#{a} b:#{b} c:#{c}" end
         "##,
         );
     }
