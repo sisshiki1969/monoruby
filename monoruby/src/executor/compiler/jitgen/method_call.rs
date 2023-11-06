@@ -479,7 +479,9 @@ impl Codegen {
                 if info.is_block_style && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.pos_num() == info.req_num() {
+                if info.pos_num() == info.req_num()
+                    && !(info.key_num() == 0 && callsite.kw_len() != 0)
+                {
                     // no optional param, no rest param.
                     if info.key_num() != 0 {
                         let CallSiteInfo {

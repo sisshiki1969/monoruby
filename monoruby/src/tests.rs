@@ -1681,12 +1681,40 @@ mod test {
         );
         run_test_with_prelude(
             r##"
+        f("a", x:100, y:200)
+        "##,
+            r##"
+        def f(a, b)
+          "a:#{a} b:#{b}"
+        end
+        "##,
+        );
+        run_test_with_prelude(
+            r##"
         f do |a,b,*c| "a:#{a} b:#{b} c:#{c}" end
         "##,
             r##"
         def f
           yield 1,2,3,x:100,y:200
         end
+        "##,
+        );
+        run_test_with_prelude(
+            r##"
+        f do |a,b,c| "a:#{a} b:#{b} c:#{c}" end
+        "##,
+            r##"
+        def f
+          yield 1,x:100,y:200
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        def f(a, b, c)
+          "a:#{a} b:#{b} c:#{c}"
+        end
+        f("a", 42, 1000, x:100, y:200)
         "##,
         );
     }

@@ -2,12 +2,13 @@
 # 実引数に１個以上のキーワード引数がある
 # calleeの仮引数にキーワード引数がない
 
-def expand_methods(a, b, *c)
-  puts "a:#{a} b:#{b} c:#{c}"
+def f(a, b)
+  "a:#{a} b:#{b}"
 end
 
-expand_methods("a", 42, 1000, x:100, y:200)
-
+10.times do
+  puts f("a", x:100, y:200)
+end
 #def f
 #  yield 1,2,3,x:100,y:200
 #end
