@@ -69,7 +69,7 @@ impl Codegen {
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                assert!(store[callid].kw_args.is_empty());
+                assert!(store[callid].kw_len() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 if cached.class_id.is_always_frozen() {
@@ -89,7 +89,7 @@ impl Codegen {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                assert!(store[callid].kw_args.is_empty());
+                assert!(store[callid].kw_len() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 if !self_in_rdi_flag {
@@ -479,13 +479,15 @@ impl Codegen {
                 if info.is_block_style && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.pos_num() == info.req_num() {
+                if info.pos_num() == info.req_num()
+                    && !(info.key_num() == 0 && callsite.kw_len() != 0)
+                {
                     // no optional param, no rest param.
                     if info.key_num() != 0 {
                         let CallSiteInfo {
                             kw_pos, kw_args, ..
                         } = callsite;
-                        let callee_kw_pos = info.args.pos_num + 1;
+                        let callee_kw_pos = info.pos_num() + 1;
                         for (callee, param_name) in info.args.keyword_names.iter().enumerate() {
                             let callee_ofs = (callee_kw_pos as i64 + callee as i64) * 8 + LBP_SELF;
                             match kw_args.get(param_name) {

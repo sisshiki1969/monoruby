@@ -132,7 +132,7 @@ impl BytecodeGen {
             self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
         } else {
             let (_, mother_args, outer) = self.mother.clone();
-            let pos_len = mother_args.pos_num;
+            let pos_len = mother_args.pos_num();
             let pos_start = if outer == 0 {
                 BcLocal(0).into()
             } else {
@@ -150,10 +150,10 @@ impl BytecodeGen {
             } else {
                 let mut kw_args = HashMap::default();
                 let kw_start = if outer == 0 {
-                    BcLocal(mother_args.pos_num as u16).into()
+                    BcLocal(mother_args.pos_num() as u16).into()
                 } else {
                     let ret = self.push().into();
-                    let src = BcLocal(mother_args.pos_num as u16).into();
+                    let src = BcLocal(mother_args.pos_num() as u16).into();
                     self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                     ret
                 };
