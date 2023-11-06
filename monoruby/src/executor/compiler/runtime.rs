@@ -235,16 +235,34 @@ pub(super) extern "C" fn vm_handle_arguments(
     let callee_func_id = callee_lfp.meta().func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
-            // required + optional + rest
-            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, callee_lfp) {
-                vm.err_wrong_number_of_arg_range(arg_num, range);
-                return None;
-            };
-            // keyword
-            handle_keyword(&info, &globals.store[callid], vm.cfp().lfp(), callee_lfp);
+            let caller = &globals.store[callid];
+            if info.key_num() == 0 && caller.kw_len() != 0 {
+                // positional
+                let mut h = IndexMap::default();
+                for (k, id) in caller.kw_args.iter() {
+                    let v = unsafe { vm.register(caller.kw_pos.0 as usize + *id).unwrap() };
+                    h.insert(HashKey(Value::symbol(*k)), v);
+                }
+                let ex: Value = Value::hash(h);
+                if let Some((arg_num, range)) =
+                    handle_positional_with_ex(&info, arg_num, callee_lfp, ex)
+                {
+                    vm.err_wrong_number_of_arg_range(arg_num, range);
+                    return None;
+                };
+            } else {
+                // positional
+                if let Some((arg_num, range)) = handle_positional(&info, arg_num, callee_lfp) {
+                    vm.err_wrong_number_of_arg_range(arg_num, range);
+                    return None;
+                };
+                // keyword
+                handle_keyword(&info, &globals.store[callid], vm.cfp().lfp(), callee_lfp);
+            }
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
+
     let CallSiteInfo {
         block_fid,
         block_arg,
@@ -255,11 +273,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         let bh = BlockHandler::from(*block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe {
-            Some(BlockHandler(
-                vm.cfp().lfp().register(block_arg.0 as usize).unwrap(),
-            ))
-        }
+        unsafe { Some(BlockHandler(vm.register(block_arg.0 as usize).unwrap())) }
     } else {
         None
     };
@@ -279,10 +293,10 @@ pub(super) extern "C" fn handle_invoker_arguments(
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            handle_req_opt_rest(info, arg_num, callee_lfp);
+            handle_positional(info, arg_num, callee_lfp);
             // keyword
             let params = &info.args.keyword_names;
-            let callee_kw_pos = info.args.pos_num + 1;
+            let callee_kw_pos = info.pos_num() + 1;
             for (id, _) in params.iter().enumerate() {
                 *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
             }
@@ -311,55 +325,98 @@ fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> u
 ///
 /// if argument mismatch occurs, return Some((usize, usize..=usize)).
 ///
-fn handle_req_opt_rest(
+fn handle_positional(
     info: &ISeqInfo,
     arg_num: usize,
-    callee_lfp: LFP,
+    mut callee_lfp: LFP,
 ) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
     let req_num = info.required_num();
     let reqopt_num = info.reqopt_num();
-    let pos_num = info.args.pos_num;
+    let pos_num = info.pos_num();
     let is_rest = pos_num != reqopt_num;
     let is_block_style = info.is_block_style;
     unsafe {
         if arg_num > reqopt_num {
             if is_rest {
                 let len = arg_num - reqopt_num;
-                let ptr = callee_lfp.register_ptr(arg_num);
-                let iter = std::slice::from_raw_parts(ptr, len)
-                    .iter()
-                    .rev()
-                    .map(|v| v.unwrap());
-                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_from_iter(iter));
+                let iter = callee_lfp.slice(reqopt_num, len);
+                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_iter(iter)));
             } else if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
-        } else if arg_num >= req_num {
+            return None;
+        }
+
+        if arg_num >= req_num {
             let len = reqopt_num - arg_num;
-            let ptr = callee_lfp.register_ptr(reqopt_num);
-            fill(ptr, len, None);
-            if is_rest {
-                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_empty());
-            }
+            fill(callee_lfp, reqopt_num, len, None);
         } else {
             if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
             let len = req_num - arg_num;
-            let ptr = callee_lfp.register_ptr(req_num);
-            fill(ptr, len, Some(Value::nil()));
+            fill(callee_lfp, req_num, len, Some(Value::nil()));
             let len = reqopt_num - req_num;
-            let ptr = callee_lfp.register_ptr(reqopt_num);
-            fill(ptr, len, None);
-            if is_rest {
-                *callee_lfp.register_ptr(1 + reqopt_num) = Some(Value::array_empty());
-            }
+            fill(callee_lfp, reqopt_num, len, None);
+        }
+
+        if is_rest {
+            callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
         }
     }
     None
 }
 
-fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, callee_lfp: LFP) {
+fn handle_positional_with_ex(
+    info: &ISeqInfo,
+    arg_num: usize,
+    mut callee_lfp: LFP,
+    ex: Value,
+) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
+    let req_num = info.required_num();
+    let reqopt_num = info.reqopt_num();
+    let pos_num = info.pos_num();
+    let is_rest = pos_num != reqopt_num;
+    let is_block_style = info.is_block_style;
+    unsafe {
+        if arg_num + 1 > reqopt_num {
+            if is_rest {
+                let len = arg_num - reqopt_num;
+                let mut ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
+                ary.push(ex);
+                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
+            } else if !is_block_style {
+                return Some((arg_num + 1, req_num..=reqopt_num));
+            }
+            return None;
+        }
+
+        if arg_num + 1 >= req_num {
+            let len = reqopt_num - arg_num;
+            fill(callee_lfp, reqopt_num, len, None);
+        } else {
+            if !is_block_style {
+                return Some((arg_num + 1, req_num..=reqopt_num));
+            }
+            let len = req_num - (arg_num + 1);
+            fill(callee_lfp, req_num, len, Some(Value::nil()));
+            let len = reqopt_num - req_num;
+            fill(callee_lfp, reqopt_num, len, None);
+        }
+
+        callee_lfp.set_register(1 + arg_num, Some(ex));
+
+        if is_rest {
+            callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
+        }
+    }
+    None
+}
+
+///
+/// Handle keyword arguments.
+///
+fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut callee_lfp: LFP) {
     let CallSiteInfo {
         kw_pos,
         kw_args,
@@ -367,17 +424,18 @@ fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, cal
         ..
     } = callsite;
 
-    let callee_kw_pos = info.args.pos_num + 1;
+    let callee_kw_pos = info.pos_num() + 1;
+
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
-            let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
             let v = match kw_args.get(param_name) {
                 Some(id) => Some(caller_lfp.register(kw_pos.0 as usize + id).unwrap()),
                 None => None,
             };
-            *ptr = v;
+            callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
+
     for h in hash_splat_pos
         .iter()
         .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
@@ -407,17 +465,14 @@ pub(super) extern "C" fn jit_handle_hash_splat(
     callee_reg: *mut Option<Value>,
     callee_func_id: FuncId,
 ) {
-    let lfp = vm.cfp().lfp();
     let callsite = &globals.store[callid];
     let CallSiteInfo { hash_splat_pos, .. } = callsite;
     let info = globals.store[callee_func_id].as_ruby_func();
-    let callee_kw_pos = info.args.pos_num + 1;
+    let callee_kw_pos = info.pos_num() + 1;
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         for hash in hash_splat_pos {
             unsafe {
-                let h = lfp
-                    .register(hash.0 as usize)
-                    .expect("jit_handle_hash_splat(): not a Hash.");
+                let h = vm.register(hash.0 as usize).unwrap();
                 // We must check whether h is a hash.
                 if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
                     *callee_reg.sub(callee_kw_pos + id) = Some(v);
@@ -427,10 +482,9 @@ pub(super) extern "C" fn jit_handle_hash_splat(
     }
 }
 
-fn fill(ptr: *mut Option<Value>, len: usize, val: Option<Value>) {
-    unsafe {
-        std::slice::from_raw_parts_mut(ptr, len).fill(val);
-    }
+unsafe fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
+    let ptr = lfp.register_ptr(start_pos);
+    std::slice::from_raw_parts_mut(ptr, len).fill(val);
 }
 
 #[repr(C)]

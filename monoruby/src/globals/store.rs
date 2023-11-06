@@ -358,6 +358,12 @@ pub(crate) struct CallSiteInfo {
     pub ret: Option<SlotId>,
 }
 
+impl CallSiteInfo {
+    pub fn kw_len(&self) -> usize {
+        self.kw_args.len()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct CallSiteId(pub u32);

@@ -346,6 +346,16 @@ impl LFP {
         }
     }
 
+    pub fn slice(&self, start_pos: usize, len: usize) -> impl DoubleEndedIterator<Item = Value> {
+        unsafe {
+            let ptr = self.register_ptr(start_pos + len);
+            std::slice::from_raw_parts(ptr, len)
+                .iter()
+                .rev()
+                .map(|v| v.unwrap())
+        }
+    }
+
     pub fn arg(&self, i: usize) -> Value {
         unsafe { *(self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8) as *mut Value) }
     }

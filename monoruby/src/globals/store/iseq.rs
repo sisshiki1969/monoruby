@@ -394,7 +394,7 @@ pub(crate) struct ParamsInfo {
     // required + optional
     reqopt_num: usize,
     // required + optional + rest
-    pub pos_num: usize,
+    pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
     pub args_names: Vec<Option<IdentId>>,
     pub keyword_names: Vec<IdentId>,
@@ -418,5 +418,9 @@ impl ParamsInfo {
             keyword_names,
             block_param,
         }
+    }
+
+    pub fn pos_num(&self) -> usize {
+        self.pos_num
     }
 }

@@ -221,6 +221,10 @@ impl Executor {
         self.cfp.unwrap()
     }
 
+    pub unsafe fn register(&self, index: usize) -> Option<Value> {
+        self.cfp().lfp().register(index)
+    }
+
     fn method_func_id(&self) -> FuncId {
         self.cfp().method_func_id()
     }
@@ -444,7 +448,7 @@ impl Executor {
     ) -> Result<(Value, Option<Value>)> {
         let base = globals.store[site_id]
             .base
-            .map(|base| unsafe { self.cfp().lfp().register(base.0 as usize) }.unwrap());
+            .map(|base| unsafe { self.register(base.0 as usize) }.unwrap());
         let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func, base)
     }
@@ -1297,7 +1301,7 @@ impl BcPc {
                     block_arg,
                     ..
                 } = *callsite;
-                let kw_len = callsite.kw_args.len();
+                let kw_len = callsite.kw_len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",
                     ret_str(ret),
@@ -1334,7 +1338,7 @@ impl BcPc {
                     block_fid,
                     ..
                 } = *callsite;
-                let kw_len = callsite.kw_args.len();
+                let kw_len = callsite.kw_len();
                 let op1 = format!(
                     "{} = super({}{}){}",
                     ret_str(ret),
