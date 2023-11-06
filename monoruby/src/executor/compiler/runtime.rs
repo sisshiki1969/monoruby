@@ -245,14 +245,15 @@ pub(super) extern "C" fn vm_handle_arguments(
                 }
                 let ex: Value = Value::hash(h);
                 if let Some((arg_num, range)) =
-                    handle_positional_with_ex(&info, arg_num, callee_lfp, ex)
+                    handle_positional(&info, arg_num, callee_lfp, Some(ex))
                 {
                     vm.err_wrong_number_of_arg_range(arg_num, range);
                     return None;
                 };
             } else {
                 // positional
-                if let Some((arg_num, range)) = handle_positional(&info, arg_num, callee_lfp) {
+                if let Some((arg_num, range)) = handle_positional(&info, arg_num, callee_lfp, None)
+                {
                     vm.err_wrong_number_of_arg_range(arg_num, range);
                     return None;
                 };
@@ -293,7 +294,7 @@ pub(super) extern "C" fn handle_invoker_arguments(
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            handle_positional(info, arg_num, callee_lfp);
+            handle_positional(info, arg_num, callee_lfp, None);
             // keyword
             let params = &info.args.keyword_names;
             let callee_kw_pos = info.pos_num() + 1;
@@ -329,82 +330,44 @@ fn handle_positional(
     info: &ISeqInfo,
     arg_num: usize,
     mut callee_lfp: LFP,
+    ex: Option<Value>,
 ) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
     let req_num = info.required_num();
     let reqopt_num = info.reqopt_num();
     let pos_num = info.pos_num();
     let is_rest = pos_num != reqopt_num;
     let is_block_style = info.is_block_style;
+    let ex_num = ex.is_some() as usize;
     unsafe {
-        if arg_num > reqopt_num {
-            if is_rest {
-                let len = arg_num - reqopt_num;
-                let iter = callee_lfp.slice(reqopt_num, len);
-                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_iter(iter)));
-            } else if !is_block_style {
-                return Some((arg_num, req_num..=reqopt_num));
-            }
-            return None;
-        }
-
-        if arg_num >= req_num {
-            let len = reqopt_num - arg_num;
-            fill(callee_lfp, reqopt_num, len, None);
-        } else {
-            if !is_block_style {
-                return Some((arg_num, req_num..=reqopt_num));
-            }
-            let len = req_num - arg_num;
-            fill(callee_lfp, req_num, len, Some(Value::nil()));
-            let len = reqopt_num - req_num;
-            fill(callee_lfp, reqopt_num, len, None);
-        }
-
-        if is_rest {
-            callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
-        }
-    }
-    None
-}
-
-fn handle_positional_with_ex(
-    info: &ISeqInfo,
-    arg_num: usize,
-    mut callee_lfp: LFP,
-    ex: Value,
-) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
-    let req_num = info.required_num();
-    let reqopt_num = info.reqopt_num();
-    let pos_num = info.pos_num();
-    let is_rest = pos_num != reqopt_num;
-    let is_block_style = info.is_block_style;
-    unsafe {
-        if arg_num + 1 > reqopt_num {
+        if (arg_num + ex_num) > reqopt_num {
             if is_rest {
                 let len = arg_num - reqopt_num;
                 let mut ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
-                ary.push(ex);
+                if let Some(ex) = ex {
+                    ary.push(ex);
+                }
                 callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
             } else if !is_block_style {
-                return Some((arg_num + 1, req_num..=reqopt_num));
+                return Some(((arg_num + ex_num), req_num..=reqopt_num));
             }
             return None;
         }
 
-        if arg_num + 1 >= req_num {
+        if (arg_num + ex_num) >= req_num {
             let len = reqopt_num - arg_num;
             fill(callee_lfp, reqopt_num, len, None);
         } else {
             if !is_block_style {
-                return Some((arg_num + 1, req_num..=reqopt_num));
+                return Some(((arg_num + ex_num), req_num..=reqopt_num));
             }
-            let len = req_num - (arg_num + 1);
+            let len = req_num - (arg_num + ex_num);
             fill(callee_lfp, req_num, len, Some(Value::nil()));
             let len = reqopt_num - req_num;
             fill(callee_lfp, reqopt_num, len, None);
         }
-
-        callee_lfp.set_register(1 + arg_num, Some(ex));
+        if let Some(ex) = ex {
+            callee_lfp.set_register(1 + arg_num, Some(ex));
+        }
 
         if is_rest {
             callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
