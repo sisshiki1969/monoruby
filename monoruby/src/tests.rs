@@ -153,7 +153,7 @@ pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let mut globals = Globals::new(1, false);
-    match globals.compile_and_run(code, std::path::Path::new("")) {
+    match globals.run(code, std::path::Path::new("")) {
         Ok(_) => panic!(),
         Err(err) => err.show_error_message_and_all_loc(),
     }
@@ -164,7 +164,7 @@ fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
     let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
     Globals::gc_enable(!no_gc);
-    let res = match globals.compile_and_run(code, std::path::Path::new("")) {
+    let res = match globals.run(code, std::path::Path::new("")) {
         Ok(res) => res,
         Err(err) => {
             err.show_error_message_and_all_loc();

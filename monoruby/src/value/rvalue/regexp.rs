@@ -37,12 +37,12 @@ impl RegexpInner {
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
         };
-        match globals.regexp_cache.get(&reg_str) {
+        match globals.get_regex(&reg_str) {
             Some(re) => Ok(RegexpInner(re.clone())),
             None => match Regex::new(&reg_str) {
                 Ok(regexp) => {
                     let regex = Rc::new(regexp);
-                    globals.regexp_cache.insert(reg_str, regex.clone());
+                    globals.set_regex(reg_str, regex.clone());
                     Ok(RegexpInner(regex))
                 }
                 Err(err) => Err(MonorubyErr::regexerr(err)),

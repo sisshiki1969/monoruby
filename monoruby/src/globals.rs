@@ -49,7 +49,7 @@ pub struct Globals {
     /// global method cache.
     global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
     /// regex cache.
-    pub(crate) regexp_cache: HashMap<String, Rc<Regex>>,
+    regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
     pub(super) warning: u8,
     /// suppress jit compilation.
@@ -57,14 +57,14 @@ pub struct Globals {
     /// stdout.
     stdout: BufWriter<Stdout>,
     /// library directries.
-    pub lib_directories: Vec<String>,
+    lib_directories: Vec<String>,
     /// standard PRNG
     random: Prng,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
-    pub(super) deopt_stats: HashMap<(FuncId, usize), usize>,
+    deopt_stats: HashMap<(FuncId, usize), usize>,
     /// stats for inline method cache miss
     #[cfg(feature = "profile")]
     global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
@@ -77,22 +77,6 @@ pub struct Globals {
     pub(super) startup_flag: bool,
 }
 
-#[test]
-fn test() {
-    let mut globals = Globals::new(0, false);
-    unsafe {
-        let g = &mut globals as *mut Globals as *mut u8;
-        let v = g.add(GLOBALS_FUNCINFO);
-        let ptr = *(v as *const *const FuncInfo);
-        let cap = *(v.add(8) as *const usize);
-        let len = *(v.add(16) as *const usize);
-        eprintln!("{}", std::mem::size_of::<FuncInfo>());
-        dbg!(cap);
-        dbg!(len);
-        dbg!(&*(ptr.add(10)));
-        dbg!(&*((ptr.add(10) as *const u8).add(FUNCINFO_DATA) as *const FuncData));
-    }
-}
 
 impl std::ops::Index<FuncId> for Globals {
     type Output = FuncInfo;
@@ -164,8 +148,7 @@ impl Globals {
             .node;
 
         let lib: Array = Value::from_ast2(&nodes).into();
-        let mut lib: Vec<String> = lib.iter().map(|v| v.as_str().to_string()).collect();
-        globals.lib_directories.append(&mut lib);
+        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
@@ -180,20 +163,14 @@ impl Globals {
         globals
     }
 
-    pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
+    pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
+        let code = code.into();
         let mut executor = Executor::init(self);
-        let res = executor.eval_script(self, code.to_string(), path);
+        let res = executor.exec_script(self, code, path);
         self.flush_stdout();
         #[cfg(feature = "profile")]
         self.show_stats();
         res
-    }
-
-    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
-        match Parser::parse_program(code, path.into()) {
-            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
-            Err(err) => Err(MonorubyErr::parse(err)),
-        }
     }
 
     pub fn compile_script_with_binding(
@@ -238,6 +215,8 @@ impl Globals {
         self.stdout.write_all(bytes).unwrap();
     }
 
+    // Handling global variable
+
     pub(crate) fn set_gvar(&mut self, name: IdentId, val: Value) {
         self.global_vars.insert(name, val);
     }
@@ -246,12 +225,28 @@ impl Globals {
         self.global_vars.get(&name).cloned()
     }
 
-    pub(crate) fn get_load_path(&self) -> Value {
+    // Handling regex.
+
+    pub(crate) fn set_regex(&mut self, k: String, v:Rc<Regex>) -> Option<Rc<Regex>>{
+        self.regexp_cache.insert(k, v)
+    }
+
+    pub(crate) fn get_regex(&self, k: &str) -> Option<&Rc<Regex>> {
+        self.regexp_cache.get(k)
+    }
+
+    // Handling library load path.
+
+    pub fn get_load_path(&self) -> Value {
         let iter = self
             .lib_directories
             .iter()
             .map(|s| Value::string_from_str(s));
         Value::array_from_iter(iter)
+    }
+
+    pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
+        self.lib_directories.extend(iter)
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {

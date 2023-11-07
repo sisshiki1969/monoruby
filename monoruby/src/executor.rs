@@ -206,7 +206,7 @@ impl Executor {
         let mut executor = Self::default();
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../startup/startup.rb").to_string();
-        if let Err(err) = executor.eval_script(globals, code, path) {
+        if let Err(err) = executor.exec_script(globals, code, path) {
             err.show_error_message_and_all_loc();
             panic!("error occurred in startup.");
         };
@@ -342,27 +342,30 @@ impl Executor {
 }
 
 impl Executor {
-    ///
-    /// Execute top level method.
-    ///
-    /// *main* object is set to *self*.
-    pub fn execute(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        #[cfg(feature = "emit-bc")]
-        globals.dump_bc();
-
-        let res = (globals.codegen.entry_point)(self, globals, func_id);
-        res.ok_or_else(|| self.take_error())
-    }
-
-    pub(crate) fn eval_script(
+    pub fn exec_script(
         &mut self,
         globals: &mut Globals,
         code: String,
         path: &std::path::Path,
     ) -> Result<Value> {
-        globals
-            .compile_script(code, path)
-            .and_then(|fid| self.execute(globals, fid))
+        let fid = match ruruby_parse::Parser::parse_program(code, path) {
+            Ok(res) => bytecodegen::compile_script(globals, res.node, res.source_info),
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }?;
+        self.exec_func(globals, fid)
+    }
+
+    ///
+    /// Execute top level method.
+    ///
+    /// *main* object is set to *self*.
+    ///
+    pub fn exec_func(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+        #[cfg(feature = "emit-bc")]
+        globals.dump_bc();
+
+        let res = (globals.codegen.entry_point)(self, globals, func_id);
+        res.ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn enter_class_context(&mut self) {
@@ -434,6 +437,8 @@ impl Executor {
     }
 }
 
+// Handling constants.
+
 impl Executor {
     ///
     /// Find Constant in current class context.
@@ -458,6 +463,8 @@ impl Executor {
         globals.set_constant(parent, name, val);
     }
 }
+
+// Invokation of methods and blocks.
 
 impl Executor {
     ///

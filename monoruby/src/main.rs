@@ -40,7 +40,7 @@ fn main() {
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit);
     Globals::gc_enable(!args.no_gc);
-    let mut lib = args
+    let lib = args
         .directory
         .iter()
         .filter_map(|s| {
@@ -48,9 +48,8 @@ fn main() {
                 .canonicalize()
                 .map(|p| p.to_string_lossy().to_string())
                 .ok()
-        })
-        .collect();
-    globals.lib_directories.append(&mut lib);
+        });
+    globals.extend_load_path(lib);
 
     if args.version {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
@@ -74,7 +73,7 @@ fn main() {
             }
         } else {
             for code in args.exec {
-                match globals.compile_and_run(&code, path) {
+                match globals.run(code, path) {
                     Ok(_val) => {
                         #[cfg(debug_assertions)]
                         eprintln!("=> {:?}", _val)
@@ -114,7 +113,7 @@ fn main() {
             std::process::exit(1);
         }
     } else {
-        if let Err(err) = globals.compile_and_run(&code, &path) {
+        if let Err(err) = globals.run(code, &path) {
             err.show_error_message_and_all_loc();
             std::process::exit(1);
         };
