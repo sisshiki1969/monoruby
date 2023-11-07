@@ -22,6 +22,7 @@ impl Codegen {
     }
 
     fn init_func(&mut self, fn_info: &FnInitInfo) {
+        // fill block parameter.
         let FnInitInfo {
             reg_num,
             arg_num,

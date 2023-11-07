@@ -1,7 +1,7 @@
 use ruruby_parse::CmpKind;
 
 use crate::{
-    bytecodegen::inst::{Bc, BrKind, DynVar, FnInitInfo},
+    bytecodegen::inst::{BrKind, DynVar, FnInitInfo},
     *,
 };
 

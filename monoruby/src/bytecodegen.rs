@@ -12,7 +12,7 @@ mod expression;
 pub mod inst;
 mod method_call;
 mod statement;
-pub use inst::*;
+use inst::*;
 
 pub fn compile_script(
     globals: &mut Globals,

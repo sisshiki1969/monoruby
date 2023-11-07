@@ -1,8 +1,8 @@
 use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
-    let module = globals.define_class_under_obj("Struct");
-    globals.define_builtin_class_func(module.id(), "new", struct_new);
+    globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS);
+    globals.define_builtin_class_func(STRUCT_CLASS, "new", struct_new);
 }
 
 #[monoruby_builtin]

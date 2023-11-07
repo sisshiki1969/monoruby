@@ -31,6 +31,7 @@ pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + std::mem::offset_of!(Met
 pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 
 #[derive(Debug, Clone, PartialEq, Default)]
+#[repr(C)]
 pub(crate) struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,

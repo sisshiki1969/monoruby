@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    bytecodegen::{Bc, BcIndex},
-    executor::compiler::jitgen::BasicBlockInfo,
-};
+use crate::{bytecodegen::BcIndex, executor::compiler::jitgen::BasicBlockInfo};
 
 ///
 /// Information of instruction sequences.
@@ -104,7 +101,7 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
-        is_block: bool,
+        is_block_style: bool,
     ) -> Self {
         ISeqInfo {
             id,
@@ -122,7 +119,7 @@ impl ISeqInfo {
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
-            is_block_style: is_block,
+            is_block_style,
             bb_info: BasicBlockInfo::default(),
         }
     }

@@ -1,165 +1,6 @@
 use super::*;
 use ruruby_parse::CmpKind;
 
-#[derive(Clone, Copy, PartialEq)]
-#[repr(C)]
-pub(crate) struct Bc {
-    pub op1: u64,
-    pub op2: Bc2,
-}
-
-impl Bc {
-    pub fn is_integer1(&self) -> bool {
-        self.classid1() == INTEGER_CLASS
-    }
-
-    pub fn is_integer2(&self) -> bool {
-        self.classid2() == INTEGER_CLASS
-    }
-
-    pub fn is_float1(&self) -> bool {
-        self.classid1() == FLOAT_CLASS
-    }
-
-    pub fn is_float2(&self) -> bool {
-        self.classid2() == FLOAT_CLASS
-    }
-
-    pub fn is_integer_binop(&self) -> bool {
-        self.classid1() == INTEGER_CLASS && self.classid2() == INTEGER_CLASS
-    }
-
-    pub fn is_float_binop(&self) -> bool {
-        match (self.classid1(), self.classid2()) {
-            (INTEGER_CLASS, INTEGER_CLASS) => false,
-            (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
-            _ => false,
-        }
-    }
-    pub fn classid1(&self) -> ClassId {
-        ClassId::new(self.op2.0 as u32)
-    }
-
-    pub fn classid2(&self) -> ClassId {
-        ClassId::new((self.op2.0 >> 32) as u32)
-    }
-
-    pub fn class_version(&self) -> (ClassId, u32) {
-        let op = self.op2.0;
-        (ClassId::new(op as u32), (op >> 32) as u32)
-    }
-
-    pub fn value(&self) -> Option<Value> {
-        match self.op2.0 {
-            0 => None,
-            v => Some(Value::from(v)),
-        }
-    }
-
-    #[cfg(feature = "dump-bc")]
-    pub fn into_jit_addr(self) -> u64 {
-        self.op2.0
-    }
-
-    pub(super) fn from(op1: u64) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(0),
-        }
-    }
-
-    pub(super) fn from_u32(op1: u64, op2: u32) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(op2 as u64),
-        }
-    }
-
-    pub(super) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
-        let FnInitInfo {
-            arg_num,
-            block_pos,
-            req_num,
-            info,
-            ..
-        } = fn_info;
-        Bc::from_with_num(
-            op1,
-            *req_num as u16,
-            *block_pos as u16,
-            *info as u16,
-            *arg_num as u16,
-        )
-    }
-
-    pub(super) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(callid.get() as u64),
-        }
-    }
-
-    pub(super) fn from_with_value(op1: u64, val: Value) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(val.id()),
-        }
-    }
-
-    pub(super) fn from_with_func_name_id(op1: u64, name: Option<IdentId>, func_id: FuncId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(
-                ((func_id.get() as u64) << 32)
-                    + (if let Some(name) = name {
-                        name.get() as u64
-                    } else {
-                        0
-                    }),
-            ),
-        }
-    }
-
-    pub(super) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
-        Self {
-            op1,
-            op2: Bc2::class_and_version(class_id, version),
-        }
-    }
-
-    pub(super) fn from_with_class2(op1: u64) -> Self {
-        Self {
-            op1,
-            op2: Bc2::class2(ClassId::default(), ClassId::default()),
-        }
-    }
-
-    fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(
-                ((num3 as u64) << 48)
-                    + ((num2 as u64) << 32)
-                    + ((num1 as u64) << 16)
-                    + (num0 as u64),
-            ),
-        }
-    }
-
-    pub fn u16(&self, id: usize) -> u16 {
-        (self.op2.0 >> (id * 16)) as u16
-    }
-
-    pub fn func_id(&self) -> Option<FuncId> {
-        let op = self.op2.0 as u32;
-        if op == 0 {
-            None
-        } else {
-            Some(FuncId::new(op))
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum BrKind {
     BrIf = 0,
@@ -352,7 +193,7 @@ pub(super) enum BcIr {
 }
 
 #[derive(Clone, PartialEq, Default)]
-pub struct FnInitInfo {
+pub(crate) struct FnInitInfo {
     pub reg_num: usize,
     pub arg_num: usize,
     pub req_num: usize,
@@ -418,16 +259,16 @@ impl FnInitInfo {
 pub(crate) struct Bc2(pub u64);
 
 impl Bc2 {
-    fn from(op: u64) -> Self {
+    pub(crate) fn from(op: u64) -> Self {
         Self(op)
     }
 
-    fn class_and_version(class_id: ClassId, version: u32) -> Self {
+    pub(crate) fn class_and_version(class_id: ClassId, version: u32) -> Self {
         let id: u32 = class_id.into();
         Self(((version as u64) << 32) + (id as u64))
     }
 
-    fn class2(class_id1: ClassId, class_id2: ClassId) -> Self {
+    pub(crate) fn class2(class_id1: ClassId, class_id2: ClassId) -> Self {
         let id1: u32 = class_id1.into();
         let id2: u32 = class_id2.into();
         Self(((id2 as u64) << 32) + (id1 as u64))
