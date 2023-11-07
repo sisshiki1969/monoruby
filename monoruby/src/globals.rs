@@ -13,6 +13,7 @@ mod error;
 mod method;
 mod prng;
 mod store;
+#[cfg(any(feature = "log-jit", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
@@ -187,6 +188,12 @@ impl Globals {
         }
     }
 
+    pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
+        let data = &self[func_id].data;
+        assert!(data.codeptr().is_some());
+        data
+    }
+
     pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> Option<Proc> {
         cfp.get_block()
             .map(|bh| Proc::new(self.get_block_data(cfp, bh)))
@@ -326,12 +333,6 @@ impl Globals {
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
         self[func_id].data.set_codeptr(codeptr);
-    }
-
-    pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
-        let data = &self[func_id].data;
-        assert!(data.codeptr().is_some());
-        data
     }
 
     pub(super) fn class_version_inc(&mut self) {

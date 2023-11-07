@@ -1,18 +1,15 @@
 use super::*;
-use monoasm::*;
+use crate::{builtins::Arg, bytecodegen::*};
 
-pub(crate) mod compiler;
+pub mod compiler;
 mod frame;
 pub mod inline;
 pub mod op;
-pub use builtins::*;
-use bytecodegen::*;
 use compiler::jitgen::trace_ir::*;
-pub use compiler::Codegen;
 pub use compiler::*;
 use fancy_regex::Captures;
 pub use frame::*;
-pub use globals::*;
+use monoasm::*;
 pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};
 
@@ -100,107 +97,6 @@ impl alloc::GC<RValue> for Executor {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-pub struct BlockHandler(pub Value);
-
-impl std::fmt::Debug for BlockHandler {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some((fid, outer)) = self.try_proxy() {
-            write!(f, "fn:{:?} outer:{outer}", fid)
-        } else if let Some(proc) = self.try_proc() {
-            write!(f, "proc:{:?}", proc)
-        } else {
-            write!(f, "unknown handler {:016x}", self.0.id())
-        }
-    }
-}
-
-impl BlockHandler {
-    pub fn new(val: Value) -> Self {
-        Self(val)
-    }
-
-    pub fn from(func_id: FuncId) -> Self {
-        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-        let bh = Value::integer(block_handler);
-        Self::new(bh)
-    }
-
-    pub fn try_proxy(&self) -> Option<(FuncId, u16)> {
-        self.0.try_fixnum().map(|i| {
-            let i = i as u64;
-            let func_id = FuncId::new(u32::try_from(i >> 16).unwrap());
-            let idx = i as u16;
-            (func_id, idx)
-        })
-    }
-
-    pub fn delegate(self) -> Self {
-        match self.0.try_fixnum() {
-            Some(i) => Self(Value::integer(i + 1)),
-            None => self,
-        }
-    }
-
-    pub fn try_proc(&self) -> Option<&ProcInner> {
-        self.0.is_proc()
-    }
-
-    pub(crate) fn as_proc(&self) -> &ProcInner {
-        self.0.as_proc()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum OpMode {
-    RR(SlotId, SlotId),
-    RI(SlotId, i16),
-    IR(i16, SlotId),
-}
-
-impl OpMode {
-    fn is_float_op(&self, pc: &Bc) -> bool {
-        match self {
-            Self::RR(..) => pc.is_float_binop(),
-            Self::RI(..) => pc.is_float1(),
-            Self::IR(..) => pc.is_float2(),
-        }
-    }
-
-    fn is_integer_op(&self, pc: &Bc) -> bool {
-        match self {
-            Self::RR(..) => pc.is_integer_binop(),
-            Self::RI(..) => pc.is_integer1(),
-            Self::IR(..) => pc.is_integer2(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Cref {
-    class_id: ClassId,
-    module_function: bool,
-    visibility: Visibility,
-}
-
-impl Cref {
-    fn new(class_id: ClassId, module_function: bool, visibility: Visibility) -> Self {
-        Self {
-            class_id,
-            module_function,
-            visibility,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum FiberState {
-    Created,
-    Suspended,
-    Terminated,
-}
-
 impl Executor {
     pub fn init(globals: &mut Globals) -> Self {
         let mut executor = Self::default();
@@ -259,85 +155,6 @@ impl Executor {
 
     pub fn parent_fiber(&self) -> Option<NonNull<Executor>> {
         self.parent_fiber
-    }
-}
-
-//
-// error handlers
-//
-impl Executor {
-    pub fn set_error(&mut self, err: MonorubyErr) {
-        self.exception = Some(err);
-    }
-
-    pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
-        self.exception.as_ref()
-    }
-
-    pub(crate) fn take_error(&mut self) -> MonorubyErr {
-        std::mem::take(&mut self.exception).unwrap()
-    }
-
-    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
-        let err = self.take_error();
-        self.exception_to_val(globals, err)
-    }
-
-    pub(crate) fn err_divide_by_zero(&mut self) {
-        self.set_error(MonorubyErr::divide_by_zero());
-    }
-
-    pub(crate) fn err_wrong_number_of_arg_range(
-        &mut self,
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) {
-        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
-    }
-
-    ///
-    /// Set FrozenError with message "can't modify frozen Integer: 5".
-    ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
-    }
-
-    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
-        match &mut self.exception {
-            Some(err) => {
-                err.push_trace(loc, sourceinfo);
-            }
-            None => unreachable!(),
-        };
-    }
-
-    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
-        let class_id = globals.get_error_class(&err);
-        Value::new_exception_from_err(err, class_id)
-    }
-}
-
-//
-// handling fiber.
-//
-impl Executor {
-    pub fn fiber_state(&self) -> FiberState {
-        match self.rsp_save {
-            None => FiberState::Created,
-            Some(p) if p.as_ptr() as i64 == -1 => FiberState::Terminated,
-            _ => FiberState::Suspended,
-        }
-    }
-
-    pub fn save_rsp(&mut self, rsp: *mut u8) {
-        self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
-    }
-
-    pub(crate) fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
-        match (globals.codegen.yield_fiber)(self as _, val) {
-            Some(res) => Ok(res),
-            None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
-        }
     }
 }
 
@@ -434,6 +251,86 @@ impl Executor {
             .last_mut()
             .unwrap()
             .visibility = visi;
+    }
+}
+
+//
+// error handlers
+//
+impl Executor {
+    pub fn set_error(&mut self, err: MonorubyErr) {
+        assert_eq!(self.exception, None);
+        self.exception = Some(err);
+    }
+
+    pub(crate) fn take_error(&mut self) -> MonorubyErr {
+        std::mem::take(&mut self.exception).unwrap()
+    }
+
+    fn exception(&self) -> Option<&MonorubyErr> {
+        self.exception.as_ref()
+    }
+
+    fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+        let err = self.take_error();
+        self.exception_to_val(globals, err)
+    }
+
+    fn err_divide_by_zero(&mut self) {
+        self.set_error(MonorubyErr::divide_by_zero());
+    }
+
+    fn err_wrong_number_of_arg_range(
+        &mut self,
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) {
+        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
+    }
+
+    fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        match &mut self.exception {
+            Some(err) => {
+                err.push_trace(loc, sourceinfo);
+            }
+            None => unreachable!(),
+        };
+    }
+
+    fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
+        let class_id = globals.get_error_class(&err);
+        Value::new_exception_from_err(err, class_id)
+    }
+}
+
+//
+// handling fiber.
+//
+impl Executor {
+    pub fn fiber_state(&self) -> FiberState {
+        match self.rsp_save {
+            None => FiberState::Created,
+            Some(p) if p.as_ptr() as i64 == -1 => FiberState::Terminated,
+            _ => FiberState::Suspended,
+        }
+    }
+
+    pub fn save_rsp(&mut self, rsp: *mut u8) {
+        self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
+    }
+
+    pub(crate) fn yield_fiber(&mut self, globals: &Globals, val: Value) -> Result<Value> {
+        match (globals.codegen.yield_fiber)(self as _, val) {
+            Some(res) => Ok(res),
+            None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
+        }
     }
 }
 
@@ -857,6 +754,82 @@ impl Executor {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct BlockHandler(pub Value);
+
+impl std::fmt::Debug for BlockHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((fid, outer)) = self.try_proxy() {
+            write!(f, "fn:{:?} outer:{outer}", fid)
+        } else if let Some(proc) = self.try_proc() {
+            write!(f, "proc:{:?}", proc)
+        } else {
+            write!(f, "unknown handler {:016x}", self.0.id())
+        }
+    }
+}
+
+impl BlockHandler {
+    pub fn new(val: Value) -> Self {
+        Self(val)
+    }
+
+    pub fn from(func_id: FuncId) -> Self {
+        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+        let bh = Value::integer(block_handler);
+        Self::new(bh)
+    }
+
+    pub fn try_proxy(&self) -> Option<(FuncId, u16)> {
+        self.0.try_fixnum().map(|i| {
+            let i = i as u64;
+            let func_id = FuncId::new(u32::try_from(i >> 16).unwrap());
+            let idx = i as u16;
+            (func_id, idx)
+        })
+    }
+
+    pub fn delegate(self) -> Self {
+        match self.0.try_fixnum() {
+            Some(i) => Self(Value::integer(i + 1)),
+            None => self,
+        }
+    }
+
+    pub fn try_proc(&self) -> Option<&ProcInner> {
+        self.0.is_proc()
+    }
+
+    pub(crate) fn as_proc(&self) -> &ProcInner {
+        self.0.as_proc()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Cref {
+    class_id: ClassId,
+    module_function: bool,
+    visibility: Visibility,
+}
+
+impl Cref {
+    fn new(class_id: ClassId, module_function: bool, visibility: Visibility) -> Self {
+        Self {
+            class_id,
+            module_function,
+            visibility,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FiberState {
+    Created,
+    Suspended,
+    Terminated,
+}
+
 ///
 /// Program counter base.
 ///
@@ -1144,7 +1117,7 @@ pub enum Visibility {
     Private = 2,
 }
 
-impl Visibility {
+/*impl Visibility {
     pub fn is_public(&self) -> bool {
         self == &Self::Public
     }
@@ -1152,13 +1125,13 @@ impl Visibility {
     pub fn is_private(&self) -> bool {
         self == &Self::Private
     }
-}
+}*/
 
 extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
-    entry: DestLabel,
+    entry: monoasm::DestLabel,
 ) {
     let patch_point = globals.codegen.jit.label();
     let entry_label = globals.codegen.jit.label();

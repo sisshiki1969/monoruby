@@ -57,18 +57,16 @@ fn main() {
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;
-                        let fid = match monoruby::bytecodegen::compile_script(
-                            &mut globals,
-                            res.node,
-                            res.source_info,
-                        ) {
-                            Ok(id) => id,
-                            Err(err) => {
-                                err.show_error_message_and_all_loc();
-                                cont_mode = false;
-                                continue;
-                            }
-                        };
+                        let fid =
+                            match monoruby::compile_script(&mut globals, res.node, res.source_info)
+                            {
+                                Ok(id) => id,
+                                Err(err) => {
+                                    err.show_error_message_and_all_loc();
+                                    cont_mode = false;
+                                    continue;
+                                }
+                            };
                         context = Some(collector);
                         fid
                     }

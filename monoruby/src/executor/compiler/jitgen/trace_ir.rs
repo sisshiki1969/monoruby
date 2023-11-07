@@ -1,7 +1,7 @@
 use ruruby_parse::CmpKind;
 
 use crate::{
-    bytecodegen::inst::{BrKind, DynVar, FnInitInfo},
+    bytecodegen::inst::{Bc, BrKind, DynVar, FnInitInfo},
     *,
 };
 
@@ -586,6 +586,31 @@ impl TraceIr {
                 }
                 _ => unreachable!("{:016x}", op),
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OpMode {
+    RR(SlotId, SlotId),
+    RI(SlotId, i16),
+    IR(i16, SlotId),
+}
+
+impl OpMode {
+    pub(crate) fn is_float_op(&self, pc: &Bc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_float_binop(),
+            Self::RI(..) => pc.is_float1(),
+            Self::IR(..) => pc.is_float2(),
+        }
+    }
+
+    pub(crate) fn is_integer_op(&self, pc: &Bc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_integer_binop(),
+            Self::RI(..) => pc.is_integer1(),
+            Self::IR(..) => pc.is_integer2(),
         }
     }
 }

@@ -174,7 +174,7 @@ impl Globals {
 
     #[cfg(feature = "dump-bc")]
     pub(super) fn format(&self, pc: BcPc, i: usize) -> Option<String> {
-        use crate::jitgen::trace_ir::TraceIr;
+        use crate::jitgen::trace_ir::{OpMode, TraceIr};
 
         fn optstr(opt: bool) -> &'static str {
             if opt {

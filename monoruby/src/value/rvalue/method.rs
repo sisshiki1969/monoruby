@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 #[repr(C)]

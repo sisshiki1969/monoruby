@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 use num::BigInt;
 use ruruby_parse::Loc;
 use ruruby_parse::SourceInfoRef;

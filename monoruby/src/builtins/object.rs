@@ -1,6 +1,5 @@
-use crate::jitgen::conv;
-
 use super::*;
+use crate::jitgen::conv;
 use std::io::Write;
 
 //

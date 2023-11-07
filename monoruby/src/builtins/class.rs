@@ -1,5 +1,4 @@
 use super::*;
-use monoruby_attr::monoruby_builtin;
 
 //
 // Class class

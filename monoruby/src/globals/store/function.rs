@@ -250,6 +250,8 @@ impl std::default::Default for Funcs {
     }
 }
 
+use crate::builtins::Arg;
+
 #[monoruby_builtin]
 fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let e: Enumerator = lfp.self_val().into();

@@ -50,29 +50,6 @@ impl IvarTable {
         self.buf.ptr.as_ptr()
     }
 
-    pub fn capacity(&self) -> usize {
-        self.buf.cap
-    }
-
-    pub fn new() -> Self {
-        IvarTable {
-            buf: RawTable::new(),
-            len: 0,
-        }
-    }
-
-    /*pub fn push(&mut self, elem: T) {
-        if self.len == self.capacity() {
-            self.buf.grow();
-        }
-
-        unsafe {
-            ptr::write(self.ptr().offset(self.len as isize), elem);
-        }
-
-        self.len += 1;
-    }*/
-
     pub fn reserve(&mut self, additional: usize) {
         self.buf.reserve(self.len, additional);
     }
@@ -95,7 +72,7 @@ impl IvarTable {
         self.len += n;
     }
 
-    pub fn into_iter(self) -> IvarTableIntoIter {
+    /*pub fn into_iter(self) -> IvarTableIntoIter {
         unsafe {
             let iter = RawIter::new(&self);
             let buf = ptr::read(&self.buf);
@@ -106,7 +83,7 @@ impl IvarTable {
                 _buf: buf,
             }
         }
-    }
+    }*/
 }
 
 pub struct IvarTableIntoIter {
@@ -166,9 +143,9 @@ impl Drop for RawTable {
 }
 
 impl RawTable {
-    fn new() -> Self {
+    /*fn new() -> Self {
         Self::with_capacity(0)
-    }
+    }*/
 
     ///
     /// Allocate with capacity.
@@ -246,7 +223,7 @@ struct RawIter {
 }
 
 impl RawIter {
-    unsafe fn new(slice: &[T]) -> Self {
+    /*unsafe fn new(slice: &[T]) -> Self {
         RawIter {
             start: slice.as_ptr(),
             end: if slice.len() == 0 {
@@ -255,7 +232,7 @@ impl RawIter {
                 slice.as_ptr().offset(slice.len() as isize)
             },
         }
-    }
+    }*/
 }
 
 impl Iterator for RawIter {

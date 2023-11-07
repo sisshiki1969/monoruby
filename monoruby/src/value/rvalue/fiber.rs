@@ -1,4 +1,5 @@
-use crate::*;
+use super::*;
+use crate::builtins::Arg;
 
 #[monoruby_object]
 pub struct Fiber(Value);

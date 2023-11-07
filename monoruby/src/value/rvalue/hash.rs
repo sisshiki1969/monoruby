@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 use std::hash::Hash;
 use std::ops::Deref;
 

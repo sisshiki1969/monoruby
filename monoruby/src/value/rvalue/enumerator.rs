@@ -1,4 +1,4 @@
-use crate::*;
+use super::*;
 
 #[monoruby_object]
 pub struct Enumerator(Value);

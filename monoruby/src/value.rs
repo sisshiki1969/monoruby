@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 
-use crate::alloc::{Allocator, GC};
-use crate::*;
+use super::*;
+use crate::{
+    alloc::{Allocator, GC},
+    builtins::TimeInner,
+};
 use num::BigInt;
 use ruruby_parse::{Loc, Node, NodeKind, SourceInfoRef};
 
@@ -269,7 +272,7 @@ impl Value {
     }
 
     pub fn yielder_object() -> Self {
-        Value::object(unsafe { crate::executor::YIELDER.unwrap().id() })
+        Value::object(unsafe { crate::builtins::YIELDER.unwrap().id() })
     }
 
     pub fn string(s: String) -> Self {

@@ -1,6 +1,6 @@
 use num::ToPrimitive;
 
-use crate::*;
+use super::*;
 
 use self::clock_gettime::TimeSpec;
 

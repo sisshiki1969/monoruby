@@ -1,7 +1,6 @@
-use std::cmp::Ordering;
-
 use super::*;
 use smallvec::smallvec;
+use std::cmp::Ordering;
 
 //
 // Array class

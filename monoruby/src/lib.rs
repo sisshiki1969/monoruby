@@ -12,25 +12,31 @@
 #![feature(ptr_internals)]
 mod alloc;
 mod builtins;
-pub mod bytecodegen;
-pub mod executor;
-pub mod globals;
+mod bytecodegen;
+mod executor;
+mod globals;
 mod id_table;
 #[cfg(test)]
 mod tests;
 mod value;
 
-pub use executor::jitgen::analysis;
-pub use executor::*;
+pub use bytecodegen::compile_script;
+pub use executor::Executor;
+pub use globals::OBJECT_CLASS;
+pub use globals::{Globals, MonorubyErr};
+pub use value::Value;
+
+use executor::jitgen::analysis;
+use executor::*;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
-pub use monoruby_attr::*;
-pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
-pub type IndexSet<T> = indexmap::IndexSet<T>;
-pub use globals::*;
+use globals::*;
 use id_table::*;
-pub use value::*;
+use monoruby_attr::*;
+use value::rvalue::RegexpInner;
+use value::*;
 
-pub use value::rvalue::RegexpInner;
+const STRING_INLINE_CAP: usize = 39;
 
-pub const STRING_INLINE_CAP: usize = 39;
+type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
+type IndexSet<T> = indexmap::IndexSet<T>;
