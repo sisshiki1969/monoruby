@@ -653,10 +653,10 @@ impl FuncInfo {
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            if let Some(fmt) = pc.format(globals, i) {
+            if let Some(fmt) = globals.format(pc, i) {
                 eprint!(
                     "{}:{:05} [{:02}] ",
-                    if info.bb_info.is_bb_head(BcIndex::from(i)) {
+                    if info.bb_info.is_bb_head(bytecodegen::BcIndex::from(i)) {
                         "+"
                     } else {
                         " "
