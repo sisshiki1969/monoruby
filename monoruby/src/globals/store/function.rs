@@ -1,6 +1,13 @@
+use super::*;
 use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
 
-use super::*;
+pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
+pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
+pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
+pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
+
+pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
+pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
 
 ///
 /// ID of function.
@@ -24,11 +31,6 @@ impl FuncId {
         self.0.get()
     }
 }
-
-pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
-pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
-pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + std::mem::offset_of!(Meta, reg_num) as u64;
-pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
