@@ -865,18 +865,13 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
+
+    let bh = lfp.expect_block()?;
     let ary: Array = lfp.self_val().into();
     let iter = ary.iter().cloned();
-    let bh = lfp.expect_block()?;
-    let mut v = vec![];
-    for elem in vm.invoke_block_map1(globals, bh, iter)? {
-        match elem.is_array() {
-            Some(ary) => v.extend(ary.iter()),
-            None => v.push(elem),
-        }
-    }
-    let res = Value::array_from_vec(v);
-    Ok(res)
+
+    let v = vm.flat_map(globals, bh, iter)?;
+    Ok(Value::array_from_vec(v))
 }
 
 ///

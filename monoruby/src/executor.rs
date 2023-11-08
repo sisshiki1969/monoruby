@@ -532,6 +532,22 @@ impl Executor {
         Ok(vec)
     }
 
+    pub(crate) fn flat_map(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        iter: impl Iterator<Item = Value>,
+    ) -> Result<Vec<Value>> {
+        let mut v = vec![];
+        for elem in self.invoke_block_map1(globals, bh, iter)? {
+            match elem.is_array() {
+                Some(ary) => v.extend(ary.iter()),
+                None => v.push(elem),
+            }
+        }
+        Ok(v)
+    }
+
     pub(crate) fn invoke_block_fold1(
         &mut self,
         globals: &mut Globals,

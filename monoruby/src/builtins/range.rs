@@ -14,6 +14,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "all?", all_);
     globals.define_builtin_func(RANGE_CLASS, "collect", map);
     globals.define_builtin_func(RANGE_CLASS, "map", map);
+    globals.define_builtin_func(RANGE_CLASS, "collect_concat", flat_map);
+    globals.define_builtin_func(RANGE_CLASS, "flat_map", flat_map);
     globals.define_builtin_func(RANGE_CLASS, "entries", toa);
     globals.define_builtin_func(RANGE_CLASS, "to_a", toa);
 }
@@ -149,6 +151,37 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
     }
 }
 
+/// ### Enumerable#collect_concat
+///
+/// - flat_map {| obj | block } -> Array
+/// - collect_concat {| obj | block } -> Array
+/// - [NOT SUPPORTED] flat_map -> Enumerator
+/// - [NOT SUPPORTED] collect_concat -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
+#[monoruby_builtin]
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+
+    let bh = lfp.expect_block()?;
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if range.start.is_fixnum() && range.end.is_fixnum() {
+        let start = range.start.as_fixnum();
+        let mut end = range.end.as_fixnum();
+        if !range.exclude_end() {
+            end += 1
+        }
+        let iter = (start..end).map(|i| Value::fixnum(i));
+
+        let v = vm.flat_map(globals, bh, iter)?;
+        Ok(Value::array_from_vec(v))
+    } else {
+        Err(MonorubyErr::runtimeerr("not supported"))
+    }
+}
+
 ///
 /// ### Range#entries
 ///
@@ -226,6 +259,24 @@ mod test {
             r#"
         (1..5).map do |x|
             x + 100
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn flat_map() {
+        run_test(
+            r#"
+        (1...5).flat_map do |x|
+            [x] * x
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        (1..5).flat_map do |x|
+            [x] * x
         end
         "#,
         );
