@@ -1,11 +1,5 @@
-class Foo
-  def foo(x)
-    x * 100
-  end
-end
-
-x = [[0,1,2,3]] * 20
-x << Foo.new.method(:foo)
-x.each do |a|
-  puts a[2]
+x = [2] * 20
+x << :j
+x.each do |x|
+  puts [0,1,2,3,4,5][x]
 end

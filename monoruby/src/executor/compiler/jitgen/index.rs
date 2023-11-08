@@ -26,8 +26,10 @@ impl Codegen {
                 self.fetch_to_rsi(ctx, idx);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm! { &mut self.jit,
-                    testq rsi, 0b01;
+                    xchgq rdi, rsi;
+                    testq rdi, 0b01;
                     jeq side_exit;
+                    xchgq rdi, rsi;
                     sarq rsi, 1;
                     // lower bound check
                     cmpq rsi, 0;
