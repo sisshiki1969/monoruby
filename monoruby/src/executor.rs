@@ -25,9 +25,9 @@ const LBP_OUTER: i64 = 0 + LFP_OFFSET;
 /// Meta 8bytes
 const LBP_META: i64 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
-const LBP_META_REGNUM: i64 = LBP_META - 4;
+const LBP_META_REGNUM: i64 = LBP_META - META_REGNUM as i64;
 /// Meta::FuncId 4bytes
-const LBP_META_FUNCID: i64 = LBP_META;
+const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
 const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
 const LBP_SELF: i64 = 24 + LFP_OFFSET;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;

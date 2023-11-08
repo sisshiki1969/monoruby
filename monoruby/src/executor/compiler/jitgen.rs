@@ -1562,20 +1562,19 @@ impl Codegen {
             let wb = ctx.get_write_back();
             self.gen_write_back(&wb);
         }
-        let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
             movq r13, (pc.get_u64());
         );
         #[cfg(any(feature = "log-jit", feature = "profile"))]
         monoasm!( &mut self.jit,
-            movq r8, rdi; // the Value which caused this deopt.
+            movq rcx, rdi; // the Value which caused this deopt.
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (LBP_META)];
-            movq rcx, r13;
+            movq rdx, r13;
             movq rax, (crate::globals::log_deoptimize);
             call rax;
         );
+        let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
             jmp fetch;
         );

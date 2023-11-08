@@ -660,14 +660,14 @@ impl Globals {
 
 #[cfg(any(feature = "log-jit", feature = "profile"))]
 pub(crate) extern "C" fn log_deoptimize(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
-    func_id: FuncId,
     pc: BcPc,
     #[cfg(feature = "log-jit")] v: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::TraceIr;
 
+    let func_id = vm.cfp().lfp().meta().func_id();
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
 
