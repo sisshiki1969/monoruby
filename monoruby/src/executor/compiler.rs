@@ -772,11 +772,11 @@ impl Codegen {
             movq rdi, rax;
             movzxw rdx, [rsi + 8];  // rdx <- req
             lea  rsi, [rsp - (16 + LBP_ARG0)]; // rsi <- dst
-            subq rsp, 1024;
+            subq rsp, 4096;
             movq rax, (block_expand_array); // extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize
             call rax;
             movq rdi, rax;
-            addq rsp, 1024;
+            addq rsp, 4096;
         l1:
         };
     }

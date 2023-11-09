@@ -511,7 +511,7 @@ impl Codegen {
                     if !callsite.hash_splat_pos.is_empty() {
                         monoasm! { &mut self.jit,
                             lea  rcx, [rsp - (16 + LBP_SELF)];
-                            subq rsp, 1016;
+                            subq rsp, 4088;
                             pushq rdi;
                             movq rdi, rbx;
                             movq rsi, r12;
@@ -520,7 +520,7 @@ impl Codegen {
                             movq rax, (runtime::jit_handle_hash_splat);
                             call rax;
                             popq rdi;
-                            addq rsp, 1016;
+                            addq rsp, 4088;
                         }
                     }
                 } else {
@@ -702,7 +702,7 @@ impl Codegen {
         if has_splat {
             monoasm!( &mut self.jit,
                 lea r8, [rsp - (16 + LBP_ARG0)];
-                subq rsp, 1016;
+                subq rsp, 4088;
                 pushq r15;
                 movq r15, r8;
                 movq r8, (pos_num);
@@ -733,7 +733,7 @@ impl Codegen {
             }
             monoasm!( &mut self.jit,
                 popq r15;
-                addq rsp, 1016;
+                addq rsp, 4088;
                 movq rdi, r8;
             );
         } else {

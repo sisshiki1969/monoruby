@@ -53,10 +53,10 @@ impl Codegen {
             movl rsi, [r14 - (LBP_META_FUNCID)];
             movq rdx, [r14 - (LBP_SELF)];
             movq rcx, (entry.to_usize());
-            subq rsp, 1032;
+            subq rsp, 4088;
             movq rax, (exec_jit_compile_patch);
             call rax;
-            addq rsp, 1032;
+            addq rsp, 4088;
             jmp entry;
         );
     }

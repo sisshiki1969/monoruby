@@ -620,14 +620,14 @@ impl Codegen {
     fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
             lea  rsi, [rsp - 16];
-            subq rsp, 1024;
+            subq rsp, 4096;
             movq rdx, rdi; // arg_num
             movq rdi, r12; // &Globals
             movq rax, (runtime::handle_invoker_arguments);
             call rax;
             // set arg len
             movq rdx, rax;
-            addq rsp, 1024;
+            addq rsp, 4096;
         }
         self.push_frame();
         self.set_lfp();

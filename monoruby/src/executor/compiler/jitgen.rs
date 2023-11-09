@@ -32,6 +32,7 @@ pub mod trace_ir;
 /// Context for JIT compilation.
 ///
 struct JitContext {
+    fid: FuncId,
     ///
     /// Destination labels for jump instructions.
     ///
@@ -137,6 +138,7 @@ impl JitContext {
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
+            fid: func.id(),
             labels,
             bb_scan,
             loop_backedges: HashMap::default(),
@@ -245,6 +247,7 @@ impl WriteBack {
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BBContext {
+    fid: FuncId,
     /// Information for stack slots.
     slot_state: SlotState,
     /// Stack top register.
@@ -270,6 +273,7 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
+            fid: cc.fid,
             slot_state: SlotState::new(cc),
             sp: SlotId(cc.local_num as u16),
             next_sp: SlotId(cc.local_num as u16),
@@ -288,7 +292,12 @@ impl BBContext {
 
     fn merge(&mut self, other: &Self) {
         if self.sp != other.sp {
-            eprintln!("sp mismatch: {:?} {:?}", self.sp, other.sp);
+            eprintln!(
+                "in {:?} sp mismatch: {:?} {:?}",
+                self.fid, self.sp, other.sp
+            );
+            eprintln!("self: {:?}", self.slot_state);
+            eprintln!("other: {:?}", other.slot_state);
             panic!();
         };
         self.slot_state.merge(&other.slot_state);
