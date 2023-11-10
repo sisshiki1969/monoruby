@@ -214,9 +214,9 @@ impl BytecodeGen {
                 UseMode::Push => {} // +1
             }
         } else {
-            let temp = self.temp;
+            let base = self.temp;
             for branch in when_ {
-                self.temp = temp; // 0
+                self.temp = base; // 0
                 let CaseBranch { box body, mut when } = branch;
                 let succ_pos = self.new_label();
                 if when.len() == 1 {
@@ -236,7 +236,7 @@ impl BytecodeGen {
                 }
                 self.apply_label(succ_pos);
             }
-            self.temp = temp;
+            self.temp = base;
             self.gen_expr(else_, use_mode.into())?;
         }
 

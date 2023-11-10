@@ -388,6 +388,14 @@ impl ForParamInfo {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MergeSourceInfo {
+    /// Label of the merge source.
+    idx: BcIndex,
+    /// Stack pointer of the merge source.
+    sp: BcTemp,
+}
+
 #[derive(Debug)]
 struct BytecodeGen {
     /// ID of this function.
@@ -428,6 +436,8 @@ struct BytecodeGen {
     functions: Vec<Functions>,
     /// Offset of func info.
     functions_offset: usize,
+    /// Merge info.
+    merge_info: HashMap<Label, Vec<MergeSourceInfo>>,
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
@@ -471,6 +481,7 @@ impl BytecodeGen {
             callsite_offset,
             functions: vec![],
             functions_offset,
+            merge_info: HashMap::default(),
         };
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(*name);
@@ -581,6 +592,21 @@ impl BytecodeGen {
     fn sp(&mut self) -> BcTemp {
         self.push();
         self.pop()
+    }
+
+    fn pc(&self) -> BcIndex {
+        BcIndex(self.ir.len() as u32)
+    }
+
+    fn add_merge(&mut self, dest: Label) {
+        let idx = self.pc();
+        let sp = self.sp();
+        let new_entry = MergeSourceInfo { idx, sp };
+        if let Some(info) = self.merge_info.get_mut(&dest) {
+            info.push(new_entry);
+        } else {
+            self.merge_info.insert(dest, vec![new_entry]);
+        }
     }
 
     fn push(&mut self) -> BcTemp {
@@ -711,7 +737,22 @@ impl BytecodeGen {
 
     /// apply current instruction pointer to the destination label.
     fn apply_label(&mut self, label: Label) {
-        let pos = BcIndex(self.ir.len() as u32);
+        let pos = self.pc();
+        let dest_sp = self.sp();
+        if let Some(info) = self.merge_info.remove(&label) {
+            for MergeSourceInfo { idx, sp } in info {
+                if dest_sp != sp {
+                    eprintln!(
+                        "warning: stack pointer mismatch. {:?}:{:?} <- {:?}:{:?}",
+                        pos,
+                        BcReg::from(dest_sp),
+                        idx,
+                        BcReg::from(sp),
+                    );
+                    //panic!();
+                }
+            }
+        }
         self.labels[label.0] = Some(pos);
     }
 
@@ -736,10 +777,12 @@ impl BytecodeGen {
     }
 
     fn emit_br(&mut self, jmp_pos: Label) {
+        self.add_merge(jmp_pos);
         self.emit(BcIr::Br(jmp_pos), Loc::default());
     }
 
     fn emit_condbr(&mut self, cond: BcReg, jmp_pos: Label, jmp_if_true: bool, optimizable: bool) {
+        self.add_merge(jmp_pos);
         self.emit(
             BcIr::CondBr(
                 cond,
@@ -756,6 +799,7 @@ impl BytecodeGen {
     }
 
     fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
+        self.add_merge(else_pos);
         self.emit(BcIr::CheckLocal(local, else_pos), Loc::default());
     }
 
