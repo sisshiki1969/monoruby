@@ -122,23 +122,17 @@ mod test {
     fn case7() {
         run_test(
             r#"
-        case 4
-        when 0
-        when 4
-        when 8
+        case 9
+        when 0,4,8
           0
-        when 1
-        when 5
-        when 9
+        when 1,5,9
           1
-        when 2
-        when 6
+        when 2,6
           2
-        when 3
-        when 7
+        when 3,7
           3
         end
-        nil
+        #nil
         "#,
         );
     }
