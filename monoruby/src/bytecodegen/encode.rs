@@ -9,6 +9,24 @@ impl BytecodeGen {
         func_id: FuncId,
         loc: Loc,
     ) -> Result<()> {
+        for (dst, (dst_sp, src)) in std::mem::take(&mut self.merge_info) {
+            let dst_idx = self[dst];
+            let dst_sp = dst_sp.unwrap();
+            for MergeSourceInfo {
+                idx: src_idx,
+                sp: src_sp,
+            } in src
+            {
+                if dst_sp != src_sp {
+                    eprintln!(
+                        "warning: sp mismatch: {:?}:{:?} <- {:?}:{:?}",
+                        dst_idx, dst_sp, src_idx, src_sp
+                    );
+                    //panic!();
+                }
+            }
+        }
+
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {

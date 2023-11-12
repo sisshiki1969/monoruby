@@ -15,9 +15,10 @@ impl BytecodeGen {
     ///
     /// Evaluate *expr* and
     ///
-    /// * If *use_mode* is `UseMode::Use`, push the result to the stack and return the register.
-    /// * If *use_mode* is `UseMode::Ret`, emit BcIr::Ret with the result.
-    /// * If *use_mode* is `UseMode::NotUse`, the result will discarded.
+    /// * If *use_mode* is `UseMode2::Store(r)`, the result is stored in r.
+    /// * If *use_mode* is `UseMode2::NotUse`, the result will be discarded.
+    /// * If *use_mode* is `UseMode2::Push`, push the result to the stack and return the register.
+    /// * If *use_mode* is `UseMode2::Ret`, emit BcIr::Ret with the result.
     ///
     pub(super) fn gen_expr(&mut self, expr: Node, use_mode: UseMode2) -> Result<()> {
         let use_mode = match use_mode {

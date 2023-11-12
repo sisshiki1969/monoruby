@@ -2323,7 +2323,7 @@ mod test {
     }
 
     #[test]
-    fn rescue() {
+    fn rescue1() {
         run_test(
             r#"
             # Use
@@ -2332,6 +2332,10 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn rescue2() {
         run_test(
             r#"
             # NoUse
@@ -2341,6 +2345,10 @@ mod test {
             nil
         "#,
         );
+    }
+
+    #[test]
+    fn rescue3() {
         run_test_once(
             r#"
             # Ret
@@ -2349,14 +2357,25 @@ mod test {
             end
         "#,
         );
-        run_test(
+    }
+
+    #[test]
+    fn rescue4() {
+        run_test_once(
             r#"
+            #Ret
             begin
               100
+            rescue
+              200
             end
         "#,
         );
-        run_test_once(
+    }
+
+    #[test]
+    fn rescue5() {
+        run_test(
             r#"
             begin
               100
@@ -2365,6 +2384,10 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn rescue6() {
         run_test(
             r#"
             begin
@@ -2375,6 +2398,10 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn rescue7() {
         run_test(
             r#"
             begin
@@ -2387,6 +2414,10 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn rescue8() {
         run_test(
             r#"
             $x = []
@@ -2413,7 +2444,7 @@ mod test {
     }
 
     #[test]
-    fn rescue_write_back() {
+    fn rescue_write_back1() {
         run_test(
             r#"
         res = []
@@ -2435,6 +2466,10 @@ mod test {
         res
         "#,
         );
+    }
+
+    #[test]
+    fn rescue_write_back2() {
         run_test(
             r#"
         res = []

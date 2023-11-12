@@ -437,7 +437,7 @@ struct BytecodeGen {
     /// Offset of func info.
     functions_offset: usize,
     /// Merge info.
-    merge_info: HashMap<Label, Vec<MergeSourceInfo>>,
+    merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
@@ -602,10 +602,10 @@ impl BytecodeGen {
         let idx = self.pc();
         let sp = self.sp();
         let new_entry = MergeSourceInfo { idx, sp };
-        if let Some(info) = self.merge_info.get_mut(&dest) {
+        if let Some((_, info)) = self.merge_info.get_mut(&dest) {
             info.push(new_entry);
         } else {
-            self.merge_info.insert(dest, vec![new_entry]);
+            self.merge_info.insert(dest, (None, vec![new_entry]));
         }
     }
 
@@ -739,19 +739,11 @@ impl BytecodeGen {
     fn apply_label(&mut self, label: Label) {
         let pos = self.pc();
         let dest_sp = self.sp();
-        if let Some(info) = self.merge_info.remove(&label) {
-            for MergeSourceInfo { idx, sp } in info {
-                if dest_sp != sp {
-                    eprintln!(
-                        "warning: stack pointer mismatch. {:?}:{:?} <- {:?}:{:?}",
-                        pos,
-                        BcReg::from(dest_sp),
-                        idx,
-                        BcReg::from(sp),
-                    );
-                    //panic!();
-                }
-            }
+        if let Some((sp, _)) = self.merge_info.get_mut(&label) {
+            assert_eq!(*sp, None);
+            *sp = Some(dest_sp);
+        } else {
+            self.merge_info.insert(label, (Some(dest_sp), vec![]));
         }
         self.labels[label.0] = Some(pos);
     }
