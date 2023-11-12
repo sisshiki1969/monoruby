@@ -216,7 +216,6 @@ impl BytecodeGen {
         } else {
             let base = self.temp;
             for branch in when_ {
-                self.temp = base; // 0
                 let CaseBranch { box body, mut when } = branch;
                 let succ_pos = self.new_label();
                 if when.len() == 1 {
@@ -234,6 +233,7 @@ impl BytecodeGen {
                 if !use_mode.is_ret() {
                     self.emit_br(exit_pos);
                 }
+                self.temp = base;
                 self.apply_label(succ_pos);
             }
             self.temp = base;

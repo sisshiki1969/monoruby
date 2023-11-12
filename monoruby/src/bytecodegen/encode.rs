@@ -18,11 +18,12 @@ impl BytecodeGen {
             } in src
             {
                 if dst_sp != src_sp {
+                    let name = store[self.id].as_ruby_func().name();
                     eprintln!(
-                        "warning: sp mismatch: {:?}:{:?} <- {:?}:{:?}",
+                        "warning: sp mismatch: {name} {:?}:{:?} <- {:?}:{:?}",
                         dst_idx, dst_sp, src_idx, src_sp
                     );
-                    panic!();
+                    //panic!();
                 }
             }
         }

@@ -2,7 +2,6 @@
 mod test {
     use crate::tests::*;
 
-    #[ignore]
     #[test]
     fn case0() {
         run_test(
@@ -38,7 +37,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn case2() {
         run_test(
@@ -56,7 +54,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn case3() {
         run_test(
@@ -98,6 +95,25 @@ mod test {
         when Float then 'float'
         when Symbol then 'symbol'
         end
+        "#,
+        );
+    }
+
+    #[test]
+    fn case6() {
+        run_test(
+            r#"
+        case 4
+        when 0
+          0
+        when 1
+          1
+        when 2
+          2
+        when 3
+          3
+        end
+        nil
         "#,
         );
     }
