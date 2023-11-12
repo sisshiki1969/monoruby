@@ -253,7 +253,6 @@ impl BytecodeGen {
         use_mode: UseMode,
     ) -> Result<()> {
         let base = self.temp;
-        let ret_reg = self.sp().into();
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.
@@ -273,17 +272,18 @@ impl BytecodeGen {
         let range = body_start..body_end;
         self.apply_label(body_start);
         self.gen_expr(body, body_use.into())?;
+        let finish = self.temp;
         self.apply_label(body_end);
         let else_label = self.new_label();
         if !rescue.is_empty() {
             if !body_use.is_ret() {
                 self.emit_br(else_label);
             }
+            self.temp = base;
             let err_reg = self.push().into();
             let rescue_pos = self.new_label();
             self.apply_label(rescue_pos);
-            //assert_eq!(1, rescue.len());
-            let old = self.temp;
+
             for RescueEntry {
                 exception_list,
                 assign,
@@ -305,22 +305,20 @@ impl BytecodeGen {
                     self.emit_br(next_pos);
                 };
                 self.apply_label(cont_pos);
-                match rescue_use {
-                    UseMode::Push => self.gen_store_expr(ret_reg, body)?,
-                    _ => self.gen_expr(body, rescue_use.into())?,
-                }
+                self.temp = base;
+                self.gen_expr(body, rescue_use.into())?;
                 if !rescue_use.is_ret() {
                     self.emit_br(ensure_label);
                 }
+                self.temp = base + 1;
                 self.apply_label(next_pos);
-                self.temp = old;
             }
+            self.temp = finish;
             // no rescue branch was matched.
             if let Some(box ensure) = &ensure {
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
             }
             self.emit(BcIr::Raise(err_reg), Loc::default());
-            self.pop();
 
             self.exception_table.push(ExceptionEntry {
                 range,

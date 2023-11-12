@@ -22,7 +22,7 @@ impl BytecodeGen {
                         "warning: sp mismatch: {:?}:{:?} <- {:?}:{:?}",
                         dst_idx, dst_sp, src_idx, src_sp
                     );
-                    //panic!();
+                    panic!();
                 }
             }
         }

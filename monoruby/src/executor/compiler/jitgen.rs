@@ -291,15 +291,6 @@ impl BBContext {
     }
 
     fn merge(&mut self, other: &Self) {
-        if self.sp != other.sp {
-            eprintln!(
-                "in {:?} sp mismatch: {:?} {:?}",
-                self.fid, self.sp, other.sp
-            );
-            eprintln!("self: {:?}", self.slot_state);
-            eprintln!("other: {:?}", other.slot_state);
-            panic!();
-        };
         self.slot_state.merge(&other.slot_state);
     }
 
