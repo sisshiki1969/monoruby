@@ -172,49 +172,34 @@ impl BytecodeGen {
         use_mode: UseMode,
     ) -> Result<()> {
         let exit_pos = self.new_label();
+        let base = self.temp;
         if let Some(box cond) = cond {
-            let ret = self.push().into(); // +1
-            let rhs = self.push_expr(cond)?.into(); // +2
+            let rhs = self.push_expr(cond)?.into();
             for branch in when_ {
                 let CaseBranch { box body, mut when } = branch;
                 let succ_pos = self.new_label();
                 if when.len() == 1 {
                     let when = when.remove(0);
-                    self.gen_teq_condbr(when, rhs, succ_pos, false)?; // +2
+                    self.gen_teq_condbr(when, rhs, succ_pos, false)?;
                 } else {
                     let then_pos = self.new_label();
                     for when in when {
-                        self.gen_teq_condbr(when, rhs, then_pos, true)?; // +2
+                        self.gen_teq_condbr(when, rhs, then_pos, true)?;
                     }
-                    self.pop();
-                    self.emit_br(succ_pos); // +1
-                    self.apply_label(then_pos); // +1
-                    self.push();
+                    self.emit_br(succ_pos);
+                    self.apply_label(then_pos);
                 }
-                self.gen_store_expr(ret, body)?; // +2
 
-                if use_mode.is_ret() {
-                    self.emit(BcIr::Ret(ret), Loc::default());
-                } else {
-                    self.pop();
-                    self.emit_br(exit_pos); // +1
-                    self.push();
+                self.temp = base;
+                self.gen_expr(body, use_mode.into())?;
+
+                if !use_mode.is_ret() {
+                    self.emit_br(exit_pos);
                 }
-                self.apply_label(succ_pos); // +1
-            }
-            self.pop(); // +1
-            self.gen_store_expr(ret, else_)?; // +1
-            match use_mode {
-                UseMode::Ret => {
-                    self.emit_ret(None); // +1
-                }
-                UseMode::NotUse => {
-                    self.pop(); // 0
-                }
-                UseMode::Push => {} // +1
+                self.temp = base + 1;
+                self.apply_label(succ_pos);
             }
         } else {
-            let base = self.temp;
             for branch in when_ {
                 let CaseBranch { box body, mut when } = branch;
                 let succ_pos = self.new_label();
@@ -229,18 +214,25 @@ impl BytecodeGen {
                     self.emit_br(succ_pos);
                     self.apply_label(then_pos);
                 }
+
                 self.gen_expr(body, use_mode.into())?;
+
                 if !use_mode.is_ret() {
                     self.emit_br(exit_pos);
                 }
                 self.temp = base;
                 self.apply_label(succ_pos);
             }
-            self.temp = base;
-            self.gen_expr(else_, use_mode.into())?;
         }
 
+        self.temp = base;
+        self.gen_expr(else_, use_mode.into())?;
+
         self.apply_label(exit_pos);
+        match use_mode {
+            UseMode::Push => assert_eq!(self.temp, base + 1),
+            _ => assert_eq!(self.temp, base),
+        }
         Ok(())
     }
 

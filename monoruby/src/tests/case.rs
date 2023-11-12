@@ -117,4 +117,29 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn case7() {
+        run_test(
+            r#"
+        case 4
+        when 0
+        when 4
+        when 8
+          0
+        when 1
+        when 5
+        when 9
+          1
+        when 2
+        when 6
+          2
+        when 3
+        when 7
+          3
+        end
+        nil
+        "#,
+        );
+    }
 }
