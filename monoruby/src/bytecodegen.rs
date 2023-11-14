@@ -410,6 +410,8 @@ struct BytecodeGen {
     labels: Vec<Option<BcIndex>>,
     /// loop information.
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
+    /// ensure clause information.
+    ensure: Vec<Option<Node>>,
     /// local variables.
     locals: HashMap<IdentId, u16>,
     /// outer local variables. (dynamic_locals, block_param)
@@ -468,6 +470,7 @@ impl BytecodeGen {
             sp: vec![],
             labels: vec![],
             loops: vec![],
+            ensure: vec![],
             locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
@@ -753,13 +756,17 @@ impl BytecodeGen {
         self.sp.push(BcTemp(self.temp));
     }
 
-    fn emit_ret(&mut self, src: Option<BcReg>) {
+    fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {
+        let ensure: Vec<_> = self.ensure.iter().rev().filter_map(|e| e.clone()).collect();
+        for ensure in ensure.into_iter() {
+            self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
+        }
         let ret = match src {
             Some(ret) => ret,
             None => self.pop().into(),
         };
-        //assert_eq!(0, self.temp);
         self.emit(BcIr::Ret(ret), Loc::default());
+        Ok(())
     }
 
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {

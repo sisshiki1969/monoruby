@@ -50,7 +50,7 @@ impl BytecodeGen {
         };
         self.emit_binary_op(method, lhs, rhs, ret, loc);
         if use_mode == UseMode2::Ret {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -137,7 +137,7 @@ macro_rules! gen_ri_ops {
               };
               self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
               if use_mode == UseMode2::Ret {
-                  self.emit_ret(None);
+                  self.emit_ret(None)?;
               }
               Ok(())
           }
@@ -236,7 +236,7 @@ impl BytecodeGen {
                 self.pop();
             }
             UseMode2::Ret => {
-                self.emit_ret(None);
+                self.emit_ret(None)?;
             }
             _ => {}
         }
@@ -262,7 +262,7 @@ impl BytecodeGen {
                 self.pop();
             }
             UseMode2::Ret => {
-                self.emit_ret(None);
+                self.emit_ret(None)?;
             }
             _ => {}
         }
@@ -294,7 +294,7 @@ impl BytecodeGen {
                         self.pop();
                     }
                     UseMode2::Ret => {
-                        self.emit_ret(None);
+                        self.emit_ret(None)?;
                     }
                     _ => {}
                 };

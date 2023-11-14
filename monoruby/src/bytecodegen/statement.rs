@@ -244,6 +244,7 @@ impl BytecodeGen {
         ensure: Option<Box<Node>>,
         use_mode: UseMode,
     ) -> Result<()> {
+        self.ensure.push(ensure.as_deref().cloned());
         let base = self.temp;
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
@@ -360,11 +361,12 @@ impl BytecodeGen {
             self.gen_expr(else_, rescue_use.into())?;
         }
         self.apply_label(ensure_label);
+        self.ensure.pop().unwrap();
         if let Some(box ensure) = ensure {
             self.gen_expr(ensure, UseMode2::NotUse)?;
             self.emit(BcIr::EnsureEnd, Loc::default());
             if use_mode.is_ret() {
-                self.emit_ret(None);
+                self.emit_ret(None)?;
             }
         }
         match use_mode {

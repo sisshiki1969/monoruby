@@ -107,7 +107,7 @@ impl BytecodeGen {
         }
         self.emit_call(callid, ret, has_splat, loc);
         if use_mode.is_ret() {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -185,7 +185,7 @@ impl BytecodeGen {
         };
         self.emit_super(callid, ret, loc);
         if use_mode.is_ret() {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -251,7 +251,7 @@ impl BytecodeGen {
         );
         self.emit_call(callid, ret, false, loc);
         if use_mode.is_ret() {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -292,7 +292,7 @@ impl BytecodeGen {
         self.temp = old;
 
         if use_mode.is_ret() {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }

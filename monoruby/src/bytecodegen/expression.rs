@@ -268,7 +268,7 @@ impl BytecodeGen {
         match ret {
             Some(ret) => {
                 self.gen_store_expr(ret, last)?;
-                self.handle_mode(use_mode, ret);
+                self.handle_mode(use_mode, ret)?;
             }
             None => {
                 self.gen_expr(last, use_mode.into())?;
@@ -352,7 +352,7 @@ impl BytecodeGen {
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = self.is_assign_local(&lhs) {
                     self.gen_binop(op, lhs, rhs, UseMode2::Store(local.into()), loc)?;
-                    self.handle_mode(use_mode, local.into());
+                    self.handle_mode(use_mode, local.into())?;
                     return Ok(());
                 }
                 let lhs_loc = lhs.loc;
@@ -367,7 +367,7 @@ impl BytecodeGen {
                     UseMode::Ret => {
                         self.emit_assign(src, lhs_kind, None, lhs_loc);
                         self.temp = temp;
-                        self.emit_ret(Some(src));
+                        self.emit_ret(Some(src))?;
                     }
                     UseMode::Push => {
                         self.emit_assign(src, lhs_kind, None, lhs_loc);
@@ -386,7 +386,7 @@ impl BytecodeGen {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(local) = self.is_assign_local(&lhs) {
                         self.gen_store_expr(local.into(), rhs)?;
-                        self.handle_mode(use_mode, local.into());
+                        self.handle_mode(use_mode, local.into())?;
                         return Ok(());
                     }
                     let temp = self.temp;
@@ -397,7 +397,7 @@ impl BytecodeGen {
                         UseMode::Ret => {
                             self.emit_assign(src, lhs, None, loc);
                             self.temp = temp;
-                            self.emit_ret(Some(src));
+                            self.emit_ret(Some(src))?;
                         }
                         UseMode::Push => {
                             self.emit_assign(src, lhs, None, loc);
@@ -416,7 +416,7 @@ impl BytecodeGen {
             }
             NodeKind::LocalVar(0, ident) => {
                 if let Some(local) = self.refer_local(&ident) {
-                    self.handle_mode(use_mode, local.into());
+                    self.handle_mode(use_mode, local.into())?;
                     return Ok(());
                 } else {
                     let ret = self.push().into();
@@ -506,7 +506,7 @@ impl BytecodeGen {
                     self.gen_while(cond_op, cond, body, use_mode.use_val())?;
                 }
                 if use_mode.is_ret() {
-                    self.emit_ret(None);
+                    self.emit_ret(None)?;
                 }
                 return Ok(());
             }
@@ -517,7 +517,7 @@ impl BytecodeGen {
             } => {
                 self.gen_for(param, iter, body, use_mode.use_val())?;
                 if use_mode.is_ret() {
-                    self.emit_ret(None);
+                    self.emit_ret(None)?;
                 }
                 return Ok(());
             }
@@ -641,7 +641,7 @@ impl BytecodeGen {
                 };
                 self.emit(BcIr::ConcatStr(ret, arg, len), Loc::default());
                 if use_mode.is_ret() {
-                    self.emit_ret(None);
+                    self.emit_ret(None)?;
                 }
                 return Ok(());
             }
@@ -659,7 +659,7 @@ impl BytecodeGen {
                 match use_mode {
                     UseMode::Ret => {
                         self.push_nil();
-                        self.emit_ret(None);
+                        self.emit_ret(None)?;
                     }
                     UseMode::NotUse => {}
                     UseMode::Push => {
@@ -675,7 +675,7 @@ impl BytecodeGen {
         }
         match use_mode {
             UseMode::Ret => {
-                self.emit_ret(None);
+                self.emit_ret(None)?;
             }
             UseMode::NotUse => {
                 self.pop();
@@ -685,10 +685,10 @@ impl BytecodeGen {
         Ok(())
     }
 
-    fn handle_mode(&mut self, use_mode: UseMode, src: BcReg) {
+    fn handle_mode(&mut self, use_mode: UseMode, src: BcReg) -> Result<()> {
         match use_mode {
             UseMode::Ret => {
-                self.emit_ret(Some(src));
+                self.emit_ret(Some(src))?;
             }
             UseMode::Push => {
                 let dst = self.push();
@@ -696,6 +696,7 @@ impl BytecodeGen {
             }
             UseMode::NotUse => {}
         }
+        Ok(())
     }
 }
 
@@ -775,7 +776,7 @@ impl BytecodeGen {
         }
 
         if use_mode.is_ret() {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -798,7 +799,7 @@ impl BytecodeGen {
 // Literals
 //
 impl BytecodeGen {
-    fn gen_symbol(&mut self, sym: IdentId, use_mode: UseMode2) {
+    fn gen_symbol(&mut self, sym: IdentId, use_mode: UseMode2) -> Result<()> {
         match use_mode {
             UseMode2::NotUse => {}
             UseMode2::Push => {
@@ -809,9 +810,10 @@ impl BytecodeGen {
             }
             UseMode2::Ret => {
                 self.push_symbol(sym);
-                self.emit_ret(None);
+                self.emit_ret(None)?;
             }
         }
+        Ok(())
     }
 
     fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
@@ -901,7 +903,7 @@ impl BytecodeGen {
     ) -> Result<()> {
         let func_id = self.add_method(Some(name), block);
         self.emit(BcIr::MethodDef { name, func_id }, loc);
-        self.gen_symbol(name, use_mode);
+        self.gen_symbol(name, use_mode)?;
         Ok(())
     }
 
@@ -915,7 +917,7 @@ impl BytecodeGen {
         let func_id = self.add_method(Some(name), block);
         let obj = self.pop().into();
         self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
-        self.gen_symbol(name, use_mode);
+        self.gen_symbol(name, use_mode)?;
         Ok(())
     }
 
@@ -972,7 +974,7 @@ impl BytecodeGen {
             loc,
         );
         if use_mode == UseMode2::Ret {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
@@ -995,7 +997,7 @@ impl BytecodeGen {
         };
         self.emit(BcIr::SingletonClassDef { ret, base, func_id }, loc);
         if use_mode == UseMode2::Ret {
-            self.emit_ret(None);
+            self.emit_ret(None)?;
         }
         Ok(())
     }
