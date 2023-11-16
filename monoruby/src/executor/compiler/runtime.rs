@@ -200,6 +200,19 @@ pub(super) extern "C" fn concatenate_regexp(
     Some(Value::regexp(inner))
 }
 
+pub(super) extern "C" fn opt_case(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    callid: OptCaseId,
+    idx: Value,
+) -> u32 {
+    if let Some(idx) = idx.try_fixnum() {
+        globals.store[callid].find(idx)
+    } else {
+        globals.store[callid].default()
+    }
+}
+
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     match src.is_array() {
         Some(ary) => {

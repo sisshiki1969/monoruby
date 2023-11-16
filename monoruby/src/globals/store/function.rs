@@ -33,7 +33,6 @@ impl FuncId {
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
-#[repr(C)]
 pub(crate) struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,

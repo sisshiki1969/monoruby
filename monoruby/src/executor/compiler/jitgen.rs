@@ -1400,6 +1400,49 @@ impl Codegen {
                         jnz  branch_dest;
                     );
                 }
+                TraceIr::OptCase { cond, optid } => {
+                    self.fetch_to_rdi(&mut ctx, cond);
+                    let deopt = self.gen_side_deopt(pc, &ctx);
+                    self.guard_class(INTEGER_CLASS, deopt);
+                    let OptCaseInfo {
+                        min,
+                        max,
+                        else_,
+                        branch_table,
+                        offsets,
+                    } = &store[optid];
+                    let mut label_map = HashMap::default();
+                    for ofs in offsets {
+                        let dest_idx = bb_pos + 1 + (*ofs as i32);
+                        let branch_dest = self.jit.label();
+                        label_map.insert(dest_idx, branch_dest);
+                        cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
+                    }
+                    let else_idx = bb_pos + 1 + (*else_ as i32);
+                    let else_dest = self.jit.label();
+                    label_map.insert(else_idx, else_dest);
+                    cc.new_branch(func, bb_pos, else_idx, ctx.clone(), else_dest);
+
+                    let jump_table = self.jit.current_const();
+                    for ofs in branch_table.iter() {
+                        let idx = bb_pos + 1 + (*ofs as i32);
+                        let label = label_map.get(&idx).cloned().unwrap();
+                        self.jit.abs_address(label);
+                    }
+
+                    monoasm! {&mut self.jit,
+                        sarq rdi, 1;
+                        cmpq rdi, (*max);
+                        jgt  else_dest;
+                        subq rdi, (*min);
+                        jlt  else_dest;
+                        shlq rdi, 3;
+                        lea  rax, [rip + jump_table];
+                        addq rdi, rax;
+                        jmp  [rdi];
+                    };
+                    return;
+                }
             }
             ctx.clear();
             ctx.sp = ctx.next_sp;

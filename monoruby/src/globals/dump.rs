@@ -210,6 +210,9 @@ impl Globals {
                     i as i32 + 1 + disp
                 )
             }
+            TraceIr::OptCase { cond: dst, optid } => {
+                format!("opt_case {:?}->({:?})", dst, self.store[optid])
+            }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
             TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
             TraceIr::Range {

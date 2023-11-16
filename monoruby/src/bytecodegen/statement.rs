@@ -171,33 +171,95 @@ impl BytecodeGen {
         else_: Node,
         use_mode: UseMode,
     ) -> Result<()> {
+        let else_pos = self.new_label();
         let exit_pos = self.new_label();
         let base = self.temp;
         if let Some(box cond) = cond {
+            let loc = cond.loc;
             let rhs = self.push_expr(cond)?.into();
-            for branch in when_ {
-                let CaseBranch { box body, mut when } = branch;
-                let succ_pos = self.new_label();
-                if when.len() == 1 {
-                    let when = when.remove(0);
-                    self.gen_teq_condbr(when, rhs, succ_pos, false)?;
-                } else {
+            let mut idx_start = 2048;
+            let mut idx_end = 0;
+            //let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
+            if false
+                && when_.iter().all(|cb| {
+                    cb.when.iter().all(|node| {
+                        if let NodeKind::Integer(i) = node.kind {
+                            if 0 <= i && i < 2048 {
+                                idx_start = idx_start.min(i);
+                                idx_end = idx_end.max(i);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                })
+            {
+                let mut table = vec![];
+                let mut bodies = vec![];
+                let mut labels = vec![];
+                let min = idx_start as u16;
+                let max = idx_end as u16;
+                for branch in when_ {
+                    let CaseBranch { box body, when } = branch;
                     let then_pos = self.new_label();
+                    labels.push(then_pos);
                     for when in when {
-                        self.gen_teq_condbr(when, rhs, then_pos, true)?;
+                        let idx = if let NodeKind::Integer(i) = when.kind {
+                            i as u16 - min
+                        } else {
+                            unreachable!()
+                        };
+                        table.push((idx, then_pos));
                     }
-                    self.emit_br(succ_pos);
+                    bodies.push((then_pos, body));
+                }
+                self.emit(
+                    BcIr::OptCase {
+                        reg: rhs,
+                        min,
+                        max,
+                        else_: else_pos,
+                        table,
+                        labels,
+                    },
+                    loc,
+                );
+                for (then_pos, body) in bodies {
+                    self.temp = base;
                     self.apply_label(then_pos);
+                    self.gen_expr(body, use_mode.into())?;
+                    if !use_mode.is_ret() {
+                        self.emit_br(exit_pos);
+                    }
                 }
+            } else {
+                for branch in when_ {
+                    let CaseBranch { box body, mut when } = branch;
+                    let succ_pos = self.new_label();
+                    if when.len() == 1 {
+                        let when = when.remove(0);
+                        self.gen_teq_condbr(when, rhs, succ_pos, false)?;
+                    } else {
+                        let then_pos = self.new_label();
+                        for when in when {
+                            self.gen_teq_condbr(when, rhs, then_pos, true)?;
+                        }
+                        self.emit_br(succ_pos);
+                        self.apply_label(then_pos);
+                    }
 
-                self.temp = base;
-                self.gen_expr(body, use_mode.into())?;
+                    self.temp = base;
+                    self.gen_expr(body, use_mode.into())?;
 
-                if !use_mode.is_ret() {
-                    self.emit_br(exit_pos);
+                    if !use_mode.is_ret() {
+                        self.emit_br(exit_pos);
+                    }
+                    self.temp = base + 1;
+                    self.apply_label(succ_pos);
                 }
-                self.temp = base + 1;
-                self.apply_label(succ_pos);
             }
         } else {
             for branch in when_ {
@@ -226,6 +288,7 @@ impl BytecodeGen {
         }
 
         self.temp = base;
+        self.apply_label(else_pos);
         self.gen_expr(else_, use_mode.into())?;
 
         self.apply_label(exit_pos);

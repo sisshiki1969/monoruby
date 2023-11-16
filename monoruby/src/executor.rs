@@ -1142,8 +1142,8 @@ impl BcPc {
 
     pub(crate) fn is_terminal(self) -> bool {
         let opcode = self.opcode();
-        // Br or Ret or MethodRet or Break or Raise
-        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 || opcode == 83
+        // Br or Ret or MethodRet or Break or Raise or OptCase
+        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 || opcode == 83 || opcode == 36
     }
 
     pub(crate) fn is_loop_start(self) -> bool {

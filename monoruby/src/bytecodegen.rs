@@ -1195,6 +1195,7 @@ enum RecvKind {
 /// an index of bytecode instruction.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd)]
+#[repr(transparent)]
 pub(crate) struct BcIndex(pub u32);
 
 impl std::fmt::Debug for BcIndex {

@@ -19,12 +19,12 @@ pub const STORE_FUNCTION: usize = std::mem::offset_of!(Store, functions);
 pub(crate) struct Store {
     /// function info.
     functions: function::Funcs,
-    /// inline function info.
-    //inline: HashMap<FuncId, InlineMethod>,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
+    /// opt case branch info.
+    optcase_info: Vec<OptCaseInfo>,
     /// class table.
     classes: Vec<ClassInfo>,
     /// inline method info.
@@ -70,6 +70,13 @@ impl std::ops::IndexMut<CallSiteId> for Store {
     }
 }
 
+impl std::ops::Index<OptCaseId> for Store {
+    type Output = OptCaseInfo;
+    fn index(&self, index: OptCaseId) -> &Self::Output {
+        &self.optcase_info[index.0 as usize]
+    }
+}
+
 impl std::ops::Index<ClassId> for Store {
     type Output = ClassInfo;
     fn index(&self, index: ClassId) -> &Self::Output {
@@ -101,6 +108,7 @@ impl Store {
             functions: function::Funcs::default(),
             constsite_info: vec![],
             callsite_info: vec![],
+            optcase_info: vec![],
             classes: vec![ClassInfo::new(); 40],
             inline_method: vec![],
         }
@@ -284,6 +292,26 @@ impl Store {
         ConstSiteId(id as u32)
     }
 
+    pub(crate) fn add_optcase(
+        &mut self,
+        min: u16,
+        max: u16,
+        else_: u32,
+        branch_table: Vec<u32>,
+        offsets: Vec<u32>,
+    ) -> OptCaseId {
+        let id = self.optcase_info.len();
+        let branch_table = branch_table.into_boxed_slice();
+        self.optcase_info.push(OptCaseInfo {
+            min,
+            max,
+            else_,
+            branch_table,
+            offsets,
+        });
+        OptCaseId::from(id as u32)
+    }
+
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
@@ -375,6 +403,49 @@ impl std::convert::From<u32> for CallSiteId {
 }
 
 impl CallSiteId {
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OptCaseInfo {
+    pub min: u16,
+    pub max: u16,
+    pub else_: u32,
+    pub branch_table: Box<[u32]>,
+    pub offsets: Vec<u32>,
+}
+
+impl OptCaseInfo {
+    pub(crate) fn find(&self, idx: i64) -> u32 {
+        if let Ok(idx) = u16::try_from(idx) {
+            if idx >= self.min && idx <= self.max {
+                self.branch_table[(idx - self.min) as usize]
+            } else {
+                self.else_
+            }
+        } else {
+            self.else_
+        }
+    }
+
+    pub(crate) fn default(&self) -> u32 {
+        self.else_
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct OptCaseId(pub u32);
+
+impl std::convert::From<u32> for OptCaseId {
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl OptCaseId {
     pub fn get(&self) -> u32 {
         self.0
     }

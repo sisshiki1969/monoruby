@@ -117,6 +117,15 @@ pub(super) enum BcIr {
     CheckLocal(BcReg, Label),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
+    OptCase {
+        // a register for cond and ret.
+        reg: BcReg,
+        min: u16,
+        max: u16,
+        else_: Label,
+        table: Vec<(u16, Label)>,
+        labels: Vec<Label>,
+    },
     Ret(BcReg),
     MethodRet(BcReg),
     Break(BcReg),

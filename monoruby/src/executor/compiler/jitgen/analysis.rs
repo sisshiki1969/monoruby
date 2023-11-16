@@ -451,6 +451,10 @@ impl JitContext {
                     info.r#use(src);
                     return (ExitType::Continue, info);
                 }
+                TraceIr::OptCase { cond, .. } => {
+                    info.r#use(cond);
+                    return (ExitType::Continue, info);
+                }
             }
         }
         (ExitType::Continue, info)
