@@ -226,10 +226,6 @@ impl Store {
         self.functions.add_attr_writer(name, ivar_name)
     }
 
-    pub(crate) fn callsite_offset(&self) -> usize {
-        self.callsite_info.len()
-    }
-
     pub(crate) fn add_callsite(
         &mut self,
         name: Option<IdentId>,

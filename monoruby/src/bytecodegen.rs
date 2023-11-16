@@ -43,12 +43,7 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
     let info = store[func_id].as_ruby_func();
     let (fid, outer) = info.mother;
     let params = store[fid].as_ruby_func().args.clone();
-    let mut gen = BytecodeGen::new(
-        info,
-        (fid, params, outer),
-        store.callsite_offset(),
-        store.func_len(),
-    );
+    let mut gen = BytecodeGen::new(info, (fid, params, outer), store.func_len());
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -251,6 +246,46 @@ struct CallSite {
     ret: Option<BcReg>,
 }
 
+impl CallSite {
+    fn new(
+        name: impl Into<Option<IdentId>>,
+        pos_num: usize,
+        kw: Option<KeywordArgs>,
+        splat_pos: Vec<usize>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<BcReg>,
+        args: BcReg,
+        recv: BcReg,
+        ret: Option<BcReg>,
+    ) -> Self {
+        let name = name.into();
+        let kw_len = kw.as_ref().map_or(0, |kw| kw.len());
+        let len = pos_num + kw_len + block_arg.is_some() as usize;
+        CallSite {
+            name,
+            pos_num,
+            kw,
+            splat_pos,
+            block_fid,
+            block_arg,
+            args,
+            len,
+            recv,
+            ret,
+        }
+    }
+
+    fn simple(
+        name: impl Into<Option<IdentId>>,
+        len: usize,
+        args: BcReg,
+        recv: BcReg,
+        ret: Option<BcReg>,
+    ) -> CallSite {
+        CallSite::new(name, len, None, vec![], None, None, args, recv, ret)
+    }
+}
+
 ///
 /// keyword arguments information of *Callsite*.
 ///
@@ -430,10 +465,6 @@ struct BytecodeGen {
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
-    /// Call site info.
-    callsites: Vec<CallSite>,
-    /// Offset of call site info.
-    callsite_offset: usize,
     /// Func info.
     functions: Vec<Functions>,
     /// Offset of func info.
@@ -449,20 +480,8 @@ impl std::ops::Index<Label> for BytecodeGen {
     }
 }
 
-impl std::ops::Index<CallSiteId> for BytecodeGen {
-    type Output = CallSite;
-    fn index(&self, index: CallSiteId) -> &Self::Output {
-        &self.callsites[index.0 as usize - self.callsite_offset]
-    }
-}
-
 impl BytecodeGen {
-    fn new(
-        info: &ISeqInfo,
-        mother: (FuncId, ParamsInfo, usize),
-        callsite_offset: usize,
-        functions_offset: usize,
-    ) -> Self {
+    fn new(info: &ISeqInfo, mother: (FuncId, ParamsInfo, usize), functions_offset: usize) -> Self {
         let mut ir = Self {
             id: info.id(),
             mother,
@@ -480,8 +499,6 @@ impl BytecodeGen {
             non_temp_num: 0,
             sourceinfo: info.sourceinfo.clone(),
             exception_table: vec![],
-            callsites: vec![],
-            callsite_offset,
             functions: vec![],
             functions_offset,
             merge_info: HashMap::default(),
@@ -496,48 +513,6 @@ impl BytecodeGen {
 
     fn is_block(&self) -> bool {
         !self.outer_locals.is_empty()
-    }
-
-    fn add_callsite(
-        &mut self,
-        name: impl Into<Option<IdentId>>,
-        pos_num: usize,
-        kw: Option<KeywordArgs>,
-        splat_pos: Vec<usize>,
-        block_fid: Option<FuncId>,
-        block_arg: Option<BcReg>,
-        args: BcReg,
-        recv: BcReg,
-        ret: Option<BcReg>,
-    ) -> CallSiteId {
-        let name = name.into();
-        let id = self.callsite_offset + self.callsites.len();
-        let kw_len = kw.as_ref().map_or(0, |kw| kw.len());
-        let len = pos_num + kw_len + block_arg.is_some() as usize;
-        self.callsites.push(CallSite {
-            name,
-            pos_num,
-            kw,
-            splat_pos,
-            block_fid,
-            block_arg,
-            args,
-            len,
-            recv,
-            ret,
-        });
-        CallSiteId(id as u32)
-    }
-
-    fn add_callsite_simple(
-        &mut self,
-        name: impl Into<Option<IdentId>>,
-        len: usize,
-        args: BcReg,
-        recv: BcReg,
-        ret: Option<BcReg>,
-    ) -> CallSiteId {
-        self.add_callsite(name, len, None, vec![], None, None, args, recv, ret)
     }
 
     fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
@@ -836,7 +811,7 @@ impl BytecodeGen {
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
-        let id = self.add_callsite(
+        let calsite = CallSite::new(
             None,
             len,
             None,
@@ -847,7 +822,7 @@ impl BytecodeGen {
             BcReg::Self_,
             Some(ret),
         );
-        self.emit(BcIr::Array(ret, id), loc);
+        self.emit(BcIr::Array(ret, Box::new(calsite)), loc);
     }
 
     fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {
@@ -1073,21 +1048,21 @@ impl BytecodeGen {
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
-                let callid =
-                    self.add_callsite_simple(IdentId::_INDEX_ASSIGN, 3, index1.into(), base, None);
+                let callsite =
+                    CallSite::simple(IdentId::_INDEX_ASSIGN, 3, index1.into(), base, None);
                 self.emit_mov((index1 + 2).into(), src);
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit(BcIr::MethodCall(None, callid, false), loc);
+                self.emit(BcIr::MethodCall(None, Box::new(callsite), false), loc);
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = self.add_callsite_simple(method, 1, src, recv, None);
+                let callsite = CallSite::simple(method, 1, src, recv, None);
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit_method_assign(callid, loc);
+                self.emit_method_assign(callsite, loc);
             }
             LvalueKind::LocalVar { dst } => {
                 if let Some(old_temp) = old_temp {

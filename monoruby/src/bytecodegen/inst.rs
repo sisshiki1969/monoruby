@@ -35,13 +35,13 @@ pub(super) enum BinopMode {
 ///
 /// bytecode Ir.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(super) enum BcIr {
     Nil(BcReg),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
-    Array(BcReg, CallSiteId),
+    Array(BcReg, Box<CallSite>),
     Hash {
         ret: BcReg,
         args: BcReg,
@@ -131,15 +131,15 @@ pub(super) enum BcIr {
     Break(BcReg),
     Raise(BcReg),
     EnsureEnd,
-    MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
-    MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
-    Super(Option<BcReg>, CallSiteId),
+    MethodCall(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
+    MethodCallBlock(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
+    Super(Option<BcReg>, Box<CallSite>),
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,
         len: usize,
-        callid: CallSiteId,
+        callsite: Box<CallSite>,
     },
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
