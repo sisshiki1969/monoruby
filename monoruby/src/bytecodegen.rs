@@ -43,7 +43,7 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
     let info = store[func_id].as_ruby_func();
     let (fid, outer) = info.mother;
     let params = store[fid].as_ruby_func().args.clone();
-    let mut gen = BytecodeGen::new(info, (fid, params, outer), store.func_len());
+    let mut gen = BytecodeGen::new(info, (fid, params, outer));
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -234,7 +234,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_fid: Option<FuncId>,
+    block_fid: Option<Functions>,
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
@@ -252,7 +252,7 @@ impl CallSite {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_fid: Option<FuncId>,
+        block_fid: Option<Functions>,
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
@@ -465,10 +465,6 @@ struct BytecodeGen {
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
-    /// Func info.
-    functions: Vec<Functions>,
-    /// Offset of func info.
-    functions_offset: usize,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
 }
@@ -481,7 +477,7 @@ impl std::ops::Index<Label> for BytecodeGen {
 }
 
 impl BytecodeGen {
-    fn new(info: &ISeqInfo, mother: (FuncId, ParamsInfo, usize), functions_offset: usize) -> Self {
+    fn new(info: &ISeqInfo, mother: (FuncId, ParamsInfo, usize)) -> Self {
         let mut ir = Self {
             id: info.id(),
             mother,
@@ -499,8 +495,6 @@ impl BytecodeGen {
             non_temp_num: 0,
             sourceinfo: info.sourceinfo.clone(),
             exception_table: vec![],
-            functions: vec![],
-            functions_offset,
             merge_info: HashMap::default(),
         };
         info.args.args_names.iter().for_each(|name| {
@@ -515,16 +509,12 @@ impl BytecodeGen {
         !self.outer_locals.is_empty()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
-        let id = self.functions_offset + self.functions.len();
-        self.functions.push(Functions::Method { name, info });
-        FuncId::new(id as _)
+    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
+        Functions::Method { name, info }
     }
 
-    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
-        let id = self.functions_offset + self.functions.len();
-        self.functions.push(Functions::ClassDef { name, info });
-        FuncId::new(id as _)
+    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
+        Functions::ClassDef { name, info }
     }
 
     fn add_block(
@@ -533,15 +523,13 @@ impl BytecodeGen {
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
-    ) -> FuncId {
-        let id = self.functions_offset + self.functions.len();
-        self.functions.push(Functions::Block {
+    ) -> Functions {
+        Functions::Block {
             mother,
             outer,
             optional_params,
             info,
-        });
-        FuncId::new(id as _)
+        }
     }
 
     fn loop_push(&mut self, break_dest: Label, next_dest: Label, ret: Option<BcReg>) {

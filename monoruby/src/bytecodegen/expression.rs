@@ -901,8 +901,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = self.add_method(Some(name), block);
-        self.emit(BcIr::MethodDef { name, func_id }, loc);
+        let func = self.add_method(Some(name), block);
+        self.emit(BcIr::MethodDef { name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -914,9 +914,9 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = self.add_method(Some(name), block);
+        let func = self.add_method(Some(name), block);
         let obj = self.pop().into();
-        self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
+        self.emit(BcIr::SingletonMethodDef { obj, name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -950,7 +950,7 @@ impl BytecodeGen {
                 self.sourceinfo.clone(),
             ));
         };
-        let func_id = self.add_classdef(Some(name), info);
+        let func = self.add_classdef(Some(name), info);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(*superclass)?),
             None => None,
@@ -962,13 +962,13 @@ impl BytecodeGen {
         };
         self.emit(
             if is_module {
-                BcIr::ModuleDef { ret, name, func_id }
+                BcIr::ModuleDef { ret, name, func }
             } else {
                 BcIr::ClassDef {
                     ret,
                     superclass,
                     name,
-                    func_id,
+                    func,
                 }
             },
             loc,
@@ -986,7 +986,7 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = self.add_classdef(None, info);
+        let func = self.add_classdef(None, info);
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;
@@ -995,7 +995,7 @@ impl BytecodeGen {
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
             UseMode2::Store(r) => Some(r),
         };
-        self.emit(BcIr::SingletonClassDef { ret, base, func_id }, loc);
+        self.emit(BcIr::SingletonClassDef { ret, base, func }, loc);
         if use_mode == UseMode2::Ret {
             self.emit_ret(None)?;
         }

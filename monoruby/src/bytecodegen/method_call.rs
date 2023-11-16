@@ -383,7 +383,7 @@ impl BytecodeGen {
         }
     }
 
-    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
+    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<Functions>> {
         match block.kind {
             NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
             NodeKind::LocalVar(0, proc_local) => {
@@ -419,7 +419,7 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Result<FuncId> {
+    ) -> Result<Functions> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         let func_id = self.add_block(

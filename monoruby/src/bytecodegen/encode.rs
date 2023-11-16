@@ -32,28 +32,9 @@ impl BytecodeGen {
         let mut locs = vec![];
         let ir = std::mem::take(&mut self.ir);
         for (idx, (inst, loc)) in ir.into_iter().enumerate() {
-            let op = self.inst_to_bc(store, inst, idx);
+            let op = self.inst_to_bc(store, inst, idx, loc)?;
             ops.push(op);
             locs.push(loc);
-        }
-        for f in std::mem::take(&mut self.functions) {
-            let sourceinfo = self.sourceinfo.clone();
-            match f {
-                Functions::Method { name, info } => {
-                    store.add_method(name, info, loc, sourceinfo)?;
-                }
-                Functions::ClassDef { name, info } => {
-                    store.add_classdef(name, info, loc, sourceinfo)?;
-                }
-                Functions::Block {
-                    mother,
-                    outer,
-                    optional_params,
-                    info,
-                } => {
-                    store.add_block(mother, outer, optional_params, info, loc, sourceinfo)?;
-                }
-            }
         }
         let info = store[func_id].as_ruby_func_mut();
         info.temp_num = self.temp_num;
@@ -94,15 +75,24 @@ impl BytecodeGen {
         info.get_pc(self[label])
     }
 
-    fn inst_to_bc(&self, store: &mut Store, inst: BcIr, idx: usize) -> Bc {
-        match inst {
-            BcIr::SingletonMethodDef { obj, name, func_id } => {
+    fn inst_to_bc(&self, store: &mut Store, inst: BcIr, idx: usize, loc: Loc) -> Result<Bc> {
+        let bc = match inst {
+            BcIr::SingletonMethodDef {
+                obj,
+                name,
+                func: func_id,
+            } => {
                 // 1
                 let op1 = self.get_index(&obj);
+                let func_id = self.functions(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(name), func_id)
             }
-            BcIr::MethodDef { name, func_id } => {
+            BcIr::MethodDef {
+                name,
+                func: func_id,
+            } => {
                 // 2
+                let func_id = self.functions(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
             BcIr::Br(dst) => {
@@ -184,7 +174,7 @@ impl BytecodeGen {
                 ret,
                 superclass,
                 name,
-                func_id,
+                func: func_id,
             } => {
                 // 18
                 let op1 = match ret {
@@ -195,14 +185,20 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
+                let func_id = self.functions(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), Some(name), func_id)
             }
-            BcIr::ModuleDef { ret, name, func_id } => {
+            BcIr::ModuleDef {
+                ret,
+                name,
+                func: func_id,
+            } => {
                 // 19
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
+                let func_id = self.functions(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), Some(name), func_id)
             }
             BcIr::CheckLocal(local, dst) => {
@@ -217,13 +213,18 @@ impl BytecodeGen {
                 let op1 = self.get_index(&dst);
                 Bc::from(enc_wl(21, op1.0, outer as u32))
             }
-            BcIr::SingletonClassDef { ret, base, func_id } => {
+            BcIr::SingletonClassDef {
+                ret,
+                base,
+                func: func_id,
+            } => {
                 // 22
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
                 let op2 = self.get_index(&base);
+                let func_id = self.functions(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
             BcIr::BlockArg(dst, outer) => {
@@ -252,7 +253,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite);
+                let callid = self.callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
                     ClassId::new(0),
@@ -265,7 +266,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite);
+                let callid = self.callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 32 } else { 33 }, op1.0, callid.get()),
                     ClassId::new(0),
@@ -278,7 +279,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite);
+                let callid = self.callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(34, op1.0, callid.get()),
                     ClassId::new(0),
@@ -288,7 +289,7 @@ impl BytecodeGen {
             BcIr::Array(ret, box callsite) => {
                 // 35
                 let op1 = self.get_index(&ret);
-                let callid = self.callsite(store, callsite);
+                let callid = self.callsite(store, callsite, loc)?;
                 Bc::from(enc_wl(35, op1.0, callid.get()))
             }
             BcIr::OptCase {
@@ -464,7 +465,7 @@ impl BytecodeGen {
                     Some(ret) => self.get_index(&ret),
                 };
                 let op2 = self.get_index(&args);
-                let callid = self.callsite(store, callsite);
+                let callid = self.callsite(store, callsite, loc)?;
                 Bc::from_with_callid(enc_www(152, op1.0, op2.0, len as u16), callid)
             }
 
@@ -524,10 +525,11 @@ impl BytecodeGen {
                     }
                 }
             }
-        }
+        };
+        Ok(bc)
     }
 
-    fn callsite(&self, store: &mut Store, callsite: CallSite) -> CallSiteId {
+    fn callsite(&self, store: &mut Store, callsite: CallSite, loc: Loc) -> Result<CallSiteId> {
         let CallSite {
             name,
             pos_num,
@@ -540,6 +542,12 @@ impl BytecodeGen {
             recv,
             ret,
         } = callsite;
+
+        let block_fid = if let Some(block_fid) = block_fid {
+            Some(self.functions(store, block_fid, loc)?)
+        } else {
+            None
+        };
 
         let args = self.get_index(&args);
         let recv = self.get_index(&recv);
@@ -568,7 +576,7 @@ impl BytecodeGen {
         } else {
             (SlotId(0), HashMap::default(), vec![])
         };
-        store.add_callsite(
+        Ok(store.add_callsite(
             name,
             pos_num,
             kw_pos,
@@ -581,7 +589,21 @@ impl BytecodeGen {
             len,
             recv,
             ret,
-        )
+        ))
+    }
+
+    fn functions(&self, store: &mut Store, function: Functions, loc: Loc) -> Result<FuncId> {
+        let sourceinfo = self.sourceinfo.clone();
+        match function {
+            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
+            Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
+            Functions::Block {
+                mother,
+                outer,
+                optional_params,
+                info,
+            } => store.add_block(mother, outer, optional_params, info, loc, sourceinfo),
+        }
     }
 }
 

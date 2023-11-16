@@ -145,28 +145,28 @@ pub(super) enum BcIr {
     InitBlock(FnInitInfo),
     MethodDef {
         name: IdentId,
-        func_id: FuncId,
+        func: Functions,
     },
     ClassDef {
         ret: Option<BcReg>,
         superclass: Option<BcReg>,
         name: IdentId,
-        func_id: FuncId,
+        func: Functions,
     },
     SingletonClassDef {
         ret: Option<BcReg>,
         base: BcReg,
-        func_id: FuncId,
+        func: Functions,
     },
     ModuleDef {
         ret: Option<BcReg>,
         name: IdentId,
-        func_id: FuncId,
+        func: Functions,
     },
     SingletonMethodDef {
         obj: BcReg,
         name: IdentId,
-        func_id: FuncId,
+        func: Functions,
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
