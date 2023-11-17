@@ -3,12 +3,8 @@ use crate::jitgen::BasicBlockInfo;
 use super::*;
 
 impl BytecodeGen {
-    pub(super) fn into_bytecode(
-        mut self,
-        store: &mut Store,
-        func_id: FuncId,
-        loc: Loc,
-    ) -> Result<()> {
+    pub(super) fn into_bytecode(mut self, store: &mut Store, loc: Loc) -> Result<()> {
+        let func_id = self.id;
         for (dst, (dst_sp, src)) in std::mem::take(&mut self.merge_info) {
             let dst_idx = self[dst];
             let dst_sp = dst_sp.unwrap();
@@ -28,14 +24,7 @@ impl BytecodeGen {
             }
         }
 
-        let mut ops = vec![];
-        let mut locs = vec![];
-        let ir = std::mem::take(&mut self.ir);
-        for (idx, (inst, loc)) in ir.into_iter().enumerate() {
-            let op = self.inst_to_bc(store, inst, idx, loc)?;
-            ops.push(op);
-            locs.push(loc);
-        }
+        let (ops, sourcemap) = self.ir_to_bc(store)?;
         let info = store[func_id].as_ruby_func_mut();
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
@@ -59,7 +48,7 @@ impl BytecodeGen {
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
-        info.sourcemap = locs;
+        info.sourcemap = sourcemap;
         let sp = std::mem::take(&mut self.sp);
         info.sp = sp
             .into_iter()
@@ -67,7 +56,7 @@ impl BytecodeGen {
             .collect();
 
         info.bb_info = BasicBlockInfo::new(info);
-
+        store.set_func_data(func_id);
         Ok(())
     }
 
@@ -75,24 +64,29 @@ impl BytecodeGen {
         info.get_pc(self[label])
     }
 
+    fn ir_to_bc(&mut self, store: &mut Store) -> Result<(Vec<Bc>, Vec<Loc>)> {
+        let mut ops = vec![];
+        let mut sourcemap = vec![];
+        let ir = std::mem::take(&mut self.ir);
+        for (idx, (inst, loc)) in ir.into_iter().enumerate() {
+            let op = self.inst_to_bc(store, inst, idx, loc)?;
+            ops.push(op);
+            sourcemap.push(loc);
+        }
+        Ok((ops, sourcemap))
+    }
+
     fn inst_to_bc(&self, store: &mut Store, inst: BcIr, idx: usize, loc: Loc) -> Result<Bc> {
         let bc = match inst {
-            BcIr::SingletonMethodDef {
-                obj,
-                name,
-                func: func_id,
-            } => {
+            BcIr::SingletonMethodDef { obj, name, func } => {
                 // 1
                 let op1 = self.get_index(&obj);
-                let func_id = self.functions(store, func_id, loc)?;
+                let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(name), func_id)
             }
-            BcIr::MethodDef {
-                name,
-                func: func_id,
-            } => {
+            BcIr::MethodDef { name, func } => {
                 // 2
-                let func_id = self.functions(store, func_id, loc)?;
+                let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
             BcIr::Br(dst) => {
@@ -185,7 +179,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let func_id = self.functions(store, func_id, loc)?;
+                let func_id = self.new_function(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), Some(name), func_id)
             }
             BcIr::ModuleDef {
@@ -198,7 +192,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let func_id = self.functions(store, func_id, loc)?;
+                let func_id = self.new_function(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), Some(name), func_id)
             }
             BcIr::CheckLocal(local, dst) => {
@@ -224,7 +218,7 @@ impl BytecodeGen {
                     Some(ret) => self.get_index(&ret),
                 };
                 let op2 = self.get_index(&base);
-                let func_id = self.functions(store, func_id, loc)?;
+                let func_id = self.new_function(store, func_id, loc)?;
                 Bc::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
             BcIr::BlockArg(dst, outer) => {
@@ -253,7 +247,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
                     ClassId::new(0),
@@ -266,7 +260,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 32 } else { 33 }, op1.0, callid.get()),
                     ClassId::new(0),
@@ -279,7 +273,7 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.get_index(&ret),
                 };
-                let callid = self.callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(34, op1.0, callid.get()),
                     ClassId::new(0),
@@ -289,7 +283,7 @@ impl BytecodeGen {
             BcIr::Array(ret, box callsite) => {
                 // 35
                 let op1 = self.get_index(&ret);
-                let callid = self.callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from(enc_wl(35, op1.0, callid.get()))
             }
             BcIr::OptCase {
@@ -465,7 +459,7 @@ impl BytecodeGen {
                     Some(ret) => self.get_index(&ret),
                 };
                 let op2 = self.get_index(&args);
-                let callid = self.callsite(store, callsite, loc)?;
+                let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_callid(enc_www(152, op1.0, op2.0, len as u16), callid)
             }
 
@@ -529,7 +523,7 @@ impl BytecodeGen {
         Ok(bc)
     }
 
-    fn callsite(&self, store: &mut Store, callsite: CallSite, loc: Loc) -> Result<CallSiteId> {
+    fn new_callsite(&self, store: &mut Store, callsite: CallSite, loc: Loc) -> Result<CallSiteId> {
         let CallSite {
             name,
             pos_num,
@@ -544,7 +538,7 @@ impl BytecodeGen {
         } = callsite;
 
         let block_fid = if let Some(block_fid) = block_fid {
-            Some(self.functions(store, block_fid, loc)?)
+            Some(self.new_function(store, block_fid, loc)?)
         } else {
             None
         };
@@ -592,9 +586,9 @@ impl BytecodeGen {
         ))
     }
 
-    fn functions(&self, store: &mut Store, function: Functions, loc: Loc) -> Result<FuncId> {
+    fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        match function {
+        match func {
             Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
             Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
             Functions::Block {

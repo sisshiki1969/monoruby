@@ -21,7 +21,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Bytecode.
     ///
-    pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
+    bytecode: Option<Pin<Box<[Bc]>>>,
     ///
     /// Location of the function in a source code.
     ///

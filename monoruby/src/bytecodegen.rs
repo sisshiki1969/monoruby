@@ -85,9 +85,8 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
     }
     gen.gen_expr(ast, UseMode2::Ret)?;
     gen.replace_init(info);
-    //assert_eq!(0, ir.temp);
-    gen.into_bytecode(store, func_id, loc)?;
-    store.set_func_data(func_id);
+    gen.into_bytecode(store, loc)?;
+
     Ok(())
 }
 
