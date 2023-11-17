@@ -179,7 +179,7 @@ impl BytecodeGen {
             let rhs = self.push_expr(cond)?.into();
             let mut idx_start = 2048;
             let mut idx_end = 0;
-            //let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
+            let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
             if false
                 && when_.iter().all(|cb| {
                     cb.when.iter().all(|node| {

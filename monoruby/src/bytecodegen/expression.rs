@@ -902,7 +902,13 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<()> {
         let func = self.add_method(Some(name), block);
-        self.emit(BcIr::MethodDef { name, func }, loc);
+        self.emit(
+            BcIr::MethodDef {
+                name,
+                func: Box::new(func),
+            },
+            loc,
+        );
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -916,7 +922,14 @@ impl BytecodeGen {
     ) -> Result<()> {
         let func = self.add_method(Some(name), block);
         let obj = self.pop().into();
-        self.emit(BcIr::SingletonMethodDef { obj, name, func }, loc);
+        self.emit(
+            BcIr::SingletonMethodDef {
+                obj,
+                name,
+                func: Box::new(func),
+            },
+            loc,
+        );
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -962,13 +975,17 @@ impl BytecodeGen {
         };
         self.emit(
             if is_module {
-                BcIr::ModuleDef { ret, name, func }
+                BcIr::ModuleDef {
+                    ret,
+                    name,
+                    func: Box::new(func),
+                }
             } else {
                 BcIr::ClassDef {
                     ret,
                     superclass,
                     name,
-                    func,
+                    func: Box::new(func),
                 }
             },
             loc,
@@ -995,7 +1012,14 @@ impl BytecodeGen {
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
             UseMode2::Store(r) => Some(r),
         };
-        self.emit(BcIr::SingletonClassDef { ret, base, func }, loc);
+        self.emit(
+            BcIr::SingletonClassDef {
+                ret,
+                base,
+                func: Box::new(func),
+            },
+            loc,
+        );
         if use_mode == UseMode2::Ret {
             self.emit_ret(None)?;
         }

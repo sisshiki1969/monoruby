@@ -324,45 +324,6 @@ impl ISeqInfo {
         self.bytecode().len()
     }
 
-    ///
-    /// Get basic block information.
-    ///
-    /// This returns a Vec which represents whether it is a start of a basic block for each bytecode.
-    ///
-    /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
-    ///
-    pub(crate) fn get_incoming(&self) -> Vec<Vec<BcIndex>> {
-        let mut info = vec![vec![]; self.bytecode_len() + 1];
-        for (i, pc) in self.bytecode().iter().enumerate() {
-            let idx = BcIndex::from(i);
-            let pc = BcPc::from(pc);
-            if let Some(disp) = pc.is_branch() {
-                let dest = ((i + 1) as i32 + disp) as usize;
-                info[dest].push(idx);
-                if !pc.is_terminal() {
-                    // "not taken" edge for conditional branches.
-                    if !info[i + 1].contains(&idx) {
-                        info[i + 1].push(idx);
-                    }
-                }
-            } else if pc.is_loop_end() {
-                info[i + 1].push(idx);
-            }
-        }
-        for (i, pc) in self.bytecode().iter().enumerate() {
-            let idx = BcIndex::from(i);
-            let pc = BcPc::from(pc);
-            if !info[i + 1].is_empty() && !pc.is_terminal() {
-                if !info[i + 1].contains(&idx) {
-                    info[i + 1].push(idx);
-                }
-            }
-        }
-        assert_eq!(0, info[self.bytecode_len()].len());
-        info.pop();
-        info
-    }
-
     #[cfg(any(feature = "emit-asm", feature = "emit-bc"))]
     pub(super) fn get_exception_map(
         &self,

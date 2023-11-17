@@ -1121,40 +1121,6 @@ impl BcPc {
     pub fn get_ir(&self) -> TraceIr {
         TraceIr::from_bc(*self)
     }
-
-    pub(crate) fn is_branch(self) -> Option<i32> {
-        let op = self.op1;
-        let opcode = self.opcode();
-        if opcode & 0x80 == 0 {
-            let (_, op2) = compiler::jitgen::trace_ir::dec_wl(op);
-            match opcode {
-                3 => Some(op2 as i32),       // Br
-                4 => Some(op2 as i32),       // CondBr
-                5 => Some(op2 as i32),       // CondBr
-                12..=13 => Some(op2 as i32), // CondBr
-                20 => Some(op2 as i32),      // CheckLocal
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn is_terminal(self) -> bool {
-        let opcode = self.opcode();
-        // Br or Ret or MethodRet or Break or Raise or OptCase
-        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 || opcode == 83 || opcode == 36
-    }
-
-    pub(crate) fn is_loop_start(self) -> bool {
-        let opcode = self.opcode();
-        opcode == 14 // LoopStart
-    }
-
-    pub(crate) fn is_loop_end(self) -> bool {
-        let opcode = self.opcode();
-        opcode == 15 // LoopEnd
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
