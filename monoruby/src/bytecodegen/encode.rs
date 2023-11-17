@@ -105,7 +105,7 @@ impl BytecodeGen {
             sourcemap.push(*loc);
         }
         for (idx, (inst, _)) in ir.iter().enumerate() {
-            if !incoming[idx].is_empty() && !inst.is_terminal() {
+            if !incoming[idx + 1].is_empty() && !inst.is_terminal() {
                 incoming.push(idx, idx + 1);
             }
         }

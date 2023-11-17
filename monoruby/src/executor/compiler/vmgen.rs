@@ -1743,7 +1743,7 @@ impl Codegen {
             movq rax, (runtime::opt_case);
             call rax;
             movl rdi, rax;
-            jp branch;
+            jmp branch;
         };
         label
     }

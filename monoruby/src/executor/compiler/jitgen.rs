@@ -1401,9 +1401,6 @@ impl Codegen {
                     );
                 }
                 TraceIr::OptCase { cond, optid } => {
-                    self.fetch_to_rdi(&mut ctx, cond);
-                    let deopt = self.gen_side_deopt(pc, &ctx);
-                    self.guard_class(INTEGER_CLASS, deopt);
                     let OptCaseInfo {
                         min,
                         max,
@@ -1423,12 +1420,17 @@ impl Codegen {
                     label_map.insert(else_idx, else_dest);
                     cc.new_branch(func, bb_pos, else_idx, ctx.clone(), else_dest);
 
+                    self.jit.select_page(1);
                     let jump_table = self.jit.current_const();
                     for ofs in branch_table.iter() {
                         let idx = bb_pos + 1 + (*ofs as i32);
                         let label = label_map.get(&idx).cloned().unwrap();
                         self.jit.abs_address(label);
                     }
+                    self.jit.select_page(0);
+
+                    self.fetch_to_rdi(&mut ctx, cond);
+                    self.guard_class(INTEGER_CLASS, else_dest);
 
                     monoasm! {&mut self.jit,
                         sarq rdi, 1;
@@ -1436,10 +1438,8 @@ impl Codegen {
                         jgt  else_dest;
                         subq rdi, (*min);
                         jlt  else_dest;
-                        shlq rdi, 3;
                         lea  rax, [rip + jump_table];
-                        addq rdi, rax;
-                        jmp  [rdi];
+                        jmp  [rax + rdi * 8];
                     };
                     return;
                 }
