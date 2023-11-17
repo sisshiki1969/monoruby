@@ -3,7 +3,7 @@ mod test {
     use crate::tests::*;
 
     #[test]
-    fn rescue1() {
+    fn begin_use() {
         run_test(
             r#"
             # Use
@@ -15,7 +15,7 @@ mod test {
     }
 
     #[test]
-    fn rescue2() {
+    fn begin_nouse() {
         run_test(
             r#"
             # NoUse
@@ -28,7 +28,7 @@ mod test {
     }
 
     #[test]
-    fn rescue3() {
+    fn begin_ret() {
         run_test_once(
             r#"
             # Ret
@@ -40,7 +40,7 @@ mod test {
     }
 
     #[test]
-    fn rescue4() {
+    fn rescue_ret() {
         run_test_once(
             r#"
             #Ret
@@ -54,7 +54,7 @@ mod test {
     }
 
     #[test]
-    fn rescue5() {
+    fn rescue_use() {
         run_test(
             r#"
             begin
@@ -67,7 +67,7 @@ mod test {
     }
 
     #[test]
-    fn rescue6() {
+    fn rescue_else() {
         run_test(
             r#"
             begin
@@ -81,7 +81,7 @@ mod test {
     }
 
     #[test]
-    fn rescue7() {
+    fn rescue_else_ensure() {
         run_test(
             r#"
             begin
