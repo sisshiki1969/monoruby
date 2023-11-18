@@ -180,7 +180,7 @@ impl BytecodeGen {
             let mut idx_start = 2048;
             let mut idx_end = 0;
             let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
-            if false
+            if branch_len >= 8
                 && when_.iter().all(|cb| {
                     cb.when.iter().all(|node| {
                         if let NodeKind::Integer(i) = node.kind {

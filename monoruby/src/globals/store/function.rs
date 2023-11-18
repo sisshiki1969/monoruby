@@ -642,7 +642,7 @@ impl FuncInfo {
 }
 
 impl FuncInfo {
-    #[cfg(any(feature = "emit-asm", feature = "emit-bc"))]
+    #[cfg(feature = "emit-bc")]
     pub(crate) fn dump_bc(&self, globals: &Globals) {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");

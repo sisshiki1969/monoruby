@@ -11,7 +11,9 @@ ruby --yjit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master
 echo
 
 monoruby -v
+echo ""
 monoruby --no-jit ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
+echo "with --opt"
 monoruby --no-jit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
 monoruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes

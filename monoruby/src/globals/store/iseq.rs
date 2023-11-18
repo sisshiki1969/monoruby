@@ -324,7 +324,7 @@ impl ISeqInfo {
         self.bytecode().len()
     }
 
-    #[cfg(any(feature = "emit-asm", feature = "emit-bc"))]
+    #[cfg(feature = "emit-bc")]
     pub(super) fn get_exception_map(
         &self,
     ) -> Vec<(

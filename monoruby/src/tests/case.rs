@@ -105,15 +105,15 @@ mod test {
             r#"
         case 4
         when 0
-          0
+          a = 10
         when 1
-          1
+          a = 11
         when 2
-          2
+          a = 12
         when 3
-          3
+          a = 13
         end
-        nil
+        a
         "#,
         );
     }
@@ -132,7 +132,6 @@ mod test {
         when 3,7
           3
         end
-        #nil
         "#,
         );
     }

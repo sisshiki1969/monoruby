@@ -421,7 +421,7 @@ impl Codegen {
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(feature = "log-jit")]
         let now = std::time::Instant::now();
 
         self.jit.bind_label(entry_label);
@@ -487,12 +487,12 @@ impl Codegen {
             eprintln!("    total bytes(1):{:?}", self.jit.get_current());
             self.jit.select_page(0);
         }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(feature = "log-jit")]
         {
             let elapsed = now.elapsed();
             eprintln!("<== finished compile. elapsed:{:?}", elapsed);
         }
-        #[cfg(feature = "jit-debug")]
+        #[cfg(any(feature = "emit-asm", feature = "jit-debug"))]
         eprintln!("<== finished compile.");
 
         ctx.sourcemap
@@ -690,8 +690,6 @@ impl Codegen {
                     assert_ne!(0, cc.loop_count);
                     cc.loop_count -= 1;
                     if cc.is_loop && cc.loop_count == 0 {
-                        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("<-- compile finished. end:[{:05}]", bb_pos);
                         self.go_deopt(&ctx, pc);
                         break;
                     }
@@ -1420,14 +1418,12 @@ impl Codegen {
                     label_map.insert(else_idx, else_dest);
                     cc.new_branch(func, bb_pos, else_idx, ctx.clone(), else_dest);
 
-                    self.jit.select_page(1);
-                    let jump_table = self.jit.current_const();
+                    let jump_table = self.jit.const_align8();
                     for ofs in branch_table.iter() {
                         let idx = bb_pos + 1 + (*ofs as i32);
-                        let label = label_map.get(&idx).cloned().unwrap();
-                        self.jit.abs_address(label);
+                        let dest_label = label_map.get(&idx).cloned().unwrap();
+                        self.jit.abs_address(dest_label);
                     }
-                    self.jit.select_page(0);
 
                     self.fetch_to_rdi(&mut ctx, cond);
                     self.guard_class(INTEGER_CLASS, else_dest);
