@@ -102,7 +102,7 @@ impl Codegen {
     ///
     pub(super) fn fetch_to_rdi(&mut self, ctx: &mut BBContext, reg: SlotId) {
         if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
+            eprintln!("warning: {:?} >= {:?} in fetch_to_rdi()", reg, ctx.sp);
             panic!();
         };
         match ctx[reg] {

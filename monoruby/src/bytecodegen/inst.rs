@@ -32,16 +32,42 @@ pub(super) enum BinopMode {
     IR(i16, BcReg),
 }
 
+pub(crate) struct Ir(Vec<(BcIr, Loc)>);
+
+impl Ir {
+    pub(super) fn new(ir: Vec<(BcIr, Loc)>) -> Self {
+        Self(ir)
+    }
+
+    pub(crate) fn is_loop_start(&self, index: usize) -> bool {
+        match self.0[index].0 {
+            BcIr::LoopStart => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_loop_end(&self, index: usize) -> bool {
+        match self.0[index].0 {
+            BcIr::LoopEnd => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_terminal(&self, index: usize) -> bool {
+        self.0[index].0.is_terminal()
+    }
+}
+
 ///
 /// bytecode Ir.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(super) enum BcIr {
     Nil(BcReg),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
-    Array(BcReg, CallSiteId),
+    Array(BcReg, Box<CallSite>),
     Hash {
         ret: BcReg,
         args: BcReg,
@@ -117,47 +143,56 @@ pub(super) enum BcIr {
     CheckLocal(BcReg, Label),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
+    OptCase {
+        // a register for cond and ret.
+        reg: BcReg,
+        min: u16,
+        max: u16,
+        else_: Label,
+        table: Vec<(u16, Label)>,
+        labels: Vec<Label>,
+    },
     Ret(BcReg),
     MethodRet(BcReg),
     Break(BcReg),
     Raise(BcReg),
     EnsureEnd,
-    MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
-    MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
-    Super(Option<BcReg>, CallSiteId),
+    MethodCall(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
+    MethodCallBlock(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
+    Super(Option<BcReg>, Box<CallSite>),
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,
         len: usize,
-        callid: CallSiteId,
+        callsite: Box<CallSite>,
     },
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
     MethodDef {
         name: IdentId,
-        func_id: FuncId,
+        func: Box<Functions>,
     },
     ClassDef {
         ret: Option<BcReg>,
         superclass: Option<BcReg>,
         name: IdentId,
-        func_id: FuncId,
+        func: Box<Functions>,
     },
     SingletonClassDef {
         ret: Option<BcReg>,
         base: BcReg,
-        func_id: FuncId,
+        func: Box<Functions>,
     },
     ModuleDef {
         ret: Option<BcReg>,
         name: IdentId,
-        func_id: FuncId,
+        func: Box<Functions>,
     },
     SingletonMethodDef {
         obj: BcReg,
         name: IdentId,
-        func_id: FuncId,
+        func: Box<Functions>,
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
@@ -190,6 +225,21 @@ pub(super) enum BcIr {
     },
     LoopStart,
     LoopEnd,
+}
+
+impl BcIr {
+    pub(crate) fn is_terminal(&self) -> bool {
+        match self {
+            // Br or Ret or MethodRet or Break or Raise or OptCase
+            Self::Br(_)
+            | Self::Ret(_)
+            | Self::MethodRet(_)
+            | Self::Break(_)
+            | Self::Raise(_)
+            | Self::OptCase { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Default)]

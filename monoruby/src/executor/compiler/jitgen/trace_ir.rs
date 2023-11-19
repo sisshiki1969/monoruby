@@ -15,6 +15,10 @@ pub(crate) enum TraceIr {
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
     CondBr(SlotId, i32, bool, BrKind),
     /// check local var(%reg, dest)  : branch when reg was None.
+    OptCase {
+        cond: SlotId,
+        optid: OptCaseId,
+    },
     CheckLocal(SlotId, i32),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
@@ -369,6 +373,10 @@ impl TraceIr {
                 35 => Self::Array {
                     dst: SlotId::new(op1),
                     callid: CallSiteId::from(op2),
+                },
+                36 => Self::OptCase {
+                    cond: SlotId::new(op1),
+                    optid: OptCaseId::from(op2),
                 },
                 _ => unreachable!("{:016x}", op),
             }

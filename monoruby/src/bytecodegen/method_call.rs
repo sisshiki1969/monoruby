@@ -3,40 +3,46 @@ use super::*;
 impl BytecodeGen {
     pub(super) fn emit_call(
         &mut self,
-        callid: CallSiteId,
+        callsite: CallSite,
         ret: Option<BcReg>,
         has_splat: bool,
         loc: Loc,
     ) {
-        if self[callid].block_fid.is_some() {
-            self.emit(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
+        if callsite.block_fid.is_some() {
+            self.emit(
+                BcIr::MethodCallBlock(ret, Box::new(callsite.clone()), has_splat),
+                loc,
+            )
         } else {
-            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc);
+            self.emit(
+                BcIr::MethodCall(ret, Box::new(callsite.clone()), has_splat),
+                loc,
+            );
         };
-        self.emit_method_arg(callid, loc);
+        self.emit_method_arg(callsite, loc);
     }
 
-    fn emit_super(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
-        self.emit(BcIr::Super(ret, callid), loc);
-        self.emit_method_arg(callid, loc);
+    fn emit_super(&mut self, callsite: CallSite, ret: Option<BcReg>, loc: Loc) {
+        self.emit(BcIr::Super(ret, Box::new(callsite.clone())), loc);
+        self.emit_method_arg(callsite, loc);
     }
 
-    fn emit_method_arg(&mut self, callid: CallSiteId, loc: Loc) {
-        let recv = self[callid].recv;
-        let args = self[callid].args;
-        let len = self[callid].pos_num;
+    fn emit_method_arg(&mut self, callsite: CallSite, loc: Loc) {
+        let recv = callsite.recv;
+        let args = callsite.args;
+        let len = callsite.pos_num;
         self.emit(BcIr::MethodArgs(recv, args, len), loc);
     }
 
-    pub(super) fn emit_yield(&mut self, callid: CallSiteId, ret: Option<BcReg>, loc: Loc) {
-        let args = self[callid].args;
-        let len = self[callid].pos_num;
+    pub(super) fn emit_yield(&mut self, callsite: CallSite, ret: Option<BcReg>, loc: Loc) {
+        let args = callsite.args;
+        let len = callsite.pos_num;
         self.emit(
             BcIr::Yield {
                 ret,
                 args,
                 len,
-                callid,
+                callsite: Box::new(callsite),
             },
             loc,
         );
@@ -50,12 +56,12 @@ impl BytecodeGen {
         ret: Option<BcReg>,
         loc: Loc,
     ) {
-        let callid = self.add_callsite_simple(method, 1, rhs, lhs, ret);
-        self.emit_call(callid, ret, false, loc);
+        let callsite = CallSite::simple(method, 1, rhs, lhs, ret);
+        self.emit_call(callsite, ret, false, loc);
     }
 
-    pub(super) fn emit_method_assign(&mut self, callid: CallSiteId, loc: Loc) {
-        self.emit_call(callid, None, false, loc);
+    pub(super) fn emit_method_assign(&mut self, callsite: CallSite, loc: Loc) {
+        self.emit_call(callsite, None, false, loc);
     }
 
     pub(super) fn gen_method_call(
@@ -166,7 +172,7 @@ impl BytecodeGen {
                     hash_splat_pos: vec![],
                 })
             };
-            let callid = self.add_callsite(
+            CallSite::new(
                 None,
                 pos_len,
                 kw,
@@ -176,8 +182,7 @@ impl BytecodeGen {
                 pos_start,
                 BcReg::Self_,
                 ret,
-            );
-            callid
+            )
         };
         self.temp = old;
         if ret_push_flag {
@@ -238,7 +243,7 @@ impl BytecodeGen {
         } else {
             None
         };
-        let callid = self.add_callsite(
+        let callsite = CallSite::new(
             IdentId::EACH,
             0,
             None,
@@ -249,7 +254,7 @@ impl BytecodeGen {
             recv,
             ret,
         );
-        self.emit_call(callid, ret, false, loc);
+        self.emit_call(callsite, ret, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None)?;
         }
@@ -304,7 +309,7 @@ impl BytecodeGen {
         recv: BcReg,
         ret: Option<BcReg>,
         loc: Loc,
-    ) -> Result<CallSiteId> {
+    ) -> Result<CallSite> {
         let (args, pos_num, splat_pos) = self.positional_args(&mut arglist)?;
 
         let kw = self.keyword_arg(&mut arglist)?;
@@ -321,10 +326,10 @@ impl BytecodeGen {
             Some(block_arg)
         };
 
-        let callid = self.add_callsite(
+        let callsite = CallSite::new(
             method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, ret,
         );
-        Ok(callid)
+        Ok(callsite)
     }
 
     ///
@@ -378,7 +383,7 @@ impl BytecodeGen {
         }
     }
 
-    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
+    fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<Functions>> {
         match block.kind {
             NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
             NodeKind::LocalVar(0, proc_local) => {
@@ -414,7 +419,7 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Result<FuncId> {
+    ) -> Result<Functions> {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
         let func_id = self.add_block(

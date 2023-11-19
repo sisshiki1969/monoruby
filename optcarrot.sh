@@ -10,11 +10,10 @@ ruby --yjit ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 ruby --yjit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
 echo
 
-#rbenv local truffleruby+graalvm-22.3.1
-#ruby -v
-#ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
-#echo
-
 monoruby -v
+echo ""
+monoruby --no-jit ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
+echo "with --opt"
+monoruby --no-jit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
 monoruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes

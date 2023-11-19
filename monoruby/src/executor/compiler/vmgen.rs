@@ -237,6 +237,7 @@ impl Codegen {
         self.dispatch[33] = self.vm_method_call(false);
         self.dispatch[34] = self.vm_super();
         self.dispatch[35] = self.vm_array();
+        self.dispatch[36] = self.vm_optcase(branch);
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
@@ -1727,6 +1728,23 @@ impl Codegen {
             jeq branch;
         };
         self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_optcase(&mut self, branch: DestLabel) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_addr_r15();
+        monoasm! { &mut self.jit,
+            movl rdx, rdi;
+            movq rcx, [r15];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::opt_case);
+            call rax;
+            movl rdi, rax;
+            jmp branch;
+        };
         label
     }
 }

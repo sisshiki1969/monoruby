@@ -19,7 +19,10 @@
           "kind": "bin"
         }
       },
-      "args": ["../optcarrot/bin/optcarrot", "--opt", "-b", "../optcarrot/examples/Lan_Master.nes"],
+      //"args": ["../optcarrot/bin/optcarrot", "--opt", "-b", "../optcarrot/examples/Lan_Master.nes"],
+      "args": [
+        "a.rb"
+      ],
       "cwd": "${workspaceFolder}"
     },
     {

@@ -72,19 +72,12 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
-    pub(crate) fn new(info: &ISeqInfo) -> Self {
-        let incoming = info.get_incoming();
-
+    pub(crate) fn new(incoming: Vec<Vec<BcIndex>>, ir: &Ir) -> Self {
         // generate bb_head.
         let bb_head: bitvec::vec::BitVec<_> = incoming
             .iter()
             .enumerate()
-            .map(|(i, v)| {
-                i == 0 || !v.is_empty() || {
-                    let pc = BcPc::from(&info.bytecode()[i - 1]);
-                    pc.is_terminal()
-                }
-            })
+            .map(|(i, v)| i == 0 || !v.is_empty() || ir.is_terminal(i - 1))
             .collect();
 
         // generate bb_map.
@@ -110,10 +103,9 @@ impl BasicBlockInfo {
         let mut loop_stack = vec![];
         for (i, incoming) in incoming.into_iter().enumerate() {
             let idx = BcIndex::from(i);
-            let pc = info.get_pc(idx);
-            if pc.is_loop_start() {
+            if ir.is_loop_start(i) {
                 loop_stack.push(idx);
-            } else if pc.is_loop_end() {
+            } else if ir.is_loop_end(i) {
                 let start = loop_stack.pop().unwrap();
                 bb_info
                     .loops

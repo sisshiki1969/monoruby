@@ -421,7 +421,7 @@ impl Codegen {
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(feature = "log-jit")]
         let now = std::time::Instant::now();
 
         self.jit.bind_label(entry_label);
@@ -487,12 +487,12 @@ impl Codegen {
             eprintln!("    total bytes(1):{:?}", self.jit.get_current());
             self.jit.select_page(0);
         }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(feature = "log-jit")]
         {
             let elapsed = now.elapsed();
             eprintln!("<== finished compile. elapsed:{:?}", elapsed);
         }
-        #[cfg(feature = "jit-debug")]
+        #[cfg(any(feature = "emit-asm", feature = "jit-debug"))]
         eprintln!("<== finished compile.");
 
         ctx.sourcemap
@@ -690,8 +690,6 @@ impl Codegen {
                     assert_ne!(0, cc.loop_count);
                     cc.loop_count -= 1;
                     if cc.is_loop && cc.loop_count == 0 {
-                        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("<-- compile finished. end:[{:05}]", bb_pos);
                         self.go_deopt(&ctx, pc);
                         break;
                     }
@@ -1399,6 +1397,47 @@ impl Codegen {
                         testq rax, rax;
                         jnz  branch_dest;
                     );
+                }
+                TraceIr::OptCase { cond, optid } => {
+                    let OptCaseInfo {
+                        min,
+                        max,
+                        else_,
+                        branch_table,
+                        offsets,
+                    } = &store[optid];
+                    let mut label_map = HashMap::default();
+                    for ofs in offsets {
+                        let dest_idx = bb_pos + 1 + (*ofs as i32);
+                        let branch_dest = self.jit.label();
+                        label_map.insert(dest_idx, branch_dest);
+                        cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
+                    }
+                    let else_idx = bb_pos + 1 + (*else_ as i32);
+                    let else_dest = self.jit.label();
+                    label_map.insert(else_idx, else_dest);
+                    cc.new_branch(func, bb_pos, else_idx, ctx.clone(), else_dest);
+
+                    let jump_table = self.jit.const_align8();
+                    for ofs in branch_table.iter() {
+                        let idx = bb_pos + 1 + (*ofs as i32);
+                        let dest_label = label_map.get(&idx).cloned().unwrap();
+                        self.jit.abs_address(dest_label);
+                    }
+
+                    self.fetch_to_rdi(&mut ctx, cond);
+                    self.guard_class(INTEGER_CLASS, else_dest);
+
+                    monoasm! {&mut self.jit,
+                        sarq rdi, 1;
+                        cmpq rdi, (*max);
+                        jgt  else_dest;
+                        subq rdi, (*min);
+                        jlt  else_dest;
+                        lea  rax, [rip + jump_table];
+                        jmp  [rax + rdi * 8];
+                    };
+                    return;
                 }
             }
             ctx.clear();

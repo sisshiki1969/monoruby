@@ -1,0 +1,18 @@
+benchmark:
+  case: |
+    200000.times do |i|
+      case i
+      when 1,2,3,4,5
+        0
+      when 6,7,8,9,10
+        1
+      when 11,12,13,14,15
+        2
+      when 16,17,18,19,20
+        3
+      when 21,22,23,24,25
+        4
+      else
+        5
+      end
+    end
