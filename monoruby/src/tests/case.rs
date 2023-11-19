@@ -93,14 +93,14 @@ mod test {
         x = case :symbol
         when Integer then 'integer'
         when Float then 'float'
-        when Symbol then 'symbol'
+        when Symbol,String then 'symbol'
         end
         "#,
         );
     }
 
     #[test]
-    fn case6() {
+    fn case_opt1() {
         run_test(
             r#"
         case 4
@@ -110,7 +110,7 @@ mod test {
           a = 11
         when 2
           a = 12
-        when 3
+        when 3, 4
           a = 13
         end
         a
@@ -119,7 +119,7 @@ mod test {
     }
 
     #[test]
-    fn case7() {
+    fn case_opt2() {
         run_test(
             r#"
         case 9
@@ -131,6 +131,48 @@ mod test {
           2
         when 3,7
           3
+        else
+          4
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn case_opt3() {
+        run_test(
+            r#"
+        case 9
+        when 0,4,8
+          0
+        when 1,5,9
+          1
+        when 2,6
+          2
+        when 3,5000
+          3
+        else
+          4
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn case_opt4() {
+        run_test(
+            r#"
+        case 9
+        when 0,4,8
+          0
+        when 1,5,9
+          1
+        when 2,6
+          2
+        when 3,"5000"
+          3
+        else
+          4
         end
         "#,
         );

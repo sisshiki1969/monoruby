@@ -206,11 +206,7 @@ pub(super) extern "C" fn opt_case(
     callid: OptCaseId,
     idx: Value,
 ) -> u32 {
-    if let Some(idx) = idx.try_fixnum() {
-        globals.store[callid].find(idx)
-    } else {
-        globals.store[callid].default()
-    }
+    globals.store[callid].find(idx)
 }
 
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {

@@ -15,7 +15,7 @@ pub(crate) use iseq::*;
 
 pub const STORE_FUNCTION: usize = std::mem::offset_of!(Store, functions);
 
-#[derive(Default)]
+//#[derive(Default)]
 pub(crate) struct Store {
     /// function info.
     functions: function::Funcs,
@@ -64,11 +64,11 @@ impl std::ops::Index<CallSiteId> for Store {
     }
 }
 
-impl std::ops::IndexMut<CallSiteId> for Store {
-    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
-        &mut self.callsite_info[index.0 as usize]
-    }
-}
+//impl std::ops::IndexMut<CallSiteId> for Store {
+//    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
+//        &mut self.callsite_info[index.0 as usize]
+//    }
+//}
 
 impl std::ops::Index<OptCaseId> for Store {
     type Output = OptCaseInfo;
@@ -414,19 +414,14 @@ pub(crate) struct OptCaseInfo {
 }
 
 impl OptCaseInfo {
-    pub(crate) fn find(&self, idx: i64) -> u32 {
-        if let Ok(idx) = u16::try_from(idx) {
-            if idx >= self.min && idx <= self.max {
-                self.branch_table[(idx - self.min) as usize]
-            } else {
-                self.else_
+    pub(crate) fn find(&self, idx: Value) -> u32 {
+        if let Some(idx) = idx.try_fixnum() {
+            if let Ok(idx) = u16::try_from(idx) {
+                if idx >= self.min && idx <= self.max {
+                    return self.branch_table[(idx - self.min) as usize];
+                }
             }
-        } else {
-            self.else_
         }
-    }
-
-    pub(crate) fn default(&self) -> u32 {
         self.else_
     }
 }
