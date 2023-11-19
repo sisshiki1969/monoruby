@@ -133,7 +133,6 @@ pub(crate) enum TraceIr {
     /// func call(%ret, name)
     MethodCall {
         callid: CallSiteId,
-        has_splat: bool,
         cached_fid: Option<FuncId>,
         #[allow(dead_code)]
         class: ClassId,
@@ -142,7 +141,6 @@ pub(crate) enum TraceIr {
     },
     MethodCallBlock {
         callid: CallSiteId,
-        has_splat: bool,
         cached_fid: Option<FuncId>,
         #[allow(dead_code)]
         class: ClassId,
@@ -276,21 +274,23 @@ impl TraceIr {
                 14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
                 16 => {
-                    let (class, ivar) = pc.class_version();
+                    let class = pc.cached_class();
+                    let ivar = pc.cached_ivarid();
                     Self::LoadIvar(
                         SlotId::new(op1),
                         IdentId::from(op2),
                         if class.0 == 0 { None } else { Some(class) },
-                        IvarId::new(ivar),
+                        ivar,
                     )
                 }
                 17 => {
-                    let (class, ivar) = pc.class_version();
+                    let class = pc.cached_class();
+                    let ivar = pc.cached_ivarid();
                     Self::StoreIvar(
                         SlotId::new(op1),
                         IdentId::from(op2),
                         if class.0 == 0 { None } else { Some(class) },
-                        IvarId::new(ivar),
+                        ivar,
                     )
                 }
                 18 => Self::ClassDef {
@@ -325,7 +325,8 @@ impl TraceIr {
                     id: op2,
                 },
                 30..=31 => {
-                    let (class, version) = pc.class_version();
+                    let class = pc.cached_class();
+                    let version = pc.cached_version();
                     let cached_fid = (pc + 1).func_id();
                     let has_splat = opcode == 30;
 
@@ -345,24 +346,24 @@ impl TraceIr {
                     }
                     Self::MethodCall {
                         callid: op2.into(),
-                        has_splat,
                         cached_fid,
                         class,
                         version,
                     }
                 }
                 32..=33 => {
-                    let (class, version) = pc.class_version();
+                    let class = pc.cached_class();
+                    let version = pc.cached_version();
                     Self::MethodCallBlock {
                         callid: op2.into(),
-                        has_splat: opcode == 32,
                         cached_fid: (pc + 1).func_id(),
                         class,
                         version,
                     }
                 }
                 34 => {
-                    let (class, version) = pc.class_version();
+                    let class = pc.cached_class();
+                    let version = pc.cached_version();
                     Self::Super {
                         callid: op2.into(),
                         cached_fid: (pc + 1).func_id(),

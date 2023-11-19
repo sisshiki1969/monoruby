@@ -227,7 +227,7 @@ impl BytecodeGen {
 
         let old_temp = self.temp;
         let arg = self.sp();
-        let block_func_id = self.handle_block(optional_params, block)?;
+        let block_fid = self.handle_block(optional_params, block)?;
         self.push_nil();
         self.temp = old_temp;
 
@@ -248,7 +248,7 @@ impl BytecodeGen {
             0,
             None,
             vec![],
-            Some(block_func_id),
+            Some(block_fid),
             None,
             arg.into(),
             recv,

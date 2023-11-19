@@ -356,19 +356,6 @@ impl BBContext {
     }
 }
 
-#[derive(Debug)]
-struct InlineCached {
-    class_id: ClassId,
-    version: u32,
-}
-
-impl InlineCached {
-    fn new(pc: BcPc) -> Self {
-        let (class_id, version) = (pc - 1).class_version();
-        InlineCached { class_id, version }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
 pub(crate) struct Xmm(u16);
@@ -1161,30 +1148,24 @@ impl Codegen {
                     self.jit_handle_error(&ctx, pc);
                 }
                 TraceIr::MethodCall {
-                    callid,
-                    has_splat,
-                    cached_fid,
-                    ..
+                    callid, cached_fid, ..
                 } => {
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = cached_fid {
-                        self.gen_call(store, &mut ctx, fid, callid, pc, has_splat);
+                        self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
                     }
                 }
                 TraceIr::MethodCallBlock {
-                    callid,
-                    has_splat,
-                    cached_fid,
-                    ..
+                    callid, cached_fid, ..
                 } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = cached_fid {
-                        self.gen_call(store, &mut ctx, fid, callid, pc, has_splat);
+                        self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
@@ -1198,7 +1179,7 @@ impl Codegen {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = info {
-                        self.gen_call(store, &mut ctx, fid, callid, pc, false);
+                        self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;

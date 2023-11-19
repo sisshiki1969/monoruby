@@ -85,7 +85,7 @@ fn math_sqrt(
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
-        gen.guard_class(pc.class_version().0, deopt);
+        gen.guard_class(pc.cached_class(), deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
     if let Some(ret) = ret {
@@ -109,7 +109,7 @@ fn math_cos(
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
-        gen.guard_class(pc.class_version().0, deopt);
+        gen.guard_class(pc.cached_class(), deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
     if let Some(ret) = ret {
@@ -141,7 +141,7 @@ fn math_sin(
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
-        gen.guard_class(pc.class_version().0, deopt);
+        gen.guard_class(pc.cached_class(), deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
     if let Some(ret) = ret {

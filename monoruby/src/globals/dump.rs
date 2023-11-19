@@ -461,18 +461,8 @@ impl Globals {
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            TraceIr::MethodCall {
-                callid,
-                has_splat,
-                class,
-                ..
-            }
-            | TraceIr::MethodCallBlock {
-                callid,
-                has_splat,
-                class,
-                ..
-            } => {
+            TraceIr::MethodCall { callid, class, .. }
+            | TraceIr::MethodCallBlock { callid, class, .. } => {
                 let callsite = &self.store[callid];
                 let name = callsite.name.unwrap();
                 let CallSiteInfo {
@@ -484,6 +474,7 @@ impl Globals {
                     block_arg,
                     ..
                 } = *callsite;
+                let has_splat = callsite.has_splat();
                 let kw_len = callsite.kw_len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",

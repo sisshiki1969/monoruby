@@ -890,9 +890,19 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
-    pub fn class_version(&self) -> (ClassId, u32) {
+    pub fn cached_version(&self) -> u32 {
         let op = self.op2.0;
-        (ClassId::new(op as u32), (op >> 32) as u32)
+        (op >> 32) as u32
+    }
+
+    pub fn cached_ivarid(&self) -> IvarId {
+        let op = self.op2.0;
+        IvarId::new((op >> 32) as u32)
+    }
+
+    pub fn cached_class(&self) -> ClassId {
+        let op = self.op2.0;
+        ClassId::new(op as u32)
     }
 
     pub fn value(&self) -> Option<Value> {

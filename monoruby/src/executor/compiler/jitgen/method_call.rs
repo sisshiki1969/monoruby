@@ -8,7 +8,7 @@ impl Codegen {
         inline_gen: InlineGen,
         pc: BcPc,
     ) {
-        let (_, version) = pc.class_version();
+        let version = pc.cached_version();
         self.writeback_acc(ctx);
         let deopt = self.gen_side_deopt(pc, ctx);
         self.guard_version(version, deopt);
@@ -22,17 +22,15 @@ impl Codegen {
         fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
-        has_splat: bool,
     ) {
         let CallSiteInfo { recv, ret, .. } = store[callid];
         self.fetch_slots(ctx, &[recv]);
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(ret);
-        let cached = InlineCached::new(pc + 1);
-        if store[callid].recv.is_zero() && ctx.self_value.class() != cached.class_id {
-            self.gen_call_not_cached(ctx, &store[callid], pc, has_splat);
+        if store[callid].recv.is_zero() && ctx.self_value.class() != pc.cached_class() {
+            self.gen_call_not_cached(ctx, &store[callid], pc);
         } else {
-            self.gen_call_cached(store, ctx, callid, fid, cached, pc, has_splat);
+            self.gen_call_cached(store, ctx, callid, fid, pc);
         }
     }
 
@@ -45,9 +43,7 @@ impl Codegen {
         ctx: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
-        cached: InlineCached,
         pc: BcPc,
-        has_splat: bool,
     ) {
         let CallSiteInfo {
             recv,
@@ -56,6 +52,8 @@ impl Codegen {
             ret,
             ..
         } = store[callid];
+        let cached_version = pc.cached_version();
+        let cached_class = pc.cached_class();
         let deopt = self.gen_side_deopt(pc, ctx);
         let mut self_in_rdi_flag = false;
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -63,16 +61,16 @@ impl Codegen {
         if !recv.is_zero() {
             self.load_rdi(recv);
             self_in_rdi_flag = true;
-            self.guard_class(cached.class_id, deopt);
+            self.guard_class(cached_class, deopt);
         }
-        self.guard_version(cached.version, deopt);
+        self.guard_version(cached_version, deopt);
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(store[callid].kw_len() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                if cached.class_id.is_always_frozen() {
+                if cached_class.is_always_frozen() {
                     if let Some(ret) = ret {
                         monoasm!( &mut self.jit,
                             movq rax, (NIL_VALUE);
@@ -83,7 +81,7 @@ impl Codegen {
                     if !self_in_rdi_flag {
                         self.load_rdi(recv);
                     }
-                    let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
+                    let ivar_id = store[cached_class].get_ivarid(ivar_name);
                     self.attr_reader(ctx, ivar_name, ivar_id, ret);
                 }
             }
@@ -95,32 +93,14 @@ impl Codegen {
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
-                let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
+                let ivar_id = store[cached_class].get_ivarid(ivar_name);
                 self.attr_writer(ctx, ivar_name, ivar_id, ret, args, pc);
             }
             FuncKind::Builtin { .. } => {
-                self.method_call_cached(
-                    ctx,
-                    store,
-                    callid,
-                    fid,
-                    pc,
-                    has_splat,
-                    cached.class_id,
-                    true,
-                );
+                self.method_call_cached(ctx, store, callid, fid, pc, cached_class, true);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(
-                    ctx,
-                    store,
-                    callid,
-                    fid,
-                    pc,
-                    has_splat,
-                    cached.class_id,
-                    false,
-                );
+                self.method_call_cached(ctx, store, callid, fid, pc, cached_class, false);
             }
         };
     }
@@ -128,13 +108,8 @@ impl Codegen {
     ///
     /// generate JIT code for a method call which was not cached.
     ///
-    fn gen_call_not_cached(
-        &mut self,
-        ctx: &mut BBContext,
-        callsite: &CallSiteInfo,
-        pc: BcPc,
-        has_splat: bool,
-    ) {
+    fn gen_call_not_cached(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
+        let has_splat = callsite.has_splat();
         let CallSiteInfo { id, recv, ret, .. } = *callsite;
         // argument registers:
         //   rdi: args len
@@ -452,12 +427,12 @@ impl Codegen {
         ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
-        callee_func_id: FuncId,
+        callee_fid: FuncId,
         pc: BcPc,
-        has_splat: bool,
         recv_classid: ClassId,
         native: bool,
     ) {
+        let has_splat = store[callid].has_splat();
         let xmm_using = ctx.get_xmm_using();
         let dst = store[callid].ret;
         self.writeback_acc(ctx);
@@ -465,7 +440,7 @@ impl Codegen {
         self.execute_gc();
         self.set_method_outer();
         self.set_self_and_args(has_splat, &store[callid]);
-        let func_data = &store[callee_func_id].data;
+        let func_data = &store[callee_fid].data;
         monoasm! { &mut self.jit,
             // set meta.
             movq rax, (func_data.meta().get());
@@ -473,7 +448,7 @@ impl Codegen {
         }
         // argument registers:
         //   rdi: args len
-        match &store[callee_func_id].kind {
+        match &store[callee_fid].kind {
             FuncKind::ISeq(info) => {
                 let callsite = &store[callid];
                 if info.is_block_style && info.reqopt_num() > 1 && callsite.pos_num == 1 {
@@ -516,7 +491,7 @@ impl Codegen {
                             movq rdi, rbx;
                             movq rsi, r12;
                             movl rdx, (callid.get());
-                            movl r8, (callee_func_id.get());
+                            movl r8, (callee_fid.get());
                             movq rax, (runtime::jit_handle_hash_splat);
                             call rax;
                             popq rdi;
@@ -543,7 +518,7 @@ impl Codegen {
                 // set pc.
                 movq r13, (func_data.pc().get_u64());
             }
-            match store[callee_func_id].get_jit_code(recv_classid) {
+            match store[callee_fid].get_jit_code(recv_classid) {
                 Some(dest) => self.call_label(dest),
                 None => self.call_codeptr(func_data.codeptr().unwrap()),
             };
