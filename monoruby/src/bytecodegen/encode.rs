@@ -161,12 +161,11 @@ impl BytecodeGen {
                 reg,
                 min,
                 max,
-                else_,
                 table,
                 labels,
             } => {
                 // 36
-                incoming.push(idx, self[else_].to_usize());
+                let else_ = labels[0];
                 let else_ofs = self[else_].0 - idx as u32 - 1;
                 let mut branch_table = vec![else_ofs; (max - min + 1) as usize];
                 for (i, label) in table {
@@ -179,7 +178,7 @@ impl BytecodeGen {
                     .iter()
                     .map(|label| self[*label].0 - idx as u32 - 1)
                     .collect::<Vec<_>>();
-                let id = store.add_optcase(min, max, else_ofs, branch_table, offsets);
+                let id = store.add_optcase(min, max, branch_table, offsets);
                 let op1 = self.get_index(&reg);
                 // terminal inst.
                 Bc::from(enc_wl(36, op1.0, id.get()))

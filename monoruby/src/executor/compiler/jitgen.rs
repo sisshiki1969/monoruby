@@ -1402,7 +1402,6 @@ impl Codegen {
                     let OptCaseInfo {
                         min,
                         max,
-                        else_,
                         branch_table,
                         offsets,
                     } = &store[optid];
@@ -1413,10 +1412,8 @@ impl Codegen {
                         label_map.insert(dest_idx, branch_dest);
                         cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
                     }
-                    let else_idx = bb_pos + 1 + (*else_ as i32);
-                    let else_dest = self.jit.label();
-                    label_map.insert(else_idx, else_dest);
-                    cc.new_branch(func, bb_pos, else_idx, ctx.clone(), else_dest);
+                    let else_idx = bb_pos + 1 + (offsets[0] as i32);
+                    let else_dest = label_map.get(&else_idx).cloned().unwrap();
 
                     let jump_table = self.jit.const_align8();
                     for ofs in branch_table.iter() {

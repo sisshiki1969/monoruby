@@ -292,7 +292,6 @@ impl Store {
         &mut self,
         min: u16,
         max: u16,
-        else_: u32,
         branch_table: Vec<u32>,
         offsets: Vec<u32>,
     ) -> OptCaseId {
@@ -301,7 +300,6 @@ impl Store {
         self.optcase_info.push(OptCaseInfo {
             min,
             max,
-            else_,
             branch_table,
             offsets,
         });
@@ -408,7 +406,6 @@ impl CallSiteId {
 pub(crate) struct OptCaseInfo {
     pub min: u16,
     pub max: u16,
-    pub else_: u32,
     pub branch_table: Box<[u32]>,
     pub offsets: Vec<u32>,
 }
@@ -422,7 +419,7 @@ impl OptCaseInfo {
                 }
             }
         }
-        self.else_
+        self.offsets[0]
     }
 }
 

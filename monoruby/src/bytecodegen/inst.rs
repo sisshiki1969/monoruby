@@ -148,8 +148,9 @@ pub(super) enum BcIr {
         reg: BcReg,
         min: u16,
         max: u16,
-        else_: Label,
         table: Vec<(u16, Label)>,
+        /// destination labels.
+        /// it is guaranteed then labels.len() >= 1 and labels[0] is the label for else clause.
         labels: Vec<Label>,
     },
     Ret(BcReg),

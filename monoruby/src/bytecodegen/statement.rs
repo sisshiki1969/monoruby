@@ -199,7 +199,7 @@ impl BytecodeGen {
             {
                 let mut table = vec![];
                 let mut bodies = vec![];
-                let mut labels = vec![];
+                let mut labels = vec![else_pos];
                 let min = idx_start as u16;
                 let max = idx_end as u16;
                 for branch in when_ {
@@ -221,7 +221,6 @@ impl BytecodeGen {
                         reg: rhs,
                         min,
                         max,
-                        else_: else_pos,
                         table,
                         labels,
                     },
