@@ -905,6 +905,11 @@ impl Bc {
         ClassId::new(op as u32)
     }
 
+    pub fn cached_fid(&self) -> FuncId {
+        let op = self.op2.0;
+        FuncId::new(op as u32)
+    }
+
     pub fn value(&self) -> Option<Value> {
         match self.op2.0 {
             0 => None,
@@ -1077,6 +1082,10 @@ impl BcPc {
 
     fn write2(self, data: u64) {
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
+    }
+
+    fn cached_fid(self) -> FuncId {
+        (*(self + 1)).cached_fid()
     }
 }
 

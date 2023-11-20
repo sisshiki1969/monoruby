@@ -134,34 +134,18 @@ pub(crate) enum TraceIr {
     MethodCall {
         callid: CallSiteId,
         cached_fid: Option<FuncId>,
-        #[allow(dead_code)]
-        class: ClassId,
-        #[allow(dead_code)]
-        version: u32,
     },
     MethodCallBlock {
         callid: CallSiteId,
         cached_fid: Option<FuncId>,
-        #[allow(dead_code)]
-        class: ClassId,
-        #[allow(dead_code)]
-        version: u32,
     },
     Super {
         callid: CallSiteId,
         cached_fid: Option<FuncId>,
-        #[allow(dead_code)]
-        class: ClassId,
-        #[allow(dead_code)]
-        version: u32,
     },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
         callsite: CallSiteId,
-        #[allow(dead_code)]
-        class: ClassId,
-        #[allow(dead_code)]
-        version: u32,
     },
     Yield {
         ret: Option<SlotId>,
@@ -325,8 +309,6 @@ impl TraceIr {
                     id: op2,
                 },
                 30..=31 => {
-                    let class = pc.cached_class();
-                    let version = pc.cached_version();
                     let cached_fid = (pc + 1).func_id();
                     let has_splat = opcode == 30;
 
@@ -338,8 +320,6 @@ impl TraceIr {
                                 return Self::InlineCall {
                                     inline_id,
                                     callsite: op2.into(),
-                                    class,
-                                    version,
                                 };
                             }
                         }
@@ -347,30 +327,16 @@ impl TraceIr {
                     Self::MethodCall {
                         callid: op2.into(),
                         cached_fid,
-                        class,
-                        version,
                     }
                 }
-                32..=33 => {
-                    let class = pc.cached_class();
-                    let version = pc.cached_version();
-                    Self::MethodCallBlock {
-                        callid: op2.into(),
-                        cached_fid: (pc + 1).func_id(),
-                        class,
-                        version,
-                    }
-                }
-                34 => {
-                    let class = pc.cached_class();
-                    let version = pc.cached_version();
-                    Self::Super {
-                        callid: op2.into(),
-                        cached_fid: (pc + 1).func_id(),
-                        class,
-                        version,
-                    }
-                }
+                32..=33 => Self::MethodCallBlock {
+                    callid: op2.into(),
+                    cached_fid: (pc + 1).func_id(),
+                },
+                34 => Self::Super {
+                    callid: op2.into(),
+                    cached_fid: (pc + 1).func_id(),
+                },
                 35 => Self::Array {
                     dst: SlotId::new(op1),
                     callid: CallSiteId::from(op2),

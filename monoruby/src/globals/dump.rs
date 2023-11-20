@@ -461,9 +461,9 @@ impl Globals {
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            TraceIr::MethodCall { callid, class, .. }
-            | TraceIr::MethodCallBlock { callid, class, .. } => {
+            TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
                 let callsite = &self.store[callid];
+                let class = pc.cached_class();
                 let name = callsite.name.unwrap();
                 let CallSiteInfo {
                     recv,
@@ -503,8 +503,9 @@ impl Globals {
                 );
                 format!("{:36} [{}]", op1, class.get_name(self))
             }
-            TraceIr::Super { callid, class, .. } => {
+            TraceIr::Super { callid, .. } => {
                 let callsite = &self.store[callid];
+                let class = pc.cached_class();
                 let CallSiteInfo {
                     args,
                     pos_num,
@@ -537,7 +538,6 @@ impl Globals {
             TraceIr::InlineCall {
                 inline_id,
                 callsite,
-                class,
                 ..
             } => {
                 let CallSiteInfo {
@@ -547,6 +547,7 @@ impl Globals {
                     ret,
                     ..
                 } = self.store[callsite];
+                let class = pc.cached_class();
                 let name = &self.store.get_inline_info(inline_id).2;
                 let op1 = if pos_num == 0 {
                     format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)

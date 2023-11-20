@@ -13,15 +13,20 @@ pub(crate) extern "C" fn find_method(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
-    receiver: Value,
 ) -> Option<FuncId> {
-    let func_name = globals.store[callid].name.unwrap();
-    match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
-        Ok(id) => Some(id),
-        Err(err) => {
-            vm.set_error(err);
-            None
+    if let Some(func_name) = globals.store[callid].name {
+        let recv_reg = globals.store[callid].recv;
+        let receiver = unsafe { vm.register(recv_reg.0 as usize).unwrap() };
+        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
+            Ok(id) => Some(id),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
         }
+    } else {
+        let self_val = vm.cfp().lfp().self_val();
+        get_super_data(vm, globals, self_val)
     }
 }
 

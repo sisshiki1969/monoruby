@@ -1,5 +1,22 @@
 use super::*;
 
+// ~~~text
+// MethodCall
+//  0   2   4   6    8  10  12  14
+// +---+---+---+---++---+---+---+---+
+// |callid |ret| op|| class |version|
+// +---+---+---+---++---+---+---+---+
+// 16  18  20  22   24  26  28  30
+// +---+---+---+---++---+---+---+---+
+// |len|arg|rcv| op||  fid  |       |
+// +---+---+---+---++---+---+---+---+
+// ~~~
+
+const CALLSITE_ID: usize = 0;
+//const CACHED_VERSION: usize = 12;
+//const RECV_REG: usize = 20;
+//const CACHED_FUNCID: usize = 24;
+
 impl Codegen {
     pub(super) fn gen_inlinable(
         &mut self,
@@ -8,10 +25,9 @@ impl Codegen {
         inline_gen: InlineGen,
         pc: BcPc,
     ) {
-        let version = pc.cached_version();
         self.writeback_acc(ctx);
         let deopt = self.gen_side_deopt(pc, ctx);
-        self.guard_version(version, deopt);
+        self.guard_version(pc, ctx, deopt);
         inline_gen(self, ctx, callsite, pc, deopt);
     }
 
@@ -28,6 +44,7 @@ impl Codegen {
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(ret);
         if store[callid].recv.is_zero() && ctx.self_value.class() != pc.cached_class() {
+            // the cache is invalid because the receiver class is not matched.
             self.gen_call_not_cached(ctx, &store[callid], pc);
         } else {
             self.gen_call_cached(store, ctx, callid, fid, pc);
@@ -52,18 +69,15 @@ impl Codegen {
             ret,
             ..
         } = store[callid];
-        let cached_version = pc.cached_version();
         let cached_class = pc.cached_class();
         let deopt = self.gen_side_deopt(pc, ctx);
-        let mut self_in_rdi_flag = false;
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_zero() {
             self.load_rdi(recv);
-            self_in_rdi_flag = true;
             self.guard_class(cached_class, deopt);
         }
-        self.guard_version(cached_version, deopt);
+        self.guard_version(pc, ctx, deopt);
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
@@ -78,9 +92,7 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 } else {
-                    if !self_in_rdi_flag {
-                        self.load_rdi(recv);
-                    }
+                    self.load_rdi(recv);
                     let ivar_id = store[cached_class].get_ivarid(ivar_name);
                     self.attr_reader(ctx, ivar_name, ivar_id, ret);
                 }
@@ -90,9 +102,7 @@ impl Codegen {
                 assert!(store[callid].kw_len() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                if !self_in_rdi_flag {
-                    self.load_rdi(recv);
-                }
+                self.load_rdi(recv);
                 let ivar_id = store[cached_class].get_ivarid(ivar_name);
                 self.attr_writer(ctx, ivar_name, ivar_id, ret, args, pc);
             }
@@ -204,7 +214,6 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, (id.get()); // CallSiteId
-            movq rcx, [r14 - (conv(recv))]; // receiver: Value
             movq rax, (runtime::find_method);
             call rax;
             // FuncId was returned to rax.
@@ -602,20 +611,53 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
+    ///
+    /// Version guard fro JIT.
+    ///
+    /// Check the cached class version, and jump to `side_exit` if the version is changed.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - r13
+    ///
+    fn guard_version(&mut self, pc: BcPc, ctx: &BBContext, side_exit: DestLabel) {
         assert_eq!(0, self.jit.get_page());
-        let global_class_version = self.class_version;
-        let fail = self.jit.label();
-        monoasm!( &mut self.jit,
-            cmpl [rip + global_class_version], (cached_version);
-            jne  fail;
-        );
+        let global_version = self.class_version;
+        let unmatch = self.jit.label();
+        let exit = self.jit.label();
+        let deopt = self.jit.label();
+        let cached_version = self.jit.const_i32(pc.cached_version() as i32);
+        let cached_fid = self.jit.const_i32(pc.cached_fid().get() as i32);
+        monoasm! { &mut self.jit,
+            movl rax, [rip + cached_version];
+            cmpl [rip + global_version], rax;
+            jne  unmatch;
+        exit:
+        }
+
         self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        fail:
+        monoasm! { &mut self.jit,
+        unmatch:
+            movq r13, (pc.as_ptr());
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
+            movq rax, (runtime::find_method);
+            call rax;   // rax <- Option<FuncId>
+            movl rax, rax;
+        }
+        self.jit_handle_error(ctx, pc);
+        monoasm! { &mut self.jit,
+            cmpl [rip + cached_fid], rax;
+            jne  deopt;
+            movl rax, [rip + global_version];
+            //movl [r13 + (CACHED_VERSION)], rax;
+            movl [rip + cached_version], rax;
+            jmp  exit;
+        deopt:
             movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
             jmp  side_exit;
-        );
+        }
         self.jit.select_page(0);
     }
 
@@ -1002,7 +1044,7 @@ mod test {
 
     #[test]
     fn deopt_writer_class_version() {
-        run_test(
+        run_test_once(
             r##"
         class A
           attr_accessor :w

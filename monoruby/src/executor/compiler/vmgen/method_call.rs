@@ -6,11 +6,11 @@ impl Codegen {
     /// ~~~text
     /// MethodCall
     /// +---+---+---+---++---+---+---+---+
-    /// | op|ret|callid || class |version|
+    /// |callid |ret| op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     /// MethodArgs
     /// +---+---+---+---++---+---+---+---+
-    /// | op|rcv|arg|len||  fid  |       |
+    /// |len|arg|rcv| op||  fid  |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -45,7 +45,7 @@ impl Codegen {
         // [r13 +  0]; len
         // [r13 +  2]; %args
         // [r13 +  4]: %recv
-        // [r13 +  8]: FuncData
+        // [r13 +  8]: FuncId
 
         let label = self.vm_method_call_main(slow_path, exec, has_splat);
 
@@ -55,7 +55,6 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, [r13 - 16];  // CallSiteId
-            movq rcx, [rsp]; // receiver:Value
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
         );

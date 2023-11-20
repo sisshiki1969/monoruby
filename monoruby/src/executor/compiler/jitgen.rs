@@ -1172,13 +1172,11 @@ impl Codegen {
                     }
                 }
                 TraceIr::Super {
-                    callid,
-                    cached_fid: info,
-                    ..
+                    callid, cached_fid, ..
                 } => {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
-                    if let Some(fid) = info {
+                    if let Some(fid) = cached_fid {
                         self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
