@@ -671,7 +671,7 @@ impl Codegen {
             cc.sourcemap
                 .push((bb_pos, self.jit.get_current() - cc.start_codepos));
             ctx.next_sp = func.get_sp(bb_pos);
-            match pc.get_ir() {
+            match pc.trace_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;

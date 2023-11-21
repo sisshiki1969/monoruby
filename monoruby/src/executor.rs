@@ -10,7 +10,7 @@ pub use compiler::*;
 use fancy_regex::Captures;
 pub use frame::*;
 pub use op::*;
-use ruruby_parse::{Loc, SourceInfoRef};
+use ruruby_parse::{CmpKind, Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
@@ -216,7 +216,7 @@ impl Executor {
             .module_function = true;
     }
 
-    pub(crate) fn get_class_context(&self) -> Cref {
+    fn get_class_context(&self) -> Cref {
         self.lexical_class
             .last()
             .unwrap()
@@ -357,6 +357,41 @@ impl Executor {
     pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.context_class_id();
         globals.set_constant(parent, name, val);
+    }
+}
+
+impl Executor {
+    pub(crate) fn define_method(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        func: FuncId,
+    ) -> Option<Value> {
+        let Cref {
+            class_id,
+            module_function,
+            visibility,
+        } = self.get_class_context();
+        let current_func = self.method_func_id();
+        if globals[func].is_ruby_func().is_some() {
+            globals[func].as_ruby_func_mut().lexical_context =
+                globals[current_func].as_ruby_func().lexical_context.clone();
+            globals.add_method(class_id, name, func, visibility);
+            if module_function {
+                globals.add_singleton_method(class_id, name, func, visibility);
+            }
+            globals.class_version_inc();
+            Some(Value::nil())
+        } else {
+            let err = MonorubyErr::internalerr(format!(
+                "define func: {:?} {:016x}",
+                name,
+                (func.get() as u64) + (name.get() as u64) << 32
+            ));
+            runtime::_dump_stacktrace(self, globals);
+            self.set_error(err);
+            None
+        }
     }
 }
 
@@ -822,7 +857,7 @@ impl BlockHandler {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Cref {
+struct Cref {
     pub(crate) class_id: ClassId,
     pub(crate) module_function: bool,
     pub(crate) visibility: Visibility,
@@ -1063,7 +1098,7 @@ impl BcPc {
     }
 
     pub(crate) fn is_loop(&self) -> bool {
-        matches!(self.get_ir(), TraceIr::LoopStart(_))
+        matches!(self.trace_ir(), TraceIr::LoopStart(_))
     }
 
     pub(crate) fn opcode(&self) -> u16 {
@@ -1085,6 +1120,355 @@ impl BcPc {
     /*fn cached_fid(self) -> FuncId {
         (*(self + 1)).cached_fid()
     }*/
+}
+
+impl BcPc {
+    pub(crate) fn trace_ir(&self) -> TraceIr {
+        let op = self.op1;
+        let opcode = self.opcode();
+        if opcode & 0xffc0 == 0 {
+            let (op1, op2) = dec_wl(op);
+            match opcode {
+                1 => TraceIr::SingletonMethodDef {
+                    obj: SlotId::new(op1),
+                    name: IdentId::from(self.op2.0 as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                2 => TraceIr::MethodDef {
+                    name: IdentId::from((self.op2.0) as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                3 => TraceIr::Br(op2 as i32),
+                4 => TraceIr::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIf),
+                5 => TraceIr::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIfNot),
+                6 => TraceIr::Integer(SlotId::new(op1), op2 as i32),
+                7 => TraceIr::Literal(SlotId::new(op1), self.op2.get_value()),
+                8 => TraceIr::Nil(SlotId::new(op1)),
+                9 => TraceIr::Symbol(SlotId::new(op1), IdentId::from(op2)),
+                10 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
+                11 => TraceIr::StoreConst(SlotId::new(op1), IdentId::from(op2)),
+                12..=13 => TraceIr::CondBr(
+                    SlotId::new(op1),
+                    op2 as i32,
+                    true,
+                    BrKind::from(opcode - 12),
+                ),
+                14 => TraceIr::LoopStart(op2),
+                15 => TraceIr::LoopEnd,
+                16 => {
+                    let class = self.cached_class();
+                    let ivar = self.cached_ivarid();
+                    TraceIr::LoadIvar(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        if class.0 == 0 { None } else { Some(class) },
+                        ivar,
+                    )
+                }
+                17 => {
+                    let class = self.cached_class();
+                    let ivar = self.cached_ivarid();
+                    TraceIr::StoreIvar(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        if class.0 == 0 { None } else { Some(class) },
+                        ivar,
+                    )
+                }
+                18 => TraceIr::ClassDef {
+                    ret: SlotId::from(op1),
+                    superclass: SlotId::new(op2 as u16),
+                    name: IdentId::from((self.op2.0) as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                19 => TraceIr::ModuleDef {
+                    ret: SlotId::from(op1),
+                    name: IdentId::from((self.op2.0) as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
+                21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
+                22 => TraceIr::SingletonClassDef {
+                    ret: SlotId::from(op1),
+                    base: SlotId::new(op2 as u16),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                23 => TraceIr::BlockArg(SlotId::new(op1), op2 as usize),
+                25 => TraceIr::LoadGvar {
+                    dst: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
+                26 => TraceIr::StoreGvar {
+                    src: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
+                28 => TraceIr::LoadSvar {
+                    dst: SlotId::new(op1),
+                    id: op2,
+                },
+                30..=31 => {
+                    let cached_fid = (*self + 1).func_id();
+                    let has_splat = opcode == 30;
+
+                    if let Some(fid) = cached_fid {
+                        if !has_splat {
+                            if let Some(inline_id) =
+                                crate::executor::inline::InlineTable::get_inline(fid)
+                            {
+                                return TraceIr::InlineCall {
+                                    inline_id,
+                                    callsite: op2.into(),
+                                };
+                            }
+                        }
+                    }
+                    TraceIr::MethodCall {
+                        callid: op2.into(),
+                        cached_fid,
+                    }
+                }
+                32..=33 => TraceIr::MethodCallBlock {
+                    callid: op2.into(),
+                    cached_fid: (*self + 1).func_id(),
+                },
+                34 => TraceIr::Super {
+                    callid: op2.into(),
+                    cached_fid: (*self + 1).func_id(),
+                },
+                35 => TraceIr::Array {
+                    dst: SlotId::new(op1),
+                    callid: CallSiteId::from(op2),
+                },
+                36 => TraceIr::OptCase {
+                    cond: SlotId::new(op1),
+                    optid: OptCaseId::from(op2),
+                },
+                _ => unreachable!("{:016x}", op),
+            }
+        } else {
+            let (op1, op2, op3) = dec_www(op);
+            match opcode {
+                64 => TraceIr::DefinedYield {
+                    ret: SlotId::new(op1),
+                },
+                65 => TraceIr::DefinedConst {
+                    ret: SlotId::new(op1),
+                    siteid: ConstSiteId(self.op2.0 as u32),
+                },
+                66 => TraceIr::DefinedMethod {
+                    ret: SlotId::new(op1),
+                    recv: SlotId::new(op2),
+                    name: IdentId::from(self.op2.0 as u32),
+                },
+                67 => TraceIr::DefinedGvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(self.op2.0 as u32),
+                },
+                68 => TraceIr::DefinedIvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(self.op2.0 as u32),
+                },
+                80 => TraceIr::Ret(SlotId::new(op1)),
+                81 => TraceIr::MethodRet(SlotId::new(op1)),
+                82 => TraceIr::Break(SlotId::new(op1)),
+                83 => TraceIr::Raise(SlotId::new(op1)),
+                85 => TraceIr::EnsureEnd,
+                86 => TraceIr::ConcatRegexp(SlotId::from(op1), SlotId::new(op2), op3),
+                126 => TraceIr::Pos {
+                    dst: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                127 => TraceIr::BitNot {
+                    dst: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                128 => TraceIr::Not {
+                    dst: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                129 => TraceIr::Neg {
+                    dst: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                130 => TraceIr::MethodArgs,
+                132 => TraceIr::Index {
+                    dst: SlotId::new(op1),
+                    base: SlotId::new(op2),
+                    idx: SlotId::new(op3),
+                },
+                133 => TraceIr::IndexAssign {
+                    src: SlotId::new(op1),
+                    base: SlotId::new(op2),
+                    idx: SlotId::new(op3),
+                },
+                134..=141 => TraceIr::Cmp(
+                    CmpKind::from(opcode - 134),
+                    SlotId::from(op1),
+                    OpMode::RR(SlotId::new(op2), SlotId::new(op3)),
+                    false,
+                ),
+                142..=149 => TraceIr::Cmp(
+                    CmpKind::from(opcode - 142),
+                    SlotId::from(op1),
+                    OpMode::RI(SlotId::new(op2), op3 as i16),
+                    false,
+                ),
+                150 => TraceIr::LoadDynVar(
+                    SlotId::new(op1),
+                    DynVar {
+                        reg: SlotId::new(op2),
+                        outer: op3 as usize,
+                    },
+                ),
+                151 => TraceIr::StoreDynVar(
+                    DynVar {
+                        reg: SlotId::new(op1),
+                        outer: op2 as usize,
+                    },
+                    SlotId::new(op3),
+                ),
+                152 => TraceIr::Yield {
+                    ret: SlotId::from(op1),
+                    args: SlotId::new(op2),
+                    len: op3,
+                    callid: CallSiteId::from(self.op2.0 as u32),
+                },
+                154..=161 => TraceIr::Cmp(
+                    CmpKind::from(opcode - 154),
+                    SlotId::from(op1),
+                    OpMode::RR(SlotId(op2), SlotId(op3)),
+                    true,
+                ),
+                162..=169 => TraceIr::Cmp(
+                    CmpKind::from(opcode - 162),
+                    SlotId::from(op1),
+                    OpMode::RI(SlotId::new(op2), op3 as i16),
+                    true,
+                ),
+                170 => TraceIr::InitMethod(FnInitInfo {
+                    reg_num: op1 as usize,
+                    arg_num: self.u16(3) as usize,
+                    block_pos: self.u16(1) as usize,
+                    reqopt_num: op2 as usize,
+                    req_num: self.u16(0) as usize,
+                    info: self.u16(2) as usize,
+                    stack_offset: op3 as usize,
+                }),
+                171 => TraceIr::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
+                172 => TraceIr::InitMethod(FnInitInfo {
+                    reg_num: op1 as usize,
+                    arg_num: self.u16(3) as usize,
+                    block_pos: self.u16(1) as usize,
+                    reqopt_num: op2 as usize,
+                    req_num: self.u16(0) as usize,
+                    info: self.u16(2) as usize,
+                    stack_offset: op3 as usize,
+                }),
+                173 => TraceIr::AliasMethod {
+                    new: SlotId::new(op2),
+                    old: SlotId::new(op3),
+                },
+                174 => TraceIr::Hash {
+                    dst: SlotId::new(op1),
+                    args: SlotId::new(op2),
+                    len: op3,
+                },
+                176 => TraceIr::Mov(SlotId::new(op1), SlotId::new(op2)),
+                177..=178 => TraceIr::Range {
+                    dst: SlotId::new(op1),
+                    start: SlotId::new(op2),
+                    end: SlotId::new(op3),
+                    exclude_end: match opcode - 177 {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    },
+                },
+                179 => TraceIr::ConcatStr(SlotId::from(op1), SlotId::new(op2), op3),
+                180..=189 => {
+                    let kind = BinOpK::from(opcode - 180);
+                    let ret = SlotId::from(op1);
+                    let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
+                    if self.is_integer2() {
+                        TraceIr::IBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else if self.is_float2() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    }
+                }
+                190..=199 => {
+                    let kind = BinOpK::from(opcode - 190);
+                    let ret = SlotId::from(op1);
+                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    if self.is_integer1() {
+                        TraceIr::IBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else if self.is_float1() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    }
+                }
+                200..=209 => {
+                    let kind = BinOpK::from(opcode - 200);
+                    let ret = SlotId::from(op1);
+                    let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
+                    if self.is_integer_binop() {
+                        TraceIr::IBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else if self.is_float_binop() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst: ret,
+                            mode,
+                        }
+                    }
+                }
+                _ => unreachable!("{:016x}", op),
+            }
+        }
+    }
+}
+
+fn dec_wl(op: u64) -> (u16, u32) {
+    ((op >> 32) as u16, op as u32)
+}
+
+fn dec_www(op: u64) -> (u16, u16, u16) {
+    ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
 impl std::ops::Sub<BcPcBase> for BcPc {
@@ -1131,12 +1515,6 @@ impl std::ops::Deref for BcPc {
     type Target = Bc;
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.as_ref() }
-    }
-}
-
-impl BcPc {
-    pub fn get_ir(&self) -> TraceIr {
-        TraceIr::from_bc(*self)
     }
 }
 

@@ -229,7 +229,7 @@ pub(super) enum BcIr {
 }
 
 impl BcIr {
-    pub(crate) fn is_terminal(&self) -> bool {
+    pub fn is_terminal(&self) -> bool {
         match self {
             // Br or Ret or MethodRet or Break or Raise or OptCase
             Self::Br(_)

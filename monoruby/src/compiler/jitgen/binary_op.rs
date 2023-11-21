@@ -478,7 +478,7 @@ impl Codegen {
         pc: BcPc,
         index: BcIndex,
     ) {
-        match (pc + 1).get_ir() {
+        match (pc + 1).trace_ir() {
             TraceIr::CondBr(_, disp, true, brkind) => {
                 let dest_idx = index + disp + 1;
                 let branch_dest = self.jit.label();

@@ -189,7 +189,7 @@ impl JitContext {
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
             let pc = BcPc::from(pc);
-            match pc.get_ir() {
+            match pc.trace_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { new, old } => {
                     info.r#use(new);

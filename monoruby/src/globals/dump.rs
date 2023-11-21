@@ -191,7 +191,7 @@ impl Globals {
             }
         }
 
-        let s = match TraceIr::from_bc(pc) {
+        let s = match pc.trace_ir() {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
@@ -665,7 +665,7 @@ pub(crate) extern "C" fn log_deoptimize(
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
 
-    if let TraceIr::LoopEnd = pc.get_ir() {
+    if let TraceIr::LoopEnd = pc.trace_ir() {
         // normal exit from jit'ed loop
         #[cfg(feature = "log-jit")]
         {
@@ -686,7 +686,7 @@ pub(crate) extern "C" fn log_deoptimize(
         }
         #[cfg(feature = "log-jit")]
         {
-            let trace_ir = pc.get_ir();
+            let trace_ir = pc.trace_ir();
             let name = globals.store.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
             match trace_ir {
