@@ -13,9 +13,10 @@ use super::*;
 // ~~~
 
 const CALLSITE_ID: usize = 0;
-//const CACHED_VERSION: usize = 12;
+const CACHED_CLASS: usize = 8;
+const CACHED_VERSION: usize = 12;
 //const RECV_REG: usize = 20;
-//const CACHED_FUNCID: usize = 24;
+const CACHED_FUNCID: usize = 24;
 
 impl Codegen {
     pub(super) fn gen_inlinable(
@@ -119,7 +120,6 @@ impl Codegen {
     /// generate JIT code for a method call which was not cached.
     ///
     fn gen_call_not_cached(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
-        let has_splat = callsite.has_splat();
         let CallSiteInfo { id, recv, ret, .. } = *callsite;
         // argument registers:
         //   rdi: args len
@@ -147,25 +147,24 @@ impl Codegen {
             );
         }
         monoasm! { &mut self.jit,
-            movq r13, ((pc + 1).get_u64());
+            movq r13, (pc.get_u64());
             // check inline cache
-            cmpq [r13 + 8], 0;
+            cmpl [r13 + (CACHED_FUNCID)], 0;
             jeq  slow_path;
             // class guard
-            cmpl r15, [r13 - 8];
+            cmpl r15, [r13 + (CACHED_CLASS)];
             jne  slow_path;
             // version guard
             movl rax, [rip + global_class_version];
-            cmpl [r13 - 4], rax;
+            cmpl [r13 + (CACHED_VERSION)], rax;
             jne  slow_path;
         method_resolved:
         }
 
-        self.set_method_outer();
-        self.set_self_and_args(has_splat, callsite);
+        self.set_args_outer(callsite);
 
         monoasm! { &mut self.jit,
-        movq rdx, [r13 + 8];    // FuncId
+            movl rdx, [r13 + (CACHED_FUNCID)];    // FuncId
         }
         self.get_func_data();
         monoasm! { &mut self.jit,
@@ -173,9 +172,6 @@ impl Codegen {
             // set meta.
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rax;
-        }
-
-        monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
         self.block_arg_expand();
@@ -219,11 +215,11 @@ impl Codegen {
             // FuncId was returned to rax.
             testq rax, rax;
             jeq raise;
-            movl [r13 + 8], rax;
+            movl [r13 + (CACHED_FUNCID)], rax;
 
             movl rax, [rip + global_class_version];
-            movl [r13 - 4], rax;
-            movl [r13 - 8], r15;
+            movl [r13 + (CACHED_VERSION)], rax;
+            movl [r13 + (CACHED_CLASS)], r15;
             jmp method_resolved;
         );
         let raise = self.entry_raise;
@@ -441,14 +437,12 @@ impl Codegen {
         recv_classid: ClassId,
         native: bool,
     ) {
-        let has_splat = store[callid].has_splat();
         let xmm_using = ctx.get_xmm_using();
         let dst = store[callid].ret;
         self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         self.execute_gc();
-        self.set_method_outer();
-        self.set_self_and_args(has_splat, &store[callid]);
+        self.set_args_outer(&store[callid]);
         let func_data = &store[callee_fid].data;
         monoasm! { &mut self.jit,
             // set meta.
@@ -577,7 +571,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         // set arguments
-        self.jit_set_arguments(args, len, true, &store[callid]);
+        self.jit_set_arguments(args, len, &store[callid]);
 
         monoasm! { &mut self.jit,
             movq rsi, [r13 + (FUNCDATA_PC)];
@@ -668,7 +662,8 @@ impl Codegen {
     ///
     /// ### destroy
     /// - caller save registers
-    fn set_self_and_args(&mut self, has_splat: bool, callsite: &CallSiteInfo) {
+    fn set_args_outer(&mut self, callsite: &CallSiteInfo) {
+        self.set_method_outer();
         let CallSiteInfo {
             args,
             pos_num,
@@ -695,7 +690,7 @@ impl Codegen {
                 movq [rsp - (16 + LBP_BLOCK)], 0;
             );
         }
-        self.jit_set_arguments(args, pos_num as u16, has_splat, callsite);
+        self.jit_set_arguments(args, pos_num as u16, callsite);
     }
 
     /// Set arguments.
@@ -708,15 +703,9 @@ impl Codegen {
     ///
     /// - caller save registers
     ///
-    fn jit_set_arguments(
-        &mut self,
-        args: SlotId,
-        pos_num: u16,
-        has_splat: bool,
-        callsite: &CallSiteInfo,
-    ) {
+    fn jit_set_arguments(&mut self, args: SlotId, pos_num: u16, callsite: &CallSiteInfo) {
         // set arguments
-        if has_splat {
+        if callsite.has_splat() {
             monoasm!( &mut self.jit,
                 lea r8, [rsp - (16 + LBP_ARG0)];
                 subq rsp, 4088;
