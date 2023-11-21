@@ -1,3 +1,4 @@
+use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
@@ -7,7 +8,8 @@ mod vmgen;
 mod wrapper;
 
 use super::*;
-//use runtime::*;
+use crate::bytecodegen::inst::*;
+use crate::executor::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{bytecodegen::BcIndex, executor::compiler::jitgen::BasicBlockInfo};
+use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
 
 ///
 /// Information of instruction sequences.

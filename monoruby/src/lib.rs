@@ -13,6 +13,7 @@
 mod alloc;
 mod builtins;
 mod bytecodegen;
+mod compiler;
 mod executor;
 mod globals;
 mod id_table;
@@ -26,7 +27,9 @@ pub use globals::OBJECT_CLASS;
 pub use globals::{Globals, MonorubyErr};
 pub use value::Value;
 
-use executor::jitgen::analysis;
+use builtins::Arg;
+use compiler::jitgen::analysis;
+//use compiler::jitgen::trace_ir::TraceIr;
 use executor::*;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;

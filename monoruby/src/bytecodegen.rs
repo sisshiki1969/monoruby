@@ -599,7 +599,7 @@ impl BytecodeGen {
         }
     }
 
-    fn get_index(&self, reg: &BcReg) -> SlotId {
+    fn slot_id(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,
             BcReg::Temp(i) => 1 + self.non_temp_num + i.0,

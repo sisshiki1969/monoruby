@@ -216,7 +216,7 @@ pub(crate) enum TraceIr {
     LoopEnd,
 }
 
-pub(in crate::executor) fn dec_wl(op: u64) -> (u16, u32) {
+pub(super) fn dec_wl(op: u64) -> (u16, u32) {
     ((op >> 32) as u16, op as u32)
 }
 

@@ -24,7 +24,7 @@ mod string;
 mod struct_class;
 mod time;
 
-pub(self) use crate::executor::compiler::jitgen::BBContext;
+pub(self) use crate::compiler::jitgen::BBContext;
 pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;

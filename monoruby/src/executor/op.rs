@@ -186,7 +186,7 @@ pub(crate) extern "C" fn div_values(
 macro_rules! int_binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
-            pub(super) extern "C" fn [<$op _values>](
+            pub(crate) extern "C" fn [<$op _values>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -383,7 +383,7 @@ impl Executor {
 macro_rules! eq_values {
     ($op:ident) => {
         paste! {
-            pub(super) extern "C" fn [<cmp_ $op _values>](
+            pub(crate) extern "C" fn [<cmp_ $op _values>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -450,7 +450,7 @@ fn cmp_values() {
     }
 }
 
-pub(super) extern "C" fn cmp_teq_values(
+pub(crate) extern "C" fn cmp_teq_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -510,7 +510,7 @@ pub(crate) fn cmp_teq_values_bool(
     Ok(b)
 }
 
-pub(super) extern "C" fn cmp_cmp_values(
+pub(crate) extern "C" fn cmp_cmp_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,

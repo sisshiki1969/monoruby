@@ -2,12 +2,15 @@ use monoasm_macro::monoasm;
 use paste::paste;
 use ruruby_parse::CmpKind;
 
+use crate::bytecodegen::BcIndex;
+
 pub(crate) use self::basic_block::BasicBlockInfo;
 pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use slot::SlotState;
+use trace_ir::*;
 
 pub mod analysis;
 mod basic_block;

@@ -174,7 +174,7 @@ impl Globals {
 
     #[cfg(feature = "dump-bc")]
     pub(super) fn format(&self, pc: BcPc, i: usize) -> Option<String> {
-        use crate::jitgen::trace_ir::{OpMode, TraceIr};
+        use crate::jitgen::trace_ir::*;
 
         fn optstr(opt: bool) -> &'static str {
             if opt {
@@ -660,8 +660,7 @@ pub(crate) extern "C" fn log_deoptimize(
     pc: BcPc,
     #[cfg(feature = "log-jit")] v: Option<Value>,
 ) {
-    use crate::jitgen::trace_ir::TraceIr;
-
+    use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;

@@ -1,16 +1,14 @@
 use super::*;
 use crate::{builtins::Arg, bytecodegen::*};
 
-pub mod compiler;
-mod frame;
+pub mod frame;
 pub mod inline;
 pub mod op;
 use crate::bytecodegen::inst::*;
-use compiler::jitgen::trace_ir::*;
+use crate::compiler::jitgen::trace_ir::*;
 pub use compiler::*;
 use fancy_regex::Captures;
 pub use frame::*;
-use monoasm::*;
 pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};
 
@@ -18,23 +16,23 @@ pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 
-const BP_PREV_CFP: i64 = 8;
-const BP_LFP: i64 = 16;
-const LFP_OFFSET: i64 = 24;
-const LBP_OUTER: i64 = 0 + LFP_OFFSET;
+pub(crate) const BP_PREV_CFP: i64 = 8;
+pub(crate) const BP_LFP: i64 = 16;
+pub(crate) const LFP_OFFSET: i64 = 24;
+pub(crate) const LBP_OUTER: i64 = 0 + LFP_OFFSET;
 /// Meta 8bytes
-const LBP_META: i64 = 8 + LFP_OFFSET;
+pub(crate) const LBP_META: i64 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
-const LBP_META_REGNUM: i64 = LBP_META - META_REGNUM as i64;
+pub(crate) const LBP_META_REGNUM: i64 = LBP_META - META_REGNUM as i64;
 /// Meta::FuncId 4bytes
-const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
-const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
-const LBP_SELF: i64 = 24 + LFP_OFFSET;
+pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
+pub(crate) const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
+pub(crate) const LBP_SELF: i64 = 24 + LFP_OFFSET;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
-const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
-const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
-const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
+pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
+pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
+pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 
 ///
 /// Bytecode interpreter.
@@ -52,9 +50,9 @@ pub struct Executor {
     rsp_save: Option<std::ptr::NonNull<u8>>,
     parent_fiber: Option<std::ptr::NonNull<Executor>>,
     lexical_class: Vec<Vec<Cref>>,
-    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
-    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
-    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
+    pub(crate) sp_last_match: Option<Value>, // $&        : Regexp.last_match(0)
+    pub(crate) sp_post_match: Option<Value>, // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>,          // $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
     /// error information.
     exception: Option<MonorubyErr>,
@@ -122,7 +120,7 @@ impl Executor {
         self.cfp().lfp().register(index)
     }
 
-    fn method_func_id(&self) -> FuncId {
+    pub(crate) fn method_func_id(&self) -> FuncId {
         self.cfp().method_func_id()
     }
 
@@ -218,7 +216,7 @@ impl Executor {
             .module_function = true;
     }
 
-    fn get_class_context(&self) -> Cref {
+    pub(crate) fn get_class_context(&self) -> Cref {
         self.lexical_class
             .last()
             .unwrap()
@@ -268,20 +266,20 @@ impl Executor {
         std::mem::take(&mut self.exception).unwrap()
     }
 
-    fn exception(&self) -> Option<&MonorubyErr> {
+    pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
         self.exception.as_ref()
     }
 
-    fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
         let err = self.take_error();
         self.exception_to_val(globals, err)
     }
 
-    fn err_divide_by_zero(&mut self) {
+    pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    fn err_wrong_number_of_arg_range(
+    pub(crate) fn err_wrong_number_of_arg_range(
         &mut self,
         given: usize,
         range: std::ops::RangeInclusive<usize>,
@@ -296,7 +294,7 @@ impl Executor {
         self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
     }
 
-    fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
         match &mut self.exception {
             Some(err) => {
                 err.push_trace(loc, sourceinfo);
@@ -344,7 +342,7 @@ impl Executor {
     /// This fn returns the value of the constant and the class id of the base object.
     /// It is necessary to check the base class for confirmation of cache consistency.
     ///
-    fn find_constant(
+    pub(crate) fn find_constant(
         &self,
         globals: &mut Globals,
         site_id: ConstSiteId,
@@ -356,7 +354,7 @@ impl Executor {
         globals.find_constant(site_id, current_func, base)
     }
 
-    fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
+    pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.context_class_id();
         globals.set_constant(parent, name, val);
     }
@@ -618,7 +616,7 @@ impl Executor {
     ///
     /// Invoke func with *args*: Args.
     ///
-    fn invoke_func(
+    pub(crate) fn invoke_func(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
@@ -638,7 +636,7 @@ impl Executor {
         )
     }
 
-    fn define_class(
+    pub(crate) fn define_class(
         &mut self,
         globals: &mut Globals,
         name: IdentId,
@@ -824,10 +822,10 @@ impl BlockHandler {
 }
 
 #[derive(Debug, Clone)]
-struct Cref {
-    class_id: ClassId,
-    module_function: bool,
-    visibility: Visibility,
+pub(crate) struct Cref {
+    pub(crate) class_id: ClassId,
+    pub(crate) module_function: bool,
+    pub(crate) visibility: Visibility,
 }
 
 impl Cref {
@@ -1060,15 +1058,15 @@ impl BcPc {
         Self(std::ptr::NonNull::new(ptr).unwrap())
     }
 
-    fn as_ptr(&self) -> *mut Bc {
+    pub(crate) fn as_ptr(&self) -> *mut Bc {
         self.0.as_ptr()
     }
 
-    fn is_loop(&self) -> bool {
+    pub(crate) fn is_loop(&self) -> bool {
         matches!(self.get_ir(), TraceIr::LoopStart(_))
     }
 
-    fn opcode(&self) -> u16 {
+    pub(crate) fn opcode(&self) -> u16 {
         (self.op1 >> 48) as u16
     }
 
@@ -1076,7 +1074,7 @@ impl BcPc {
         Self(std::ptr::NonNull::from(bc))
     }
 
-    fn get_u64(self) -> u64 {
+    pub fn get_u64(self) -> u64 {
         self.0.as_ptr() as _
     }
 
@@ -1084,9 +1082,9 @@ impl BcPc {
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 
-    fn cached_fid(self) -> FuncId {
+    /*fn cached_fid(self) -> FuncId {
         (*(self + 1)).cached_fid()
-    }
+    }*/
 }
 
 impl std::ops::Sub<BcPcBase> for BcPc {
@@ -1256,7 +1254,7 @@ impl BinOpK {
         }
     }
 
-    fn generic_func(&self) -> BinaryOpFn {
+    pub(crate) fn generic_func(&self) -> BinaryOpFn {
         match self {
             BinOpK::Add => add_values,
             BinOpK::Sub => sub_values,
@@ -1288,7 +1286,7 @@ pub enum Visibility {
     }
 }*/
 
-extern "C" fn exec_jit_compile_patch(
+pub(crate) extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
@@ -1309,7 +1307,11 @@ extern "C" fn exec_jit_compile_patch(
     globals.codegen.jit.apply_jmp_patch(entry, guard);
 }
 
-extern "C" fn exec_jit_recompile_method(globals: &mut Globals, func_id: FuncId, self_value: Value) {
+pub(crate) extern "C" fn exec_jit_recompile_method(
+    globals: &mut Globals,
+    func_id: FuncId,
+    self_value: Value,
+) {
     let entry_label = globals.codegen.jit.label();
     globals.exec_jit_compile_method(func_id, self_value, entry_label);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
@@ -1322,7 +1324,7 @@ extern "C" fn exec_jit_recompile_method(globals: &mut Globals, func_id: FuncId, 
 ///
 /// Compile the loop.
 ///
-extern "C" fn exec_jit_partial_compile(
+pub(crate) extern "C" fn exec_jit_partial_compile(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
@@ -1355,7 +1357,7 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
-extern "C" fn execute_gc(globals: &Globals, mut executor: &Executor) {
+pub(crate) extern "C" fn execute_gc(globals: &Globals, mut executor: &Executor) {
     // Get root Executor.
     while let Some(parent) = executor.parent_fiber {
         executor = unsafe { parent.as_ref() };
