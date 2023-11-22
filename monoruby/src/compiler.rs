@@ -790,38 +790,38 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
     let exit = jit.label();
     let err = jit.label();
     monoasm!(jit,
-        label:
-            movl  rax, (INTEGER_CLASS.0);
-            testq rdi, 0b001;
-            jnz   exit;
-            movl  rax, (FLOAT_CLASS.0);
-            testq rdi, 0b010;
-            jnz   exit;
-            testq rdi, 0b111;
-            jnz   l1;
-            testq rdi, rdi;
-            jz    err;
-            movl  rax, [rdi + 4];
-            jmp   exit;
-        l1:
-            movl  rax, (SYMBOL_CLASS.0);
-            cmpb  rdi, (TAG_SYMBOL);
-            je    exit;
-            movl  rax, (NIL_CLASS.0);
-            cmpq  rdi, (NIL_VALUE);
-            je    exit;
-            movl  rax, (TRUE_CLASS.0);
-            cmpq  rdi, (TRUE_VALUE);
-            je    exit;
-            movl  rax, (FALSE_CLASS.0);
-            cmpq  rdi, (FALSE_VALUE);
-            je    exit;
-        err:
-            movq  rax, (runtime::illegal_classid);  // rdi: Value
-            call  rax;
-            // no return
-        exit:
-            ret;
+    label:
+        movl  rax, (INTEGER_CLASS.0);
+        testq rdi, 0b001;
+        jnz   exit;
+        movl  rax, (FLOAT_CLASS.0);
+        testq rdi, 0b010;
+        jnz   exit;
+        testq rdi, 0b111;
+        jnz   l1;
+        testq rdi, rdi;
+        jz    err;
+        movl  rax, [rdi + 4];
+        jmp   exit;
+    l1:
+        movl  rax, (SYMBOL_CLASS.0);
+        cmpb  rdi, (TAG_SYMBOL);
+        je    exit;
+        movl  rax, (NIL_CLASS.0);
+        cmpq  rdi, (NIL_VALUE);
+        je    exit;
+        movl  rax, (TRUE_CLASS.0);
+        cmpq  rdi, (TRUE_VALUE);
+        je    exit;
+        movl  rax, (FALSE_CLASS.0);
+        cmpq  rdi, (FALSE_VALUE);
+        je    exit;
+    err:
+        movq  rax, (runtime::illegal_classid);  // rdi: Value
+        call  rax;
+        // no return
+    exit:
+        ret;
     );
     label
 }
@@ -829,6 +829,7 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
 fn wrong_arguments(jit: &mut JitMemory) -> DestLabel {
     let label = jit.label();
     monoasm! {jit,
+    label:
         movq rdi, rbx;
         movl rsi, rdx;  // given
         movzxw rdx, [r13 - 8];  // min
@@ -873,6 +874,7 @@ fn flonum_to_f64(jit: &mut JitMemory) -> DestLabel {
     let label = jit.label();
     let exit = jit.label();
     monoasm! {jit,
+    label:
         xorps xmm0, xmm0;
         movq rax, (FLOAT_ZERO);
         cmpq rdi, rax;
@@ -908,6 +910,7 @@ fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
     let normal = jit.label();
     let heap_alloc = jit.label();
     monoasm! {jit,
+    label:
         xorps xmm1, xmm1;
         ucomisd xmm0, xmm1;
         jne normal;

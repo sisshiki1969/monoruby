@@ -50,9 +50,9 @@ pub struct Executor {
     rsp_save: Option<std::ptr::NonNull<u8>>,
     parent_fiber: Option<std::ptr::NonNull<Executor>>,
     lexical_class: Vec<Vec<Cref>>,
-    pub(crate) sp_last_match: Option<Value>, // $&        : Regexp.last_match(0)
-    pub(crate) sp_post_match: Option<Value>, // $'        : Regexp.post_match
-    sp_matches: Vec<Option<Value>>,          // $1 ... $n : Regexp.last_match(n)
+    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
+    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
     /// error information.
     exception: Option<MonorubyErr>,
@@ -154,6 +154,14 @@ impl Executor {
 
     pub fn parent_fiber(&self) -> Option<NonNull<Executor>> {
         self.parent_fiber
+    }
+
+    pub fn sp_last_match(&self) -> Value {
+        self.sp_last_match.unwrap_or_default()
+    }
+
+    pub fn sp_post_match(&self) -> Value {
+        self.sp_post_match.unwrap_or_default()
     }
 }
 

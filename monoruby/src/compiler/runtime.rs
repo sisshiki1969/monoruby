@@ -512,26 +512,16 @@ pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, va
 ///
 pub(super) extern "C" fn get_special_var(vm: &Executor, globals: &Globals, id: u32) -> Value {
     match id {
-        ruruby_parse::SPECIAL_LASTMATCH => {
-            // $&
-            vm.sp_last_match.unwrap_or_default()
-        }
-        ruruby_parse::SPECIAL_POSTMATCH => {
-            // $'
-            vm.sp_post_match.unwrap_or_default()
-        }
-        ruruby_parse::SPECIAL_LOADPATH => {
-            // $LOAD_PATH
-            globals.get_load_path()
-        }
-        ruruby_parse::SPECIAL_LOADEDFEATURES => {
-            // $LOADED_FEATURES
-            globals.get_loaded_features()
-        }
-        id if id >= 100 => {
-            // $1, $2, ..
-            vm.get_special_matches(id as i64 - 100)
-        }
+        // $&
+        ruruby_parse::SPECIAL_LASTMATCH => vm.sp_last_match(),
+        // $'
+        ruruby_parse::SPECIAL_POSTMATCH => vm.sp_post_match(),
+        // $LOAD_PATH
+        ruruby_parse::SPECIAL_LOADPATH => globals.get_load_path(),
+        // $LOADED_FEATURES
+        ruruby_parse::SPECIAL_LOADEDFEATURES => globals.get_loaded_features(),
+        // $1, $2, ..
+        id if id >= 100 => vm.get_special_matches(id as i64 - 100),
         _ => unreachable!(),
     }
 }
