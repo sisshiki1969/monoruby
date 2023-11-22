@@ -624,7 +624,7 @@ impl Codegen {
             subq rsp, 4096;
             movq rdx, rdi; // arg_num
             movq rdi, r12; // &Globals
-            movq rax, (runtime::handle_invoker_arguments);
+            movq rax, (handle_invoker_arguments);
             call rax;
             // set arg len
             movq rdx, rax;
@@ -1740,11 +1740,57 @@ impl Codegen {
             movq rcx, [r15];
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (runtime::opt_case);
+            movq rax, (opt_case);
             call rax;
             movl rdi, rax;
             jmp branch;
         };
         label
     }
+}
+
+fn handle_invoker_arguments(globals: &Globals, callee_lfp: LFP, mut arg_num: usize) -> usize {
+    let callee_func_id = callee_lfp.meta().func_id();
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => unsafe {
+            // expand array for block
+            arg_num = expand_array_for_block(info, arg_num, callee_lfp);
+
+            // required + optional + rest
+            runtime::handle_positional(info, arg_num, callee_lfp, None);
+            // keyword
+            let params = &info.args.keyword_names;
+            let callee_kw_pos = info.pos_num() + 1;
+            for (id, _) in params.iter().enumerate() {
+                *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
+            }
+        },
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+    }
+    arg_num
+}
+
+/// deconstruct array for block
+fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
+    let req_num = info.required_num();
+    let reqopt_num = info.reqopt_num();
+    if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
+        unsafe {
+            let v = callee_lfp.register(1).unwrap();
+            if v.is_array().is_some() {
+                let ptr = callee_lfp.register_ptr(1);
+                return block_expand_array(v, ptr as _, req_num);
+            }
+        }
+    }
+    arg_num
+}
+
+extern "C" fn opt_case(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    callid: OptCaseId,
+    idx: Value,
+) -> u32 {
+    globals.store[callid].find(idx)
 }

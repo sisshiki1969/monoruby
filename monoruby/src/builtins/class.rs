@@ -90,7 +90,7 @@ fn inline_class_new(
     gen.load_rdi(recv);
     let cached_version = gen.jit.const_i32(-1);
     let cached_funcid = gen.jit.const_i32(-1);
-    let class_version = gen.class_version;
+    let class_version = gen.class_version_label();
     let slow_path = gen.jit.label();
     let checked = gen.jit.label();
     let exit = gen.jit.label();
@@ -135,7 +135,7 @@ fn inline_class_new(
     slow_path:
         movq rdi, r12;
         movq rsi, r15;
-        movq rax, (runtime::check_initializer);
+        movq rax, (check_initializer);
         call rax;
         movl [rip + cached_funcid], rax;
         movl rdi, [rip + class_version];
@@ -148,6 +148,10 @@ fn inline_class_new(
 extern "C" fn allocate_instance(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::object(class_id)
+}
+
+extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {
+    globals.check_method(receiver, IdentId::INITIALIZE)
 }
 
 #[cfg(test)]

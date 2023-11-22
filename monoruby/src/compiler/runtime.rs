@@ -9,7 +9,7 @@ use super::*;
 ///
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
 ///
-pub(crate) extern "C" fn find_method(
+pub(super) extern "C" fn find_method(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
@@ -28,13 +28,6 @@ pub(crate) extern "C" fn find_method(
         let self_val = vm.cfp().lfp().self_val();
         get_super_data(vm, globals, self_val)
     }
-}
-
-pub(crate) extern "C" fn check_initializer(
-    globals: &mut Globals,
-    receiver: Value,
-) -> Option<FuncId> {
-    globals.check_method(receiver, IdentId::INITIALIZE)
 }
 
 pub(super) extern "C" fn enter_classdef<'a>(
@@ -205,15 +198,6 @@ pub(super) extern "C" fn concatenate_regexp(
     Some(Value::regexp(inner))
 }
 
-pub(super) extern "C" fn opt_case(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    callid: OptCaseId,
-    idx: Value,
-) -> u32 {
-    globals.store[callid].find(idx)
-}
-
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     match src.is_array() {
         Some(ary) => {
@@ -296,51 +280,10 @@ pub(super) extern "C" fn vm_handle_arguments(
     Some(Value::nil())
 }
 
-pub(super) extern "C" fn handle_invoker_arguments(
-    globals: &Globals,
-    callee_lfp: LFP,
-    mut arg_num: usize,
-) -> usize {
-    let callee_func_id = callee_lfp.meta().func_id();
-    match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => unsafe {
-            // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_lfp);
-
-            // required + optional + rest
-            handle_positional(info, arg_num, callee_lfp, None);
-            // keyword
-            let params = &info.args.keyword_names;
-            let callee_kw_pos = info.pos_num() + 1;
-            for (id, _) in params.iter().enumerate() {
-                *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
-            }
-        },
-        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
-    }
-    arg_num
-}
-
-/// deconstruct array for block
-fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
-    let req_num = info.required_num();
-    let reqopt_num = info.reqopt_num();
-    if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
-        unsafe {
-            let v = callee_lfp.register(1).unwrap();
-            if v.is_array().is_some() {
-                let ptr = callee_lfp.register_ptr(1);
-                return block_expand_array(v, ptr as _, req_num);
-            }
-        }
-    }
-    arg_num
-}
-
 ///
 /// if argument mismatch occurs, return Some((usize, usize..=usize)).
 ///
-fn handle_positional(
+pub(super) fn handle_positional(
     info: &ISeqInfo,
     arg_num: usize,
     mut callee_lfp: LFP,
@@ -435,30 +378,6 @@ fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut
     }
 }
 
-pub(super) extern "C" fn jit_handle_hash_splat(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    callee_reg: *mut Option<Value>,
-    callee_func_id: FuncId,
-) {
-    let callsite = &globals.store[callid];
-    let CallSiteInfo { hash_splat_pos, .. } = callsite;
-    let info = globals.store[callee_func_id].as_ruby_func();
-    let callee_kw_pos = info.pos_num() + 1;
-    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
-        for hash in hash_splat_pos {
-            unsafe {
-                let h = vm.register(hash.0 as usize).unwrap();
-                // We must check whether h is a hash.
-                if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
-                    *callee_reg.sub(callee_kw_pos + id) = Some(v);
-                }
-            }
-        }
-    }
-}
-
 unsafe fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
     let ptr = lfp.register_ptr(start_pos);
     std::slice::from_raw_parts_mut(ptr, len).fill(val);
@@ -540,22 +459,6 @@ pub(super) extern "C" fn set_index(
     vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
 }
 
-pub(super) extern "C" fn set_array_integer_index(
-    mut base: Value,
-    index: i64,
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    src: Value,
-) -> Option<Value> {
-    match base.as_array_mut().set_index(index, src) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
-}
-
 /*///
 /// Get Constant.
 ///
@@ -585,38 +488,6 @@ pub(super) extern "C" fn set_constant(
     val: Value,
 ) {
     vm.set_constant(globals, name, val)
-}
-
-///
-/// Get instance variable.
-///
-/// rax <= the value of instance variable. <Value>
-///
-pub(super) extern "C" fn get_instance_var(
-    base: Value,
-    name: IdentId,
-    globals: &mut Globals,
-) -> Value {
-    globals.get_ivar(base, name).unwrap_or_default()
-}
-
-///
-/// Set instance variable.
-///
-/// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
-///
-pub(super) extern "C" fn set_instance_var(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    base: Value,
-    name: IdentId,
-    val: Value,
-) -> Option<Value> {
-    if let Err(err) = globals.set_ivar(base, name, val) {
-        vm.set_error(err);
-        return None;
-    };
-    Some(val)
 }
 
 ///

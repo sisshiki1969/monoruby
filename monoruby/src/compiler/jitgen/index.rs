@@ -174,7 +174,7 @@ impl Codegen {
                 movq rdx, rbx;
                 movq rcx, r12;
                 movq r8, r15;
-                movq rax, (runtime::set_array_integer_index);
+                movq rax, (set_array_integer_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
@@ -239,6 +239,22 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(&using);
+    }
+}
+
+extern "C" fn set_array_integer_index(
+    mut base: Value,
+    index: i64,
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    src: Value,
+) -> Option<Value> {
+    match base.as_array_mut().set_index(index, src) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
     }
 }
 

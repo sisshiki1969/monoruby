@@ -495,7 +495,7 @@ impl Codegen {
                             movq rsi, r12;
                             movl rdx, (callid.get());
                             movl r8, (callee_fid.get());
-                            movq rax, (runtime::jit_handle_hash_splat);
+                            movq rax, (jit_handle_hash_splat);
                             call rax;
                             popq rdi;
                             addq rsp, 4088;
@@ -753,6 +753,30 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdi, (pos_num);
             );
+        }
+    }
+}
+
+extern "C" fn jit_handle_hash_splat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    callee_reg: *mut Option<Value>,
+    callee_func_id: FuncId,
+) {
+    let callsite = &globals.store[callid];
+    let CallSiteInfo { hash_splat_pos, .. } = callsite;
+    let info = globals.store[callee_func_id].as_ruby_func();
+    let callee_kw_pos = info.pos_num() + 1;
+    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
+        for hash in hash_splat_pos {
+            unsafe {
+                let h = vm.register(hash.0 as usize).unwrap();
+                // We must check whether h is a hash.
+                if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
+                    *callee_reg.sub(callee_kw_pos + id) = Some(v);
+                }
+            }
         }
     }
 }

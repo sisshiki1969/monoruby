@@ -36,7 +36,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rsi, (id.get());  // id: IdentId
                 movq rdx, r12; // &mut Globals
-                movq rax, (runtime::get_instance_var);
+                movq rax, (get_instance_var);
                 call rax;
             );
             self.xmm_restore(&xmm_using);
@@ -77,7 +77,7 @@ impl Codegen {
                 movq r8, rax;   // val: Value
                 movq rdi, rbx; //&mut Executor
                 movq rsi, r12; //&mut Globals
-                movq rax, (runtime::set_instance_var);
+                movq rax, (set_instance_var);
                 call rax;
             );
             self.xmm_restore(&using);
@@ -214,6 +214,34 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
         self.save_rax_to_acc(ctx, dst);
     }
+}
+
+///
+/// Get instance variable.
+///
+/// rax <= the value of instance variable. <Value>
+///
+extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
+    globals.get_ivar(base, name).unwrap_or_default()
+}
+
+///
+/// Set instance variable.
+///
+/// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
+///
+extern "C" fn set_instance_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    name: IdentId,
+    val: Value,
+) -> Option<Value> {
+    if let Err(err) = globals.set_ivar(base, name, val) {
+        vm.set_error(err);
+        return None;
+    };
+    Some(val)
 }
 
 #[cfg(test)]

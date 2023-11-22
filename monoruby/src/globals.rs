@@ -335,12 +335,12 @@ impl Globals {
         self[func_id].data.set_codeptr(codeptr);
     }
 
-    pub(super) fn class_version_inc(&mut self) {
-        unsafe { *self.codegen.class_version_addr += 1 }
+    pub(crate) fn class_version_inc(&mut self) {
+        self.codegen.class_version_inc()
     }
 
-    pub fn class_version(&self) -> u32 {
-        unsafe { *self.codegen.class_version_addr }
+    pub(crate) fn class_version(&self) -> u32 {
+        self.codegen.class_version()
     }
 
     fn load_file(

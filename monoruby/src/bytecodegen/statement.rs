@@ -171,37 +171,42 @@ impl BytecodeGen {
         else_: Node,
         use_mode: UseMode,
     ) -> Result<()> {
+        fn check_opt(when_: &[CaseBranch]) -> Option<(u16, u16)> {
+            let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
+            if branch_len < 8 {
+                return None;
+            }
+            let mut min = 2048;
+            let mut max = 0;
+            let b = when_.iter().all(|cb| {
+                cb.when.iter().all(|node| {
+                    if let NodeKind::Integer(i) = node.kind {
+                        if 0 <= i && i < 2048 {
+                            min = min.min(i);
+                            max = max.max(i);
+                            return true;
+                        }
+                    }
+                    false
+                })
+            });
+            if b {
+                Some((min as u16, max as u16))
+            } else {
+                None
+            }
+        }
+
         let else_pos = self.new_label();
         let exit_pos = self.new_label();
         let base = self.temp;
         if let Some(box cond) = cond {
             let loc = cond.loc;
-            let rhs = self.push_expr(cond)?.into();
-            let mut idx_start = 2048;
-            let mut idx_end = 0;
-            let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
-            if branch_len >= 8
-                && when_.iter().all(|cb| {
-                    cb.when.iter().all(|node| {
-                        if let NodeKind::Integer(i) = node.kind {
-                            if 0 <= i && i < 2048 {
-                                idx_start = idx_start.min(i);
-                                idx_end = idx_end.max(i);
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    })
-                })
-            {
+            let reg = self.push_expr(cond)?.into();
+            if let Some((min, max)) = check_opt(&when_) {
                 let mut table = vec![];
                 let mut bodies = vec![];
                 let mut labels = vec![else_pos];
-                let min = idx_start as u16;
-                let max = idx_end as u16;
                 for branch in when_ {
                     let CaseBranch { box body, when } = branch;
                     let then_pos = self.new_label();
@@ -218,7 +223,7 @@ impl BytecodeGen {
                 }
                 self.emit(
                     BcIr::OptCase {
-                        reg: rhs,
+                        reg,
                         min,
                         max,
                         table,
@@ -240,11 +245,11 @@ impl BytecodeGen {
                     let succ_pos = self.new_label();
                     if when.len() == 1 {
                         let when = when.remove(0);
-                        self.gen_teq_condbr(when, rhs, succ_pos, false)?;
+                        self.gen_teq_condbr(when, reg, succ_pos, false)?;
                     } else {
                         let then_pos = self.new_label();
                         for when in when {
-                            self.gen_teq_condbr(when, rhs, then_pos, true)?;
+                            self.gen_teq_condbr(when, reg, then_pos, true)?;
                         }
                         self.emit_br(succ_pos);
                         self.apply_label(then_pos);

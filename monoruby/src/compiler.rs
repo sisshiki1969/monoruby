@@ -110,15 +110,14 @@ macro_rules! cmp_opt_main {
 /// This generates x86-64 machine code from a bytecode.
 ///
 pub struct Codegen {
-    pub jit: JitMemory,
-    pub main_object: Value,
-    pub(crate) class_version: DestLabel,
-    pub(crate) class_version_addr: *mut u32,
+    pub(crate) jit: JitMemory,
+    class_version: DestLabel,
+    class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
     #[allow(dead_code)]
     entry_panic: DestLabel,
-    pub(super) vm_entry: DestLabel,
+    vm_entry: DestLabel,
     vm_fetch: DestLabel,
     ///
     /// Raise error.
@@ -203,70 +202,23 @@ pub struct Codegen {
 }
 
 impl Codegen {
-    cmp_main!(eq, ne, lt, le, gt, ge);
-    cmp_opt_main!(
-        (eq, ne, eq, ne),
-        (ne, eq, ne, eq),
-        (a, be, gt, le),
-        (b, ae, lt, ge),
-        (ae, b, ge, lt),
-        (be, a, le, gt)
-    );
-
-    fn icmp_teq(&mut self) {
-        self.icmp_eq()
-    }
-
-    fn icmp_cmp(&mut self) {
-        let exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            xorq rax, rax;
-            movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
-            cmpq rdi, rsi;
-            jeq  exit;
-            cmovgeq rax, rdx;
-            movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
-            cmovltq rax, rdx;
-        };
-    }
-
     pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(1);
         let const_version = jit.const_i64(1);
         let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let entry_panic = jit.label();
-        jit.bind_label(entry_panic);
-        Self::entry_panic(&mut jit);
-        let get_class = jit.label();
-        jit.bind_label(get_class);
-        Self::get_class(&mut jit);
-        let wrong_argument = jit.label();
-        jit.bind_label(wrong_argument);
-        Self::wrong_arguments(&mut jit);
-        let f64_to_val = jit.label();
-        jit.bind_label(f64_to_val);
-        Self::f64_to_val(&mut jit);
-        let flonum_to_f64 = jit.label();
-        jit.bind_label(flonum_to_f64);
-        Self::flonum_to_f64(&mut jit);
+
+        let entry_panic = entry_panic(&mut jit);
+        let get_class = get_class(&mut jit);
+        let wrong_argument = wrong_arguments(&mut jit);
+        let f64_to_val = f64_to_val(&mut jit);
+        let flonum_to_f64 = flonum_to_f64(&mut jit);
+        let entry_unimpl = unimplemented_inst(&mut jit);
 
         // dispatch table.
-        let entry_unimpl = jit.get_current_address();
-        monoasm! { &mut jit,
-                movq rdi, rbx;
-                movq rsi, r12;
-                movzxw rdx, [r13 - 10];
-                movq rax, (runtime::unimplemented_inst);
-                call rax;
-                leave;
-                ret;
-        };
-        //jit.select_page(0);
         let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,
-            main_object,
             class_version,
             class_version_addr: std::ptr::null_mut(),
             alloc_flag,
@@ -304,6 +256,7 @@ impl Codegen {
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
         codegen.jit.finalize();
+
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
         let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
@@ -311,6 +264,45 @@ impl Codegen {
             alloc.borrow_mut().set_alloc_flag_address(address);
         });
         codegen
+    }
+
+    pub(crate) fn class_version_label(&self) -> DestLabel {
+        self.class_version
+    }
+
+    pub(crate) fn class_version(&self) -> u32 {
+        unsafe { *self.class_version_addr }
+    }
+
+    pub(crate) fn class_version_inc(&self) {
+        unsafe { *self.class_version_addr += 1 }
+    }
+
+    cmp_main!(eq, ne, lt, le, gt, ge);
+    cmp_opt_main!(
+        (eq, ne, eq, ne),
+        (ne, eq, ne, eq),
+        (a, be, gt, le),
+        (b, ae, lt, ge),
+        (ae, b, ge, lt),
+        (be, a, le, gt)
+    );
+
+    fn icmp_teq(&mut self) {
+        self.icmp_eq()
+    }
+
+    fn icmp_cmp(&mut self) {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+            movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
+            cmpq rdi, rsi;
+            jeq  exit;
+            cmovgeq rax, rdx;
+            movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
+            cmovltq rax, rdx;
+        };
     }
 
     fn gen_entry_point(&mut self, main_object: Value) {
@@ -393,7 +385,7 @@ impl Codegen {
             popq r12;
             popq rbx;
             ret;
-        };
+        }
 
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
 
@@ -782,194 +774,219 @@ impl Codegen {
         l1:
         };
     }
-
-    ///
-    /// Get *ClassId* of the *Value*.
-    ///
-    /// #### in
-    /// - rdi: Value
-    ///
-    /// #### out
-    /// - rax: ClassId
-    ///
-    fn get_class(jit: &mut JitMemory) {
-        let l1 = jit.label();
-        let exit = jit.label();
-        let err = jit.label();
-        monoasm!(jit,
-                movl  rax, (INTEGER_CLASS.0);
-                testq rdi, 0b001;
-                jnz   exit;
-                movl  rax, (FLOAT_CLASS.0);
-                testq rdi, 0b010;
-                jnz   exit;
-                testq rdi, 0b111;
-                jnz   l1;
-                testq rdi, rdi;
-                jz    err;
-                movl  rax, [rdi + 4];
-                jmp   exit;
-            l1:
-                movl  rax, (SYMBOL_CLASS.0);
-                cmpb  rdi, (TAG_SYMBOL);
-                je    exit;
-                movl  rax, (NIL_CLASS.0);
-                cmpq  rdi, (NIL_VALUE);
-                je    exit;
-                movl  rax, (TRUE_CLASS.0);
-                cmpq  rdi, (TRUE_VALUE);
-                je    exit;
-                movl  rax, (FALSE_CLASS.0);
-                cmpq  rdi, (FALSE_VALUE);
-                je    exit;
-            err:
-                movq  rax, (runtime::illegal_classid);  // rdi: Value
-                call  rax;
-                // no return
-            exit:
-                ret;
-        );
-    }
-
-    fn wrong_arguments(jit: &mut JitMemory) {
-        monoasm! {jit,
-            movq rdi, rbx;
-            movl rsi, rdx;  // given
-            movzxw rdx, [r13 - 8];  // min
-            movzxw rcx, [r13 - 14];  // max
-            movq rax, (runtime::err_wrong_number_of_arguments_range);
-            call rax;
-        }
-    }
-
-    fn entry_panic(jit: &mut JitMemory) {
-        monoasm! {jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::_dump_stacktrace);
-            call rax;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::panic);
-            jmp rax;
-            leave;
-            ret;
-        }
-    }
-
-    ///
-    /// Copy f64 of flonum to *xmm*.
-    ///
-    /// ### in
-    /// - rdi: Value
-    ///
-    /// ### out
-    /// - xmm0
-    ///
-    /// ### destroy
-    /// - rax, rdi
-    ///
-    pub(super) fn flonum_to_f64(jit: &mut JitMemory) {
-        let exit = jit.label();
-        monoasm! {jit,
-            xorps xmm0, xmm0;
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            // in the case of 0.0
-            je exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm0, rdi;
+}
+///
+/// Get *ClassId* of the *Value*.
+///
+/// #### in
+/// - rdi: Value
+///
+/// #### out
+/// - rax: ClassId
+///
+fn get_class(jit: &mut JitMemory) -> DestLabel {
+    let label = jit.label();
+    let l1 = jit.label();
+    let exit = jit.label();
+    let err = jit.label();
+    monoasm!(jit,
+        label:
+            movl  rax, (INTEGER_CLASS.0);
+            testq rdi, 0b001;
+            jnz   exit;
+            movl  rax, (FLOAT_CLASS.0);
+            testq rdi, 0b010;
+            jnz   exit;
+            testq rdi, 0b111;
+            jnz   l1;
+            testq rdi, rdi;
+            jz    err;
+            movl  rax, [rdi + 4];
+            jmp   exit;
+        l1:
+            movl  rax, (SYMBOL_CLASS.0);
+            cmpb  rdi, (TAG_SYMBOL);
+            je    exit;
+            movl  rax, (NIL_CLASS.0);
+            cmpq  rdi, (NIL_VALUE);
+            je    exit;
+            movl  rax, (TRUE_CLASS.0);
+            cmpq  rdi, (TRUE_VALUE);
+            je    exit;
+            movl  rax, (FALSE_CLASS.0);
+            cmpq  rdi, (FALSE_VALUE);
+            je    exit;
+        err:
+            movq  rax, (runtime::illegal_classid);  // rdi: Value
+            call  rax;
+            // no return
         exit:
             ret;
-        }
-    }
+    );
+    label
+}
 
-    ///
-    /// Convert f64 to Value.
-    ///
-    /// ### in
-    /// - xmm0: f64
-    ///
-    /// ### out
-    /// - rax: Value
-    ///
-    /// ### destroy
-    /// - rcx
-    ///
-    pub(super) fn f64_to_val(jit: &mut JitMemory) {
-        let normal = jit.label();
-        let heap_alloc = jit.label();
-        monoasm!(jit,
-            xorps xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jne normal;
-            jp normal;
-            movq rax, (FLOAT_ZERO);
-            ret;
-        normal:
-            movq rax, xmm0;
-            movq rcx, rax;
-            shrq rcx, 60;
-            addl rcx, 1;
-            andl rcx, 6;
-            cmpl rcx, 4;
-            jne heap_alloc;
-            rolq rax, 3;
-            andq rax, (-4);
-            orq rax, 2;
-            ret;
-        heap_alloc:
-        // we must save rdi for log_deoptimize.
-            subq rsp, 152;
-            movq [rsp + 144], r9;
-            movq [rsp + 136], r8;
-            movq [rsp + 128], rdx;
-            movq [rsp + 120], rsi;
-            movq [rsp + 112], rdi;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-            movq rax, (Value::float_heap);
-            call rax;
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            movq rdi, [rsp + 112];
-            movq rsi, [rsp + 120];
-            movq rdx, [rsp + 128];
-            movq r8, [rsp + 136];
-            movq r9, [rsp + 144];
-            addq rsp, 152;
-            ret;
-        );
+fn wrong_arguments(jit: &mut JitMemory) -> DestLabel {
+    let label = jit.label();
+    monoasm! {jit,
+        movq rdi, rbx;
+        movl rsi, rdx;  // given
+        movzxw rdx, [r13 - 8];  // min
+        movzxw rcx, [r13 - 14];  // max
+        movq rax, (runtime::err_wrong_number_of_arguments_range);
+        call rax;
     }
+    label
+}
+
+fn entry_panic(jit: &mut JitMemory) -> DestLabel {
+    let label = jit.label();
+    monoasm! {jit,
+    label:
+        movq rdi, rbx;
+        movq rsi, r12;
+        movq rax, (runtime::_dump_stacktrace);
+        call rax;
+        movq rdi, rbx;
+        movq rsi, r12;
+        movq rax, (runtime::panic);
+        jmp rax;
+        leave;
+        ret;
+    }
+    label
+}
+
+///
+/// Copy f64 of flonum to *xmm*.
+///
+/// ### in
+/// - rdi: Value
+///
+/// ### out
+/// - xmm0
+///
+/// ### destroy
+/// - rax, rdi
+///
+fn flonum_to_f64(jit: &mut JitMemory) -> DestLabel {
+    let label = jit.label();
+    let exit = jit.label();
+    monoasm! {jit,
+        xorps xmm0, xmm0;
+        movq rax, (FLOAT_ZERO);
+        cmpq rdi, rax;
+        // in the case of 0.0
+        je exit;
+        movq rax, rdi;
+        sarq rax, 63;
+        addq rax, 2;
+        andq rdi, (-4);
+        orq rdi, rax;
+        rolq rdi, 61;
+        movq xmm0, rdi;
+    exit:
+        ret;
+    }
+    label
+}
+
+///
+/// Convert f64 to Value.
+///
+/// ### in
+/// - xmm0: f64
+///
+/// ### out
+/// - rax: Value
+///
+/// ### destroy
+/// - rcx
+///
+fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
+    let label = jit.label();
+    let normal = jit.label();
+    let heap_alloc = jit.label();
+    monoasm! {jit,
+        xorps xmm1, xmm1;
+        ucomisd xmm0, xmm1;
+        jne normal;
+        jp normal;
+        movq rax, (FLOAT_ZERO);
+        ret;
+    normal:
+        movq rax, xmm0;
+        movq rcx, rax;
+        shrq rcx, 60;
+        addl rcx, 1;
+        andl rcx, 6;
+        cmpl rcx, 4;
+        jne heap_alloc;
+        rolq rax, 3;
+        andq rax, (-4);
+        orq rax, 2;
+        ret;
+    heap_alloc:
+    // we must save rdi for log_deoptimize.
+        subq rsp, 152;
+        movq [rsp + 144], r9;
+        movq [rsp + 136], r8;
+        movq [rsp + 128], rdx;
+        movq [rsp + 120], rsi;
+        movq [rsp + 112], rdi;
+        movq [rsp + 104], xmm15;
+        movq [rsp + 96], xmm14;
+        movq [rsp + 88], xmm13;
+        movq [rsp + 80], xmm12;
+        movq [rsp + 72], xmm11;
+        movq [rsp + 64], xmm10;
+        movq [rsp + 56], xmm9;
+        movq [rsp + 48], xmm8;
+        movq [rsp + 40], xmm7;
+        movq [rsp + 32], xmm6;
+        movq [rsp + 24], xmm5;
+        movq [rsp + 16], xmm4;
+        movq [rsp + 8], xmm3;
+        movq [rsp + 0], xmm2;
+        movq rax, (Value::float_heap);
+        call rax;
+        movq xmm2, [rsp + 0];
+        movq xmm3, [rsp + 8];
+        movq xmm4, [rsp + 16];
+        movq xmm5, [rsp + 24];
+        movq xmm6, [rsp + 32];
+        movq xmm7, [rsp + 40];
+        movq xmm8, [rsp + 48];
+        movq xmm9, [rsp + 56];
+        movq xmm10, [rsp + 64];
+        movq xmm11, [rsp + 72];
+        movq xmm12, [rsp + 80];
+        movq xmm13, [rsp + 88];
+        movq xmm14, [rsp + 96];
+        movq xmm15, [rsp + 104];
+        movq rdi, [rsp + 112];
+        movq rsi, [rsp + 120];
+        movq rdx, [rsp + 128];
+        movq r8, [rsp + 136];
+        movq r9, [rsp + 144];
+        addq rsp, 152;
+        ret;
+    }
+    label
+}
+
+fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
+    let lebel = jit.get_current_address();
+    monoasm! { jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movzxw rdx, [r13 - 10];
+            movq rax, (runtime::unimplemented_inst);
+            call rax;
+            leave;
+            ret;
+    }
+    lebel
 }
 
 #[test]
@@ -1052,8 +1069,6 @@ impl Globals {
                 func.sourceinfo.get_line(&func.loc),
             );
         }
-        //#[cfg(feature = "emit-asm")]
-        //self[func_id].dump_bc(self);
 
         #[cfg(feature = "perf")]
         let codeptr = self.codegen.jit.get_current_address();
