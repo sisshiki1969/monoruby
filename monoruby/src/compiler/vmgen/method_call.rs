@@ -1,21 +1,32 @@
 use super::*;
 
+const CALLSITE_ID: i64 = 0 - 16;
+const CACHED_CLASS: i64 = 8 - 16;
+const CACHED_VERSION: i64 = 12 - 16;
+const CACHED_FUNCID: i64 = 24 - 16;
+const RET_REG: i64 = 4 - 16;
+const POS_NUM: i64 = 16 - 16;
+const ARG_REG: i64 = 18 - 16;
+const RECV_REG: i64 = 20 - 16;
+
 impl Codegen {
+    ///
     /// Call Method
     ///
     /// ~~~text
     /// MethodCall
+    //  0   2   4   6    8  10  12  14
     /// +---+---+---+---++---+---+---+---+
     /// |callid |ret| op|| class |version|
     /// +---+---+---+---++---+---+---+---+
-    /// MethodArgs
+    /// 16  18  20  22   24  26  28  30
     /// +---+---+---+---++---+---+---+---+
     /// |len|arg|rcv| op||  fid  |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
     /// ret:  return register
-    /// id:   call site id
+    /// callid:   call site id
     /// rcv:  receiver register
     /// arg:  the start of argument registers
     /// len:  the number of argument registers
@@ -23,30 +34,11 @@ impl Codegen {
     /// inline method cache
     /// class:    a class of the receiver
     /// version:  class version
-    /// func data: the data of the function
+    /// fid:      FuncId
     /// ~~~
     pub(super) fn vm_method_call(&mut self, has_splat: bool) -> CodePtr {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
-        let class_version = self.class_version;
-
-        //      -16    -12    -8     -4
-        //      +------+------+------+------+
-        //      | MethodCall  |class | ver  |
-        //      +------+------+------+------+
-        // r13->| MethodArgs  |FuncId|      |
-        //      +------+------+------+------+
-        //
-        // rdi: IdentId
-        // r15: %ret
-        // [r13 - 16]: CallSiteId
-        // [r13 -  8]: class_id
-        // [r13 -  4]: class_version
-        // [r13 +  0]; len
-        // [r13 +  2]; %args
-        // [r13 +  4]: %recv
-        // [r13 +  8]: FuncId
-
         let label = self.vm_method_call_main(slow_path, exec, has_splat);
 
         self.jit.select_page(1);
@@ -54,50 +46,23 @@ impl Codegen {
         slow_path:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r13 - 16];  // CallSiteId
+            movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
         );
         self.vm_handle_error();
-        monoasm!( &mut self.jit,
-            movl [r13 + 8], rax;    // FuncId
-            movl [r13 - 8], r15;    // ClassId of receiver
-            movl rdi, [rip + class_version];
-            movl [r13 - 4], rdi;    // class_version
-            jmp exec;
-        );
+        self.save_cache(exec);
         self.jit.select_page(0);
 
         label
     }
 
+    ///
     /// Super
     ///
-    /// ~~~text
-    /// Super
-    /// +---+---+---+---++---+---+---+---+
-    /// | op|ret|callid || class |version|
-    /// +---+---+---+---++---+---+---+---+
-    /// MethodArgs
-    /// +---+---+---+---++---+---+---+---+
-    /// | op| - |arg|len||  fid  |       |
-    /// +---+---+---+---++---+---+---+---+
-    ///
-    /// operands
-    /// ret:  return register
-    /// id:   call site id
-    /// arg:  the start of argument registers
-    /// len:  the number of argument registers
-    ///
-    /// inline method cache
-    /// class:    a class of the receiver
-    /// version:  class version
-    /// func data: the data of the function
-    /// ~~~
     pub(super) fn vm_super(&mut self) -> CodePtr {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
-        let class_version = self.class_version;
 
         let label = self.vm_method_call_main(slow_path, exec, false);
 
@@ -111,13 +76,7 @@ impl Codegen {
             call rax;   // rax <- Option<FuncId>
         );
         self.vm_handle_error();
-        monoasm!( &mut self.jit,
-            movl [r13 + 8], rax;    // FuncId
-            movl [r13 - 8], r15;    // ClassId of receiver
-            movl rdi, [rip + class_version];
-            movl [r13 - 4], rdi;    // class_version
-            jmp exec;
-        );
+        self.save_cache(exec);
         self.jit.select_page(0);
 
         label
@@ -133,26 +92,10 @@ impl Codegen {
         let exit = self.jit.label();
         let class_version = self.class_version;
         let get_class = self.get_class;
-        //      -16    -12    -8     -4
-        //      +------+------+------+------+
-        //      | MethodCall  |class | ver  |
-        //      +------+------+------+------+
-        // r13->| MethodArgs  | fid  |      |
-        //      +------+------+------+------+
-        //
-        // rdi: IdentId
-        // r15: %ret
-        // [r13 - 16]: CallSiteId
-        // [r13 -  8]: class_id
-        // [r13 -  4]: class_version
-        // [r13 +  0]; pos_num
-        // [r13 +  2]; %args
-        // [r13 +  4]: %recv
-        // [r13 +  8]: FuncData
         self.execute_gc();
         monoasm! { &mut self.jit,
             pushq r13;
-            movzxw rdi, [r13 + 4];
+            movzxw rdi, [r13 + (RECV_REG)];
         };
         self.vm_get_rdi();
         monoasm! { &mut self.jit,
@@ -164,16 +107,16 @@ impl Codegen {
         monoasm! { &mut self.jit,
             call get_class;
             movl r15, rax;
-            cmpl r15, [r13 - 8];
+            cmpl r15, [r13 + (CACHED_CLASS)];
             jne  slow_path;
-            movl rdi, [r13 - 4];
+            movl rdi, [r13 + (CACHED_VERSION)];
             cmpl rdi, [rip + class_version];
             jne  slow_path;
         exec:
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movl rdx, [r13 + 8];
+            movl rdx, [r13 + (CACHED_FUNCID)];
         }
         self.get_func_data();
         monoasm! { &mut self.jit,
@@ -181,12 +124,12 @@ impl Codegen {
             movq r15, rdx;
             movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
-            movzxw rdi, [r13 + 0];  // rdi <- pos_num
-            movzxw rcx, [r13 + 2]; // rcx <- args
+            movzxw rdi, [r13 + (POS_NUM)];  // rdi <- pos_num
+            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- args
             // set self (= receiver)
             movq rax, [rsp];
             movq [rsp - (16 + LBP_SELF)], rax;
-            movl r8, [r13 - 16]; // CallSiteId
+            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
         };
         self.vm_get_addr_rcx();
         // rcx <- *args
@@ -196,7 +139,7 @@ impl Codegen {
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
-            movl rdx, [r13 - 16]; // CallSiteId
+            movl rdx, [r13 + (CALLSITE_ID)]; // CallSiteId
         }
         self.handle_arguments();
         self.vm_handle_error();
@@ -218,7 +161,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             addq rsp, 8;
             popq r13;   // pop pc
-            movzxw r15, [r13 - 12];  // r15 <- :1
+            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
             addq r13, 16;
         };
         self.vm_handle_error();
@@ -308,6 +251,24 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
+    }
+
+    ///
+    /// Save inline method cache.
+    ///
+    /// ### in
+    /// - rax: FuncId
+    /// - r15: ClassId of receiver
+    ///
+    fn save_cache(&mut self, exec: DestLabel) {
+        let class_version = self.class_version;
+        monoasm!( &mut self.jit,
+            movl [r13 + (CACHED_FUNCID)], rax;    // FuncId
+            movl [r13 + (CACHED_CLASS)], r15;    // ClassId of receiver
+            movl rdi, [rip + class_version];
+            movl [r13 + (CACHED_VERSION)], rdi;    // class_version
+            jmp exec;
+        );
     }
 
     /// Set arguments
