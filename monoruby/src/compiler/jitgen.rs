@@ -1150,13 +1150,12 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
                 }
-                TraceIr::MethodCall { callid, cached_fid }
-                | TraceIr::MethodCallBlock { callid, cached_fid } => {
+                TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     if store[callid].block_fid.is_some() {
                         self.gen_write_back_locals(&mut ctx);
                     }
-                    if let Some(fid) = cached_fid {
+                    if let Some(fid) = pc.cached_fid() {
                         self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1164,12 +1163,10 @@ impl Codegen {
                     }
                 }
                 TraceIr::InlineCall {
-                    inline_id,
-                    callsite,
-                    ..
+                    inline_id, callid, ..
                 } => {
                     let gen = store.get_inline_info(inline_id).0;
-                    self.gen_inlinable(&mut ctx, &store[callsite], gen, pc);
+                    self.gen_inlinable(&mut ctx, &store[callid], gen, pc);
                 }
                 TraceIr::Yield {
                     ret: dst,

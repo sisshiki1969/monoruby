@@ -508,9 +508,7 @@ impl Globals {
                 format!("{:36} [{}]", op1, class.get_name(self))
             }
             TraceIr::InlineCall {
-                inline_id,
-                callsite,
-                ..
+                inline_id, callid, ..
             } => {
                 let CallSiteInfo {
                     recv,
@@ -518,7 +516,7 @@ impl Globals {
                     pos_num,
                     ret,
                     ..
-                } = self.store[callsite];
+                } = self.store[callid];
                 let class = pc.cached_class();
                 let name = &self.store.get_inline_info(inline_id).2;
                 let op1 = if pos_num == 0 {

@@ -124,7 +124,7 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
-        let method_resolved = self.jit.label();
+        let resolved = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
         let global_class_version = self.class_version;
@@ -158,7 +158,7 @@ impl Codegen {
             movl rax, [rip + global_class_version];
             cmpl [r13 + (CACHED_VERSION)], rax;
             jne  slow_path;
-        method_resolved:
+        resolved:
         }
 
         self.set_args_outer(callsite);
@@ -220,7 +220,7 @@ impl Codegen {
             movl rax, [rip + global_class_version];
             movl [r13 + (CACHED_VERSION)], rax;
             movl [r13 + (CACHED_CLASS)], r15;
-            jmp method_resolved;
+            jmp resolved;
         );
         let raise = self.entry_raise;
         // raise error.
@@ -619,7 +619,11 @@ impl Codegen {
         let exit = self.jit.label();
         let deopt = self.jit.label();
         let cached_version = self.jit.const_i32(pc.cached_version() as i32);
-        let cached_fid = self.jit.const_i32(pc.cached_fid().get() as i32);
+        let cached_fid = if let Some(fid) = pc.cached_fid() {
+            fid.get()
+        } else {
+            0
+        };
         monoasm! { &mut self.jit,
             movl rax, [rip + cached_version];
             cmpl [rip + global_version], rax;
@@ -640,10 +644,9 @@ impl Codegen {
         }
         self.jit_handle_error(ctx, pc);
         monoasm! { &mut self.jit,
-            cmpl [rip + cached_fid], rax;
+            cmpl rax, (cached_fid);
             jne  deopt;
             movl rax, [rip + global_version];
-            //movl [r13 + (CACHED_VERSION)], rax;
             movl [rip + cached_version], rax;
             jmp  exit;
         deopt:

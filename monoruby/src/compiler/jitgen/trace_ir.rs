@@ -129,15 +129,13 @@ pub(crate) enum TraceIr {
     /// func call(%ret, name)
     MethodCall {
         callid: CallSiteId,
-        cached_fid: Option<FuncId>,
     },
     MethodCallBlock {
         callid: CallSiteId,
-        cached_fid: Option<FuncId>,
     },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
-        callsite: CallSiteId,
+        callid: CallSiteId,
     },
     Yield {
         ret: Option<SlotId>,

@@ -415,11 +415,9 @@ impl JitContext {
                 }
                 TraceIr::MethodArgs => {}
                 TraceIr::InlineCall {
-                    inline_id,
-                    callsite,
-                    ..
+                    inline_id, callid, ..
                 } => {
-                    store.get_inline_info(inline_id).1(&mut info, &store[callsite]);
+                    store.get_inline_info(inline_id).1(&mut info, &store[callid]);
                 }
                 TraceIr::Ret(src)
                 | TraceIr::MethodRet(src)

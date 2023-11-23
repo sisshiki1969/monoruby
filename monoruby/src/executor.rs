@@ -946,11 +946,6 @@ impl Bc {
         ClassId::new(op as u32)
     }
 
-    pub fn cached_fid(&self) -> FuncId {
-        let op = self.op2.0;
-        FuncId::new(op as u32)
-    }
-
     pub fn value(&self) -> Option<Value> {
         match self.op2.0 {
             0 => None,
@@ -1052,7 +1047,7 @@ impl Bc {
         (self.op2.0 >> (id * 16)) as u16
     }
 
-    pub fn func_id(&self) -> Option<FuncId> {
+    fn fid(&self) -> Option<FuncId> {
         let op = self.op2.0 as u32;
         if op == 0 {
             None
@@ -1125,9 +1120,9 @@ impl BcPc {
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 
-    /*fn cached_fid(self) -> FuncId {
-        (*(self + 1)).cached_fid()
-    }*/
+    pub(crate) fn cached_fid(self) -> Option<FuncId> {
+        (*(self + 1)).fid()
+    }
 }
 
 impl BcPc {
@@ -1215,7 +1210,7 @@ impl BcPc {
                     id: op2,
                 },
                 30..=31 => {
-                    let cached_fid = (*self + 1).func_id();
+                    let cached_fid = self.cached_fid();
                     let has_splat = opcode == 30;
 
                     if let Some(fid) = cached_fid {
@@ -1225,20 +1220,14 @@ impl BcPc {
                             {
                                 return TraceIr::InlineCall {
                                     inline_id,
-                                    callsite: op2.into(),
+                                    callid: op2.into(),
                                 };
                             }
                         }
                     }
-                    TraceIr::MethodCall {
-                        callid: op2.into(),
-                        cached_fid,
-                    }
+                    TraceIr::MethodCall { callid: op2.into() }
                 }
-                32..=33 => TraceIr::MethodCallBlock {
-                    callid: op2.into(),
-                    cached_fid: (*self + 1).func_id(),
-                },
+                32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
                 35 => TraceIr::Array {
                     dst: SlotId::new(op1),
                     callid: CallSiteId::from(op2),
