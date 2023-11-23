@@ -1150,9 +1150,7 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
                 }
-                TraceIr::MethodCall {
-                    callid, cached_fid, ..
-                } => {
+                TraceIr::MethodCall { callid, cached_fid } => {
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = cached_fid {
@@ -1162,9 +1160,7 @@ impl Codegen {
                         return;
                     }
                 }
-                TraceIr::MethodCallBlock {
-                    callid, cached_fid, ..
-                } => {
+                TraceIr::MethodCallBlock { callid, cached_fid } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = cached_fid {
@@ -1174,9 +1170,7 @@ impl Codegen {
                         return;
                     }
                 }
-                TraceIr::Super {
-                    callid, cached_fid, ..
-                } => {
+                TraceIr::Super { callid, cached_fid } => {
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
                     if let Some(fid) = cached_fid {

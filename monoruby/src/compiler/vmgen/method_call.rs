@@ -36,60 +36,11 @@ impl Codegen {
     /// version:  class version
     /// fid:      FuncId
     /// ~~~
-    pub(super) fn vm_method_call(&mut self, has_splat: bool) -> CodePtr {
-        let slow_path = self.jit.label();
-        let exec = self.jit.label();
-        let label = self.vm_method_call_main(slow_path, exec, has_splat);
-
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        slow_path:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
-            movq rax, (runtime::find_method);
-            call rax;   // rax <- Option<FuncId>
-        );
-        self.vm_handle_error();
-        self.save_cache(exec);
-        self.jit.select_page(0);
-
-        label
-    }
-
-    ///
-    /// Super
-    ///
-    pub(super) fn vm_super(&mut self) -> CodePtr {
-        let slow_path = self.jit.label();
-        let exec = self.jit.label();
-
-        let label = self.vm_method_call_main(slow_path, exec, false);
-
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        slow_path:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [rsp];
-            movq rax, (runtime::get_super_data);
-            call rax;   // rax <- Option<FuncId>
-        );
-        self.vm_handle_error();
-        self.save_cache(exec);
-        self.jit.select_page(0);
-
-        label
-    }
-
-    fn vm_method_call_main(
-        &mut self,
-        slow_path: DestLabel,
-        exec: DestLabel,
-        has_splat: bool,
-    ) -> CodePtr {
+    pub(super) fn vm_call(&mut self, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
+        let exec = self.jit.label();
         let exit = self.jit.label();
+        let slow_path = self.jit.label();
         let class_version = self.class_version;
         let get_class = self.get_class;
         self.execute_gc();
@@ -131,8 +82,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
         };
-        self.vm_get_addr_rcx();
-        // rcx <- *args
+
         self.set_arguments(has_splat);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
@@ -167,6 +117,9 @@ impl Codegen {
         self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
+
+        self.slow_path(exec, slow_path);
+
         label
     }
 
@@ -215,8 +168,7 @@ impl Codegen {
             movl r8, [r13 - 8];    // CallSiteId
         };
         self.set_block_self_outer();
-        self.vm_get_addr_rcx();
-        // rcx <- *args
+
         self.set_arguments(true);
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
@@ -253,6 +205,21 @@ impl Codegen {
         label
     }
 
+    fn slow_path(&mut self, exec: DestLabel, slow_path: DestLabel) {
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        slow_path:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
+            movq rax, (runtime::find_method);
+            call rax;   // rax <- Option<FuncId>
+        );
+        self.vm_handle_error();
+        self.save_cache(exec);
+        self.jit.select_page(0);
+    }
+
     ///
     /// Save inline method cache.
     ///
@@ -276,7 +243,6 @@ impl Codegen {
     /// ### in
     ///
     /// - rdi: arg len
-    /// - rcx: the first argument address
     /// - r8:  CallSiteId
     ///
     /// ### out
@@ -292,6 +258,7 @@ impl Codegen {
     fn set_arguments(&mut self, has_splat: bool) {
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        self.vm_get_addr_rcx(); // rcx <- *args
         monoasm! { &mut self.jit,
             testq rdi, rdi;
             jeq  loop_exit;

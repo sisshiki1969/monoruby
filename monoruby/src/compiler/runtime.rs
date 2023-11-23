@@ -26,7 +26,15 @@ pub(super) extern "C" fn find_method(
         }
     } else {
         let self_val = vm.cfp().lfp().self_val();
-        get_super_data(vm, globals, self_val)
+        let func_id = vm.method_func_id();
+        let func_name = globals.store[func_id].name().unwrap();
+        match globals.check_super(self_val, func_name) {
+            Some(entry) => Some(entry.func_id()),
+            None => {
+                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                None
+            }
+        }
     }
 }
 
@@ -41,22 +49,6 @@ pub(super) extern "C" fn enter_classdef<'a>(
     lexical_context.push(self_value);
     globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
     globals.get_func_data(func_id)
-}
-
-pub(super) extern "C" fn get_super_data(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-) -> Option<FuncId> {
-    let func_id = vm.method_func_id();
-    let func_name = globals.store[func_id].name().unwrap();
-    match globals.check_super(self_val, func_name) {
-        Some(entry) => Some(entry.func_id()),
-        None => {
-            vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
-            None
-        }
-    }
 }
 
 ///
