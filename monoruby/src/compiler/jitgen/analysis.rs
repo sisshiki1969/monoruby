@@ -395,7 +395,8 @@ impl JitContext {
                         info.def(ret);
                     }
                 }
-                TraceIr::MethodCall { callid, .. } | TraceIr::Super { callid, .. } => {
+                TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
+                    let has_block = store[callid].block_fid.is_some();
                     let CallSiteInfo {
                         recv,
                         args,
@@ -405,22 +406,9 @@ impl JitContext {
                     } = store[callid];
                     info.r#use(recv);
                     info.use_range(args, len as u16);
-                    //info.unlink_locals(func);
-                    if let Some(ret) = ret {
-                        info.def(ret);
+                    if has_block {
+                        info.unlink_locals(func);
                     }
-                }
-                TraceIr::MethodCallBlock { callid, .. } => {
-                    let CallSiteInfo {
-                        recv,
-                        args,
-                        len,
-                        ret,
-                        ..
-                    } = store[callid];
-                    info.r#use(recv);
-                    info.use_range(args, len as u16);
-                    info.unlink_locals(func);
                     if let Some(ret) = ret {
                         info.def(ret);
                     }

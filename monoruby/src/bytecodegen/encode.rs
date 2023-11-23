@@ -349,12 +349,13 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&ret);
                 Bc::from(enc_wl(28, op1.0, id))
             }
-            BcIr::MethodCall(ret, box callsite, has_splat) => {
+            BcIr::MethodCall(ret, box callsite) => {
                 // 30, 31
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
+                let has_splat = callsite.has_splat();
                 let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
@@ -362,28 +363,16 @@ impl BytecodeGen {
                     -1i32 as u32,
                 )
             }
-            BcIr::MethodCallBlock(ret, box callsite, has_splat) => {
+            BcIr::MethodCallBlock(ret, box callsite) => {
                 // 32, 33
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
+                let has_splat = callsite.has_splat();
                 let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from_with_class_and_version(
                     enc_wl(if has_splat { 32 } else { 33 }, op1.0, callid.get()),
-                    ClassId::new(0),
-                    -1i32 as u32,
-                )
-            }
-            BcIr::Super(ret, box callsite) => {
-                // 34
-                let op1 = match ret {
-                    None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
-                };
-                let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from_with_class_and_version(
-                    enc_wl(34, op1.0, callid.get()),
                     ClassId::new(0),
                     -1i32 as u32,
                 )

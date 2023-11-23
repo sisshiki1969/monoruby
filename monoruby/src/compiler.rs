@@ -478,7 +478,7 @@ impl Codegen {
         self.set_block_outer();
         monoasm! { &mut self.jit,
             // set self
-            movq  rsi, [rax - (LBP_SELF)];
+            movq rsi, [rax - (LBP_SELF)];
             movq [rsp - (16 + LBP_SELF)], rsi;
         };
     }

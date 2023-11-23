@@ -237,7 +237,6 @@ impl Codegen {
         self.dispatch[31] = vm_call;
         self.dispatch[32] = vm_call_splat;
         self.dispatch[33] = vm_call;
-        self.dispatch[34] = vm_call_splat;
         self.dispatch[35] = self.vm_array();
         self.dispatch[36] = self.vm_optcase(branch);
 

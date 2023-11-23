@@ -1,29 +1,17 @@
 use super::*;
 
 impl BytecodeGen {
-    pub(super) fn emit_call(
-        &mut self,
-        callsite: CallSite,
-        ret: Option<BcReg>,
-        has_splat: bool,
-        loc: Loc,
-    ) {
+    pub(super) fn emit_call(&mut self, callsite: CallSite, ret: Option<BcReg>, loc: Loc) {
         if callsite.block_fid.is_some() {
-            self.emit(
-                BcIr::MethodCallBlock(ret, Box::new(callsite.clone()), has_splat),
-                loc,
-            )
+            self.emit(BcIr::MethodCallBlock(ret, Box::new(callsite.clone())), loc)
         } else {
-            self.emit(
-                BcIr::MethodCall(ret, Box::new(callsite.clone()), has_splat),
-                loc,
-            );
+            self.emit(BcIr::MethodCall(ret, Box::new(callsite.clone())), loc);
         };
         self.emit_method_arg(callsite, loc);
     }
 
     fn emit_super(&mut self, callsite: CallSite, ret: Option<BcReg>, loc: Loc) {
-        self.emit(BcIr::Super(ret, Box::new(callsite.clone())), loc);
+        self.emit(BcIr::MethodCall(ret, Box::new(callsite.clone())), loc);
         self.emit_method_arg(callsite, loc);
     }
 
@@ -57,11 +45,11 @@ impl BytecodeGen {
         loc: Loc,
     ) {
         let callsite = CallSite::simple(method, 1, rhs, lhs, ret);
-        self.emit_call(callsite, ret, false, loc);
+        self.emit_call(callsite, ret, loc);
     }
 
     pub(super) fn emit_method_assign(&mut self, callsite: CallSite, loc: Loc) {
-        self.emit_call(callsite, None, false, loc);
+        self.emit_call(callsite, None, loc);
     }
 
     pub(super) fn gen_method_call(
@@ -103,7 +91,6 @@ impl BytecodeGen {
                 self.sourceinfo.clone(),
             ));
         }
-        let has_splat = arglist.splat;
 
         let callid = self.handle_arguments(arglist, method, recv, ret, loc)?;
 
@@ -111,7 +98,7 @@ impl BytecodeGen {
         if ret_pop_flag {
             self.push();
         }
-        self.emit_call(callid, ret, has_splat, loc);
+        self.emit_call(callid, ret, loc);
         if use_mode.is_ret() {
             self.emit_ret(None)?;
         }
@@ -254,7 +241,7 @@ impl BytecodeGen {
             recv,
             ret,
         );
-        self.emit_call(callsite, ret, false, loc);
+        self.emit_call(callsite, ret, loc);
         if use_mode.is_ret() {
             self.emit_ret(None)?;
         }

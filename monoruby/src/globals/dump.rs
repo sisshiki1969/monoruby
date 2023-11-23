@@ -464,7 +464,11 @@ impl Globals {
             TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
                 let callsite = &self.store[callid];
                 let class = pc.cached_class();
-                let name = callsite.name.unwrap();
+                let name = if let Some(name) = callsite.name {
+                    name.to_string()
+                } else {
+                    "super".to_string()
+                };
                 let CallSiteInfo {
                     recv,
                     args,
@@ -494,38 +498,6 @@ impl Globals {
                         format!(" &{:?}", block_arg)
                     } else {
                         "".to_string()
-                    },
-                    if let Some(block_fid) = block_fid {
-                        format!(" {{ {:?} }}", block_fid)
-                    } else {
-                        "".to_string()
-                    },
-                );
-                format!("{:36} [{}]", op1, class.get_name(self))
-            }
-            TraceIr::Super { callid, .. } => {
-                let callsite = &self.store[callid];
-                let class = pc.cached_class();
-                let CallSiteInfo {
-                    args,
-                    pos_num,
-                    ret,
-                    block_fid,
-                    ..
-                } = *callsite;
-                let kw_len = callsite.kw_len();
-                let op1 = format!(
-                    "{} = super({}{}){}",
-                    ret_str(ret),
-                    if pos_num == 0 {
-                        "".to_string()
-                    } else {
-                        format!("{:?};{}", args, pos_num)
-                    },
-                    if kw_len == 0 {
-                        "".to_string()
-                    } else {
-                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
                     },
                     if let Some(block_fid) = block_fid {
                         format!(" {{ {:?} }}", block_fid)

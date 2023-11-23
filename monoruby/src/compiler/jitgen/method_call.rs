@@ -555,15 +555,13 @@ impl Codegen {
         }
         self.jit_handle_error(ctx, pc);
         monoasm! { &mut self.jit,
-            lea  rdx, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
+            lea  r13, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rax, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
-            // rax <- outer_cfp, rdx <- &FuncData
+            // rax <- outer_cfp, r13 <- &FuncData
         }
 
         self.set_block_self_outer();
         monoasm! { &mut self.jit,
-            // r13 <- &FuncData
-            movq r13, rdx;
             // set meta
             movq rdi, [r13 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;

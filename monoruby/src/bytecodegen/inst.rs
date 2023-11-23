@@ -158,10 +158,9 @@ pub(super) enum BcIr {
     Break(BcReg),
     Raise(BcReg),
     EnsureEnd,
-    MethodCall(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
-    MethodCallBlock(Option<BcReg>, Box<CallSite>, bool), // (ret, id, has_splat)
-    Super(Option<BcReg>, Box<CallSite>),
-    MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
+    MethodCall(Option<BcReg>, Box<CallSite>), // (ret, id, has_splat)
+    MethodCallBlock(Option<BcReg>, Box<CallSite>), // (ret, id, has_splat)
+    MethodArgs(BcReg, BcReg, usize),          // (recv, args, args_len)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,

@@ -1239,10 +1239,6 @@ impl BcPc {
                     callid: op2.into(),
                     cached_fid: (*self + 1).func_id(),
                 },
-                34 => TraceIr::Super {
-                    callid: op2.into(),
-                    cached_fid: (*self + 1).func_id(),
-                },
                 35 => TraceIr::Array {
                     dst: SlotId::new(op1),
                     callid: CallSiteId::from(op2),

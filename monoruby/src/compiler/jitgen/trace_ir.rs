@@ -135,10 +135,6 @@ pub(crate) enum TraceIr {
         callid: CallSiteId,
         cached_fid: Option<FuncId>,
     },
-    Super {
-        callid: CallSiteId,
-        cached_fid: Option<FuncId>,
-    },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
         callsite: CallSiteId,

@@ -54,7 +54,7 @@ pub(super) extern "C" fn enter_classdef<'a>(
 ///
 /// Get *BlockData* for yield.
 ///
-/// - rdi: CFP
+/// - rdi: &mut Executor
 /// - rsi: &mut Globals
 ///
 pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> Option<Proc> {

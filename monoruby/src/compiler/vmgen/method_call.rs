@@ -46,14 +46,14 @@ impl Codegen {
         self.execute_gc();
         monoasm! { &mut self.jit,
             pushq r13;
+            subq  rsp, 8;
             movzxw rdi, [r13 + (RECV_REG)];
         };
         self.vm_get_rdi();
         monoasm! { &mut self.jit,
-            pushq rdi;
+            // set self (= receiver)
+            movq [rsp - (16 + LBP_SELF)], rdi;
         }
-        // rsp + 08:[pc]
-        // rsp + 00:[recv:Value]
         // rdi: receiver: Value
         monoasm! { &mut self.jit,
             call get_class;
@@ -77,9 +77,6 @@ impl Codegen {
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rdi, [r13 + (POS_NUM)];  // rdi <- pos_num
             movzxw rcx, [r13 + (ARG_REG)]; // rcx <- args
-            // set self (= receiver)
-            movq rax, [rsp];
-            movq [rsp - (16 + LBP_SELF)], rax;
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
         };
 
@@ -141,12 +138,7 @@ impl Codegen {
         // r15: %ret
         // rdi: %args
         // rsi: len
-        self.fetch3();
         monoasm! { &mut self.jit,
-            // rsp + 08:[%ret]
-            // rsp + 00:[pc]
-            pushq rdi;
-            pushq rsi;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::get_yield_data);
@@ -154,14 +146,13 @@ impl Codegen {
         }
         self.vm_handle_error();
         monoasm! { &mut self.jit,
-            lea  rdx, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
+            lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rax, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
-            // rax <- outer_cfp, rdx <- &FuncData
-            popq rdi;  // rdi <- len
-            popq rcx;  // rcx <- %args
-            pushq r15;
+            // rax <- outer_cfp, r15 <- &FuncData
+            movsxw rdi, [r13 - 16]; // rdi <- len
+            movzxw rcx, [r13 - 14]; // rcx <- %args
             pushq r13; // push pc
-            movq r15, rdx;
+            subq rsp, 8;
             // set meta
             movq rsi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rsi;
@@ -196,8 +187,9 @@ impl Codegen {
         };
         self.call_rax();
         monoasm! { &mut self.jit,
+            addq rsp, 8;
             popq r13;   // pop pc
-            popq r15;   // pop %ret
+            movzxw r15, [r13 - 12]; // r15 <- %ret
         };
         self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);

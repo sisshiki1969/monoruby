@@ -283,6 +283,10 @@ impl CallSite {
     ) -> CallSite {
         CallSite::new(name, len, None, vec![], None, None, args, recv, ret)
     }
+
+    fn has_splat(&self) -> bool {
+        !self.splat_pos.is_empty()
+    }
 }
 
 ///
@@ -1041,7 +1045,7 @@ impl BytecodeGen {
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit(BcIr::MethodCall(None, Box::new(callsite), false), loc);
+                self.emit(BcIr::MethodCall(None, Box::new(callsite)), loc);
                 self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
             }
             LvalueKind::Send { recv, method } => {
