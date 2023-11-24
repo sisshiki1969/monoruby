@@ -349,31 +349,54 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&ret);
                 Bc::from(enc_wl(28, op1.0, id))
             }
-            BcIr::MethodCall(ret, box callsite) => {
+            BcIr::MethodCall(box callsite) => {
                 // 30, 31
-                let op1 = match ret {
+                let op1 = match callsite.ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
                 let has_splat = callsite.has_splat();
+                let CallSite {
+                    args,
+                    pos_num,
+                    recv,
+                    ..
+                } = callsite;
                 let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from_with_class_and_version(
+                Bc::from_with_num(
                     enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
-                    ClassId::new(0),
-                    -1i32 as u32,
+                    pos_num as u16,
+                    self.slot_id(&args).0,
+                    self.slot_id(&recv).0,
+                    0,
                 )
             }
-            BcIr::MethodCallBlock(ret, box callsite) => {
+            BcIr::MethodCallBlock(box callsite) => {
                 // 32, 33
-                let op1 = match ret {
+                let op1 = match callsite.ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
                 let has_splat = callsite.has_splat();
+                let CallSite {
+                    args,
+                    pos_num,
+                    recv,
+                    ..
+                } = callsite;
                 let callid = self.new_callsite(store, callsite, loc)?;
+                Bc::from_with_num(
+                    enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
+                    pos_num as u16,
+                    self.slot_id(&args).0,
+                    self.slot_id(&recv).0,
+                    0,
+                )
+            }
+            BcIr::InlineCache => {
                 Bc::from_with_class_and_version(
-                    enc_wl(if has_splat { 32 } else { 33 }, op1.0, callid.get()),
-                    ClassId::new(0),
+                    enc_wl(130, 0 /* dummy */, 0 /* FuncId */),
+                    ClassId(0),
                     -1i32 as u32,
                 )
             }
@@ -448,11 +471,6 @@ impl BytecodeGen {
                     ClassId::default(),
                     -1i32 as u32,
                 )
-            }
-            BcIr::MethodArgs(recv, args, len) => {
-                let op1 = self.slot_id(&recv);
-                let op2 = self.slot_id(&args);
-                Bc::from(enc_www(130, op1.0, op2.0, len as u16))
             }
             BcIr::Index(ret, base, idx) => {
                 let op1 = self.slot_id(&ret);

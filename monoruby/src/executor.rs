@@ -941,9 +941,22 @@ impl Bc {
         IvarId::new((op >> 32) as u32)
     }
 
-    pub fn cached_class(&self) -> ClassId {
+    fn class(&self) -> Option<ClassId> {
         let op = self.op2.0;
-        ClassId::new(op as u32)
+        if op == 0 {
+            None
+        } else {
+            Some(ClassId::new(op as u32))
+        }
+    }
+
+    fn fid(&self) -> Option<FuncId> {
+        let op = self.op1 as u32;
+        if op == 0 {
+            None
+        } else {
+            Some(FuncId::new(op))
+        }
     }
 
     pub fn value(&self) -> Option<Value> {
@@ -1031,7 +1044,7 @@ impl Bc {
         }
     }
 
-    fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
+    pub(super) fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
         Self {
             op1,
             op2: Bc2::from(
@@ -1045,15 +1058,6 @@ impl Bc {
 
     pub fn u16(&self, id: usize) -> u16 {
         (self.op2.0 >> (id * 16)) as u16
-    }
-
-    fn fid(&self) -> Option<FuncId> {
-        let op = self.op2.0 as u32;
-        if op == 0 {
-            None
-        } else {
-            Some(FuncId::new(op))
-        }
     }
 }
 
@@ -1123,6 +1127,14 @@ impl BcPc {
     pub(crate) fn cached_fid(self) -> Option<FuncId> {
         (*(self + 1)).fid()
     }
+
+    pub(crate) fn cached_class1(self) -> Option<ClassId> {
+        (*(self + 1)).class()
+    }
+
+    pub(crate) fn cached_class0(self) -> Option<ClassId> {
+        self.class()
+    }
 }
 
 impl BcPc {
@@ -1159,24 +1171,14 @@ impl BcPc {
                 14 => TraceIr::LoopStart(op2),
                 15 => TraceIr::LoopEnd,
                 16 => {
-                    let class = self.cached_class();
+                    let class = self.cached_class0();
                     let ivar = self.cached_ivarid();
-                    TraceIr::LoadIvar(
-                        SlotId::new(op1),
-                        IdentId::from(op2),
-                        if class.0 == 0 { None } else { Some(class) },
-                        ivar,
-                    )
+                    TraceIr::LoadIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
                 17 => {
-                    let class = self.cached_class();
+                    let class = self.cached_class0();
                     let ivar = self.cached_ivarid();
-                    TraceIr::StoreIvar(
-                        SlotId::new(op1),
-                        IdentId::from(op2),
-                        if class.0 == 0 { None } else { Some(class) },
-                        ivar,
-                    )
+                    TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
                 18 => TraceIr::ClassDef {
                     ret: SlotId::from(op1),

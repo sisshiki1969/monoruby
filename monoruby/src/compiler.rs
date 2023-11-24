@@ -623,10 +623,10 @@ impl Codegen {
         self.jit.select_page(1);
 
         let vm_entry = self.vm_entry;
-        monoasm!( &mut self.jit,
+        monoasm! { &mut self.jit,
         guard:
             movq rdi, [r14 - (LBP_SELF)];
-        );
+        }
         self.guard_class(self_class, vm_entry);
         monoasm! { &mut self.jit,
         patch_point:
@@ -645,7 +645,7 @@ impl Codegen {
             movq rdi, [rbx + (EXECUTOR_CFP)];
             movq rdi, [rdi];    // rdi <- caller's cfp
             lea  rbp, [rdi + (BP_PREV_CFP)];
-        };
+        }
     }
 
     ///
@@ -664,7 +664,7 @@ impl Codegen {
             movq rax, (runtime::err_method_return);
             call rax;
             jmp  raise;
-        };
+        }
     }
 
     /// Check whether *rdi*(Value) is true or not, and store boolean result (Value) to *rax*.
@@ -680,7 +680,7 @@ impl Codegen {
             seteq rax;
             shlq rax, 3;
             orq rax, (FALSE_VALUE);
-        };
+        }
     }
 
     ///
@@ -739,7 +739,7 @@ impl Codegen {
         self.single_arg_expand();
         monoasm! { &mut self.jit,
         l1:
-        };
+        }
     }
 
     ///
@@ -772,7 +772,7 @@ impl Codegen {
             movq rdi, rax;
             addq rsp, 4096;
         l1:
-        };
+        }
     }
 }
 ///

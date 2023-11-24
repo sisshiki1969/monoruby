@@ -1,22 +1,22 @@
 use super::*;
 
 // ~~~text
-// MethodCall
-//  0   2   4   6    8  10  12  14
-// +---+---+---+---++---+---+---+---+
-// |callid |ret| op|| class |version|
-// +---+---+---+---++---+---+---+---+
-// 16  18  20  22   24  26  28  30
-// +---+---+---+---++---+---+---+---+
-// |len|arg|rcv| op||  fid  |       |
-// +---+---+---+---++---+---+---+---+
+/// MethodCall
+///  0   2   4   6    8  10  12  14
+/// +---+---+---+---++---+---+---+---+
+/// |callid |ret| op||pos|arg|rcv| - |
+/// +---+---+---+---++---+---+---+---+
+/// 16  18  20  22   24  26  28  30
+/// +---+---+---+---++---+---+---+---+
+/// |  fid  |   | op|| class |version|
+/// +---+---+---+---++---+---+---+---+
 // ~~~
 
 const CALLSITE_ID: usize = 0;
-const CACHED_CLASS: usize = 8;
-const CACHED_VERSION: usize = 12;
+const CACHED_CLASS: usize = 24;
+const CACHED_VERSION: usize = 28;
 //const RECV_REG: usize = 20;
-const CACHED_FUNCID: usize = 24;
+const CACHED_FUNCID: usize = 16;
 
 impl Codegen {
     pub(super) fn gen_inlinable(
@@ -44,7 +44,7 @@ impl Codegen {
         self.fetch_slots(ctx, &[recv]);
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(ret);
-        if store[callid].recv.is_zero() && ctx.self_value.class() != pc.cached_class() {
+        if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
             // the cache is invalid because the receiver class is not matched.
             self.gen_call_not_cached(ctx, &store[callid], pc);
         } else {
@@ -70,7 +70,7 @@ impl Codegen {
             ret,
             ..
         } = store[callid];
-        let cached_class = pc.cached_class();
+        let cached_class = pc.cached_class1().unwrap();
         let deopt = self.gen_side_deopt(pc, ctx);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
@@ -618,7 +618,7 @@ impl Codegen {
         let unmatch = self.jit.label();
         let exit = self.jit.label();
         let deopt = self.jit.label();
-        let cached_version = self.jit.const_i32(pc.cached_version() as i32);
+        let cached_version = self.jit.const_i32((pc + 1).cached_version() as i32);
         let cached_fid = if let Some(fid) = pc.cached_fid() {
             fid.get()
         } else {

@@ -463,7 +463,7 @@ impl Globals {
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
                 let callsite = &self.store[callid];
-                let class = pc.cached_class();
+                let class = pc.cached_class1();
                 let name = if let Some(name) = callsite.name {
                     name.to_string()
                 } else {
@@ -505,7 +505,14 @@ impl Globals {
                         "".to_string()
                     },
                 );
-                format!("{:36} [{}]", op1, class.get_name(self))
+                format!(
+                    "{:36} [{}]",
+                    op1,
+                    match class {
+                        Some(class) => class.get_name(self),
+                        None => "-".to_string(),
+                    }
+                )
             }
             TraceIr::InlineCall {
                 inline_id, callid, ..
@@ -517,7 +524,7 @@ impl Globals {
                     ret,
                     ..
                 } = self.store[callid];
-                let class = pc.cached_class();
+                let class = pc.cached_class1().unwrap();
                 let name = &self.store.get_inline_info(inline_id).2;
                 let op1 = if pos_num == 0 {
                     format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)

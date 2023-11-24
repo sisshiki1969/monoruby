@@ -1045,8 +1045,7 @@ impl BytecodeGen {
                 if let Some(old_temp) = old_temp {
                     self.temp = old_temp;
                 }
-                self.emit(BcIr::MethodCall(None, Box::new(callsite)), loc);
-                self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
+                self.emit_call(callsite, loc);
             }
             LvalueKind::Send { recv, method } => {
                 let callsite = CallSite::simple(method, 1, src, recv, None);

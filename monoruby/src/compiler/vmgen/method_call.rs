@@ -1,13 +1,13 @@
 use super::*;
 
 const CALLSITE_ID: i64 = 0 - 16;
-const CACHED_CLASS: i64 = 8 - 16;
-const CACHED_VERSION: i64 = 12 - 16;
-const CACHED_FUNCID: i64 = 24 - 16;
+const CACHED_CLASS: i64 = 24 - 16;
+const CACHED_VERSION: i64 = 28 - 16;
+const CACHED_FUNCID: i64 = 16 - 16;
 const RET_REG: i64 = 4 - 16;
-const POS_NUM: i64 = 16 - 16;
-const ARG_REG: i64 = 18 - 16;
-const RECV_REG: i64 = 20 - 16;
+const POS_NUM: i64 = 8 - 16;
+const ARG_REG: i64 = 10 - 16;
+const RECV_REG: i64 = 12 - 16;
 
 impl Codegen {
     ///
@@ -15,13 +15,13 @@ impl Codegen {
     ///
     /// ~~~text
     /// MethodCall
-    //  0   2   4   6    8  10  12  14
+    ///  0   2   4   6    8  10  12  14
     /// +---+---+---+---++---+---+---+---+
-    /// |callid |ret| op|| class |version|
+    /// |callid |ret| op||pos|arg|rcv| - |
     /// +---+---+---+---++---+---+---+---+
     /// 16  18  20  22   24  26  28  30
     /// +---+---+---+---++---+---+---+---+
-    /// |len|arg|rcv| op||  fid  |       |
+    /// |  fid  |   | op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -75,7 +75,7 @@ impl Codegen {
             movq r15, rdx;
             movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
-            movzxw rdi, [r13 + (POS_NUM)];  // rdi <- pos_num
+            movzxw rdi, [r13 + (POS_NUM)];  // rdi <- len
             movzxw rcx, [r13 + (ARG_REG)]; // rcx <- args
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
         };
@@ -235,6 +235,7 @@ impl Codegen {
     /// ### in
     ///
     /// - rdi: arg len
+    /// - rcx: %args
     /// - r8:  CallSiteId
     ///
     /// ### out

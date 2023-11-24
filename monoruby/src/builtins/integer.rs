@@ -160,7 +160,7 @@ fn integer_tof(
     gen.fetch_slots(ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
-        gen.guard_class(pc.cached_class(), deopt);
+        gen.guard_class(pc.cached_class1().unwrap(), deopt);
     }
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
