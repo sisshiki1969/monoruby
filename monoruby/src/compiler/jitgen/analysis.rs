@@ -413,12 +413,12 @@ impl JitContext {
                         info.def(ret);
                     }
                 }
-                TraceIr::MethodArgs => {}
                 TraceIr::InlineCall {
                     inline_id, callid, ..
                 } => {
                     store.get_inline_info(inline_id).1(&mut info, &store[callid]);
                 }
+                TraceIr::InlineCache => {}
                 TraceIr::Ret(src)
                 | TraceIr::MethodRet(src)
                 | TraceIr::Break(src)

@@ -1176,7 +1176,7 @@ impl Codegen {
                 } => {
                     self.gen_yield(&mut ctx, store, args, len, dst, callid, pc);
                 }
-                TraceIr::MethodArgs => {}
+                TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);

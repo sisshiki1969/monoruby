@@ -67,13 +67,11 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         id: u32,
     },
-    /// nil(%reg)
     Nil(SlotId),
     BitNot {
         dst: SlotId,
         src: SlotId,
     },
-    /// negate(%ret, %src)
     Neg {
         dst: SlotId,
         src: SlotId,
@@ -86,7 +84,6 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         src: SlotId,
     },
-    /// binop(kind, %ret, %lhs, %rhs)
     BinOp {
         kind: BinOpK,
         dst: Option<SlotId>,
@@ -137,14 +134,13 @@ pub(crate) enum TraceIr {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
     },
+    InlineCache,
     Yield {
         ret: Option<SlotId>,
         args: SlotId,
         len: u16,
         callid: CallSiteId,
     },
-    /// func call 2nd opecode(%recv, %args, len)
-    MethodArgs,
     /// method definition(method_name, func_id)
     MethodDef {
         name: IdentId,

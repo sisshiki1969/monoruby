@@ -551,7 +551,7 @@ impl Globals {
                     format!("{} = yield({:?}; {})", ret_str(ret), args, len)
                 }
             }
-            TraceIr::MethodArgs => return None,
+            TraceIr::InlineCache => return None,
             TraceIr::MethodDef { name, func_id } => {
                 format!("method_def {name}: {:?}", func_id)
             }

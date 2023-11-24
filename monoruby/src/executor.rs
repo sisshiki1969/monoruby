@@ -1285,7 +1285,7 @@ impl BcPc {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
-                130 => TraceIr::MethodArgs,
+                130 => TraceIr::InlineCache,
                 132 => TraceIr::Index {
                     dst: SlotId::new(op1),
                     base: SlotId::new(op2),
