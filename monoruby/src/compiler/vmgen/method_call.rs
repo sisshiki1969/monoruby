@@ -19,6 +19,7 @@ impl Codegen {
     /// +---+---+---+---++---+---+---+---+
     /// |callid |ret| op||pos|arg|rcv| - |
     /// +---+---+---+---++---+---+---+---+
+    /// InlineCache
     /// 16  18  20  22   24  26  28  30
     /// +---+---+---+---++---+---+---+---+
     /// |  fid  |   | op|| class |version|
@@ -127,17 +128,14 @@ impl Codegen {
     /// +---+---+---+---++---+---+---+---+
     /// | op|ret|arg|len||               |
     /// +---+---+---+---++---+---+---+---+
-    ///
-    /// ret:  return register
-    /// arg:  the start of argument registers
-    /// len:  the number of argument registers
+    ///  0   2   4   6    8  10  12  14
+    /// +---+---+---+---++---+---+---+---+
+    /// |callid |ret| op||pos|arg| - | - |
+    /// +---+---+---+---++---+---+---+---+
     /// ~~~
     pub(super) fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        // r15: %ret
-        // rdi: %args
-        // rsi: len
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -149,14 +147,14 @@ impl Codegen {
             lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rax, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
             // rax <- outer_cfp, r15 <- &FuncData
-            movsxw rdi, [r13 - 16]; // rdi <- len
-            movzxw rcx, [r13 - 14]; // rcx <- %args
+            movsxw rdi, [r13 + (POS_NUM)]; // rdi <- pos_num
+            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- %args
             pushq r13; // push pc
             subq rsp, 8;
             // set meta
             movq rsi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rsi;
-            movl r8, [r13 - 8];    // CallSiteId
+            movl r8, [r13 + (CALLSITE_ID)];    // CallSiteId
         };
         self.set_block_self_outer();
 
@@ -166,7 +164,7 @@ impl Codegen {
         }
         self.block_arg_expand();
         monoasm! { &mut self.jit,
-            movl rdx, [r13 - 8];    // CallSiteId
+            movl rdx, [r13 + (CALLSITE_ID)];    // CallSiteId
         }
         self.handle_arguments();
         self.vm_handle_error();
@@ -189,7 +187,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             addq rsp, 8;
             popq r13;   // pop pc
-            movzxw r15, [r13 - 12]; // r15 <- %ret
+            movzxw r15, [r13 + (RET_REG)]; // r15 <- %ret
         };
         self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);

@@ -1168,13 +1168,8 @@ impl Codegen {
                     let gen = store.get_inline_info(inline_id).0;
                     self.gen_inlinable(&mut ctx, &store[callid], gen, pc);
                 }
-                TraceIr::Yield {
-                    ret: dst,
-                    args,
-                    len,
-                    callid,
-                } => {
-                    self.gen_yield(&mut ctx, store, args, len, dst, callid, pc);
+                TraceIr::Yield { callid } => {
+                    self.gen_yield(&mut ctx, store, callid, pc);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {

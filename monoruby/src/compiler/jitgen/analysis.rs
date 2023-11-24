@@ -389,8 +389,9 @@ impl JitContext {
                     info.use_range(dst, len);
                     info.r#use(src);
                 }
-                TraceIr::Yield { ret, args, len, .. } => {
-                    info.use_range(args, len);
+                TraceIr::Yield { callid } => {
+                    let CallSiteInfo { args, len, ret, .. } = store[callid];
+                    info.use_range(args, len as u16);
                     if let Some(ret) = ret {
                         info.def(ret);
                     }

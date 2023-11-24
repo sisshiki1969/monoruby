@@ -136,9 +136,6 @@ pub(crate) enum TraceIr {
     },
     InlineCache,
     Yield {
-        ret: Option<SlotId>,
-        args: SlotId,
-        len: u16,
         callid: CallSiteId,
     },
     /// method definition(method_name, func_id)

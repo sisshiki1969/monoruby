@@ -539,16 +539,14 @@ impl Globals {
                 };
                 format!("{:36} [{}]", op1, class.get_name(self))
             }
-            TraceIr::Yield {
-                ret,
-                args,
-                len,
-                callid: _,
-            } => {
-                if len == 0 {
+            TraceIr::Yield { callid } => {
+                let CallSiteInfo {
+                    args, pos_num, ret, ..
+                } = self.store[callid];
+                if pos_num == 0 {
                     format!("{} = yield", ret_str(ret))
                 } else {
-                    format!("{} = yield({:?}; {})", ret_str(ret), args, len)
+                    format!("{} = yield({:?}; {})", ret_str(ret), args, pos_num)
                 }
             }
             TraceIr::InlineCache => return None,

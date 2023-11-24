@@ -351,47 +351,15 @@ impl BytecodeGen {
             }
             BcIr::MethodCall(box callsite) => {
                 // 30, 31
-                let op1 = match callsite.ret {
-                    None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
-                };
                 let has_splat = callsite.has_splat();
-                let CallSite {
-                    args,
-                    pos_num,
-                    recv,
-                    ..
-                } = callsite;
-                let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from_with_num(
-                    enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
-                    pos_num as u16,
-                    self.slot_id(&args).0,
-                    self.slot_id(&recv).0,
-                    0,
-                )
+                let opcode = if has_splat { 30 } else { 31 };
+                self.encode_call(store, opcode, callsite, loc)?
             }
             BcIr::MethodCallBlock(box callsite) => {
                 // 32, 33
-                let op1 = match callsite.ret {
-                    None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
-                };
                 let has_splat = callsite.has_splat();
-                let CallSite {
-                    args,
-                    pos_num,
-                    recv,
-                    ..
-                } = callsite;
-                let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from_with_num(
-                    enc_wl(if has_splat { 30 } else { 31 }, op1.0, callid.get()),
-                    pos_num as u16,
-                    self.slot_id(&args).0,
-                    self.slot_id(&recv).0,
-                    0,
-                )
+                let opcode = if has_splat { 32 } else { 33 };
+                self.encode_call(store, opcode, callsite, loc)?
             }
             BcIr::InlineCache => {
                 Bc::from_with_class_and_version(
@@ -400,6 +368,7 @@ impl BytecodeGen {
                     -1i32 as u32,
                 )
             }
+            BcIr::Yield(box callsite) => self.encode_call(store, 34, callsite, loc)?,
             BcIr::Array(ret, box callsite) => {
                 // 35
                 let op1 = self.slot_id(&ret);
@@ -521,20 +490,6 @@ impl BytecodeGen {
                 let op3 = self.slot_id(&src);
                 Bc::from(enc_www(151, op1.0, op2, op3.0))
             }
-            BcIr::Yield {
-                ret,
-                args,
-                len,
-                box callsite,
-            } => {
-                let op1 = match ret {
-                    None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
-                };
-                let op2 = self.slot_id(&args);
-                let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from_with_callid(enc_www(152, op1.0, op2.0, len as u16), callid)
-            }
             BcIr::InitMethod(fn_info) => Bc::from_fn_info(enc_www_fn_info(170, &fn_info), &fn_info),
             BcIr::ExpandArray(src, dst, len) => {
                 let op1 = self.slot_id(&src);
@@ -593,6 +548,34 @@ impl BytecodeGen {
             }
         };
         Ok(bc)
+    }
+
+    fn encode_call(
+        &self,
+        store: &mut Store,
+        opcode: u16,
+        callsite: CallSite,
+        loc: Loc,
+    ) -> Result<Bc> {
+        let CallSite {
+            ret,
+            args,
+            pos_num,
+            recv,
+            ..
+        } = callsite;
+        let ret = match ret {
+            None => 0,
+            Some(ret) => self.slot_id(&ret).0,
+        };
+        let callid = self.new_callsite(store, callsite, loc)?;
+        Ok(Bc::from_with_num(
+            enc_wl(opcode, ret, callid.get()),
+            pos_num as u16,
+            self.slot_id(&args).0,
+            self.slot_id(&recv).0,
+            0,
+        ))
     }
 
     fn new_callsite(&self, store: &mut Store, callsite: CallSite, loc: Loc) -> Result<CallSiteId> {

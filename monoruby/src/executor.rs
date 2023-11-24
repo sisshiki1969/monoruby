@@ -1002,13 +1002,6 @@ impl Bc {
         )
     }
 
-    pub(super) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(callid.get() as u64),
-        }
-    }
-
     pub(super) fn from_with_value(op1: u64, val: Value) -> Self {
         Self {
             op1,
@@ -1104,12 +1097,12 @@ impl BcPc {
         self.0.as_ptr()
     }
 
-    pub(crate) fn is_loop(&self) -> bool {
-        matches!(self.trace_ir(), TraceIr::LoopStart(_))
-    }
-
     pub(crate) fn opcode(&self) -> u16 {
         (self.op1 >> 48) as u16
+    }
+
+    pub(crate) fn is_loop_start(&self) -> bool {
+        self.opcode() == 14 // TraceIr::LoopStart(_))
     }
 
     pub fn from(bc: &Bc) -> Self {
@@ -1230,6 +1223,7 @@ impl BcPc {
                     TraceIr::MethodCall { callid: op2.into() }
                 }
                 32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
+                34 => TraceIr::Yield { callid: op2.into() },
                 35 => TraceIr::Array {
                     dst: SlotId::new(op1),
                     callid: CallSiteId::from(op2),
@@ -1322,12 +1316,6 @@ impl BcPc {
                     },
                     SlotId::new(op3),
                 ),
-                152 => TraceIr::Yield {
-                    ret: SlotId::from(op1),
-                    args: SlotId::new(op2),
-                    len: op3,
-                    callid: CallSiteId::from(self.op2.0 as u32),
-                },
                 154..=161 => TraceIr::Cmp(
                     CmpKind::from(opcode - 154),
                     SlotId::from(op1),

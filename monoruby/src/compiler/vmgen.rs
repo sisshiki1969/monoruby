@@ -237,6 +237,7 @@ impl Codegen {
         self.dispatch[31] = vm_call;
         self.dispatch[32] = vm_call_splat;
         self.dispatch[33] = vm_call;
+        self.dispatch[34] = self.vm_yield();
         self.dispatch[35] = self.vm_array();
         self.dispatch[36] = self.vm_optcase(branch);
 
@@ -278,7 +279,6 @@ impl Codegen {
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
-        self.dispatch[152] = self.vm_yield();
 
         self.dispatch[154] = self.vm_eqrr();
         self.dispatch[155] = self.vm_nerr();

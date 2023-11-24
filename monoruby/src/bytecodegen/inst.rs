@@ -161,12 +161,7 @@ pub(super) enum BcIr {
     MethodCall(Box<CallSite>),
     MethodCallBlock(Box<CallSite>),
     InlineCache,
-    Yield {
-        ret: Option<BcReg>,
-        args: BcReg,
-        len: usize,
-        callsite: Box<CallSite>,
-    },
+    Yield(Box<CallSite>),
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
     MethodDef {

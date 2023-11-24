@@ -36,7 +36,7 @@ impl Codegen {
         bb_pos: BcIndex,
     ) -> Option<BBContext> {
         //let bb_pos = cc.cur_pos;
-        let is_loop = func.get_pc(bb_pos).is_loop();
+        let is_loop = func.get_pc(bb_pos).is_loop_start();
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {bb_pos}");

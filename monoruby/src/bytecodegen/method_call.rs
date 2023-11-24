@@ -3,25 +3,15 @@ use super::*;
 impl BytecodeGen {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
         if callsite.block_fid.is_some() {
-            self.emit(BcIr::MethodCallBlock(Box::new(callsite.clone())), loc)
+            self.emit(BcIr::MethodCallBlock(Box::new(callsite)), loc)
         } else {
-            self.emit(BcIr::MethodCall(Box::new(callsite.clone())), loc);
+            self.emit(BcIr::MethodCall(Box::new(callsite)), loc);
         };
         self.emit(BcIr::InlineCache, loc);
     }
 
-    pub(super) fn emit_yield(&mut self, callsite: CallSite, ret: Option<BcReg>, loc: Loc) {
-        let args = callsite.args;
-        let len = callsite.pos_num;
-        self.emit(
-            BcIr::Yield {
-                ret,
-                args,
-                len,
-                callsite: Box::new(callsite),
-            },
-            loc,
-        );
+    pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
+        self.emit(BcIr::Yield(Box::new(callsite)), loc);
     }
 
     pub(super) fn emit_binary_op(
@@ -267,7 +257,7 @@ impl BytecodeGen {
 
         let callid =
             self.handle_arguments(arglist, IdentId::get_id("<block>"), BcReg::Self_, ret, loc)?;
-        self.emit_yield(callid, ret, loc);
+        self.emit_yield(callid, loc);
 
         self.temp = old;
 
