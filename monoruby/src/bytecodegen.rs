@@ -503,7 +503,7 @@ impl BytecodeGen {
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(*name);
         });
-        ir.gen_dummy_init(info.is_block_style);
+        ir.gen_dummy_init(info.is_block_style());
 
         ir
     }
@@ -1131,7 +1131,7 @@ impl BytecodeGen {
     fn replace_init(&mut self, info: &ISeqInfo) {
         let fninfo = FnInitInfo::new(self.total_reg_num(), info);
         self.ir[0] = (
-            if info.is_block_style {
+            if info.is_block_style() {
                 BcIr::InitBlock(fninfo)
             } else {
                 BcIr::InitMethod(fninfo)

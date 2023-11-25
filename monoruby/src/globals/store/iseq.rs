@@ -63,7 +63,7 @@ pub(crate) struct ISeqInfo {
     pub temp_num: u16,
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
-    pub(crate) is_block_style: bool,
+    is_block_style: bool,
     ///
     /// Basic block information.
     ///
@@ -122,6 +122,10 @@ impl ISeqInfo {
             is_block_style,
             bb_info: BasicBlockInfo::default(),
         }
+    }
+
+    pub fn is_block_style(&self) -> bool {
+        self.is_block_style
     }
 
     pub(super) fn new_block(

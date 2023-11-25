@@ -453,7 +453,7 @@ impl Codegen {
         match &store[callee_fid].kind {
             FuncKind::ISeq(info) => {
                 let callsite = &store[callid];
-                if info.is_block_style && info.reqopt_num() > 1 && callsite.pos_num == 1 {
+                if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
                 if info.pos_num() == info.req_num()

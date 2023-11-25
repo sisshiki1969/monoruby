@@ -80,13 +80,6 @@ impl FuncData {
 /// +-------+-------+---------+----+----+
 /// |    FuncId     | reg_num |kind|mode|
 /// +-------+-------+---------+----+----+
-///
-/// kind:   0 VM
-///         1 JIT
-///         2 NATIVE
-///
-/// mode:   0 method
-///         1 class def
 /// ~~~
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -94,12 +87,10 @@ impl FuncData {
 pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
-    ///bit 7:  0:on_stack 1:on_heap
-    ///bit 1:  0:Ruby 1:native
-    ///bit 0:
+    /// bit 7:  0:on_stack 1:on_heap
+    /// bit 1:  0:Ruby 1:native
+    /// bit 0:  0:method 1:class_def
     kind: u8,
-    /// bit 2-1: public:0 private:1 protected:2
-    /// bit 0: method:0 class_def:1
     mode: u8,
 }
 
@@ -109,11 +100,7 @@ impl std::fmt::Debug for Meta {
             f,
             "on_stack:{:?} kind:{} mode:{} {:?} regs:{}",
             self.on_stack(),
-            match self.kind() {
-                0 => "Ruby",
-                1 => "NATIVE",
-                _ => "INVALID",
-            },
+            if self.is_native() { "NATIVE" } else { "Ruby" },
             if self.is_class_def() {
                 "class_def"
             } else {
@@ -126,12 +113,12 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    pub fn new(func_id: Option<FuncId>, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
+    pub fn new(func_id: Option<FuncId>, reg_num: u16, is_native: bool, is_class_def: bool) -> Self {
         Self {
             func_id,
             reg_num,
-            kind,
-            mode: is_class_def as u8,
+            kind: (is_native as u8) << 1 | is_class_def as u8,
+            mode: 0,
         }
     }
 
@@ -140,21 +127,17 @@ impl Meta {
     }
 
     fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
-        // kind = VM, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, 0, false)
+        Self::new(func_id.into(), reg_num, false, false)
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
-        // kind = VM, mode = classdef
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, 0, true)
+        Self::new(func_id.into(), reg_num, false, true)
     }
 
     fn native(func_id: FuncId) -> Self {
-        // kind = NATIVE, mode = method
-        //let reg_num = reg_num as i16 as u16;
-        Self::new(Some(func_id), 1, 2, false)
+        Self::new(Some(func_id), 1, true, false)
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -165,13 +148,8 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
-    /// 0:Ruby 1:native
-    fn kind(&self) -> u8 {
-        (self.kind & 0b10) >> 1
-    }
-
     pub fn is_native(&self) -> bool {
-        self.kind() == 1
+        (self.kind & 0b10) >> 1 == 1
     }
 
     pub fn on_stack(&self) -> bool {
@@ -184,7 +162,7 @@ impl Meta {
 
     /// method:0 class_def:1
     pub fn is_class_def(&self) -> bool {
-        (self.mode & 0b1) == 1
+        (self.kind & 0b1) == 1
     }
 
     ///

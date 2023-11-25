@@ -285,7 +285,7 @@ pub(super) fn handle_positional(
     let reqopt_num = info.reqopt_num();
     let pos_num = info.pos_num();
     let is_rest = pos_num != reqopt_num;
-    let is_block_style = info.is_block_style;
+    let is_block_style = info.is_block_style();
     let ex_num = ex.is_some() as usize;
     unsafe {
         if (arg_num + ex_num) > reqopt_num {

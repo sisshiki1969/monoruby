@@ -1775,7 +1775,7 @@ fn handle_invoker_arguments(globals: &Globals, callee_lfp: LFP, mut arg_num: usi
 fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
     let req_num = info.required_num();
     let reqopt_num = info.reqopt_num();
-    if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
+    if info.is_block_style() && arg_num == 1 && reqopt_num > 1 {
         unsafe {
             let v = callee_lfp.register(1).unwrap();
             if v.is_array().is_some() {
