@@ -1,5 +1,5 @@
 use super::*;
-use crate::bytecodegen::inst::*;
+use crate::bytecodegen::{inst::*, BinOpK};
 
 ///
 /// IR for JIT compiler.

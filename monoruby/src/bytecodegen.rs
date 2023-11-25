@@ -1009,57 +1009,47 @@ impl BytecodeGen {
     fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, old_temp: Option<u16>, loc: Loc) {
         match lhs {
             LvalueKind::Const(name) => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit(BcIr::StoreConst(src, name), loc);
             }
             LvalueKind::InstanceVar(name) => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit(BcIr::StoreIvar(src, name), loc);
             }
             LvalueKind::GlobalVar(name) => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit(BcIr::StoreGvar { val: src, name }, loc);
             }
             LvalueKind::DynamicVar { outer, dst } => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit(BcIr::StoreDynVar { dst, outer, src }, loc);
             }
             LvalueKind::Index { base, index } => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
                 let callsite =
                     CallSite::simple(IdentId::_INDEX_ASSIGN, 3, index1.into(), base, None);
                 self.emit_mov((index1 + 2).into(), src);
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit_call(callsite, loc);
             }
             LvalueKind::Send { recv, method } => {
                 let callsite = CallSite::simple(method, 1, src, recv, None);
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit_method_assign(callsite, loc);
             }
             LvalueKind::LocalVar { dst } => {
-                if let Some(old_temp) = old_temp {
-                    self.temp = old_temp;
-                }
+                self.set_temp(old_temp);
                 self.emit_mov(dst, src);
             }
+        }
+    }
+
+    fn set_temp(&mut self, old_temp: Option<u16>) {
+        if let Some(old_temp) = old_temp {
+            self.temp = old_temp;
         }
     }
 
@@ -1150,6 +1140,7 @@ impl BytecodeGen {
         );
     }
 }
+
 enum RecvKind {
     SelfValue,
     Local(BcReg),
@@ -1225,5 +1216,69 @@ impl BcIndex {
 
     pub(crate) fn to_usize(&self) -> usize {
         self.0 as usize
+    }
+}
+
+///
+/// kinds of binary operation.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BinOpK {
+    Add = 0,
+    Sub = 1,
+    Mul = 2,
+    Div = 3,
+    BitOr = 4,
+    BitAnd = 5,
+    BitXor = 6,
+    Rem = 7,
+    Exp = 8,
+}
+
+impl std::fmt::Display for BinOpK {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match *self {
+            BinOpK::Add => "+",
+            BinOpK::Sub => "-",
+            BinOpK::Mul => "*",
+            BinOpK::Div => "/",
+            BinOpK::BitOr => "|",
+            BinOpK::BitAnd => "&",
+            BinOpK::BitXor => "^",
+            BinOpK::Rem => "%",
+            BinOpK::Exp => "**",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl BinOpK {
+    pub fn from(i: u16) -> Self {
+        match i {
+            0 => BinOpK::Add,
+            1 => BinOpK::Sub,
+            2 => BinOpK::Mul,
+            3 => BinOpK::Div,
+            4 => BinOpK::BitOr,
+            5 => BinOpK::BitAnd,
+            6 => BinOpK::BitXor,
+            7 => BinOpK::Rem,
+            8 => BinOpK::Exp,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn generic_func(&self) -> BinaryOpFn {
+        match self {
+            BinOpK::Add => add_values,
+            BinOpK::Sub => sub_values,
+            BinOpK::Mul => mul_values,
+            BinOpK::Div => div_values,
+            BinOpK::BitOr => bitor_values,
+            BinOpK::BitAnd => bitand_values,
+            BinOpK::BitXor => bitxor_values,
+            BinOpK::Rem => rem_values,
+            BinOpK::Exp => pow_values,
+        }
     }
 }

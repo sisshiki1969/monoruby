@@ -152,7 +152,7 @@ impl Executor {
         self.temp_stack.drain(len..).collect()
     }
 
-    pub fn parent_fiber(&self) -> Option<NonNull<Executor>> {
+    pub fn parent_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
         self.parent_fiber
     }
 
@@ -817,7 +817,7 @@ impl Executor {
 pub struct BlockHandler(pub Value);
 
 impl std::fmt::Debug for BlockHandler {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some((fid, outer)) = self.try_proxy() {
             write!(f, "fn:{:?} outer:{outer}", fid)
         } else if let Some(proc) = self.try_proc() {
@@ -1370,74 +1370,38 @@ impl BcPc {
                 179 => TraceIr::ConcatStr(SlotId::from(op1), SlotId::new(op2), op3),
                 180..=189 => {
                     let kind = BinOpK::from(opcode - 180);
-                    let ret = SlotId::from(op1);
+                    let dst = SlotId::from(op1);
                     let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
                     if self.is_integer2() {
-                        TraceIr::IBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float2() {
-                        TraceIr::FBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::FBinOp { kind, dst, mode }
                     } else {
-                        TraceIr::BinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::BinOp { kind, dst, mode }
                     }
                 }
                 190..=199 => {
                     let kind = BinOpK::from(opcode - 190);
-                    let ret = SlotId::from(op1);
+                    let dst = SlotId::from(op1);
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     if self.is_integer1() {
-                        TraceIr::IBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float1() {
-                        TraceIr::FBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::FBinOp { kind, dst, mode }
                     } else {
-                        TraceIr::BinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::BinOp { kind, dst, mode }
                     }
                 }
                 200..=209 => {
                     let kind = BinOpK::from(opcode - 200);
-                    let ret = SlotId::from(op1);
+                    let dst = SlotId::from(op1);
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
                     if self.is_integer_binop() {
-                        TraceIr::IBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float_binop() {
-                        TraceIr::FBinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::FBinOp { kind, dst, mode }
                     } else {
-                        TraceIr::BinOp {
-                            kind,
-                            dst: ret,
-                            mode,
-                        }
+                        TraceIr::BinOp { kind, dst, mode }
                     }
                 }
                 _ => unreachable!("{:016x}", op),
@@ -1562,71 +1526,6 @@ impl std::ops::Add<u16> for SlotId {
     type Output = Self;
     fn add(self, rhs: u16) -> Self {
         Self(self.0 + rhs)
-    }
-}
-
-///
-/// kinds of binary operation.
-///
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BinOpK {
-    Add = 0,
-    Sub = 1,
-    Mul = 2,
-    Div = 3,
-    BitOr = 4,
-    BitAnd = 5,
-    BitXor = 6,
-    Rem = 7,
-    Exp = 8,
-}
-
-use std::{fmt, ptr::NonNull};
-impl fmt::Display for BinOpK {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match *self {
-            BinOpK::Add => "+",
-            BinOpK::Sub => "-",
-            BinOpK::Mul => "*",
-            BinOpK::Div => "/",
-            BinOpK::BitOr => "|",
-            BinOpK::BitAnd => "&",
-            BinOpK::BitXor => "^",
-            BinOpK::Rem => "%",
-            BinOpK::Exp => "**",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl BinOpK {
-    pub fn from(i: u16) -> Self {
-        match i {
-            0 => BinOpK::Add,
-            1 => BinOpK::Sub,
-            2 => BinOpK::Mul,
-            3 => BinOpK::Div,
-            4 => BinOpK::BitOr,
-            5 => BinOpK::BitAnd,
-            6 => BinOpK::BitXor,
-            7 => BinOpK::Rem,
-            8 => BinOpK::Exp,
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn generic_func(&self) -> BinaryOpFn {
-        match self {
-            BinOpK::Add => add_values,
-            BinOpK::Sub => sub_values,
-            BinOpK::Mul => mul_values,
-            BinOpK::Div => div_values,
-            BinOpK::BitOr => bitor_values,
-            BinOpK::BitAnd => bitand_values,
-            BinOpK::BitXor => bitxor_values,
-            BinOpK::Rem => rem_values,
-            BinOpK::Exp => pow_values,
-        }
     }
 }
 

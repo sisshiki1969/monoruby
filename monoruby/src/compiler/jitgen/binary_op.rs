@@ -1,5 +1,7 @@
-use super::*;
+use crate::bytecodegen::BinOpK;
 use ruruby_parse::CmpKind;
+
+use super::*;
 
 impl Codegen {
     pub(super) fn gen_binop_integer(
