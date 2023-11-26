@@ -325,7 +325,7 @@ impl Codegen {
         self.get_func_data();
         monoasm! { &mut self.jit,
             // set meta func_id
-            movq rax, [rdx + (FUNCDATA_META)];  // r13: *const FuncData
+            movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
             movq [r14 - (LBP_META)], rax;
             // set block
             movq [r14 - (LBP_BLOCK)], 0;
@@ -338,7 +338,7 @@ impl Codegen {
         let l2 = self.jit.label();
         monoasm! { &mut self.jit,
             lea  rax, [r14 - (LBP_ARG0)];
-            movzxw rdi, [rdx + (FUNCDATA_REGNUM)];
+            movzxw rdi, [r15 + (FUNCDATA_REGNUM)];
         l1:
             subq rdi, 1;
             je   l2;
@@ -348,30 +348,12 @@ impl Codegen {
         l2:
         };
         monoasm! { &mut self.jit,
-            //
-            //       +-------------+
-            //  0x00 |             | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     |
-            //       +-------------+
-            // -0x20 |    block    |
-            //       +-------------+
-            // -0x28 |     %0      |
-            //       +-------------+
-            // -0x30 | %1(1st arg) |
-            //       +-------------+
-            //       |             |
-            //
             // set self
             movq rax, (main_object.id());
             movq [r14 - (LBP_SELF)], rax;
-            movq rax, [rdx + (FUNCDATA_CODEPTR)];
+            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [rdx + (FUNCDATA_PC)];
+            movq r13, [r15 + (FUNCDATA_PC)];
             // set arg len
             xorq rdx, rdx;
             call rax;
@@ -455,14 +437,14 @@ impl Codegen {
     /// - rdx: FuncId
     ///
     /// ### out
-    /// - rdx: &FuncData
+    /// - r15: &FuncData
     ///
     fn get_func_data(&mut self) {
         monoasm! { &mut self.jit,
             movl rdx, rdx;
             shlq rdx, 6;
             addq rdx, [r12 + (GLOBALS_FUNCINFO)];
-            lea  rdx, [rdx + (FUNCINFO_DATA)];
+            lea  r15, [rdx + (FUNCINFO_DATA)];
         };
     }
 

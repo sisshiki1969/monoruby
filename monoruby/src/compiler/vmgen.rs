@@ -584,15 +584,18 @@ impl Codegen {
     /// Frame preparation.
     ///
     /// ### in
-    /// - `rcx`: `self` (if *specify_self* is true)
-    /// - `rdx`: FuncId (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
+    /// - rcx: `self` (if *specify_self* is true)
+    /// - rdx: FuncId (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
+    ///
+    /// ### out
+    /// - r15: &FuncData
     ///
     fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
             monoasm! { &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], 0;
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
-                lea  rdx, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- &FuncData
+                lea  r15, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- &FuncData
             };
             self.set_block_outer();
             if !specify_self {
@@ -613,12 +616,17 @@ impl Codegen {
             // set self
             movq [rsp - (16 + LBP_SELF)], rcx;
             // set meta
-            movq rdi, [rdx + (FUNCDATA_META)];
+            movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp - (16 + LBP_META)], rdi;
-            movq r13, rdx;  // r13 <- &FuncData
         };
     }
 
+    ///
+    ///
+    /// ### in
+    /// - rdi: arg_num
+    /// - r15: &FuncData
+    ///
     fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
             lea  rsi, [rsp - 16];
@@ -634,11 +642,11 @@ impl Codegen {
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
-            // r13 : &FuncData
+            // r15 : &FuncData
             // set codeptr
-            movq rax, [r13 + (FUNCDATA_CODEPTR)];
+            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r13 + (FUNCDATA_PC)];
+            movq r13, [r15 + (FUNCDATA_PC)];
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;

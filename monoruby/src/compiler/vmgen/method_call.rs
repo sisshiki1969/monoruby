@@ -65,18 +65,10 @@ impl Codegen {
             cmpl rdi, [rip + class_version];
             jne  slow_path;
         exec:
-        };
-        self.set_method_outer();
-        monoasm! { &mut self.jit,
             movl rdx, [r13 + (CACHED_FUNCID)];
-        }
-        self.get_func_data();
-        monoasm! { &mut self.jit,
-            movq r15, rdx;
-            // set meta
-            movq rdi, [r15 + (FUNCDATA_META)];
-            movq [rsp -(16 + LBP_META)], rdi;
         };
+        self.get_func_data();
+        self.set_method_outer();
 
         self.set_arguments(has_splat);
         self.call();
@@ -123,9 +115,6 @@ impl Codegen {
             // rax <- outer_cfp, r15 <- &FuncData
             pushq r13; // push pc
             subq rsp, 8;
-            // set meta
-            movq rdi, [r15 + (FUNCDATA_META)];
-            movq [rsp -(16 + LBP_META)], rdi;
         };
         self.set_block_self_outer();
 
@@ -152,6 +141,9 @@ impl Codegen {
     ///
     fn call(&mut self) {
         monoasm! { &mut self.jit,
+            // set meta
+            movq rax, [r15 + (FUNCDATA_META)];
+            movq [rsp -(16 + LBP_META)], rax;
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
         self.block_arg_expand();
