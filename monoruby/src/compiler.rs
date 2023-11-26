@@ -529,33 +529,6 @@ impl Codegen {
         self.pop_frame();
     }
 
-    /// ## in
-    ///
-    /// ## out
-    /// - rax : result
-    fn call_codeptr(&mut self, codeptr: CodePtr) {
-        self.push_frame();
-        self.set_lfp();
-        let src_point = self.jit.get_current_address();
-        monoasm!( &mut self.jit,
-            call (codeptr - src_point - 5);
-        );
-        self.pop_frame();
-    }
-
-    /// ## in
-    ///
-    /// ## out
-    /// - rax : result
-    fn call_label(&mut self, label: DestLabel) {
-        self.push_frame();
-        self.set_lfp();
-        monoasm!( &mut self.jit,
-            call label;
-        );
-        self.pop_frame();
-    }
-
     ///
     /// check whether lhs and rhs are fixnum.
     ///

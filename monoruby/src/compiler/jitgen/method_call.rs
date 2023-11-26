@@ -81,7 +81,7 @@ impl Codegen {
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                assert!(store[callid].kw_len() == 0);
+                assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 if cached_class.is_always_frozen() {
@@ -99,7 +99,7 @@ impl Codegen {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                assert!(store[callid].kw_len() == 0);
+                assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 self.load_rdi(recv);
@@ -441,13 +441,96 @@ impl Codegen {
         self.writeback_acc(ctx);
         self.xmm_save(&xmm_using);
         self.execute_gc();
-        self.set_args_outer(&store[callid]);
-        let func_data = &store[callee_fid].data;
+        let callsite = &store[callid];
         monoasm! { &mut self.jit,
+            subq  rsp, 16;
+            // set prev_cfp
+            pushq [rbx + (EXECUTOR_CFP)];
+            // set lfp
+            lea   rax, [rsp + 8];
+            pushq rax;
+            // set outer
+            movq  rax, 0;
+            pushq rax;
             // set meta.
-            movq rax, (func_data.meta().get());
-            movq [rsp - (16 + LBP_META)], rax;
+            movq rax, (store[callee_fid].data.meta().get());
+            pushq rax;
         }
+        // set block
+        if let Some(func_id) = callsite.block_fid {
+            let bh = BlockHandler::from(func_id);
+            monoasm!( &mut self.jit,
+                movq rax, (bh.0.id());
+                pushq rax;
+            );
+        } else if let Some(block) = callsite.block_arg {
+            monoasm!( &mut self.jit,
+                pushq [r14 - (conv(block))];
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq rax, 0;
+                pushq rax;
+            );
+        }
+        // set self
+        monoasm!( &mut self.jit,
+            pushq [r14 - (conv(callsite.recv))];
+            addq  rsp, 64;
+        );
+        let CallSiteInfo { args, pos_num, .. } = *callsite;
+        let pos_num = pos_num as u16;
+        // set arguments
+        if callsite.has_splat() {
+            monoasm!( &mut self.jit,
+                lea r8, [rsp - (16 + LBP_ARG0)];
+                subq rsp, 4088;
+                pushq r15;
+                movq r15, r8;
+                movq r8, (pos_num);
+            );
+            for i in 0..pos_num {
+                let reg = args + i;
+                if callsite.splat_pos.contains(&(i as usize)) {
+                    self.load_rdi(reg);
+                    monoasm! { &mut self.jit,
+                        movq rsi, r15;
+                        movq rax, (expand_splat);
+                        subq rsp, 8;
+                        pushq r8;
+                        call rax;
+                        popq r8;
+                        addq rsp, 8;
+                        lea  r8, [r8 + rax * 1 - 1];
+                        shlq rax, 3;
+                        subq r15, rax;
+                    }
+                } else {
+                    self.load_rax(reg);
+                    monoasm! { &mut self.jit,
+                        movq [r15], rax;
+                        subq r15, 8;
+                    }
+                }
+            }
+            monoasm!( &mut self.jit,
+                popq r15;
+                addq rsp, 4088;
+                movq rdi, r8;
+            );
+        } else {
+            for i in 0..pos_num {
+                let reg = args + i;
+                self.load_rax(reg);
+                monoasm! { &mut self.jit,
+                    movq [rsp - ((16 + LBP_ARG0 + 8 * (i as i64)) as i32)], rax;
+                }
+            }
+            monoasm!( &mut self.jit,
+                movq rdi, (pos_num);
+            );
+        }
+        let func_data = &store[callee_fid].data;
         // argument registers:
         //   rdi: args len
         match &store[callee_fid].kind {
@@ -456,49 +539,14 @@ impl Codegen {
                 if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.pos_num() == info.req_num()
-                    && !(info.key_num() == 0 && callsite.kw_len() != 0)
-                {
+                if info.optional_num() == 0 && !(info.key_num() == 0 && callsite.kw_num() != 0) {
                     // no optional param, no rest param.
                     if info.key_num() != 0 {
-                        let CallSiteInfo {
-                            kw_pos, kw_args, ..
-                        } = callsite;
-                        let callee_kw_pos = info.pos_num() + 1;
-                        for (callee, param_name) in info.args.keyword_names.iter().enumerate() {
-                            let callee_ofs = (callee_kw_pos as i64 + callee as i64) * 8 + LBP_SELF;
-                            match kw_args.get(param_name) {
-                                Some(caller) => {
-                                    let caller_ofs =
-                                        (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;
-                                    monoasm! { &mut self.jit,
-                                        movq  rax, [r14 - (caller_ofs)];
-                                        movq  [rsp - (16 + callee_ofs)], rax;
-                                    }
-                                }
-                                None => {
-                                    monoasm! { &mut self.jit,
-                                        movq  [rsp - (16 + callee_ofs)], 0;
-                                    }
-                                }
-                            }
-                        }
+                        self.handle_keyword_args(callsite, info)
                         // TODO: We must care about a rest keyword paramter.
                     }
                     if !callsite.hash_splat_pos.is_empty() {
-                        monoasm! { &mut self.jit,
-                            lea  rcx, [rsp - (16 + LBP_SELF)];
-                            subq rsp, 4088;
-                            pushq rdi;
-                            movq rdi, rbx;
-                            movq rsi, r12;
-                            movl rdx, (callid.get());
-                            movl r8, (callee_fid.get());
-                            movq rax, (jit_handle_hash_splat);
-                            call rax;
-                            popq rdi;
-                            addq rsp, 4088;
-                        }
+                        self.handle_hash_splat(callid, callee_fid)
                     }
                 } else {
                     monoasm! { &mut self.jit,
@@ -510,25 +558,95 @@ impl Codegen {
             }
             _ => {}
         }
+
         if native {
             monoasm! { &mut self.jit,
                 movq rdx, rdi;
             }
-            self.call_codeptr(func_data.codeptr().unwrap());
         } else {
             monoasm! { &mut self.jit,
                 // set pc.
                 movq r13, (func_data.pc().get_u64());
             }
+        }
+
+        monoasm!( &mut self.jit,
+            // push cfp
+            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rsi;
+            // set lfp
+            lea  r14, [rsp - 16];
+            movq [r14 - (BP_LFP)], r14;
+        );
+
+        if native {
+            let codeptr = func_data.codeptr().unwrap();
+            self.call_codeptr(codeptr);
+        } else {
             match store[callee_fid].get_jit_code(recv_classid) {
-                Some(dest) => self.call_label(dest),
-                None => self.call_codeptr(func_data.codeptr().unwrap()),
+                Some(dest) => {
+                    monoasm! { &mut self.jit,
+                        call dest;
+                    }
+                }
+                None => {
+                    let codeptr = func_data.codeptr().unwrap();
+                    self.call_codeptr(codeptr);
+                }
             };
         }
+        self.pop_frame();
 
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, dst);
+    }
+
+    fn call_codeptr(&mut self, codeptr: CodePtr) {
+        let src_point = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            call (codeptr - src_point - 5);
+        }
+    }
+
+    fn handle_keyword_args(&mut self, callsite: &CallSiteInfo, info: &ISeqInfo) {
+        let CallSiteInfo {
+            kw_pos, kw_args, ..
+        } = callsite;
+        let mut callee_ofs = (info.pos_num() as i64 + 1) * 8 + LBP_SELF;
+        for param_name in &info.args.kw_names {
+            match kw_args.get(param_name) {
+                Some(caller) => {
+                    let caller_ofs = (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;
+                    monoasm! { &mut self.jit,
+                        movq  rax, [r14 - (caller_ofs)];
+                        movq  [rsp - (16 + callee_ofs)], rax;
+                    }
+                }
+                None => {
+                    monoasm! { &mut self.jit,
+                        movq  [rsp - (16 + callee_ofs)], 0;
+                    }
+                }
+            }
+            callee_ofs += 8;
+        }
+    }
+
+    fn handle_hash_splat(&mut self, callid: CallSiteId, callee_fid: FuncId) {
+        monoasm! { &mut self.jit,
+            lea  rcx, [rsp - (16 + LBP_SELF)];
+            subq rsp, 4088;
+            pushq rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            movl r8, (callee_fid.get());
+            movq rax, (jit_handle_hash_splat);
+            call rax;
+            popq rdi;
+            addq rsp, 4088;
+        }
     }
 
     pub(super) fn gen_yield(
@@ -765,7 +883,7 @@ extern "C" fn jit_handle_hash_splat(
     let CallSiteInfo { hash_splat_pos, .. } = callsite;
     let info = globals.store[callee_func_id].as_ruby_func();
     let callee_kw_pos = info.pos_num() + 1;
-    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
+    for (id, param_name) in info.args.kw_names.iter().enumerate() {
         for hash in hash_splat_pos {
             unsafe {
                 let h = vm.register(hash.0 as usize).unwrap();

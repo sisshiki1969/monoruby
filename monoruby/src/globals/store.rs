@@ -381,7 +381,7 @@ pub(crate) struct CallSiteInfo {
 }
 
 impl CallSiteInfo {
-    pub fn kw_len(&self) -> usize {
+    pub fn kw_num(&self) -> usize {
         self.kw_args.len()
     }
 

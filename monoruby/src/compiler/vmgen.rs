@@ -1760,7 +1760,7 @@ fn handle_invoker_arguments(globals: &Globals, callee_lfp: LFP, mut arg_num: usi
             // required + optional + rest
             runtime::handle_positional(info, arg_num, callee_lfp, None);
             // keyword
-            let params = &info.args.keyword_names;
+            let params = &info.args.kw_names;
             let callee_kw_pos = info.pos_num() + 1;
             for (id, _) in params.iter().enumerate() {
                 *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());

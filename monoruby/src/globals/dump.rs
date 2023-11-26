@@ -479,7 +479,7 @@ impl Globals {
                     ..
                 } = *callsite;
                 let has_splat = callsite.has_splat();
-                let kw_len = callsite.kw_len();
+                let kw_len = callsite.kw_num();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",
                     ret_str(ret),

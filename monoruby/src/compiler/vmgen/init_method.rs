@@ -1,5 +1,14 @@
 use super::*;
 
+const OFS: i32 = -16;
+//const ROP: i32 = -14;
+const REG: i32 = -12;
+//const OP: i32 = -10;
+//const REQ: i32 = -8;
+const BLK: i32 = -6;
+//const INF: i32 = -4;
+const ARG: i32 = -2;
+
 impl Codegen {
     /// Initialize method frame
     ///
@@ -7,7 +16,7 @@ impl Codegen {
     /// ~~~text
     /// -16 -14 -12 -10  -8  -6  -4  -2
     /// +---+---+---+---++---+---+---+---+
-    /// |ofs|rop|reg| op||req|blk|inf|arg|
+    /// |ofs|rop|reg| op||req|blk|   |arg|
     /// +---+---+---+---++---+---+---+---+
     ///  rsi rdi r15
     /// ~~~
@@ -18,42 +27,49 @@ impl Codegen {
     /// - req: a number of required arguments
     /// - rop: req + optional arguments
     /// - +blk: a position of block argument (if not exists, 0.)
-    /// - inf:
-    ///
-    /// ### registers
-    ///
-    /// - r15 <- reg
-    /// - rdi <- pos
-    /// - rsi <- ofs
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
         self.stack_setup();
         self.vm_init_func();
+        self.fill(NIL_VALUE);
         self.fetch_and_dispatch();
         label
     }
 
-    /// setup stack pointer.
     ///
-    /// ###  in
-    /// - rsi: stack_offset
+    /// Setup stack pointer.
+    ///
+    /// ###  destroy
+    /// - rax
     ///
     fn stack_setup(&mut self) {
         monoasm! { &mut self.jit,
             // setup stack pointer
-            shlq rsi, 4;
-            subq rsp, rsi;
+            movsxw rax, [r13 + (OFS)];
+            shlq rax, 4;
+            subq rsp, rax;
         };
     }
 
+    ///
+    /// ### in
+    /// - r13: pc
+    /// - r14: LFP
+    ///
+    /// ### out
+    /// - rax: reg_num - arg_num
+    /// - r15: reg_num
+    ///
+    /// ###  destroy
+    /// - rax, rdi
+    ///
     fn vm_init_func(&mut self) {
         let set_block = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
-        // set block parameter
-            movzxw rax, [r13 - 6];  // blk
+            // set block parameter
+            movzxw rax, [r13 + (BLK)];  // blk
             testq rax, rax;
             jz exit;
             movq rdi, [r14 - (LBP_BLOCK)];
@@ -64,14 +80,18 @@ impl Codegen {
             negq rax;
             movq [r14 + rax * 8 - (LBP_SELF)], rdi;
         exit:
+            movzxw r15, [r13 + (REG)];
             movq rax, r15;        // r15: reg_num
-            subw rax, [r13 - 2];   // rax: reg_num - arg_num
+            subw rax, [r13 + (ARG)];   // rax: reg_num - arg_num
         };
-        self.fill(NIL_VALUE);
     }
 
     ///
-    /// fill *val* to the slots from *r15* .. *r15* + *rax*
+    /// Fill *val* to the slots from *r15* .. *r15* + *rax*
+    ///
+    /// ### in
+    /// - rax: reg_num - arg_num
+    /// - r15: reg_num
     ///
     fn fill(&mut self, val: u64) {
         let l0 = self.jit.label();

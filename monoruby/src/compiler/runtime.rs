@@ -215,6 +215,9 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
+///
+/// Handle arguments.
+///
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -226,14 +229,15 @@ pub(super) extern "C" fn vm_handle_arguments(
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             let caller = &globals.store[callid];
-            if info.key_num() == 0 && caller.kw_len() != 0 {
-                // positional
+            if info.key_num() == 0 && caller.kw_num() != 0 {
+                // handle excessive keyword arguments
                 let mut h = IndexMap::default();
                 for (k, id) in caller.kw_args.iter() {
                     let v = unsafe { vm.register(caller.kw_pos.0 as usize + *id).unwrap() };
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
+                // positional arguments
                 if let Some((arg_num, range)) =
                     handle_positional(&info, arg_num, callee_lfp, Some(ex))
                 {
@@ -241,13 +245,13 @@ pub(super) extern "C" fn vm_handle_arguments(
                     return None;
                 };
             } else {
-                // positional
+                // positional argumrnts
                 if let Some((arg_num, range)) = handle_positional(&info, arg_num, callee_lfp, None)
                 {
                     vm.err_wrong_number_of_arg_range(arg_num, range);
                     return None;
                 };
-                // keyword
+                // keyword arguments
                 handle_keyword(&info, &globals.store[callid], vm.cfp().lfp(), callee_lfp);
             }
         }
@@ -338,7 +342,7 @@ fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut
 
     let callee_kw_pos = info.pos_num() + 1;
 
-    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
+    for (id, param_name) in info.args.kw_names.iter().enumerate() {
         unsafe {
             let v = match kw_args.get(param_name) {
                 Some(id) => Some(caller_lfp.register(kw_pos.0 as usize + id).unwrap()),
@@ -352,7 +356,7 @@ fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut
         .iter()
         .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
     {
-        for (id, param_name) in info.args.keyword_names.iter().enumerate() {
+        for (id, param_name) in info.args.kw_names.iter().enumerate() {
             unsafe {
                 let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                 let sym = Value::symbol(*param_name);

@@ -1,8 +1,8 @@
-# stack layout for the bytecode interpreter/ JIT-ed code (just after prologue)
+# Stack layout for the bytecode interpreter/ JIT-ed code
+
+## stack frame structure (just after prologue)
 
 ```text
-
-stack frame structure
              +-------------+
        +0x08 | return addr |
              +-------------+
@@ -28,6 +28,37 @@ DFP->  -0x18 |    outer    |
              +-------------+------------------
        -0xy0 |             | <- rsp
              +-------------+
+             |      :      |
+```
+
+## stack frame structure (just before call)
+
+```text
+             +-------------+
+             |             | <- rsp
+             +-------------+
+       +0x08 |             |
+             +-------------+
+ BP->   0x00 |             | <- r14
+             +-------------+
+CFP->  -0x08 |  prev cfp   |  control frame
+             +-------------+
+       -0x10 |     lfp     |
+             +-------------+-----------------
+DFP->  -0x18 |    outer    |
+             +-------------+
+       -0x20 |    meta     |
+             +-------------+
+       -0x28 |    block    |
+             +-------------+
+       -0x30 |    self     |  local frame
+             +-------------+
+       -0x38 |    arg0     |
+             +-------------+
+             |      :      |
+             +-------------+
+             |   arg(n-1)  |
+             +-------------+------------------
              |      :      |
 ```
 

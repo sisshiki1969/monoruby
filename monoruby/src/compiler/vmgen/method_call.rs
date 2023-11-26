@@ -48,11 +48,11 @@ impl Codegen {
         monoasm! { &mut self.jit,
             pushq r13;
             subq  rsp, 8;
+            // set self (= receiver)
             movzxw rdi, [r13 + (RECV_REG)];
         };
         self.vm_get_rdi();
         monoasm! { &mut self.jit,
-            // set self (= receiver)
             movq [rsp - (16 + LBP_SELF)], rdi;
         }
         // rdi: receiver: Value
@@ -72,40 +72,14 @@ impl Codegen {
         }
         self.get_func_data();
         monoasm! { &mut self.jit,
-            // set meta
             movq r15, rdx;
+            // set meta
             movq rdi, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rdi;
-            movzxw rdi, [r13 + (POS_NUM)];  // rdi <- len
-            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- args
-            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
         };
 
         self.set_arguments(has_splat);
-        monoasm! { &mut self.jit,
-            movq rsi, [r15 + (FUNCDATA_PC)];
-        }
-        self.block_arg_expand();
-        monoasm! { &mut self.jit,
-            movl rdx, [r13 + (CALLSITE_ID)]; // CallSiteId
-        }
-        self.handle_arguments();
-        self.vm_handle_error();
-        monoasm! { &mut self.jit,
-            // argument registers:
-            //   rdi: args len
-            //
-            // global registers:
-            //   rbx: &mut Interp
-            //   r12: &mut Globals
-            //   r13: pc
-            //
-            movq rdx, rdi;
-            movq rax, [r15 + (FUNCDATA_CODEPTR)];
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
-        };
-        self.call_rax();
+        self.call();
         monoasm! { &mut self.jit,
             addq rsp, 8;
             popq r13;   // pop pc
@@ -147,18 +121,36 @@ impl Codegen {
             lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rax, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
             // rax <- outer_cfp, r15 <- &FuncData
-            movsxw rdi, [r13 + (POS_NUM)]; // rdi <- pos_num
-            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- %args
             pushq r13; // push pc
             subq rsp, 8;
             // set meta
-            movq rsi, [r15 + (FUNCDATA_META)];
-            movq [rsp -(16 + LBP_META)], rsi;
-            movl r8, [r13 + (CALLSITE_ID)];    // CallSiteId
+            movq rdi, [r15 + (FUNCDATA_META)];
+            movq [rsp -(16 + LBP_META)], rdi;
         };
         self.set_block_self_outer();
 
         self.set_arguments(true);
+        self.call();
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            popq r13;   // pop pc
+            movzxw r15, [r13 + (RET_REG)]; // r15 <- %ret
+        };
+        self.vm_handle_error();
+        self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    ///
+    /// Call
+    ///
+    /// ### in
+    /// - rdi: args len
+    /// - r13: pc
+    /// - r15: &FuncData
+    ///
+    fn call(&mut self) {
         monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_PC)];
         }
@@ -169,30 +161,20 @@ impl Codegen {
         self.handle_arguments();
         self.vm_handle_error();
         monoasm! { &mut self.jit,
-            // argument registers:
-            //   rdx: args len
-            //
-            // global registers:
-            //   rbx: &mut Interp
-            //   r12: &mut Globals
-            //   r13: pc
-            //
             movq rdx, rdi;
-            // set codeptr
-            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-        };
-        self.call_rax();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)]; // r15 <- %ret
-        };
-        self.vm_handle_error();
-        self.vm_store_r15_if_nonzero(exit);
-        self.fetch_and_dispatch();
-        label
+            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
+            // push cfp
+            movq rdi, [rbx + (EXECUTOR_CFP)];
+            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rsi], rdi;
+            movq [rbx + (EXECUTOR_CFP)], rsi;
+            // set lfp
+            lea  r14, [rsp - 16];
+            movq [r14 - (BP_LFP)], r14;
+            call [r15 + (FUNCDATA_CODEPTR)];
+        }
+        self.pop_frame();
     }
 
     fn slow_path(&mut self, exec: DestLabel, slow_path: DestLabel) {
@@ -232,9 +214,7 @@ impl Codegen {
     ///
     /// ### in
     ///
-    /// - rdi: arg len
-    /// - rcx: %args
-    /// - r8:  CallSiteId
+    /// - r13: pc
     ///
     /// ### out
     ///
@@ -242,11 +222,13 @@ impl Codegen {
     ///
     /// ### destroy
     ///
-    /// - rax
-    /// - rcx
-    /// - rsi
-    /// - rdx
+    /// - caller save registers
     fn set_arguments(&mut self, has_splat: bool) {
+        monoasm! { &mut self.jit,
+            movsxw rdi, [r13 + (POS_NUM)]; // rdi <- pos_num
+            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- %args
+            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
+        }
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         self.vm_get_addr_rcx(); // rcx <- *args

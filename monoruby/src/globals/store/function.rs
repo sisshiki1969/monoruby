@@ -8,6 +8,7 @@ pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 
 pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
+//pub(crate) const META_KIND: u64 = std::mem::offset_of!(Meta, kind) as _;
 
 ///
 /// ID of function.
@@ -88,6 +89,7 @@ pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
     /// bit 0:  0:method 1:class_def
     kind: u8,
@@ -113,11 +115,17 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    pub fn new(func_id: Option<FuncId>, reg_num: u16, is_native: bool, is_class_def: bool) -> Self {
+    pub fn new(
+        func_id: Option<FuncId>,
+        reg_num: u16,
+        is_native: bool,
+        is_class_def: bool,
+        is_block_style: bool,
+    ) -> Self {
         Self {
             func_id,
             reg_num,
-            kind: (is_native as u8) << 1 | is_class_def as u8,
+            kind: (is_block_style as u8) << 2 | (is_native as u8) << 1 | is_class_def as u8,
             mode: 0,
         }
     }
@@ -126,18 +134,18 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
-    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
+    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64, is_block_style: bool) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false)
+        Self::new(func_id.into(), reg_num, false, false, is_block_style)
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, true)
+        Self::new(func_id.into(), reg_num, false, true, false)
     }
 
     fn native(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, true, false)
+        Self::new(Some(func_id), 1, true, false, false)
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -179,11 +187,11 @@ mod test {
 
     #[test]
     fn meta_test() {
-        let meta = Meta::vm_method(FuncId::new(12), 42);
+        let meta = Meta::vm_method(FuncId::new(12), 42, false);
         assert_eq!(FuncId::new(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
         assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId::new(42), -1);
+        let mut meta = Meta::vm_method(FuncId::new(42), -1, false);
         assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
         meta.set_reg_num(12);
@@ -521,7 +529,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0),
+            Meta::vm_method(func_id, 0, false),
         )
     }
 
@@ -537,7 +545,7 @@ impl FuncInfo {
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0),
+            Meta::vm_method(func_id, 0, true),
         )
     }
 

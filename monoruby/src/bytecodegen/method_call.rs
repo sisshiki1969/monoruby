@@ -115,7 +115,7 @@ impl BytecodeGen {
                 }
                 args
             };
-            let kw_list = &mother_args.keyword_names;
+            let kw_list = &mother_args.kw_names;
             let kw = if kw_list.len() == 0 {
                 None
             } else {
