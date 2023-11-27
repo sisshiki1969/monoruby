@@ -496,10 +496,13 @@ macro_rules! load_store {
             /// store $reg to *reg*
             ///
             #[allow(dead_code)]
-            pub(crate) fn [<store_ $reg>](&mut self, reg: SlotId) {
-                monoasm!( &mut self.jit,
-                    movq [r14 - (conv(reg))], $reg;
-                );
+            pub(crate) fn [<store_ $reg>](&mut self, reg: impl Into<Option<SlotId>>) {
+                let reg = reg.into();
+                if let Some(reg) = reg {
+                    monoasm!{ &mut self.jit,
+                        movq [r14 - (conv(reg))], $reg;
+                    }
+                }
             }
 
             ///
@@ -881,7 +884,7 @@ impl Codegen {
                     monoasm!( &mut self.jit,
                         movq rax, [rax - (offset)];
                     );
-                    if ret.0 != 0 {
+                    if !ret.is_zero() {
                         self.store_rax(ret);
                     }
                 }
@@ -910,7 +913,6 @@ impl Codegen {
                     } else {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
-                        //self.load_rdi(src);
                         self.call_unop(bitnot_value as _);
                         self.xmm_restore(&xmm_using);
                         self.jit_handle_error(&ctx, pc);
@@ -920,7 +922,6 @@ impl Codegen {
                 TraceIr::Not { dst: ret, src } => {
                     self.fetch_to_rdi(&mut ctx, src);
                     ctx.release(ret);
-                    //self.load_rdi(src);
                     self.not_rdi_to_rax();
                     self.store_rax(ret);
                 }
@@ -1040,9 +1041,7 @@ impl Codegen {
                             _ => unreachable!(),
                         }
                         self.setflag_float(kind);
-                        if let Some(ret) = ret {
-                            self.store_rax(ret);
-                        }
+                        self.store_rax(ret);
                     } else if mode.is_integer_op(&pc) {
                         self.fetch_binary(&mut ctx, &mode);
                         ctx.release(ret);
@@ -1050,9 +1049,7 @@ impl Codegen {
                         self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
                         self.jit_handle_error(&ctx, pc);
-                        if let Some(ret) = ret {
-                            self.store_rax(ret);
-                        }
+                        self.store_rax(ret);
                     } else {
                         self.fetch_binary(&mut ctx, &mode);
                         ctx.release(ret);
@@ -1063,9 +1060,7 @@ impl Codegen {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
                             self.jit_handle_error(&ctx, pc);
-                            if let Some(ret) = ret {
-                                self.store_rax(ret);
-                            }
+                            self.store_rax(ret);
                         }
                     }
                 }
@@ -1092,9 +1087,7 @@ impl Codegen {
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
-                    if let Some(ret) = ret {
-                        self.store_rax(ret);
-                    }
+                    self.store_rax(ret);
                 }
                 TraceIr::ConcatRegexp(ret, arg, len) => {
                     self.fetch_range(&mut ctx, arg, len);
@@ -1113,9 +1106,7 @@ impl Codegen {
                     );
                     self.xmm_restore(&xmm_using);
                     self.jit_handle_error(&ctx, pc);
-                    if let Some(ret) = ret {
-                        self.store_rax(ret);
-                    }
+                    self.store_rax(ret);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
                     self.fetch_slots(&mut ctx, &[src]);

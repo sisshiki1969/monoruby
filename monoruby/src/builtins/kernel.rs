@@ -73,9 +73,7 @@ fn object_nil(
         cmpq rdi, (NIL_VALUE);
         cmoveqq rax, rsi;
     );
-    if let Some(ret) = ret {
-        gen.store_rax(ret);
-    }
+    gen.store_rax(ret);
 }
 
 ///

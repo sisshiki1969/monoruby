@@ -126,9 +126,7 @@ fn inline_class_new(
     );
     gen.xmm_restore(&using);
     gen.jit_handle_error(ctx, pc);
-    if let Some(ret) = ret {
-        gen.store_rax(ret);
-    }
+    gen.store_rax(ret);
 
     gen.jit.select_page(1);
     monoasm!( &mut gen.jit,

@@ -68,9 +68,7 @@ fn object_object_id(
         call rax;
     }
     gen.xmm_restore(&using);
-    if let Some(ret) = ret {
-        gen.store_rax(ret);
-    }
+    gen.store_rax(ret);
 }
 
 ///
@@ -426,9 +424,7 @@ fn object_send(
         addq rsp, 16;
     }
     gen.xmm_restore(&using);
-    if let Some(ret) = ret {
-        gen.store_rax(ret);
-    }
+    gen.store_rax(ret);
 }
 
 #[repr(C)]

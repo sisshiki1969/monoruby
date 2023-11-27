@@ -95,9 +95,7 @@ impl Codegen {
             xorq rdx, rdx;
         }
         self.call_rax();
-        if let Some(ret) = ret {
-            self.store_rax(ret);
-        }
+        self.store_rax(ret);
         // pop class context.
         monoasm! { &mut self.jit,
             movq r13, rax;

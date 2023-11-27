@@ -306,9 +306,7 @@ fn integer_shr(
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shr(deopt);
     }
-    if let Some(ret) = ret {
-        gen.store_rdi(ret);
-    }
+    gen.store_rdi(ret);
 }
 
 ///
@@ -351,9 +349,7 @@ fn integer_shl(
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shl(deopt);
     }
-    if let Some(ret) = ret {
-        gen.store_rdi(ret);
-    }
+    gen.store_rdi(ret);
 }
 
 ///

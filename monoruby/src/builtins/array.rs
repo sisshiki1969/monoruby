@@ -360,9 +360,7 @@ fn array_shl(
         movq rax, (ary_shl);
         call rax;
     );
-    if let Some(ret) = ret {
-        gen.store_rax(ret);
-    }
+    gen.store_rax(ret);
 }
 
 /*fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
