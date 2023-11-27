@@ -20,7 +20,7 @@ impl Codegen {
                 ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Literal(v) => {
-                self.fetch_literal(reg, v);
+                self.literal_to_stack(reg, v);
                 ctx[reg] = LinkMode::Stack;
             }
             LinkMode::R15 => {

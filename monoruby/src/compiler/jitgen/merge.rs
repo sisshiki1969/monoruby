@@ -191,12 +191,12 @@ impl Codegen {
                 match src_ctx[reg] {
                     LinkMode::Xmm(freg) => {
                         src_ctx.xmm_to_both(freg);
-                        self.gen_xmm_to_stack(freg, src_ctx.xmm_slots(freg));
+                        self.xmm_to_both(freg, src_ctx.xmm_slots(freg));
                     }
                     LinkMode::Literal(v) => {
                         #[cfg(feature = "jit-debug")]
                         eprintln!("      wb: Literal({:?})->{:?}", v, reg);
-                        self.fetch_literal(reg, v);
+                        self.literal_to_stack(reg, v);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
@@ -234,7 +234,7 @@ impl Codegen {
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.gen_xmm_to_stack(l, &[reg]);
+                    self.xmm_to_both(l, &[reg]);
                     if l == r {
                         src_ctx[reg] = LinkMode::Both(l);
                     } else if src_ctx.is_xmm_vacant(r) {

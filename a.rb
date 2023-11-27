@@ -1,13 +1,13 @@
-class S
-  def f(x,y,z)
-    x + y + z
+class C
+  def f
+    for i in 0..9
+      puts i
+    end
   end
 end
 
-class C < S
-  def f(*x)
-    super *x
-  end
+class D < C
 end
 
-puts C.new.f(3,4,5)
+C.new.f
+D.new.f

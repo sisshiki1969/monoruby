@@ -429,7 +429,8 @@ impl Codegen {
         let bbctx = BBContext::new(&ctx);
 
         if let Some(pc) = position {
-            // generate class guard of *self* for a method
+            // generate class guard of *self* for loop JIT
+            // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let side_exit = self.gen_side_deopt(pc + 1, &bbctx);
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
@@ -1482,17 +1483,17 @@ impl Codegen {
     ///
     fn gen_write_back(&mut self, wb: &WriteBack) {
         for (freg, v) in &wb.xmm {
-            self.gen_xmm_to_stack(*freg, v);
+            self.xmm_to_both(*freg, v);
         }
         for (v, slot) in &wb.literal {
-            self.fetch_literal(*slot, *v);
+            self.literal_to_stack(*slot, *v);
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
         }
     }
 
-    fn gen_xmm_to_stack(&mut self, freg: Xmm, v: &[SlotId]) {
+    fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
@@ -1574,7 +1575,7 @@ impl Codegen {
         self.load_rsi(rhs);
     }
 
-    fn fetch_literal(&mut self, reg: SlotId, v: Value) {
+    fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
