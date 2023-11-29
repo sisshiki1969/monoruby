@@ -1523,7 +1523,8 @@ impl Codegen {
     ///
     fn gen_side_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let entry = self.jit.label();
-        self.gen_side_deopt_with_label(pc, Some(ctx), entry);
+        let wb = ctx.get_write_back();
+        self.gen_side_deopt_with_label(pc, &wb, entry);
         entry
     }
 
@@ -1533,14 +1534,11 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
+    fn gen_side_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
-        if let Some(ctx) = ctx {
-            let wb = ctx.get_write_back();
-            self.gen_write_back(&wb);
-        }
+        self.gen_write_back(wb);
         monoasm!( &mut self.jit,
             movq r13, (pc.get_u64());
         );
