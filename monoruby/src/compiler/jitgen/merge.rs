@@ -2,7 +2,8 @@ use super::*;
 
 struct AsmIr {
     inst: Vec<AsmInst>,
-    deopt: Vec<(BcPc, WriteBack, DestLabel)>,
+    deopt: Vec<(BcPc, WriteBack, usize)>,
+    label: usize,
 }
 
 impl std::ops::Deref for AsmIr {
@@ -23,11 +24,18 @@ impl AsmIr {
         Self {
             inst: vec![],
             deopt: vec![],
+            label: 0,
         }
     }
 
-    fn new_deopt(&mut self, pc: BcPc, wb: WriteBack, label: DestLabel) {
+    fn new_deopt(&mut self, pc: BcPc, wb: WriteBack, label: usize) {
         self.deopt.push((pc, wb, label));
+    }
+
+    fn new_label(&mut self) -> usize {
+        let label = self.label;
+        self.label += 1;
+        label
     }
 }
 
@@ -38,13 +46,13 @@ enum AsmInst {
     F64ToXmm(f64, Xmm),
     XmmToBoth(Xmm, Vec<SlotId>),
     LitToStack(Value, SlotId),
-    IntToF64(SlotId, Xmm, DestLabel),
-    GuardFloat(SlotId, DestLabel),
+    IntToF64(SlotId, Xmm, usize),
+    GuardFloat(SlotId, usize),
 }
 
 impl Codegen {
-    fn gen_asmir(&mut self, ir: &AsmInst) {
-        match ir {
+    fn gen_asmir(&mut self, labels: &[DestLabel], inst: &AsmInst) {
+        match inst {
             AsmInst::AccToStack(r) => {
                 self.store_r15(*r);
             }
@@ -60,11 +68,11 @@ impl Codegen {
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(*slot, *v),
             AsmInst::IntToF64(r, x, side_exit) => {
                 self.load_rdi(*r);
-                self.unbox_integer_float_to_f64(x.enc(), *side_exit);
+                self.unbox_integer_float_to_f64(x.enc(), labels[*side_exit]);
                 #[cfg(feature = "jit-debug")]
                 eprintln!("      conv: {:?}->{:?}", r, x);
             }
-            AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, *side_exit),
+            AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
         }
     }
 }
@@ -86,7 +94,7 @@ impl Codegen {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
-                let ir = self.gen_write_back_for_target(bbctx, &target_ctx, pc);
+                let ir = bbctx.gen_write_back_for_target(&target_ctx, pc);
                 self.gen_code(ir, false, dest_label, target_label);
             }
         }
@@ -221,39 +229,59 @@ impl Codegen {
             bbctx.remove_unused(unused);
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
-            let ir = self.gen_write_back_for_target(bbctx, &target_ctx, pc);
+            let ir = bbctx.gen_write_back_for_target(&target_ctx, pc);
             self.gen_code(ir, cont, entry, cur_label);
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back end");
         }
     }
 
-    fn gen_write_back_for_target(
-        &mut self,
-        mut src_ctx: BBContext,
-        target_ctx: &BBContext,
-        pc: BcPc,
-    ) -> AsmIr {
+    fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
+        let mut labels = vec![];
+        for _ in 0..ir.label {
+            labels.push(self.jit.label());
+        }
+
+        for (pc, wb, label) in ir.deopt {
+            self.gen_side_deopt_with_label(pc, &wb, labels[label])
+        }
+        if !cont {
+            self.jit.select_page(1);
+            self.jit.bind_label(entry);
+        }
+        for inst in ir.inst {
+            self.gen_asmir(&labels, &inst);
+        }
+        if !cont {
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        }
+    }
+}
+
+impl BBContext {
+    fn gen_write_back_for_target(mut self, target_ctx: &BBContext, pc: BcPc) -> AsmIr {
         #[cfg(feature = "jit-debug")]
         {
-            eprintln!("    src:    {:?}", src_ctx.slot_state);
+            eprintln!("    src:    {:?}", self.slot_state);
             eprintln!("    target: {:?}", target_ctx.slot_state);
         }
         let mut ir = AsmIr::new();
-        let len = src_ctx.reg_num();
+        let len = self.reg_num();
 
-        //self.writeback_acc(&mut src_ctx);
-        if let Some(slot) = src_ctx.clear_r15() {
+        if let Some(slot) = self.clear_r15() {
             ir.push(AsmInst::AccToStack(slot));
         }
 
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx[reg] == LinkMode::Stack {
-                match src_ctx[reg] {
+                match self[reg] {
                     LinkMode::Xmm(freg) => {
-                        src_ctx.xmm_to_both(freg);
-                        ir.push(AsmInst::XmmToBoth(freg, src_ctx.xmm_slots(freg).to_vec()));
+                        self.xmm_to_both(freg);
+                        ir.push(AsmInst::XmmToBoth(freg, self.xmm_slots(freg).to_vec()));
                     }
                     LinkMode::Literal(v) => {
                         ir.push(AsmInst::LitToStack(v, reg));
@@ -261,7 +289,7 @@ impl Codegen {
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
                 }
-                src_ctx.release(reg);
+                self.release(reg);
             };
         }
 
@@ -269,25 +297,25 @@ impl Codegen {
         let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
-            match (src_ctx[reg], target_ctx[reg]) {
+            match (self[reg], target_ctx[reg]) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                    } else if src_ctx.is_xmm_vacant(r) {
-                        src_ctx.link_xmm(reg, r);
+                    } else if self.is_xmm_vacant(r) {
+                        self.link_xmm(reg, r);
                         ir.push(AsmInst::XmmMove(l, r));
                     } else {
-                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                         ir.push(AsmInst::XmmSwap(l, r));
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx[reg] = LinkMode::Xmm(l);
-                    } else if src_ctx.is_xmm_vacant(r) {
-                        src_ctx.link_xmm(reg, r);
+                        self[reg] = LinkMode::Xmm(l);
+                    } else if self.is_xmm_vacant(r) {
+                        self.link_xmm(reg, r);
                         ir.push(AsmInst::XmmMove(l, r));
                     } else {
-                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                         ir.push(AsmInst::XmmSwap(l, r));
                     }
                     guard_list.push(reg);
@@ -296,33 +324,33 @@ impl Codegen {
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
                     ir.push(AsmInst::XmmToBoth(l, vec![reg]));
                     if l == r {
-                        src_ctx[reg] = LinkMode::Both(l);
-                    } else if src_ctx.is_xmm_vacant(r) {
-                        src_ctx.link_both(reg, r);
+                        self[reg] = LinkMode::Both(l);
+                    } else if self.is_xmm_vacant(r) {
+                        self.link_both(reg, r);
                         ir.push(AsmInst::XmmMove(l, r));
                     } else {
-                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                         ir.push(AsmInst::XmmSwap(l, r));
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
-                    } else if src_ctx.is_xmm_vacant(r) {
-                        src_ctx.link_both(reg, r);
+                    } else if self.is_xmm_vacant(r) {
+                        self.link_both(reg, r);
                         ir.push(AsmInst::XmmMove(l, r));
                     } else {
-                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                         ir.push(AsmInst::XmmSwap(l, r));
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    src_ctx.link_both(reg, r);
+                    self.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        src_ctx.link_xmm(reg, r);
+                        self.link_xmm(reg, r);
                         ir.push(AsmInst::F64ToXmm(f, r));
                     } else {
                         unreachable!()
@@ -332,8 +360,8 @@ impl Codegen {
             }
         }
 
-        let side_exit = self.jit.label();
-        ir.new_deopt(pc + 1, src_ctx.get_write_back(), side_exit);
+        let side_exit = ir.new_label();
+        ir.new_deopt(pc + 1, self.get_write_back(), side_exit);
 
         for (r, x) in conv_list {
             ir.push(AsmInst::IntToF64(r, x, side_exit));
@@ -344,25 +372,5 @@ impl Codegen {
         }
 
         ir
-        //self.gen_code(ir, cont, entry, exit);
-    }
-
-    fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
-        for (pc, wb, label) in ir.deopt {
-            self.gen_side_deopt_with_label(pc, &wb, label)
-        }
-        if !cont {
-            self.jit.select_page(1);
-            self.jit.bind_label(entry);
-        }
-        for ir in ir.inst {
-            self.gen_asmir(&ir);
-        }
-        if !cont {
-            monoasm!( &mut self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
-        }
     }
 }
