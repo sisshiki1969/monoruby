@@ -92,6 +92,10 @@ struct JitContext {
     ///
     sourcemap: Vec<(BcIndex, usize)>,
     ///
+    /// IR for machine code generator.
+    ///
+    asmir: Vec<(AsmIr, bool, DestLabel, DestLabel)>,
+    ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
     #[cfg(feature = "emit-asm")]
@@ -155,6 +159,7 @@ impl JitContext {
             local_num,
             self_value,
             sourcemap: vec![],
+            asmir: vec![],
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
@@ -214,6 +219,34 @@ impl JitContext {
         eprintln!("   new_backedge:[{:?}] {bb_pos}", bbctx.sp);
         self.backedge_map
             .insert(bb_pos, (dest_label, bbctx.clone(), unused));
+    }
+
+    fn gen_asm(&mut self, codegen: &mut Codegen) {
+        for (ir, cont, entry, exit) in std::mem::take(&mut self.asmir) {
+            codegen.gen_code(ir, cont, entry, exit);
+        }
+    }
+
+    fn backedge_branches(&mut self, func: &ISeqInfo) {
+        let branch_map = std::mem::take(&mut self.branch_map);
+        for (bb_pos, entries) in branch_map.into_iter() {
+            let (target_label, mut target_ctx, unused) = self.backedge_map.remove(&bb_pos).unwrap();
+            let pc = func.get_pc(bb_pos);
+            target_ctx.remove_unused(&unused);
+            for BranchEntry {
+                src_idx: _src_idx,
+                mut bbctx,
+                entry,
+                ..
+            } in entries
+            {
+                #[cfg(feature = "jit-debug")]
+                eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
+                bbctx.remove_unused(&unused);
+                let ir = bbctx.write_back_for_target(&target_ctx, pc);
+                self.asmir.push((ir, false, entry, target_label));
+            }
+        }
     }
 }
 
@@ -357,6 +390,35 @@ impl BBContext {
     pub(super) fn clear(&mut self) {
         self.slot_state.clear(self.next_sp);
     }
+
+    fn write_back_branches(
+        &self,
+        entries: Vec<BranchEntry>,
+        cur_label: DestLabel,
+        pc: BcPc,
+        _bb_pos: BcIndex,
+        unused: &[SlotId],
+    ) -> Vec<(AsmIr, bool, DestLabel, DestLabel)> {
+        let mut target_ctx = self.clone();
+        target_ctx.remove_unused(unused);
+        let mut v = vec![];
+        for BranchEntry {
+            src_idx: _src_idx,
+            mut bbctx,
+            entry,
+            cont,
+        } in entries
+        {
+            bbctx.remove_unused(unused);
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
+            let ir = bbctx.write_back_for_target(&target_ctx, pc);
+            v.push((ir, cont, entry, cur_label));
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  ***write_back end");
+        }
+        v
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -400,6 +462,56 @@ pub(crate) enum LinkMode {
     /// On R15 register.
     ///
     R15,
+}
+
+struct AsmIr {
+    inst: Vec<AsmInst>,
+    deopt: Vec<(BcPc, WriteBack, usize)>,
+    label: usize,
+}
+
+impl std::ops::Deref for AsmIr {
+    type Target = Vec<AsmInst>;
+    fn deref(&self) -> &Self::Target {
+        &self.inst
+    }
+}
+
+impl std::ops::DerefMut for AsmIr {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inst
+    }
+}
+
+impl AsmIr {
+    fn new() -> Self {
+        Self {
+            inst: vec![],
+            deopt: vec![],
+            label: 0,
+        }
+    }
+
+    fn new_deopt(&mut self, pc: BcPc, wb: WriteBack, label: usize) {
+        self.deopt.push((pc, wb, label));
+    }
+
+    fn new_label(&mut self) -> usize {
+        let label = self.label;
+        self.label += 1;
+        label
+    }
+}
+
+enum AsmInst {
+    AccToStack(SlotId),
+    XmmMove(Xmm, Xmm),
+    XmmSwap(Xmm, Xmm),
+    F64ToXmm(f64, Xmm),
+    XmmToBoth(Xmm, Vec<SlotId>),
+    LitToStack(Value, SlotId),
+    IntToF64(SlotId, Xmm, usize),
+    GuardFloat(SlotId, usize),
 }
 
 impl Codegen {
@@ -467,7 +579,8 @@ impl Codegen {
             self.compile_bb(store, func, &mut ctx, position, *begin, *end);
         }
 
-        self.gen_backedge_branches(&mut ctx, func);
+        ctx.backedge_branches(func);
+        ctx.gen_asm(self);
 
         self.jit.finalize();
         #[cfg(any(feature = "jit-debug", feature = "log-jit"))]

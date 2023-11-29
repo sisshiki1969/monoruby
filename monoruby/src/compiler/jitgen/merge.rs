@@ -1,55 +1,5 @@
 use super::*;
 
-struct AsmIr {
-    inst: Vec<AsmInst>,
-    deopt: Vec<(BcPc, WriteBack, usize)>,
-    label: usize,
-}
-
-impl std::ops::Deref for AsmIr {
-    type Target = Vec<AsmInst>;
-    fn deref(&self) -> &Self::Target {
-        &self.inst
-    }
-}
-
-impl std::ops::DerefMut for AsmIr {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inst
-    }
-}
-
-impl AsmIr {
-    fn new() -> Self {
-        Self {
-            inst: vec![],
-            deopt: vec![],
-            label: 0,
-        }
-    }
-
-    fn new_deopt(&mut self, pc: BcPc, wb: WriteBack, label: usize) {
-        self.deopt.push((pc, wb, label));
-    }
-
-    fn new_label(&mut self) -> usize {
-        let label = self.label;
-        self.label += 1;
-        label
-    }
-}
-
-enum AsmInst {
-    AccToStack(SlotId),
-    XmmMove(Xmm, Xmm),
-    XmmSwap(Xmm, Xmm),
-    F64ToXmm(f64, Xmm),
-    XmmToBoth(Xmm, Vec<SlotId>),
-    LitToStack(Value, SlotId),
-    IntToF64(SlotId, Xmm, usize),
-    GuardFloat(SlotId, usize),
-}
-
 impl Codegen {
     fn gen_asmir(&mut self, labels: &[DestLabel], inst: &AsmInst) {
         match inst {
@@ -78,28 +28,6 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(super) fn gen_backedge_branches(&mut self, cc: &mut JitContext, func: &ISeqInfo) {
-        let branch_map = std::mem::take(&mut cc.branch_map);
-        for (bb_pos, entries) in branch_map.into_iter() {
-            let (target_label, mut target_ctx, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
-            let pc = func.get_pc(bb_pos);
-            target_ctx.remove_unused(&unused);
-            for BranchEntry {
-                src_idx: _src_idx,
-                mut bbctx,
-                entry: dest_label,
-                ..
-            } in entries
-            {
-                #[cfg(feature = "jit-debug")]
-                eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
-                bbctx.remove_unused(&unused);
-                let ir = bbctx.gen_write_back_for_target(&target_ctx, pc);
-                self.gen_code(ir, false, dest_label, target_label);
-            }
-        }
-    }
-
     pub(super) fn gen_merging_branches(
         &mut self,
         func: &ISeqInfo,
@@ -111,19 +39,19 @@ impl Codegen {
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {bb_pos}");
-            self.gen_merging_branches_loop(func, cc, bb_pos)?
+            Self::merging_branches_loop(func, cc, bb_pos)?
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {bb_pos}");
-            self.gen_merging_branches_non_loop(func, cc, bb_pos)?
+            self.merging_branches_non_loop(func, cc, bb_pos)?
         };
+        cc.gen_asm(self);
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
         Some(res)
     }
 
-    fn gen_merging_branches_loop(
-        &mut self,
+    fn merging_branches_loop(
         func: &ISeqInfo,
         cc: &mut JitContext,
         bb_pos: BcIndex,
@@ -171,7 +99,8 @@ impl Codegen {
                 target_ctx.sp, target_ctx.slot_state
             );
 
-            self.write_back_branches(entries, &target_ctx, cur_label, pc + 1, bb_pos, &unused);
+            let v = target_ctx.write_back_branches(entries, cur_label, pc + 1, bb_pos, &unused);
+            cc.asmir.extend(v);
 
             cc.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
 
@@ -181,13 +110,12 @@ impl Codegen {
         }
     }
 
-    fn gen_merging_branches_non_loop(
+    fn merging_branches_non_loop(
         &mut self,
         func: &ISeqInfo,
         cc: &mut JitContext,
         bb_pos: BcIndex,
     ) -> Option<BBContext> {
-        //let bb_pos = cc.cur_pos;
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
 
@@ -200,7 +128,8 @@ impl Codegen {
             let target_ctx = BBContext::merge_entries(&entries);
             let cur_label = cc.labels[&bb_pos];
 
-            self.write_back_branches(entries, &target_ctx, cur_label, pc, bb_pos, &[]);
+            let v = target_ctx.write_back_branches(entries, cur_label, pc, bb_pos, &[]);
+            cc.asmir.extend(v);
 
             Some(target_ctx)
         } else {
@@ -208,35 +137,7 @@ impl Codegen {
         }
     }
 
-    fn write_back_branches(
-        &mut self,
-        entries: Vec<BranchEntry>,
-        target_ctx: &BBContext,
-        cur_label: DestLabel,
-        pc: BcPc,
-        _bb_pos: BcIndex,
-        unused: &[SlotId],
-    ) {
-        let mut target_ctx = target_ctx.clone();
-        target_ctx.remove_unused(unused);
-        for BranchEntry {
-            src_idx: _src_idx,
-            mut bbctx,
-            entry,
-            cont,
-        } in entries
-        {
-            bbctx.remove_unused(unused);
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
-            let ir = bbctx.gen_write_back_for_target(&target_ctx, pc);
-            self.gen_code(ir, cont, entry, cur_label);
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back end");
-        }
-    }
-
-    fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
+    pub(super) fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -262,11 +163,11 @@ impl Codegen {
 }
 
 impl BBContext {
-    fn gen_write_back_for_target(mut self, target_ctx: &BBContext, pc: BcPc) -> AsmIr {
+    pub(super) fn write_back_for_target(mut self, target: &BBContext, pc: BcPc) -> AsmIr {
         #[cfg(feature = "jit-debug")]
         {
             eprintln!("    src:    {:?}", self.slot_state);
-            eprintln!("    target: {:?}", target_ctx.slot_state);
+            eprintln!("    target: {:?}", target.slot_state);
         }
         let mut ir = AsmIr::new();
         let len = self.reg_num();
@@ -277,7 +178,7 @@ impl BBContext {
 
         for i in 0..len {
             let reg = SlotId(i as u16);
-            if target_ctx[reg] == LinkMode::Stack {
+            if target[reg] == LinkMode::Stack {
                 match self[reg] {
                     LinkMode::Xmm(freg) => {
                         self.xmm_to_both(freg);
@@ -297,7 +198,7 @@ impl BBContext {
         let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
-            match (self[reg], target_ctx[reg]) {
+            match (self[reg], target[reg]) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                     } else if self.is_xmm_vacant(r) {
