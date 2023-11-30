@@ -25,6 +25,7 @@ mod struct_class;
 mod time;
 
 pub(self) use crate::compiler::jitgen::BBContext;
+use compiler::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;

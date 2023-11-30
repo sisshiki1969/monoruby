@@ -39,9 +39,10 @@ impl Codegen {
         callid: CallSiteId,
         pc: BcPc,
     ) {
-        let CallSiteInfo { recv, ret, .. } = store[callid];
-        self.fetch_slots(ctx, &[recv]);
-        self.fetch_callargs(ctx, &store[callid]);
+        let CallSiteInfo { ret, .. } = store[callid];
+        let mut ir = AsmIr::new();
+        ctx.fetch_callargs(&mut ir, &store[callid]);
+        self.gen_code(ir);
         ctx.release(ret);
         if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
             // the cache is invalid because the receiver class is not matched.
@@ -536,7 +537,9 @@ impl Codegen {
         pc: BcPc,
     ) {
         let CallSiteInfo { ret, .. } = store[callid];
-        self.fetch_callargs(ctx, &store[callid]);
+        let mut ir = AsmIr::new();
+        ctx.fetch_callargs(&mut ir, &store[callid]);
+        self.gen_code(ir);
         ctx.release(ret);
         self.writeback_acc(ctx);
         let xmm_using = ctx.get_xmm_using();

@@ -2,202 +2,105 @@ use super::*;
 
 impl Codegen {
     ///
-    /// Fetch *reg* and store in a corresponding stack slot.
-    ///
-    fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, ctx.sp);
-            panic!();
-        };
-        match ctx[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                );
-                self.store_rax(reg);
-                ctx[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Literal(v) => {
-                self.literal_to_stack(reg, v);
-                ctx[reg] = LinkMode::Stack;
-            }
-            LinkMode::R15 => {
-                self.store_r15(reg);
-                ctx.release(reg);
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {}
-        }
-    }
-
-    ///
     /// Fetch *reg*s and store in corresponding stack slots.
     ///
     pub(crate) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
-        reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
+        let mut ir = AsmIr::new();
+        ctx.fetch_slots(&mut ir, reg);
+        self.gen_code(ir);
     }
 
     pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
+        let mut ir = AsmIr::new();
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.fetch_slots(ctx, &[*lhs, *rhs]);
+                ctx.fetch_slots(&mut ir, &[*lhs, *rhs]);
             }
             OpMode::RI(r, _) | OpMode::IR(_, r) => {
-                self.fetch_slots(ctx, &[*r]);
+                ctx.fetch_slots(&mut ir, &[*r]);
             }
         }
-    }
-
-    ///
-    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
-    ///
-    pub(crate) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
-        for reg in args.0..args.0 + len {
-            self.fetch_slot(ctx, SlotId::new(reg))
-        }
-    }
-
-    pub(crate) fn fetch_callargs(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo { args, len, .. } = callsite;
-        self.fetch_range(ctx, *args, *len as u16);
+        self.gen_code(ir);
     }
 
     ///
     /// Fetch *arg* and store in *rax*.
     ///
     pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
-            panic!();
-        };
-        match ctx[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                );
-                self.store_rax(reg);
-                ctx[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Literal(v) => {
-                monoasm!(&mut self.jit,
-                    movq rax, (v.id());
-                );
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                self.load_rax(reg);
-            }
-            LinkMode::R15 => {
-                monoasm! {&mut self.jit,
-                    movq rax, r15;
-                }
-            }
-        }
+        self.fetch_to_reg(ctx, reg, 0)
     }
 
     ///
     /// Fetch *arg* and store in *rdi*.
     ///
     pub(super) fn fetch_to_rdi(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_rdi()", reg, ctx.sp);
-            panic!();
-        };
-        match ctx[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                    movq rdi, rax;
-                );
-                self.store_rax(reg);
-                ctx[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Literal(v) => {
-                monoasm!(&mut self.jit,
-                    movq rdi, (v.id());
-                );
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                self.load_rdi(reg);
-            }
-            LinkMode::R15 => {
-                monoasm!(&mut self.jit,
-                    movq rdi, r15;
-                );
-            }
-        }
+        self.fetch_to_reg(ctx, reg, 7)
     }
 
     ///
     /// Fetch *arg* and store in *rsi*.
     ///
     pub(super) fn fetch_to_rsi(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
-            panic!();
-        };
-        match ctx[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                    movq rsi, rax;
-                );
-                self.store_rax(reg);
-                ctx[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Literal(v) => {
-                monoasm!(&mut self.jit,
-                    movq rsi, (v.id());
-                );
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                self.load_rsi(reg);
-            }
-            LinkMode::R15 => {
-                monoasm!(&mut self.jit,
-                    movq rsi, r15;
-                );
-            }
-        }
+        self.fetch_to_reg(ctx, reg, 6)
     }
 
     ///
     /// Fetch *arg* and store in *r15*.
     ///
     pub(super) fn fetch_to_r15(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        self.fetch_to_reg(ctx, reg, 15)
+    }
+
+    ///
+    /// Fetch *arg* and store in *reg*.
+    ///
+    /// 0 : rax
+    /// 6 : rsi
+    /// 7 : rdi
+    /// 15: r15
+    ///
+    fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: u64) {
         if reg >= ctx.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
             panic!();
         };
         match ctx[reg] {
-            LinkMode::Xmm(freg) => {
+            LinkMode::Xmm(x) => {
                 self.writeback_acc(ctx);
                 let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                    movq r15, rax;
-                );
-                self.store_rax(reg);
-                ctx[reg] = LinkMode::Both(freg);
+                monoasm! { &mut self.jit,
+                        movq xmm0, xmm(x.enc());
+                        call f64_to_val;
+                }
+                if dst != 0 {
+                    monoasm! { &mut self.jit,
+                        movq R(dst), rax;
+                    }
+                }
+                monoasm! { &mut self.jit,
+                    movq [r14 - (conv(reg))], rax;
+                }
+                ctx[reg] = LinkMode::Both(x);
             }
             LinkMode::Literal(v) => {
                 self.writeback_acc(ctx);
                 monoasm!(&mut self.jit,
-                    movq r15, (v.id());
+                    movq R(dst), (v.id());
                 );
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.writeback_acc(ctx);
-                self.load_r15(reg);
+                monoasm!( &mut self.jit,
+                    movq R(dst), [r14 - (conv(reg))];
+                );
             }
-            LinkMode::R15 => {}
+            LinkMode::R15 => {
+                if dst != 15 {
+                    monoasm!(&mut self.jit,
+                        movq R(dst), r15;
+                    );
+                }
+            }
         }
     }
 
@@ -225,58 +128,16 @@ impl Codegen {
         }
     }
 
-    ///
-    /// Fetch *reg* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi, rax
-    ///
-    ///
     pub(super) fn fetch_float_assume_float(
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,
         pc: BcPc,
     ) -> Xmm {
-        match ctx[reg] {
-            LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            LinkMode::Stack => {
-                let freg = ctx.link_new_both(reg);
-                let side_exit = self.gen_side_deopt(pc, ctx);
-                self.load_rdi(reg);
-                self.unbox_float(freg.enc(), side_exit);
-                freg
-            }
-            LinkMode::R15 => {
-                let freg = ctx.link_new_both(reg);
-                let side_exit = self.gen_side_deopt(pc, ctx);
-                monoasm! {&mut self.jit,
-                    movq rdi, r15;
-                }
-                self.unbox_float(freg.enc(), side_exit);
-                freg
-            }
-            LinkMode::Literal(v) => {
-                if let Some(f) = v.try_float() {
-                    let freg = ctx.link_new_xmm(reg);
-                    let f = self.jit.const_f64(f);
-                    monoasm! {&mut self.jit,
-                        movq xmm(freg.enc()), [rip + f];
-                    }
-                    freg
-                } else if let Some(i) = v.try_fixnum() {
-                    let freg = ctx.link_new_both(reg);
-                    let f = self.jit.const_f64(i as f64);
-                    monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::integer(i).id());
-                        movq xmm(freg.enc()), [rip + f];
-                    }
-                    freg
-                } else {
-                    unreachable!()
-                }
-            }
-        }
+        let mut ir = AsmIr::new();
+        let x = ctx.fetch_float_assume_float(&mut ir, reg, pc);
+        self.gen_code(ir);
+        x
     }
 
     pub(crate) fn fetch_float_assume_float_enc(
@@ -285,11 +146,12 @@ impl Codegen {
         reg: SlotId,
         pc: BcPc,
     ) -> u64 {
-        self.fetch_float_assume_float(ctx, reg, pc).enc()
+        let mut ir = AsmIr::new();
+        let enc = ctx.fetch_float_assume_float(&mut ir, reg, pc).enc();
+        self.gen_code(ir);
+        enc
     }
-}
 
-impl Codegen {
     ///
     /// Read from a slot *reg* as f64, and store in xmm register.
     ///
@@ -303,59 +165,14 @@ impl Codegen {
         class: ClassId,
         pc: BcPc,
     ) -> Xmm {
-        match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(ctx, rhs, pc),
-            FLOAT_CLASS => self.fetch_float_assume_float(ctx, rhs, pc),
+        let mut ir = AsmIr::new();
+        let x = match class {
+            INTEGER_CLASS => ctx.fetch_float_assume_integer(&mut ir, rhs, pc),
+            FLOAT_CLASS => ctx.fetch_float_assume_float(&mut ir, rhs, pc),
             _ => unreachable!(),
-        }
-    }
-
-    ///
-    /// Read from a slot *reg* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi
-    ///
-    fn fetch_float_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
-        match ctx[reg] {
-            LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            LinkMode::Stack => {
-                let freg = ctx.link_new_both(reg);
-                let side_exit = self.gen_side_deopt(pc, ctx);
-                self.load_rdi(reg);
-                self.integer_to_f64(freg.enc(), side_exit);
-                freg
-            }
-            LinkMode::R15 => {
-                let freg = ctx.link_new_both(reg);
-                let side_exit = self.gen_side_deopt(pc, ctx);
-                monoasm! {&mut self.jit,
-                    movq rdi, r15;
-                }
-                self.integer_to_f64(freg.enc(), side_exit);
-                freg
-            }
-            LinkMode::Literal(v) => {
-                if let Some(f) = v.try_float() {
-                    let freg = ctx.link_new_xmm(reg);
-                    let f = self.jit.const_f64(f);
-                    monoasm! {&mut self.jit,
-                        movq xmm(freg.enc()), [rip + f];
-                    }
-                    freg
-                } else if let Some(i) = v.try_fixnum() {
-                    let freg = ctx.link_new_both(reg);
-                    let f = self.jit.const_f64(i as f64);
-                    monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::integer(i).id());
-                        movq xmm(freg.enc()), [rip + f];
-                    }
-                    freg
-                } else {
-                    unreachable!()
-                }
-            }
-        }
+        };
+        self.gen_code(ir);
+        x
     }
 
     ///
@@ -371,13 +188,136 @@ impl Codegen {
     ///
     /// ### destroy
     /// - none
-    fn integer_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn integer_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
         monoasm!(&mut self.jit,
             testq rdi, 0b01;
             jz side_exit;
             sarq rdi, 1;
             cvtsi2sdq xmm(xmm), rdi;
         );
+    }
+}
+
+impl BBContext {
+    ///
+    /// Fetch *reg* and store in a corresponding stack slot.
+    ///
+    fn fetch_slot(&mut self, ir: &mut AsmIr, reg: SlotId) {
+        if reg >= self.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, self.sp);
+            panic!();
+        };
+        match self[reg] {
+            LinkMode::Xmm(freg) => {
+                self[reg] = LinkMode::Both(freg);
+                ir.push(AsmInst::XmmToBoth(freg, vec![reg]));
+            }
+            LinkMode::Literal(v) => {
+                self[reg] = LinkMode::Stack;
+                ir.push(AsmInst::LitToStack(v, reg));
+            }
+            LinkMode::R15 => {
+                self.release(reg);
+                ir.push(AsmInst::AccToStack(reg));
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {}
+        }
+    }
+
+    pub(crate) fn fetch_slots(&mut self, ir: &mut AsmIr, reg: &[SlotId]) {
+        reg.iter().for_each(|r| self.fetch_slot(ir, *r));
+    }
+
+    ///
+    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
+    ///
+    pub(crate) fn fetch_range(&mut self, ir: &mut AsmIr, args: SlotId, len: u16) {
+        for reg in args.0..args.0 + len {
+            self.fetch_slot(ir, SlotId::new(reg))
+        }
+    }
+
+    pub(crate) fn fetch_callargs(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
+        let CallSiteInfo {
+            recv, args, len, ..
+        } = callsite;
+        self.fetch_slot(ir, *recv);
+        self.fetch_range(ir, *args, *len as u16);
+    }
+
+    ///
+    /// Read from a slot *reg* as f64, and store in xmm register.
+    ///
+    /// ### destroy
+    /// - rdi
+    ///
+    fn fetch_float_assume_integer(&mut self, ir: &mut AsmIr, reg: SlotId, pc: BcPc) -> Xmm {
+        match self[reg] {
+            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
+            LinkMode::Stack => {
+                let x = self.link_new_both(reg);
+                let label = ir.new_deopt(pc, self.get_write_back());
+                ir.push(AsmInst::IntToXmm(Some(reg), x, label));
+                x
+            }
+            LinkMode::R15 => {
+                let x = self.link_new_both(reg);
+                let label = ir.new_deopt(pc, self.get_write_back());
+                ir.push(AsmInst::IntToXmm(None, x, label));
+                x
+            }
+            LinkMode::Literal(v) => {
+                if let Some(f) = v.try_float() {
+                    let x = self.link_new_xmm(reg);
+                    ir.push(AsmInst::F64ToXmm(f, x));
+                    x
+                } else if let Some(i) = v.try_fixnum() {
+                    let x = self.link_new_both(reg);
+                    ir.push(AsmInst::I64ToBoth(i, reg, x));
+                    x
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
+    ///
+    /// Fetch *reg* as f64, and store in xmm register.
+    ///
+    /// ### destroy
+    /// - rdi, rax
+    ///
+    ///
+    fn fetch_float_assume_float(&mut self, ir: &mut AsmIr, reg: SlotId, pc: BcPc) -> Xmm {
+        match self[reg] {
+            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
+            LinkMode::Stack => {
+                let x = self.link_new_both(reg);
+                let label = ir.new_deopt(pc, self.get_write_back());
+                ir.push(AsmInst::FloatToXmm(Some(reg), x, label));
+                x
+            }
+            LinkMode::R15 => {
+                let x = self.link_new_both(reg);
+                let label = ir.new_deopt(pc, self.get_write_back());
+                ir.push(AsmInst::FloatToXmm(None, x, label));
+                x
+            }
+            LinkMode::Literal(v) => {
+                if let Some(f) = v.try_float() {
+                    let x = self.link_new_xmm(reg);
+                    ir.push(AsmInst::F64ToXmm(f, x));
+                    x
+                } else if let Some(i) = v.try_fixnum() {
+                    let x = self.link_new_both(reg);
+                    ir.push(AsmInst::I64ToBoth(i, reg, x));
+                    x
+                } else {
+                    unreachable!()
+                }
+            }
+        }
     }
 }
 
@@ -425,7 +365,7 @@ mod test {
         assume_int_to_f64:
             pushq rbp;
         );
-        gen.integer_to_f64(0, panic);
+        gen.integer_val_to_f64(0, panic);
         monoasm!(&mut gen.jit,
             popq rbp;
             ret;

@@ -399,8 +399,9 @@ fn object_send(
         block_fid: block_func_id,
         ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
-    gen.fetch_callargs(ctx, callsite);
+    let mut ir = AsmIr::new();
+    ctx.fetch_callargs(&mut ir, callsite);
+    gen.gen_code(ir);
     ctx.release(ret);
     let using = ctx.get_xmm_using();
     let bh = match block_func_id {

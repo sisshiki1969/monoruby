@@ -1,13 +1,3 @@
-class C
-  def f
-    for i in 0..9
-      puts i
-    end
-  end
+for i in [1,2,3,4,5,6,7,8,9,"10"]
+  puts 0..i
 end
-
-class D < C
-end
-
-C.new.f
-D.new.f

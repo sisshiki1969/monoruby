@@ -89,12 +89,12 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn unbox_float(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
         monoasm!( &mut self.jit,
             testq rdi, 0b001;
             jnz side_exit;
         );
-        self.float_to_f64(xmm, side_exit);
+        self.float_val_to_f64(xmm, side_exit);
     }
 
     ///
@@ -114,21 +114,21 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn unbox_integer_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn numeric_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
         let integer = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
             testq rdi, 0b001;
             jnz integer;
         }
-        self.float_to_f64(xmm, side_exit);
+        self.float_val_to_f64(xmm, side_exit);
         monoasm! {&mut self.jit,
             jmp  exit;
         integer:
             sarq rdi, 1;
             cvtsi2sdq xmm(xmm), rdi;
+        exit:
         };
-        self.jit.bind_label(exit);
     }
 
     ///
@@ -143,7 +143,7 @@ impl Codegen {
     /// ### destroy
     /// - rax, rdi
     ///
-    fn float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    fn float_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
         let flonum = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -218,7 +218,7 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.unbox_float(0, side_exit);
+        gen.float_to_f64(0, side_exit);
         monoasm!( &mut gen.jit,
             ret;
         );
@@ -250,7 +250,7 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.unbox_integer_float_to_f64(0, side_exit);
+        gen.numeric_val_to_f64(0, side_exit);
         monoasm!( &mut gen.jit,
             ret;
         );

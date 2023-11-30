@@ -215,11 +215,10 @@ impl BBContext {
             }
         }
 
-        let side_exit = ir.new_label();
-        ir.new_deopt(pc + 1, self.get_write_back(), side_exit);
+        let side_exit = ir.new_deopt(pc + 1, self.get_write_back());
 
         for (r, x) in conv_list {
-            ir.push(AsmInst::IntToF64(r, x, side_exit));
+            ir.push(AsmInst::NumToXmm(r, x, side_exit));
         }
 
         for r in guard_list {
