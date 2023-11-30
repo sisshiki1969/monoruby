@@ -10,7 +10,7 @@ impl JitContext {
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
-                label: entry,
+                label,
                 ..
             } in entries
             {
@@ -18,7 +18,7 @@ impl JitContext {
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 let ir = bbctx.write_back_for_target(&target_ctx, pc);
-                self.asmir.push((ir, false, entry, target_label));
+                self.asmir.push((ir, label, Some(target_label)));
             }
         }
     }
@@ -101,8 +101,7 @@ impl JitContext {
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
-            self.asmir
-                .push((AsmIr::new(), true, entry.label, entry.label));
+            self.asmir.push((AsmIr::new(), entry.label, None));
             //self.jit.bind_label(entry.entry);
             return Some(entry.bbctx);
         }
@@ -237,14 +236,14 @@ impl BBContext {
         pc: BcPc,
         _bb_pos: BcIndex,
         unused: &[SlotId],
-    ) -> Vec<(AsmIr, bool, DestLabel, DestLabel)> {
+    ) -> Vec<(AsmIr, DestLabel, Option<DestLabel>)> {
         let mut target_ctx = self.clone();
         target_ctx.remove_unused(unused);
         let mut v = vec![];
         for BranchEntry {
             src_idx: _src_idx,
             mut bbctx,
-            label: entry,
+            label,
             cont,
         } in entries
         {
@@ -252,7 +251,7 @@ impl BBContext {
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             let ir = bbctx.write_back_for_target(&target_ctx, pc);
-            v.push((ir, cont, entry, cur_label));
+            v.push((ir, label, if cont { None } else { Some(cur_label) }));
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back end");
         }

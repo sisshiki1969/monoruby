@@ -94,7 +94,7 @@ struct JitContext {
     ///
     /// IR for machine code generator.
     ///
-    asmir: Vec<(AsmIr, bool, DestLabel, DestLabel)>,
+    asmir: Vec<(AsmIr, DestLabel, Option<DestLabel>)>,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
@@ -549,12 +549,12 @@ impl Codegen {
 
 impl Codegen {
     fn gen_asm(&mut self, ctx: &mut JitContext) {
-        for (ir, cont, entry, exit) in std::mem::take(&mut ctx.asmir) {
-            self.gen_code(ir, cont, entry, exit);
+        for (ir, entry, exit) in std::mem::take(&mut ctx.asmir) {
+            self.gen_code(ir, entry, exit);
         }
     }
 
-    fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
+    fn gen_code(&mut self, ir: AsmIr, entry: DestLabel, exit: Option<DestLabel>) {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -563,14 +563,14 @@ impl Codegen {
         for (pc, wb, label) in ir.deopt {
             self.gen_side_deopt_with_label(pc, &wb, labels[label])
         }
-        if !cont {
+        if exit.is_some() {
             self.jit.select_page(1);
         }
         self.jit.bind_label(entry);
         for inst in ir.inst {
             self.gen_asmir(&labels, &inst);
         }
-        if !cont {
+        if let Some(exit) = exit {
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -1623,6 +1623,20 @@ impl Codegen {
         }
     }
 
+    fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
+        let i = v.id() as i64;
+        if i32::try_from(i).is_ok() {
+            monoasm! { &mut self.jit,
+                movq [r14 - (conv(reg))], (v.id());
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (v.id());
+                movq [r14 - (conv(reg))], rax;
+            }
+        }
+    }
+
     fn gen_write_back_locals(&mut self, ctx: &mut BBContext) {
         let wb = ctx.get_locals_write_back();
         self.gen_write_back(&wb);
@@ -1685,20 +1699,6 @@ impl Codegen {
     fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
         self.load_rdi(lhs);
         self.load_rsi(rhs);
-    }
-
-    fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
-        let i = v.id() as i64;
-        if i32::try_from(i).is_ok() {
-            monoasm! { &mut self.jit,
-                movq [r14 - (conv(reg))], (v.id());
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                movq rax, (v.id());
-                movq [r14 - (conv(reg))], rax;
-            }
-        }
     }
 }
 
