@@ -1112,10 +1112,9 @@ impl Codegen {
         if !no_jit {
             monoasm!( &mut self.jit,
             compile:
-                movq rdi, r12;
-                movl rsi, [r14 - (LBP_META_FUNCID)];
-                movq rdx, [r14 - (LBP_SELF)];
-                lea rcx, [r13 - 16];
+                movq rdi, rbx;
+                movq rsi, r12;
+                lea  rdx, [r13 - 16];
                 movq rax, (exec_jit_partial_compile);
                 call rax;
                 jmp rax;

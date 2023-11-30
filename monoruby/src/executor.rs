@@ -1567,11 +1567,9 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     globals.codegen.jit.apply_jmp_patch(entry, guard);
 }
 
-pub(crate) extern "C" fn exec_jit_recompile_method(
-    globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
-) {
+pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &mut Globals) {
+    let self_value = vm.cfp().lfp().self_val();
+    let func_id = vm.cfp().lfp().meta().func_id();
     let entry_label = globals.codegen.jit.label();
     globals.exec_jit_compile_method(func_id, self_value, entry_label);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
@@ -1585,12 +1583,13 @@ pub(crate) extern "C" fn exec_jit_recompile_method(
 /// Compile the loop.
 ///
 pub(crate) extern "C" fn exec_jit_partial_compile(
+    vm: &mut Executor,
     globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
     pc: BcPc,
 ) {
     let entry_label = globals.codegen.jit.label();
+    let self_value = vm.cfp().lfp().self_val();
+    let func_id = vm.cfp().lfp().meta().func_id();
     globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
     let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);

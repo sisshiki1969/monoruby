@@ -174,7 +174,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BcIndex,
         mut bbctx: BBContext,
-        entry: DestLabel,
+        label: DestLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -182,7 +182,7 @@ impl JitContext {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
-            label: entry,
+            label,
             cont: false,
         });
     }
@@ -193,7 +193,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BcIndex,
         mut bbctx: BBContext,
-        entry: DestLabel,
+        label: DestLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -201,7 +201,7 @@ impl JitContext {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
-            label: entry,
+            label,
             cont: true,
         })
     }
@@ -1521,16 +1521,16 @@ impl Codegen {
             subl [rip + counter], 1;
             jmp deopt;
         );
+
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         recompile:
-            movq rdi, r12;
-            movl rsi, [r14 - (LBP_META_FUNCID)];
-            movq rdx, [r14 - (LBP_SELF)];
+            movq rdi, rbx;
+            movq rsi, r12;
         );
-        if let Some(index) = position {
+        if let Some(pc) = position {
             monoasm!( &mut self.jit,
-                movq rcx, (index.get_u64());
+                movq rdx, (pc.get_u64());
                 movq rax, (exec_jit_partial_compile);
                 call rax;
             );
