@@ -182,7 +182,7 @@ impl JitContext {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
-            entry,
+            label: entry,
             cont: false,
         });
     }
@@ -201,7 +201,7 @@ impl JitContext {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
-            entry,
+            label: entry,
             cont: true,
         })
     }
@@ -220,41 +220,13 @@ impl JitContext {
         self.backedge_map
             .insert(bb_pos, (dest_label, bbctx.clone(), unused));
     }
-
-    fn gen_asm(&mut self, codegen: &mut Codegen) {
-        for (ir, cont, entry, exit) in std::mem::take(&mut self.asmir) {
-            codegen.gen_code(ir, cont, entry, exit);
-        }
-    }
-
-    fn backedge_branches(&mut self, func: &ISeqInfo) {
-        let branch_map = std::mem::take(&mut self.branch_map);
-        for (bb_pos, entries) in branch_map.into_iter() {
-            let (target_label, mut target_ctx, unused) = self.backedge_map.remove(&bb_pos).unwrap();
-            let pc = func.get_pc(bb_pos);
-            target_ctx.remove_unused(&unused);
-            for BranchEntry {
-                src_idx: _src_idx,
-                mut bbctx,
-                entry,
-                ..
-            } in entries
-            {
-                #[cfg(feature = "jit-debug")]
-                eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
-                bbctx.remove_unused(&unused);
-                let ir = bbctx.write_back_for_target(&target_ctx, pc);
-                self.asmir.push((ir, false, entry, target_label));
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
 struct BranchEntry {
     src_idx: BcIndex,
     bbctx: BBContext,
-    entry: DestLabel,
+    label: DestLabel,
     cont: bool,
 }
 
@@ -335,7 +307,7 @@ impl BBContext {
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
-            entry: _,
+            label: _,
             ..
         } in entries.iter()
         {
@@ -389,35 +361,6 @@ impl BBContext {
 
     pub(super) fn clear(&mut self) {
         self.slot_state.clear(self.next_sp);
-    }
-
-    fn write_back_branches(
-        &self,
-        entries: Vec<BranchEntry>,
-        cur_label: DestLabel,
-        pc: BcPc,
-        _bb_pos: BcIndex,
-        unused: &[SlotId],
-    ) -> Vec<(AsmIr, bool, DestLabel, DestLabel)> {
-        let mut target_ctx = self.clone();
-        target_ctx.remove_unused(unused);
-        let mut v = vec![];
-        for BranchEntry {
-            src_idx: _src_idx,
-            mut bbctx,
-            entry,
-            cont,
-        } in entries
-        {
-            bbctx.remove_unused(unused);
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
-            let ir = bbctx.write_back_for_target(&target_ctx, pc);
-            v.push((ir, cont, entry, cur_label));
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back end");
-        }
-        v
     }
 }
 
@@ -561,7 +504,7 @@ impl Codegen {
             vec![BranchEntry {
                 src_idx: BcIndex(0),
                 bbctx,
-                entry: self.jit.label(),
+                label: self.jit.label(),
                 cont: true,
             }],
         );
@@ -580,7 +523,8 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
-        ctx.gen_asm(self);
+        self.gen_asm(&mut ctx);
+        let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
         self.jit.finalize();
         #[cfg(any(feature = "jit-debug", feature = "log-jit"))]
@@ -599,7 +543,64 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "jit-debug"))]
         eprintln!("<== finished compile.");
 
-        ctx.sourcemap
+        sourcemap
+    }
+}
+
+impl Codegen {
+    fn gen_asm(&mut self, ctx: &mut JitContext) {
+        for (ir, cont, entry, exit) in std::mem::take(&mut ctx.asmir) {
+            self.gen_code(ir, cont, entry, exit);
+        }
+    }
+
+    fn gen_code(&mut self, ir: AsmIr, cont: bool, entry: DestLabel, exit: DestLabel) {
+        let mut labels = vec![];
+        for _ in 0..ir.label {
+            labels.push(self.jit.label());
+        }
+
+        for (pc, wb, label) in ir.deopt {
+            self.gen_side_deopt_with_label(pc, &wb, labels[label])
+        }
+        if !cont {
+            self.jit.select_page(1);
+        }
+        self.jit.bind_label(entry);
+        for inst in ir.inst {
+            self.gen_asmir(&labels, &inst);
+        }
+        if !cont {
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        }
+    }
+
+    fn gen_asmir(&mut self, labels: &[DestLabel], inst: &AsmInst) {
+        match inst {
+            AsmInst::AccToStack(r) => {
+                self.store_r15(*r);
+            }
+            AsmInst::XmmMove(l, r) => self.xmm_mov(*l, *r),
+            AsmInst::XmmSwap(l, r) => self.xmm_swap(*l, *r),
+            AsmInst::F64ToXmm(f, x) => {
+                let f = self.jit.const_f64(*f);
+                monoasm!( &mut self.jit,
+                    movq  xmm(x.enc()), [rip + f];
+                );
+            }
+            AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(*x, slots),
+            AsmInst::LitToStack(v, slot) => self.literal_to_stack(*slot, *v),
+            AsmInst::IntToF64(r, x, side_exit) => {
+                self.load_rdi(*r);
+                self.unbox_integer_float_to_f64(x.enc(), labels[*side_exit]);
+                #[cfg(feature = "jit-debug")]
+                eprintln!("      conv: {:?}->{:?}", r, x);
+            }
+            AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
+        }
     }
 }
 
@@ -773,14 +774,13 @@ impl Codegen {
         self.jit.bind_label(cc.labels[&bb_begin]);
         let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
             ctx
+        } else if let Some(ctx) = cc.incoming_context(func, bb_begin) {
+            self.gen_asm(cc);
+            ctx
         } else {
-            if let Some(ctx) = self.gen_merging_branches(func, cc, bb_begin) {
-                ctx
-            } else {
-                #[cfg(feature = "jit-debug")]
-                eprintln!("=== no entry");
-                return;
-            }
+            #[cfg(feature = "jit-debug")]
+            eprintln!("=== no entry");
+            return;
         };
         for bb_pos in bb_begin..=bb_end {
             let pc = func.get_pc(bb_pos);
@@ -1500,7 +1500,8 @@ impl Codegen {
         if func.bb_info.is_bb_head(next_idx) {
             let branch_dest = self.jit.label();
             cc.new_continue(func, bb_end, next_idx, ctx, branch_dest);
-            if let Some(target_ctx) = self.gen_merging_branches(func, cc, next_idx) {
+            if let Some(target_ctx) = cc.incoming_context(func, next_idx) {
+                self.gen_asm(cc);
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
             }
         }
