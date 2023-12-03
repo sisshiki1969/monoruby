@@ -11,6 +11,8 @@ impl Codegen {
         is_module: bool,
         pc: BcPc,
     ) {
+        self.fetch_slots(ctx, &[superclass]);
+        ctx.release(ret);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(xmm_using);
         if superclass.is_zero() {
@@ -51,6 +53,8 @@ impl Codegen {
         func_id: FuncId,
         pc: BcPc,
     ) {
+        self.fetch_slots(ctx, &[base]);
+        ctx.release(ret);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,

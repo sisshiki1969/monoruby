@@ -780,7 +780,7 @@ impl Codegen {
                                 &mut ctx, deopt, v, version, base_class, base_slot,
                             );
                         }
-                        self.store_rax(dst);
+                        self.save_rax_to_acc(&mut ctx, dst);
                     } else {
                         let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
@@ -1099,6 +1099,7 @@ impl Codegen {
                     self.xmm_restore(xmm_using);
                 }
                 TraceIr::SingletonMethodDef { obj, name, func_id } => {
+                    self.fetch_slots(&mut ctx, &[obj]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(xmm_using);
                     monoasm!( &mut self.jit,
