@@ -539,12 +539,21 @@ impl Codegen {
         );
     }
 
-    fn call_unop(&mut self, func: usize) {
+    ///
+    /// Call unary operator function.
+    ///
+    /// ### in
+    /// - rdi: receiver
+    ///
+    /// ### out
+    /// - rax: result
+    ///
+    fn call_unop(&mut self, func: UnaryOpFn) {
         monoasm!( &mut self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (func);
+            movq rax, (func as usize);
             call rax;
         );
     }

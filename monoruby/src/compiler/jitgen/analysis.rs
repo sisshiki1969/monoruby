@@ -290,7 +290,7 @@ impl JitContext {
                     info.r#use(src);
                     info.def(dst);
                 }
-                TraceIr::Neg { dst, src } | TraceIr::Pos { dst, src } => {
+                TraceIr::UnOp { kind: _, dst, src } => {
                     let is_float = pc.is_float1();
                     info.use_as(src, is_float, pc.classid1() == FLOAT_CLASS);
                     info.def_as(dst, is_float);

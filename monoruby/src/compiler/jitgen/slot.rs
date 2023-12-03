@@ -67,7 +67,7 @@ impl SlotState {
     /// ### Panics
     /// If there is no vacant xmm register.
     ///
-    fn alloc_xmm(&mut self) -> Xmm {
+    pub(super) fn alloc_xmm(&mut self) -> Xmm {
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
                 return Xmm(flhs as u16);
@@ -107,9 +107,9 @@ impl SlotState {
     /// Link the slot *reg* to both of the stack and a new xmm register.
     ///
     pub(super) fn link_new_both(&mut self, reg: SlotId) -> Xmm {
-        let freg = self.alloc_xmm();
-        self.link_both(reg, freg);
-        freg
+        let x = self.alloc_xmm();
+        self.link_both(reg, x);
+        x
     }
 
     ///
@@ -213,9 +213,9 @@ impl SlotState {
     ///
     pub(super) fn xmm_write(&mut self, reg: SlotId) -> Xmm {
         match self[reg] {
-            LinkMode::Xmm(freg) if self.xmm[freg.0 as usize].len() == 1 => {
-                assert_eq!(reg, self.xmm[freg.0 as usize][0]);
-                freg
+            LinkMode::Xmm(x) if self.xmm[x.0 as usize].len() == 1 => {
+                assert_eq!(reg, self.xmm[x.0 as usize][0]);
+                x
             }
             LinkMode::Xmm(_)
             | LinkMode::Both(_)

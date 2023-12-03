@@ -344,12 +344,8 @@ impl Globals {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
                 format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
             }
-            TraceIr::Pos { dst, src } => {
-                let op1 = format!("{:?} = +{:?}", dst, src);
-                format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
-            }
-            TraceIr::Neg { dst, src } => {
-                let op1 = format!("{:?} = -{:?}", dst, src);
+            TraceIr::UnOp { kind, dst, src } => {
+                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
             }
             TraceIr::Not { dst, src } => {

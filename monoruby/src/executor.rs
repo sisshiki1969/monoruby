@@ -15,6 +15,7 @@ use ruruby_parse::{CmpKind, Loc, SourceInfoRef};
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
+pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
 pub(crate) const BP_PREV_CFP: i64 = 8;
 pub(crate) const BP_LFP: i64 = 16;
@@ -1263,7 +1264,8 @@ impl BcPc {
                 83 => TraceIr::Raise(SlotId::new(op1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1), SlotId::new(op2), op3),
-                126 => TraceIr::Pos {
+                126 => TraceIr::UnOp {
+                    kind: UnOpK::Pos,
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
@@ -1275,7 +1277,8 @@ impl BcPc {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
-                129 => TraceIr::Neg {
+                129 => TraceIr::UnOp {
+                    kind: UnOpK::Neg,
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },

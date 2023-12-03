@@ -87,7 +87,7 @@ fn math_sqrt(
     if !recv.is_zero() {
         gen.guard_class(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         monoasm!( &mut gen.jit,
@@ -111,7 +111,7 @@ fn math_cos(
     if !recv.is_zero() {
         gen.guard_class(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let xmm_using = ctx.get_xmm_using();
@@ -143,7 +143,7 @@ fn math_sin(
     if !recv.is_zero() {
         gen.guard_class(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float_enc(ctx, args, pc);
+    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let xmm_using = ctx.get_xmm_using();

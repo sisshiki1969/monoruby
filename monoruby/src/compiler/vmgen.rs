@@ -966,7 +966,7 @@ impl Codegen {
         };
     }
 
-    fn vm_generic_unop(&mut self, generic: DestLabel, func: usize) {
+    fn vm_generic_unop(&mut self, generic: DestLabel, func: UnaryOpFn) {
         self.jit.bind_label(generic);
         self.vm_save_lhs_class();
         self.call_unop(func);
@@ -1437,7 +1437,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.vm_generic_unop(generic, bitnot_value as _);
+        self.vm_generic_unop(generic, bitnot_value);
         label
     }
 
@@ -1456,7 +1456,7 @@ impl Codegen {
         };
         self.vm_lhs_integer();
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, neg_value as _);
+        self.vm_generic_unop(generic, neg_value);
         label
     }
 
@@ -1472,7 +1472,7 @@ impl Codegen {
             movq [r15], rdi;
         }
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, pos_value as _);
+        self.vm_generic_unop(generic, pos_value);
         label
     }
 

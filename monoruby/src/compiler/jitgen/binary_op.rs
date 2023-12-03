@@ -238,7 +238,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_rr(
         &mut self,
         kind: BinOpK,
-        ctx: &BBContext,
+        using_xmm: &[Xmm],
         fret: Xmm,
         flhs: Xmm,
         frhs: Xmm,
@@ -300,15 +300,14 @@ impl Codegen {
                 }
             }
             BinOpK::Exp => {
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
+                self.xmm_save(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&xmm_using);
+                self.xmm_restore(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
@@ -320,7 +319,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_ri(
         &mut self,
         kind: BinOpK,
-        ctx: &BBContext,
+        using_xmm: &[Xmm],
         fret: Xmm,
         flhs: Xmm,
         rhs: i16,
@@ -354,15 +353,14 @@ impl Codegen {
             }
             BinOpK::Exp => {
                 let lhs = flhs.enc();
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
+                self.xmm_save(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, [rip + rhs_label];
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&xmm_using);
+                self.xmm_restore(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
@@ -374,7 +372,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_ir(
         &mut self,
         kind: BinOpK,
-        ctx: &BBContext,
+        using_xmm: &[Xmm],
         fret: Xmm,
         lhs: i16,
         frhs: Xmm,
@@ -436,15 +434,14 @@ impl Codegen {
                 }
             }
             BinOpK::Exp => {
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
+                self.xmm_save(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, [rip + lhs];
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&xmm_using);
+                self.xmm_restore(&using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );

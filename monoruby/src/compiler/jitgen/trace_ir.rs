@@ -1,5 +1,5 @@
 use super::*;
-use crate::bytecodegen::{inst::*, BinOpK};
+use crate::bytecodegen::{inst::*, BinOpK, UnOpK};
 
 ///
 /// IR for JIT compiler.
@@ -72,11 +72,8 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         src: SlotId,
     },
-    Neg {
-        dst: SlotId,
-        src: SlotId,
-    },
-    Pos {
+    UnOp {
+        kind: UnOpK,
         dst: SlotId,
         src: SlotId,
     },

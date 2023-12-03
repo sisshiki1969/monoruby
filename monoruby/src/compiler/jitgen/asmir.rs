@@ -1,3 +1,5 @@
+use crate::bytecodegen::BinOpK;
+
 use super::*;
 
 pub(crate) struct AsmIr {
@@ -69,6 +71,15 @@ impl AsmIr {
 
     pub(super) fn xmm_swap(&mut self, x1: Xmm, x2: Xmm) {
         self.inst.push(AsmInst::XmmSwap(x1, x2));
+    }
+
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: Vec<Xmm>) {
+        self.inst.push(AsmInst::XmmBinOp {
+            kind,
+            mode,
+            dst,
+            using_xmm,
+        });
     }
 
     pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
@@ -166,6 +177,12 @@ pub(super) enum AsmInst {
 
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),
+    XmmBinOp {
+        kind: BinOpK,
+        mode: FMode,
+        dst: Xmm,
+        using_xmm: Vec<Xmm>,
+    },
 
     /// move f64 to xmm
     F64ToXmm(f64, Xmm),
@@ -222,6 +239,12 @@ pub(super) enum AsmInst {
         dst: DynVar,
         src: GP,
     },
+}
+
+pub(super) enum FMode {
+    RR(Xmm, Xmm),
+    RI(Xmm, i16),
+    IR(i16, Xmm),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -331,6 +354,17 @@ impl Codegen {
 
             AsmInst::XmmMove(l, r) => self.xmm_mov(*l, *r),
             AsmInst::XmmSwap(l, r) => self.xmm_swap(*l, *r),
+            AsmInst::XmmBinOp {
+                kind,
+                mode,
+                dst,
+                using_xmm,
+            } => match mode {
+                FMode::RR(l, r) => self.gen_binop_float_rr(*kind, using_xmm, *dst, *l, *r),
+                FMode::RI(l, r) => self.gen_binop_float_ri(*kind, using_xmm, *dst, *l, *r),
+                FMode::IR(l, r) => self.gen_binop_float_ir(*kind, using_xmm, *dst, *l, *r),
+            },
+
             AsmInst::NumToXmm(r, x, side_exit) => {
                 self.load_rdi(*r);
                 self.numeric_val_to_f64(x.enc(), labels[*side_exit]);
