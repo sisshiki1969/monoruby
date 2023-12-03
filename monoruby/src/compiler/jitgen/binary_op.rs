@@ -190,8 +190,8 @@ impl Codegen {
         let is_rhs_smi = ctx.is_i16_literal(rhs).is_some();
         self.fetch_to_rdi(ctx, lhs);
         self.fetch_to_rsi(ctx, rhs);
-        ctx.release(dst);
         let deopt = self.gen_side_deopt(pc, ctx);
+        ctx.release(dst);
         if !is_lhs_smi {
             self.guard_rdi_fixnum(deopt);
         }
@@ -210,8 +210,8 @@ impl Codegen {
     ) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rdi(ctx, slot);
-        ctx.release(dst);
         let deopt = self.gen_side_deopt(pc, ctx);
+        ctx.release(dst);
         if !is_smi {
             self.guard_rdi_fixnum(deopt);
         }
@@ -227,8 +227,8 @@ impl Codegen {
     ) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rsi(ctx, slot);
-        ctx.release(dst);
         let deopt = self.gen_side_deopt(pc, ctx);
+        ctx.release(dst);
         if !is_smi {
             self.guard_rsi_fixnum(deopt);
         }

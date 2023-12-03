@@ -618,8 +618,8 @@ impl Codegen {
     ///
     fn copy_slot(&mut self, ctx: &mut BBContext, src: SlotId, dst: SlotId) {
         match ctx[src] {
-            LinkMode::Xmm(freg) | LinkMode::Both(freg) => {
-                ctx.link_xmm(dst, freg);
+            LinkMode::Xmm(x) | LinkMode::Both(x) => {
+                ctx.link_xmm(dst, x);
             }
             LinkMode::Stack => {
                 ctx.release(dst);
@@ -723,7 +723,8 @@ impl Codegen {
                     if val.is_packed_value() || val.class() == FLOAT_CLASS {
                         ctx.link_literal(dst, val);
                     } else {
-                        ir.deep_copy_lit(&ctx, val, dst);
+                        ir.deep_copy_lit(&ctx, val);
+                        ir.rax2acc(&mut ctx, dst);
                     }
                     self.gen_code(ir);
                 }
@@ -733,7 +734,7 @@ impl Codegen {
                     ctx.fetch_range(&mut ir, args, pos_num as u16);
                     ctx.release(dst);
                     ir.new_array(&ctx, callid);
-                    ir.save_rax_to_acc(&mut ctx, dst);
+                    ir.rax2acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
                 TraceIr::Hash { dst, args, len } => {
@@ -741,7 +742,7 @@ impl Codegen {
                     ctx.fetch_range(&mut ir, args, len * 2);
                     ctx.release(dst);
                     ir.new_hash(&ctx, args, len as _);
-                    ir.save_rax_to_acc(&mut ctx, dst);
+                    ir.rax2acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
                 TraceIr::Range {
@@ -754,7 +755,7 @@ impl Codegen {
                     ctx.fetch_slots(&mut ir, &[start, end]);
                     ctx.release(dst);
                     ir.new_range(&mut ctx, pc, start, end, exclude_end);
-                    ir.save_rax_to_acc(&mut ctx, dst);
+                    ir.rax2acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
                 TraceIr::Index { dst, base, idx } => {
@@ -791,14 +792,14 @@ impl Codegen {
                     self.jit_store_constant(&mut ctx, id, src);
                 }
                 TraceIr::BlockArgProxy(ret, outer) => {
-                    ctx.release(ret);
                     let mut ir = AsmIr::new();
+                    ctx.release(ret);
                     ir.block_arg_proxy(ret, outer);
                     self.gen_code(ir);
                 }
                 TraceIr::BlockArg(ret, outer) => {
-                    ctx.release(ret);
                     let mut ir = AsmIr::new();
+                    ctx.release(ret);
                     ir.block_arg(&ctx, pc, ret, outer);
                     self.gen_code(ir);
                 }
@@ -826,8 +827,8 @@ impl Codegen {
                 TraceIr::StoreGvar { src: val, name } => self.jit_store_gvar(&mut ctx, name, val),
                 TraceIr::LoadSvar { dst, id } => self.jit_load_svar(&mut ctx, id, dst),
                 TraceIr::LoadDynVar(dst, src) => {
-                    ctx.release(dst);
                     let mut ir = AsmIr::new();
+                    ctx.release(dst);
                     ir.inst.push(AsmInst::LoadDynVar { dst, src });
                     self.gen_code(ir);
                 }
@@ -991,24 +992,20 @@ impl Codegen {
                 TraceIr::Mov(dst, src) => {
                     self.copy_slot(&mut ctx, src, dst);
                 }
-                TraceIr::ConcatStr(ret, arg, len) => {
+                TraceIr::ConcatStr(dst, arg, len) => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_range(&mut ir, arg, len);
-                    self.gen_code(ir);
-                    if let Some(ret) = ret {
-                        ctx.release(ret);
+                    if let Some(dst) = dst {
+                        ctx.release(dst);
                     }
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
-                    monoasm!( &mut self.jit,
-                        movq rdi, r12;
-                        lea rsi, [r14 - (conv(arg))];
-                        movq rdx, (len);
-                        movq rax, (runtime::concatenate_string);
-                        call rax;
-                    );
-                    self.xmm_restore(xmm_using);
-                    self.store_rax(ret);
+                    let using_xmm = ctx.get_xmm_using();
+                    ir.inst.push(AsmInst::ConcatStr {
+                        arg,
+                        len,
+                        using_xmm,
+                    });
+                    ir.reg2stack(GP::Rax, dst);
+                    self.gen_code(ir);
                 }
                 TraceIr::ConcatRegexp(ret, arg, len) => {
                     let mut ir = AsmIr::new();
@@ -1130,7 +1127,7 @@ impl Codegen {
                     self.jit_singleton_class_def(&mut ctx, ret, base, func_id, pc);
                 }
                 TraceIr::DefinedYield { ret } => {
-                    ctx.release(ret);
+                    self.fetch_slots(&mut ctx, &[ret]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1140,7 +1137,7 @@ impl Codegen {
                     };
                 }
                 TraceIr::DefinedConst { ret, siteid } => {
-                    ctx.release(ret);
+                    self.fetch_slots(&mut ctx, &[ret]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1151,8 +1148,7 @@ impl Codegen {
                     };
                 }
                 TraceIr::DefinedMethod { ret, recv, name } => {
-                    ctx.release(ret);
-                    self.fetch_slots(&mut ctx, &[recv]);
+                    self.fetch_slots(&mut ctx, &[ret, recv]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1164,7 +1160,7 @@ impl Codegen {
                     };
                 }
                 TraceIr::DefinedGvar { ret, name } => {
-                    ctx.release(ret);
+                    self.fetch_slots(&mut ctx, &[ret]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1175,7 +1171,7 @@ impl Codegen {
                     };
                 }
                 TraceIr::DefinedIvar { ret, name } => {
-                    ctx.release(ret);
+                    self.fetch_slots(&mut ctx, &[ret]);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals

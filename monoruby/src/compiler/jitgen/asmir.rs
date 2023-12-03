@@ -35,13 +35,15 @@ impl AsmIr {
         label
     }
 
-    pub(super) fn save_rax_to_acc(&mut self, ctx: &mut BBContext, dst: SlotId) {
-        if let Some(acc) = ctx.clear_r15() {
-            self.inst.push(AsmInst::AccToStack(acc));
-        }
-        self.inst.push(AsmInst::RegToAcc(GP::Rax));
+    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: SlotId) {
         ctx.clear();
+        if let Some(acc) = ctx.clear_r15() {
+            if acc != dst {
+                self.inst.push(AsmInst::AccToStack(acc));
+            }
+        }
         ctx.link_r15(dst);
+        self.inst.push(AsmInst::RegToAcc(GP::Rax));
     }
 
     pub(super) fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
@@ -62,6 +64,11 @@ impl AsmIr {
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.inst.push(AsmInst::RegMove(src, dst));
+        }
+    }
+    pub(super) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            self.inst.push(AsmInst::RegToStack(src, dst));
         }
     }
 
@@ -112,9 +119,10 @@ impl AsmIr {
         self.inst.push(AsmInst::I64ToBoth(i, reg, x));
     }
 
-    pub(super) fn deep_copy_lit(&mut self, ctx: &BBContext, val: Value, dst: SlotId) {
+    /// rax = val
+    pub(super) fn deep_copy_lit(&mut self, ctx: &BBContext, val: Value) {
         let using_xmm = ctx.get_xmm_using();
-        self.inst.push(AsmInst::DeepCopyLit(val, dst, using_xmm));
+        self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
     pub(super) fn new_array(&mut self, ctx: &BBContext, callid: CallSiteId) {
@@ -190,7 +198,7 @@ pub(super) enum AsmInst {
     I64ToBoth(i64, SlotId, Xmm),
     XmmToBoth(Xmm, Vec<SlotId>),
     LitToStack(Value, SlotId),
-    DeepCopyLit(Value, SlotId, UsingXmm),
+    DeepCopyLit(Value, UsingXmm),
     NumToXmm(SlotId, Xmm, usize),
     IntToXmm(Option<SlotId>, Xmm, usize),
     /// move a Flonum Value in a stack slot or acc to xmm, and deoptimize if it is not a Flonum.
@@ -217,6 +225,11 @@ pub(super) enum AsmInst {
         exclude_end: bool,
         using_xmm: UsingXmm,
         error: usize,
+    },
+    ConcatStr {
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
     },
 
     BlockArgProxy {
@@ -404,7 +417,7 @@ impl Codegen {
             }
             AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(*x, slots),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(*slot, *v),
-            AsmInst::DeepCopyLit(v, slot, using_xmm) => {
+            AsmInst::DeepCopyLit(v, using_xmm) => {
                 self.xmm_save(*using_xmm);
                 monoasm!( &mut self.jit,
                   movq rdi, (v.id());
@@ -412,7 +425,6 @@ impl Codegen {
                   call rax;
                 );
                 self.xmm_restore(*using_xmm);
-                self.store_rax(*slot);
             }
 
             AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
@@ -469,6 +481,21 @@ impl Codegen {
                 self.xmm_restore(*using_xmm);
                 self.handle_error(labels, *error);
             }
+            AsmInst::ConcatStr {
+                arg,
+                len,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, r12;
+                    lea rsi, [r14 - (conv(*arg))];
+                    movq rdx, (*len);
+                    movq rax, (runtime::concatenate_string);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
+            }
 
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.gen_proxy(*outer);
@@ -501,7 +528,7 @@ impl Codegen {
                 self.handle_error(labels, *side_exit);
                 self.store_rax(*ret);
             }
-            AsmInst::LoadDynVar { dst: ret, src } => {
+            AsmInst::LoadDynVar { dst, src } => {
                 monoasm!( &mut self.jit,
                     movq rax, [r14 - (LBP_OUTER)];
                 );
@@ -514,8 +541,8 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rax, [rax - (offset)];
                 );
-                if !ret.is_zero() {
-                    self.store_rax(*ret);
+                if !dst.is_zero() {
+                    self.store_rax(*dst);
                 }
             }
             AsmInst::StoreDynVar { dst, src } => {

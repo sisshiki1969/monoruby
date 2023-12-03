@@ -219,24 +219,24 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                self.link_both(reg, x);
                 ir.int2xmm(self, pc, Some(reg), x);
+                self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                self.link_both(reg, x);
                 ir.int2xmm(self, pc, None, x);
+                self.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
                 let x = self.alloc_xmm();
                 if let Some(f) = v.try_float() {
-                    self.link_xmm(reg, x);
                     ir.f64toxmm(f, x);
+                    self.link_xmm(reg, x);
                 } else if let Some(i) = v.try_fixnum() {
-                    self.link_both(reg, x);
                     ir.i64toboth(i, reg, x);
+                    self.link_both(reg, x);
                 } else {
                     unreachable!()
                 }
@@ -262,24 +262,24 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                self.link_both(reg, x);
                 ir.float2xmm(self, pc, Some(reg), x);
+                self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                self.link_both(reg, x);
                 ir.float2xmm(self, pc, None, x);
+                self.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
                 let x = self.alloc_xmm();
                 if let Some(f) = v.try_float() {
-                    self.link_xmm(reg, x);
                     ir.f64toxmm(f, x);
+                    self.link_xmm(reg, x);
                 } else if let Some(i) = v.try_fixnum() {
-                    self.link_both(reg, x);
                     ir.i64toboth(i, reg, x);
+                    self.link_both(reg, x);
                 } else {
                     unreachable!()
                 }
