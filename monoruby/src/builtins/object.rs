@@ -62,12 +62,12 @@ fn object_object_id(
     ctx.release(ret);
     gen.load_rdi(recv);
     let using = ctx.get_xmm_using();
-    gen.xmm_save(&using);
+    gen.xmm_save(using);
     monoasm! {&mut gen.jit,
         movq rax, (crate::executor::op::i64_to_value);
         call rax;
     }
-    gen.xmm_restore(&using);
+    gen.xmm_restore(using);
     gen.store_rax(ret);
 }
 
@@ -409,7 +409,7 @@ fn object_send(
         Some(func_id) => BlockHandler::from(func_id).0.id(),
     };
     let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
-    gen.xmm_save(&using);
+    gen.xmm_save(using);
     monoasm! {&mut gen.jit,
         movq rdi, rbx;
         movq rsi, r12;
@@ -424,7 +424,7 @@ fn object_send(
         call rax;
         addq rsp, 16;
     }
-    gen.xmm_restore(&using);
+    gen.xmm_restore(using);
     gen.store_rax(ret);
 }
 

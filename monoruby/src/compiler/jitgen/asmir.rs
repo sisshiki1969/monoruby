@@ -73,7 +73,7 @@ impl AsmIr {
         self.inst.push(AsmInst::XmmSwap(x1, x2));
     }
 
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: Vec<Xmm>) {
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: UsingXmm) {
         self.inst.push(AsmInst::XmmBinOp {
             kind,
             mode,
@@ -181,7 +181,7 @@ pub(super) enum AsmInst {
         kind: BinOpK,
         mode: FMode,
         dst: Xmm,
-        using_xmm: Vec<Xmm>,
+        using_xmm: UsingXmm,
     },
 
     /// move f64 to xmm
@@ -190,7 +190,7 @@ pub(super) enum AsmInst {
     I64ToBoth(i64, SlotId, Xmm),
     XmmToBoth(Xmm, Vec<SlotId>),
     LitToStack(Value, SlotId),
-    DeepCopyLit(Value, SlotId, Vec<Xmm>),
+    DeepCopyLit(Value, SlotId, UsingXmm),
     NumToXmm(SlotId, Xmm, usize),
     IntToXmm(Option<SlotId>, Xmm, usize),
     /// move a Flonum Value in a stack slot or acc to xmm, and deoptimize if it is not a Flonum.
@@ -207,15 +207,15 @@ pub(super) enum AsmInst {
     },
 
     /// create a new Array object and store it to rax
-    NewArray(CallSiteId, Vec<Xmm>),
+    NewArray(CallSiteId, UsingXmm),
     /// create a new Hash object and store it to rax
-    NewHash(SlotId, usize, Vec<Xmm>),
+    NewHash(SlotId, usize, UsingXmm),
     /// create a new Range object and store it to rax
     NewRange {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: Vec<Xmm>,
+        using_xmm: UsingXmm,
         error: usize,
     },
 
@@ -226,7 +226,7 @@ pub(super) enum AsmInst {
     BlockArg {
         ret: SlotId,
         outer: usize,
-        using_xmm: Vec<Xmm>,
+        using_xmm: UsingXmm,
         error: usize,
     },
     /// %dst = DynVar(src)
@@ -360,9 +360,9 @@ impl Codegen {
                 dst,
                 using_xmm,
             } => match mode {
-                FMode::RR(l, r) => self.gen_binop_float_rr(*kind, using_xmm, *dst, *l, *r),
-                FMode::RI(l, r) => self.gen_binop_float_ri(*kind, using_xmm, *dst, *l, *r),
-                FMode::IR(l, r) => self.gen_binop_float_ir(*kind, using_xmm, *dst, *l, *r),
+                FMode::RR(l, r) => self.gen_binop_float_rr(*kind, *using_xmm, *dst, *l, *r),
+                FMode::RI(l, r) => self.gen_binop_float_ri(*kind, *using_xmm, *dst, *l, *r),
+                FMode::IR(l, r) => self.gen_binop_float_ir(*kind, *using_xmm, *dst, *l, *r),
             },
 
             AsmInst::NumToXmm(r, x, side_exit) => {
@@ -405,13 +405,13 @@ impl Codegen {
             AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(*x, slots),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(*slot, *v),
             AsmInst::DeepCopyLit(v, slot, using_xmm) => {
-                self.xmm_save(&using_xmm);
+                self.xmm_save(*using_xmm);
                 monoasm!( &mut self.jit,
                   movq rdi, (v.id());
                   movq rax, (Value::value_deep_copy);
                   call rax;
                 );
-                self.xmm_restore(&using_xmm);
+                self.xmm_restore(*using_xmm);
                 self.store_rax(*slot);
             }
 
@@ -428,7 +428,7 @@ impl Codegen {
             }
 
             AsmInst::NewArray(callid, using_xmm) => {
-                self.xmm_save(using_xmm);
+                self.xmm_save(*using_xmm);
                 monoasm!( &mut self.jit,
                     movl rdx, (callid.get());
                     lea  rcx, [r14 - (LBP_SELF)];
@@ -437,17 +437,17 @@ impl Codegen {
                     movq rax, (runtime::gen_array);
                     call rax;
                 );
-                self.xmm_restore(using_xmm);
+                self.xmm_restore(*using_xmm);
             }
             AsmInst::NewHash(args, len, using_xmm) => {
-                self.xmm_save(using_xmm);
+                self.xmm_save(*using_xmm);
                 monoasm!( &mut self.jit,
                     lea  rdi, [r14 - (conv(*args))];
                     movq rsi, (*len);
                     movq rax, (runtime::gen_hash);
                     call rax;
                 );
-                self.xmm_restore(using_xmm);
+                self.xmm_restore(*using_xmm);
             }
             AsmInst::NewRange {
                 start,
@@ -456,7 +456,7 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.xmm_save(using_xmm);
+                self.xmm_save(*using_xmm);
                 self.load_rdi(*start);
                 self.load_rsi(*end);
                 monoasm! { &mut self.jit,
@@ -466,7 +466,7 @@ impl Codegen {
                     movq rax, (runtime::gen_range);
                     call rax;
                 };
-                self.xmm_restore(using_xmm);
+                self.xmm_restore(*using_xmm);
                 self.handle_error(labels, *error);
             }
 
@@ -489,7 +489,7 @@ impl Codegen {
                 error: side_exit,
             } => {
                 self.gen_proxy(*outer);
-                self.xmm_save(&using_xmm);
+                self.xmm_save(*using_xmm);
                 monoasm! { &mut self.jit,
                     movq rdx, [rax - (LBP_BLOCK)];
                     movq rdi, rbx;
@@ -497,7 +497,7 @@ impl Codegen {
                     movq rax, (runtime::block_arg);
                     call rax;
                 };
-                self.xmm_restore(&using_xmm);
+                self.xmm_restore(*using_xmm);
                 self.handle_error(labels, *side_exit);
                 self.store_rax(*ret);
             }

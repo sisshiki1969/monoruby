@@ -115,13 +115,13 @@ fn math_cos(
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let xmm_using = ctx.get_xmm_using();
-        gen.xmm_save(&xmm_using);
+        gen.xmm_save(xmm_using);
         monoasm!( &mut gen.jit,
             movq xmm0, xmm(fsrc);
             movq rax, (extern_cos);
             call rax;
         );
-        gen.xmm_restore(&xmm_using);
+        gen.xmm_restore(xmm_using);
         monoasm!( &mut gen.jit,
             movq xmm(fret), xmm0;
         );
@@ -147,13 +147,13 @@ fn math_sin(
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let xmm_using = ctx.get_xmm_using();
-        gen.xmm_save(&xmm_using);
+        gen.xmm_save(xmm_using);
         monoasm!( &mut gen.jit,
             movq xmm0, xmm(fsrc);
             movq rax, (extern_sin);
             call rax;
         );
-        gen.xmm_restore(&xmm_using);
+        gen.xmm_restore(xmm_using);
         monoasm!( &mut gen.jit,
             movq xmm(fret), xmm0;
         );

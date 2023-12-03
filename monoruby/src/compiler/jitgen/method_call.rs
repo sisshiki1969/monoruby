@@ -129,7 +129,7 @@ impl Codegen {
         let global_class_version = self.class_version;
         let xmm_using = ctx.get_xmm_using();
         self.writeback_acc(ctx);
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         // r15 <- recv's class
         if recv.is_zero() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -196,7 +196,7 @@ impl Codegen {
 
         self.call_funcdata();
 
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
 
@@ -278,12 +278,12 @@ impl Codegen {
                 cmpl rsi, (-1);
                 jeq  slow_path;
             );
-            self.get_ivar(&xmm_using);
+            self.get_ivar(xmm_using);
             self.jit.bind_label(exit);
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(&xmm_using);
+            self.xmm_save(xmm_using);
             monoasm!( &mut self.jit,
                 movq rsi, (ivar_name.get()); // IvarId
                 movq rdx, r12; // &mut Globals
@@ -291,7 +291,7 @@ impl Codegen {
                 movq rax, (get_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(xmm_using);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -359,14 +359,14 @@ impl Codegen {
                 );
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
-                self.set_ivar(&xmm_using);
+                self.set_ivar(xmm_using);
                 self.jit_handle_error(ctx, pc);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
-                self.set_ivar(&xmm_using);
+                self.set_ivar(xmm_using);
                 self.jit_handle_error(ctx, pc);
             }
         } else {
@@ -389,7 +389,7 @@ impl Codegen {
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(&xmm_using);
+            self.xmm_save(xmm_using);
             monoasm!( &mut self.jit,
                 movq rdx, rdi;  // recv: Value
                 movq rcx, (ivar_name.get()); // name: IdentId
@@ -400,7 +400,7 @@ impl Codegen {
                 movq rax, (set_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(xmm_using);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -409,7 +409,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdx, [r14 - (conv(args))];   // val: Value
             );
-            self.set_ivar(&xmm_using);
+            self.set_ivar(xmm_using);
             self.jit_handle_error(ctx, pc);
             monoasm!( &mut self.jit,
                 jmp exit;
@@ -432,7 +432,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         let ret = store[callid].ret;
         self.writeback_acc(ctx);
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         self.execute_gc();
         let callsite = &store[callid];
         monoasm! { &mut self.jit,
@@ -524,7 +524,7 @@ impl Codegen {
         }
         self.pop_frame();
 
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
     }
@@ -543,7 +543,7 @@ impl Codegen {
         ctx.release(ret);
         self.writeback_acc(ctx);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -592,7 +592,7 @@ impl Codegen {
 
         self.call_funcdata();
 
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
     }

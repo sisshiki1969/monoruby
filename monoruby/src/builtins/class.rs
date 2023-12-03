@@ -87,7 +87,7 @@ fn inline_class_new(
     gen.gen_code(ir);
     ctx.release(ret);
     let using = ctx.get_xmm_using();
-    gen.xmm_save(&using);
+    gen.xmm_save(using);
     gen.load_rdi(recv);
     let cached_version = gen.jit.const_i32(-1);
     let cached_funcid = gen.jit.const_i32(-1);
@@ -125,7 +125,7 @@ fn inline_class_new(
     exit:
         movq rax, r15;
     );
-    gen.xmm_restore(&using);
+    gen.xmm_restore(using);
     gen.jit_handle_error(ctx, pc);
     gen.store_rax(ret);
 

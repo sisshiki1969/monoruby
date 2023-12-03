@@ -32,14 +32,14 @@ impl Codegen {
             }
         } else {
             // ctx.self_class != cached_class merely happens, but possible.
-            self.xmm_save(&xmm_using);
+            self.xmm_save(xmm_using);
             monoasm!( &mut self.jit,
                 movq rsi, (id.get());  // id: IdentId
                 movq rdx, r12; // &mut Globals
                 movq rax, (get_instance_var);
                 call rax;
             );
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(xmm_using);
         }
         self.save_rax_to_acc(ctx, ret);
     }
@@ -67,10 +67,10 @@ impl Codegen {
                     movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
             } else {
-                self.store_ivar_heap(cached_ivarid, is_object_ty, &using);
+                self.store_ivar_heap(cached_ivarid, is_object_ty, using);
             }
         } else {
-            self.xmm_save(&using);
+            self.xmm_save(using);
             monoasm!( &mut self.jit,
                 movq rdx, rdi;  // base: Value
                 movq rcx, (id.get());  // id: IdentId
@@ -80,7 +80,7 @@ impl Codegen {
                 movq rax, (set_instance_var);
                 call rax;
             );
-            self.xmm_restore(&using);
+            self.xmm_restore(using);
             self.jit_handle_error(ctx, pc);
         }
         self.jit.bind_label(exit);
@@ -132,7 +132,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: &[Xmm]) {
+    fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
         let exit = self.jit.label();
         let generic = self.jit.label();
         let ivar = ivarid.get() as i32;
@@ -175,21 +175,21 @@ impl Codegen {
     pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
         ctx.release(dst);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,
             movq rdi, r12;
             movl rsi, (name.get());
             movq rax, (runtime::get_global_var);
             call rax;
         };
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.save_rax_to_acc(ctx, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, val: SlotId) {
         self.fetch_slots(ctx, &[val]);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,
             movq rdi, r12;
             movl rsi, (name.get());
@@ -197,13 +197,13 @@ impl Codegen {
             movq rax, (runtime::set_global_var);
             call rax;
         };
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     pub(super) fn jit_load_svar(&mut self, ctx: &mut BBContext, id: u32, dst: SlotId) {
         ctx.release(dst);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movl rsi, r12;
@@ -211,7 +211,7 @@ impl Codegen {
             movq rax, (runtime::get_special_var);
             call rax;
         };
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.save_rax_to_acc(ctx, dst);
     }
 }

@@ -330,17 +330,13 @@ impl SlotState {
         WriteBack::new(xmm, literal, r15)
     }
 
-    pub(super) fn get_xmm_using(&self, sp: SlotId) -> Vec<Xmm> {
-        self.xmm
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if !v.iter().any(|slot| slot < &sp) {
-                    None
-                } else {
-                    Some(Xmm::new(i as u16))
-                }
-            })
-            .collect()
+    pub(super) fn get_xmm_using(&self, sp: SlotId) -> UsingXmm {
+        let mut b = UsingXmm::new([0; 1]);
+        self.xmm.iter().enumerate().for_each(|(i, v)| {
+            if v.iter().any(|slot| slot < &sp) {
+                b.set(i, true);
+            }
+        });
+        b
     }
 }

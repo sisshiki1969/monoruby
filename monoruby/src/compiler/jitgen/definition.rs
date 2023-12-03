@@ -12,7 +12,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         if superclass.is_zero() {
             monoasm! { &mut self.jit,
                 xorq rcx, rcx;
@@ -40,7 +40,7 @@ impl Codegen {
         };
         self.jit_handle_error(ctx, pc);
         self.jit_class_def_sub(ctx, func_id, ret, pc);
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     pub(super) fn jit_singleton_class_def(
@@ -52,7 +52,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm! { &mut self.jit,
             movq rdx, [r14 - (conv(base))];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
@@ -62,7 +62,7 @@ impl Codegen {
         };
         self.jit_handle_error(ctx, pc);
         self.jit_class_def_sub(ctx, func_id, ret, pc);
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     fn jit_class_def_sub(

@@ -11,7 +11,7 @@ impl Codegen {
         let const_version = self.const_version;
         let xmm_using = ctx.get_xmm_using();
         self.fetch_to_rax(ctx, src);
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         monoasm!( &mut self.jit,
           movq rdx, (id.get());  // name: IdentId
           movq rcx, rax;  // val: Value
@@ -21,7 +21,7 @@ impl Codegen {
           movq rax, (runtime::set_constant);
           call rax;
         );
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     ///

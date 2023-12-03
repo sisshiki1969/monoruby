@@ -47,7 +47,7 @@ impl Codegen {
             self.fetch_slots(ctx, &[base, idx]);
             ctx.release(dst);
             let xmm_using = ctx.get_xmm_using();
-            self.generic_index(&xmm_using, base, idx, pc);
+            self.generic_index(xmm_using, base, idx, pc);
         }
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, dst);
@@ -176,7 +176,7 @@ impl Codegen {
                 jmp  store;
             };
             self.jit.bind_label(generic);
-            self.xmm_save(&xmm_using);
+            self.xmm_save(xmm_using);
             monoasm! { &mut self.jit,
                 movq rdx, rbx;
                 movq rcx, r12;
@@ -184,7 +184,7 @@ impl Codegen {
                 movq rax, (set_array_integer_index);
                 call rax;
             };
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(xmm_using);
             monoasm! { &mut self.jit,
                 jmp  exit;
             };
@@ -192,7 +192,7 @@ impl Codegen {
         } else {
             self.fetch_slots(ctx, &[base, idx, src]);
             let xmm_using = ctx.get_xmm_using();
-            self.generic_index_assign(&xmm_using, base, idx, src, pc);
+            self.generic_index_assign(xmm_using, base, idx, src, pc);
         }
         self.jit_handle_error(ctx, pc);
     }
@@ -212,8 +212,8 @@ impl Codegen {
         }
     }
 
-    fn generic_index(&mut self, using: &[Xmm], base: SlotId, idx: SlotId, pc: BcPc) {
-        self.xmm_save(&using);
+    fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
+        self.xmm_save(using);
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
@@ -223,18 +223,18 @@ impl Codegen {
             movq rax, (runtime::get_index);
             call rax;
         }
-        self.xmm_restore(&using);
+        self.xmm_restore(using);
     }
 
     fn generic_index_assign(
         &mut self,
-        using: &[Xmm],
+        using: UsingXmm,
         base: SlotId,
         idx: SlotId,
         src: SlotId,
         pc: BcPc,
     ) {
-        self.xmm_save(&using);
+        self.xmm_save(using);
         monoasm! { &mut self.jit,
             movq rdx, [r14 - (conv(base))]; // base: Value
             movq rcx, [r14 - (conv(idx))]; // idx: Value
@@ -245,7 +245,7 @@ impl Codegen {
             movq rax, (runtime::set_index);
             call rax;
         };
-        self.xmm_restore(&using);
+        self.xmm_restore(using);
     }
 }
 

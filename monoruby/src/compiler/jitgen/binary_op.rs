@@ -70,14 +70,14 @@ impl Codegen {
             BinOpK::Exp => {
                 self.fetch_fixnum_mode(ctx, mode, dst, pc);
                 let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
+                self.xmm_save(xmm_using);
                 monoasm!( &mut self.jit,
                     sarq rdi, 1;
                     sarq rsi, 1;
                     movq rax, (pow_ii as u64);
                     call rax;
                 );
-                self.xmm_restore(&xmm_using);
+                self.xmm_restore(xmm_using);
                 self.save_rax_to_acc(ctx, dst);
             }
             BinOpK::Mul | BinOpK::Div => {
@@ -238,7 +238,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_rr(
         &mut self,
         kind: BinOpK,
-        using_xmm: &[Xmm],
+        using_xmm: UsingXmm,
         fret: Xmm,
         flhs: Xmm,
         frhs: Xmm,
@@ -300,14 +300,14 @@ impl Codegen {
                 }
             }
             BinOpK::Exp => {
-                self.xmm_save(&using_xmm);
+                self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&using_xmm);
+                self.xmm_restore(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
@@ -319,7 +319,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_ri(
         &mut self,
         kind: BinOpK,
-        using_xmm: &[Xmm],
+        using_xmm: UsingXmm,
         fret: Xmm,
         flhs: Xmm,
         rhs: i16,
@@ -353,14 +353,14 @@ impl Codegen {
             }
             BinOpK::Exp => {
                 let lhs = flhs.enc();
-                self.xmm_save(&using_xmm);
+                self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, [rip + rhs_label];
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&using_xmm);
+                self.xmm_restore(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
@@ -372,7 +372,7 @@ impl Codegen {
     pub(super) fn gen_binop_float_ir(
         &mut self,
         kind: BinOpK,
-        using_xmm: &[Xmm],
+        using_xmm: UsingXmm,
         fret: Xmm,
         lhs: i16,
         frhs: Xmm,
@@ -434,14 +434,14 @@ impl Codegen {
                 }
             }
             BinOpK::Exp => {
-                self.xmm_save(&using_xmm);
+                self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, [rip + lhs];
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
-                self.xmm_restore(&using_xmm);
+                self.xmm_restore(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
@@ -541,7 +541,7 @@ impl Codegen {
 
     pub(super) fn generic_cmp(&mut self, kind: CmpKind, ctx: &BBContext) {
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         match kind {
             CmpKind::Eq => self.call_binop(cmp_eq_values),
             CmpKind::Ne => self.call_binop(cmp_ne_values),
@@ -552,7 +552,7 @@ impl Codegen {
             CmpKind::TEq => self.call_binop(cmp_teq_values),
             CmpKind::Cmp => self.call_binop(cmp_cmp_values),
         }
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     pub(super) fn integer_cmp(&mut self, kind: CmpKind) {
@@ -830,9 +830,9 @@ impl Codegen {
     ) {
         let func = kind.generic_func();
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(xmm_using);
         self.call_binop(func);
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, dst);
     }
