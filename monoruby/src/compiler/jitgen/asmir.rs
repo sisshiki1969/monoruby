@@ -252,6 +252,34 @@ pub(super) enum AsmInst {
         dst: DynVar,
         src: GP,
     },
+
+    ClassDef {
+        superclass: SlotId,
+        dst: Option<SlotId>,
+        name: IdentId,
+        func_id: FuncId,
+        is_module: bool,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    SingletonClassDef {
+        base: SlotId,
+        dst: Option<SlotId>,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    MethodDef {
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+    },
+    SingletonMethodDef {
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+    },
 }
 
 pub(super) enum FMode {
@@ -558,6 +586,102 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq [rax - (offset)], R(*src as _);
                 );
+            }
+            AsmInst::ClassDef {
+                superclass,
+                dst,
+                name,
+                func_id,
+                is_module,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                // rcx <- superclass: Option<Value>
+                if superclass.is_zero() {
+                    monoasm! { &mut self.jit,
+                        xorq rcx, rcx;
+                    }
+                } else {
+                    monoasm! { &mut self.jit,
+                        movq rcx, [r14 - (conv(*superclass))];
+                    }
+                }
+                // r8 <- is_module
+                if *is_module {
+                    monoasm! { &mut self.jit,
+                        movl r8, 1;
+                    }
+                } else {
+                    monoasm! { &mut self.jit,
+                        xorq r8, r8;
+                    }
+                }
+                monoasm! { &mut self.jit,
+                    movl rdx, (name.get());  // rdx <- name
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    movq rax, (runtime::define_class);
+                    call rax;  // rax <- self: Value
+                };
+                self.handle_error(labels, *error);
+                self.jit_class_def_sub(*func_id, *dst);
+                self.handle_error(labels, *error);
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::SingletonClassDef {
+                base,
+                dst,
+                func_id,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdx, [r14 - (conv(*base))];  // rdx <- name
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    movq rax, (runtime::define_singleton_class);
+                    call rax;  // rax <- self: Value
+                };
+                self.handle_error(labels, *error);
+                self.jit_class_def_sub(*func_id, *dst);
+                self.handle_error(labels, *error);
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::MethodDef {
+                name,
+                func_id,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, rbx; // &mut Interp
+                    movq rsi, r12; // &Globals
+                    movq rdx, (u32::from(*name)); // IdentId
+                    movq rcx, (u32::from(*func_id)); // FuncId
+                    movq rax, (runtime::define_method);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::SingletonMethodDef {
+                obj,
+                name,
+                func_id,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, rbx; // &mut Interp
+                    movq rsi, r12; // &Globals
+                    movq rdx, (u32::from(*name)); // IdentId
+                    movq rcx, (u32::from(*func_id)); // FuncId
+                    movq r8, [r14 - (conv(*obj))];
+                    movq rax, (runtime::singleton_define_method);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
             }
         }
     }

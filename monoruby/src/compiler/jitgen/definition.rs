@@ -1,82 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_class_def(
-        &mut self,
-        ctx: &mut BBContext,
-        ret: Option<SlotId>,
-        superclass: SlotId,
-        name: IdentId,
-        func_id: FuncId,
-        is_module: bool,
-        pc: BcPc,
-    ) {
-        self.fetch_slots(ctx, &[superclass]);
-        ctx.release(ret);
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
-        if superclass.is_zero() {
-            monoasm! { &mut self.jit,
-                xorq rcx, rcx;
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                movq rcx, [r14 - (conv(superclass))];  // rcx <- superclass: Option<Value>
-            }
-        }
-        if is_module {
-            monoasm! { &mut self.jit,
-                movl r8, 1; // r8 <- is_module
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                xorq r8, r8;
-            }
-        }
-        monoasm! { &mut self.jit,
-            movl rdx, (name.get());  // rdx <- name
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_class);
-            call rax;  // rax <- self: Value
-        };
-        self.jit_handle_error(ctx, pc);
-        self.jit_class_def_sub(ctx, func_id, ret, pc);
-        self.xmm_restore(xmm_using);
-    }
-
-    pub(super) fn jit_singleton_class_def(
-        &mut self,
-        ctx: &mut BBContext,
-        ret: Option<SlotId>,
-        base: SlotId,
-        func_id: FuncId,
-        pc: BcPc,
-    ) {
-        self.fetch_slots(ctx, &[base]);
-        ctx.release(ret);
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
-        monoasm! { &mut self.jit,
-            movq rdx, [r14 - (conv(base))];  // rdx <- name
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_singleton_class);
-            call rax;  // rax <- self: Value
-        };
-        self.jit_handle_error(ctx, pc);
-        self.jit_class_def_sub(ctx, func_id, ret, pc);
-        self.xmm_restore(xmm_using);
-    }
-
-    fn jit_class_def_sub(
-        &mut self,
-        ctx: &mut BBContext,
-        func_id: FuncId,
-        ret: Option<SlotId>,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(ctx);
+    pub(super) fn jit_class_def_sub(&mut self, func_id: FuncId, ret: Option<SlotId>) {
         monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
@@ -109,6 +34,53 @@ impl Codegen {
             call rax;
             movq rax, r13;
         }
-        self.jit_handle_error(ctx, pc);
+    }
+}
+
+impl BBContext {
+    pub(super) fn jit_class_def(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        superclass: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        is_module: bool,
+        pc: BcPc,
+    ) {
+        self.fetch_slots(ir, &[superclass]);
+        self.release(dst);
+        let using_xmm = self.get_xmm_using();
+        let error = ir.new_error(pc, self.get_write_back());
+        ir.inst.push(AsmInst::ClassDef {
+            superclass,
+            dst,
+            name,
+            func_id,
+            is_module,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn jit_singleton_class_def(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        base: SlotId,
+        func_id: FuncId,
+        pc: BcPc,
+    ) {
+        self.fetch_slots(ir, &[base]);
+        self.release(dst);
+        let using_xmm = self.get_xmm_using();
+        let error = ir.new_error(pc, self.get_write_back());
+        ir.inst.push(AsmInst::SingletonClassDef {
+            base,
+            dst,
+            func_id,
+            using_xmm,
+            error,
+        });
     }
 }

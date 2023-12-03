@@ -1086,32 +1086,26 @@ impl Codegen {
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
-                    monoasm!( &mut self.jit,
-                        movq rdi, rbx; // &mut Interp
-                        movq rsi, r12; // &Globals
-                        movq rdx, (u32::from(name)); // IdentId
-                        movq rcx, (u32::from(func_id)); // FuncId
-                        movq rax, (runtime::define_method);
-                        call rax;
-                    );
-                    self.xmm_restore(xmm_using);
+                    let mut ir = AsmIr::new();
+                    let using_xmm = ctx.get_xmm_using();
+                    ir.inst.push(AsmInst::MethodDef {
+                        name,
+                        func_id,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::SingletonMethodDef { obj, name, func_id } => {
+                    let mut ir = AsmIr::new();
                     self.fetch_slots(&mut ctx, &[obj]);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
-                    monoasm!( &mut self.jit,
-                        movq rdi, rbx; // &mut Interp
-                        movq rsi, r12; // &Globals
-                        movq rdx, (u32::from(name)); // IdentId
-                        movq rcx, (u32::from(func_id)); // FuncId
-                        movq r8, [r14 - (conv(obj))];
-                        movq rax, (runtime::singleton_define_method);
-                        call rax;
-                    );
-                    self.xmm_restore(xmm_using);
+                    let using_xmm = ctx.get_xmm_using();
+                    ir.inst.push(AsmInst::SingletonMethodDef {
+                        obj,
+                        name,
+                        func_id,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::ClassDef {
                     ret,
@@ -1119,13 +1113,19 @@ impl Codegen {
                     name,
                     func_id,
                 } => {
-                    self.jit_class_def(&mut ctx, ret, superclass, name, func_id, false, pc);
+                    let mut ir = AsmIr::new();
+                    ctx.jit_class_def(&mut ir, ret, superclass, name, func_id, false, pc);
+                    self.gen_code(ir);
                 }
                 TraceIr::ModuleDef { ret, name, func_id } => {
-                    self.jit_class_def(&mut ctx, ret, SlotId::new(0), name, func_id, true, pc);
+                    let mut ir = AsmIr::new();
+                    ctx.jit_class_def(&mut ir, ret, SlotId::new(0), name, func_id, true, pc);
+                    self.gen_code(ir);
                 }
                 TraceIr::SingletonClassDef { ret, base, func_id } => {
-                    self.jit_singleton_class_def(&mut ctx, ret, base, func_id, pc);
+                    let mut ir = AsmIr::new();
+                    ctx.jit_singleton_class_def(&mut ir, ret, base, func_id, pc);
+                    self.gen_code(ir);
                 }
                 TraceIr::DefinedYield { ret } => {
                     self.fetch_slots(&mut ctx, &[ret]);
