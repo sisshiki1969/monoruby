@@ -499,159 +499,6 @@ impl Codegen {
     }
 }
 
-impl Codegen {
-    fn gen_asm(&mut self, ctx: &mut JitContext) {
-        for (ir, entry, exit) in std::mem::take(&mut ctx.asmir) {
-            self.gen_code_block(ir, entry, exit);
-        }
-    }
-
-    fn gen_code_block(&mut self, ir: AsmIr, entry: DestLabel, exit: Option<DestLabel>) {
-        let mut labels = vec![];
-        for _ in 0..ir.label {
-            labels.push(self.jit.label());
-        }
-
-        for side_exit in ir.side_exit {
-            match side_exit {
-                SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_side_deopt_with_label(pc, &wb, labels[label])
-                }
-                SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
-            }
-        }
-        if exit.is_some() {
-            self.jit.select_page(1);
-        }
-        self.jit.bind_label(entry);
-        for inst in ir.inst {
-            self.gen_asmir(&labels, &inst);
-        }
-        if let Some(exit) = exit {
-            monoasm!( &mut self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
-        }
-    }
-
-    pub(crate) fn gen_code(&mut self, ir: AsmIr) {
-        let mut labels = vec![];
-        for _ in 0..ir.label {
-            labels.push(self.jit.label());
-        }
-
-        for side_exit in ir.side_exit {
-            match side_exit {
-                SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_side_deopt_with_label(pc, &wb, labels[label])
-                }
-                SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
-            }
-        }
-        for inst in ir.inst {
-            self.gen_asmir(&labels, &inst);
-        }
-    }
-
-    fn gen_asmir(&mut self, labels: &[DestLabel], inst: &AsmInst) {
-        match inst {
-            AsmInst::AccToStack(r) => {
-                self.store_r15(*r);
-            }
-            AsmInst::RaxToAcc => {
-                monoasm!( &mut self.jit,
-                    movq r15, rax;
-                );
-            }
-
-            AsmInst::XmmMove(l, r) => self.xmm_mov(*l, *r),
-            AsmInst::XmmSwap(l, r) => self.xmm_swap(*l, *r),
-            AsmInst::NumToXmm(r, x, side_exit) => {
-                self.load_rdi(*r);
-                self.numeric_val_to_f64(x.enc(), labels[*side_exit]);
-            }
-            AsmInst::F64ToXmm(f, x) => {
-                let f = self.jit.const_f64(*f);
-                monoasm!( &mut self.jit,
-                    movq  xmm(x.enc()), [rip + f];
-                );
-            }
-            AsmInst::IntToXmm(r, x, side_exit) => {
-                if let Some(r) = r {
-                    self.load_rdi(*r);
-                } else {
-                    monoasm! {&mut self.jit,
-                        movq rdi, r15;
-                    }
-                }
-                self.integer_val_to_f64(x.enc(), labels[*side_exit]);
-            }
-            AsmInst::FloatToXmm(r, x, side_exit) => {
-                if let Some(r) = r {
-                    self.load_rdi(*r);
-                } else {
-                    monoasm! {&mut self.jit,
-                        movq rdi, r15;
-                    }
-                }
-                self.float_to_f64(x.enc(), labels[*side_exit]);
-            }
-            AsmInst::I64ToBoth(i, r, x) => {
-                let f = self.jit.const_f64(*i as f64);
-                monoasm! {&mut self.jit,
-                    movq [r14 - (conv(*r))], (Value::integer(*i).id());
-                    movq xmm(x.enc()), [rip + f];
-                }
-            }
-            AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(*x, slots),
-            AsmInst::LitToStack(v, slot) => self.literal_to_stack(*slot, *v),
-            AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
-
-            AsmInst::NewArrayToRax(callid, using_xmm) => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movl rdx, (callid.get());
-                    lea  rcx, [r14 - (LBP_SELF)];
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rax, (runtime::gen_array);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::NewHashToRax(args, len, using_xmm) => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    lea  rdi, [r14 - (conv(*args))];
-                    movq rsi, (*len);
-                    movq rax, (runtime::gen_hash);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::NewRangeToRax(start, end, exclude_end, using_xmm, side_exit) => {
-                self.xmm_save(using_xmm);
-                self.load_rdi(*start);
-                self.load_rsi(*end);
-                monoasm! { &mut self.jit,
-                    movq rdx, rbx; // &mut Executor
-                    movq rcx, r12; // &mut Globals
-                    movl r8, (if *exclude_end {1} else {0});
-                    movq rax, (runtime::gen_range);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-                let error = labels[*side_exit];
-                monoasm! { &mut self.jit,
-                    testq rax, rax; // Option<Value>
-                    jeq   error;
-                }
-            }
-        }
-    }
-}
-
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -845,7 +692,9 @@ impl Codegen {
                     assert_ne!(0, cc.loop_count);
                     cc.loop_count -= 1;
                     if cc.is_loop && cc.loop_count == 0 {
-                        self.go_deopt(&ctx, pc);
+                        let mut ir = AsmIr::new();
+                        ir.deopt(&ctx, pc);
+                        self.gen_code(ir);
                         break;
                     }
                 }
@@ -859,27 +708,21 @@ impl Codegen {
                     ctx.link_literal(dst, Value::nil());
                 }
                 TraceIr::Literal(dst, val) => {
+                    let mut ir = AsmIr::new();
                     ctx.release(dst);
                     if val.is_packed_value() || val.class() == FLOAT_CLASS {
                         ctx.link_literal(dst, val);
                     } else {
-                        let xmm_using = ctx.get_xmm_using();
-                        self.xmm_save(&xmm_using);
-                        monoasm!( &mut self.jit,
-                          movq rdi, (val.id());
-                          movq rax, (Value::value_deep_copy);
-                          call rax;
-                        );
-                        self.xmm_restore(&xmm_using);
-                        self.store_rax(dst);
+                        ir.deep_copy_lit(&ctx, val, dst);
                     }
+                    self.gen_code(ir);
                 }
                 TraceIr::Array { dst, callid } => {
-                    let CallSiteInfo { args, pos_num, .. } = store[callid];
                     let mut ir = AsmIr::new();
+                    let CallSiteInfo { args, pos_num, .. } = store[callid];
                     ctx.fetch_range(&mut ir, args, pos_num as u16);
                     ctx.release(dst);
-                    ir.push(AsmInst::NewArrayToRax(callid, ctx.get_xmm_using()));
+                    ir.new_array(&ctx, callid);
                     ir.save_rax_to_acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
@@ -887,7 +730,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     ctx.fetch_range(&mut ir, args, len * 2);
                     ctx.release(dst);
-                    ir.push(AsmInst::NewHashToRax(args, len as _, ctx.get_xmm_using()));
+                    ir.new_hash(&ctx, args, len as _);
                     ir.save_rax_to_acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
@@ -900,15 +743,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     ctx.fetch_slots(&mut ir, &[start, end]);
                     ctx.release(dst);
-                    let xmm_using = ctx.get_xmm_using();
-                    let error = ir.new_error(pc, ctx.get_write_back());
-                    ir.push(AsmInst::NewRangeToRax(
-                        start,
-                        end,
-                        exclude_end,
-                        xmm_using,
-                        error,
-                    ));
+                    ir.new_range(&mut ctx, pc, start, end, exclude_end);
                     ir.save_rax_to_acc(&mut ctx, dst);
                     self.gen_code(ir);
                 }
@@ -936,79 +771,34 @@ impl Codegen {
                         }
                         self.store_rax(dst);
                     } else {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let mut ir = AsmIr::new();
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
                         return;
                     }
                 }
                 TraceIr::StoreConst(src, id) => {
                     self.jit_store_constant(&mut ctx, id, src);
                 }
-                TraceIr::BlockArgProxy(dst, outer) => {
-                    ctx.release(dst);
-                    if outer == 0 {
-                        monoasm! { &mut self.jit,
-                            movq rax, r14;
-                        };
-                    } else {
-                        monoasm!( &mut self.jit,
-                            movq rax, [r14 - (LBP_OUTER)];
-                        );
-                        for _ in 0..outer - 1 {
-                            monoasm!( &mut self.jit,
-                                movq rax, [rax];
-                            );
-                        }
-                        monoasm!( &mut self.jit,
-                            lea rax, [rax + (LBP_OUTER)];
-                        );
-                    }
-                    monoasm! { &mut self.jit,
-                        movq rax, [rax - (LBP_BLOCK)];
-                        xorq rdi, rdi;
-                        movq rsi, 0b10;
-                        testq rax, 0b1;
-                        cmovneq rdi, rsi;
-                        addq rax, rdi;
-                    };
-                    self.store_rax(dst);
+                TraceIr::BlockArgProxy(ret, outer) => {
+                    ctx.release(ret);
+                    let mut ir = AsmIr::new();
+                    ir.block_arg_proxy(ret, outer);
+                    self.gen_code(ir);
                 }
-                TraceIr::BlockArg(dst, outer) => {
-                    ctx.release(dst);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(&xmm_using);
-                    if outer == 0 {
-                        monoasm! { &mut self.jit,
-                            movq rax, r14;
-                        };
-                    } else {
-                        monoasm!( &mut self.jit,
-                            movq rax, [r14 - (LBP_OUTER)];
-                        );
-                        for _ in 0..outer - 1 {
-                            monoasm!( &mut self.jit,
-                                movq rax, [rax];
-                            );
-                        }
-                        monoasm!( &mut self.jit,
-                            lea rax, [rax + (LBP_OUTER)];
-                        );
-                    }
-                    monoasm! { &mut self.jit,
-                        movq rdx, [rax - (LBP_BLOCK)];
-                        movq rdi, rbx;
-                        movq rsi, r12;
-                        movq rax, (runtime::block_arg);
-                        call rax;
-                    };
-                    self.xmm_restore(&xmm_using);
-                    self.jit_handle_error(&ctx, pc);
-                    self.store_rax(dst);
+                TraceIr::BlockArg(ret, outer) => {
+                    ctx.release(ret);
+                    let mut ir = AsmIr::new();
+                    ir.block_arg(&ctx, pc, ret, outer);
+                    self.gen_code(ir);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     if let Some(cached_class) = cached_class {
                         self.jit_load_ivar(&mut ctx, id, ret, cached_class, cached_ivarid);
                     } else {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let mut ir = AsmIr::new();
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
                         return;
                     }
                 }
@@ -1016,52 +806,37 @@ impl Codegen {
                     if let Some(cached_class) = cached_class {
                         self.jit_store_ivar(&mut ctx, id, src, pc, cached_class, cached_ivarid);
                     } else {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let mut ir = AsmIr::new();
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
                         return;
                     }
                 }
                 TraceIr::LoadGvar { dst, name } => self.jit_load_gvar(&mut ctx, name, dst),
                 TraceIr::StoreGvar { src: val, name } => self.jit_store_gvar(&mut ctx, name, val),
                 TraceIr::LoadSvar { dst, id } => self.jit_load_svar(&mut ctx, id, dst),
-                TraceIr::LoadDynVar(ret, src) => {
-                    ctx.release(ret);
-                    monoasm!( &mut self.jit,
-                        movq rax, [r14 - (LBP_OUTER)];
-                    );
-                    for _ in 0..src.outer - 1 {
-                        monoasm!( &mut self.jit,
-                            movq rax, [rax];
-                        );
-                    }
-                    let offset = conv(src.reg) - LBP_OUTER;
-                    monoasm!( &mut self.jit,
-                        movq rax, [rax - (offset)];
-                    );
-                    if !ret.is_zero() {
-                        self.store_rax(ret);
-                    }
+                TraceIr::LoadDynVar(dst, src) => {
+                    ctx.release(dst);
+                    let mut ir = AsmIr::new();
+                    ir.inst.push(AsmInst::LoadDynVar { dst, src });
+                    self.gen_code(ir);
                 }
                 TraceIr::StoreDynVar(dst, src) => {
-                    self.fetch_to_rdi(&mut ctx, src);
-                    monoasm!( &mut self.jit,
-                        movq rax, [r14 - (LBP_OUTER)];
-                    );
-                    for _ in 0..dst.outer - 1 {
-                        monoasm!( &mut self.jit,
-                            movq rax, [rax];
-                        );
-                    }
-                    let offset = conv(dst.reg) - LBP_OUTER;
-                    //self.load_rdi(src);
-                    monoasm!( &mut self.jit,
-                        movq [rax - (offset)], rdi;
-                    );
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
+                    ir.inst.push(AsmInst::StoreDynVar {
+                        dst: dst.clone(),
+                        src: GP::Rdi,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::BitNot { dst: ret, src } => {
                     self.fetch_to_rdi(&mut ctx, src);
                     ctx.release(ret);
                     if pc.classid1().0 == 0 {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let mut ir = AsmIr::new();
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
                         return;
                     } else {
                         let xmm_using = ctx.get_xmm_using();
@@ -1091,7 +866,8 @@ impl Codegen {
                         self.fetch_to_rdi(&mut ctx, src);
                         ctx.release(dst);
                         if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
+                            let deopt = self.gen_side_deopt(pc, &ctx);
+                            self.recompile_and_deopt(position, deopt);
                             return;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
@@ -1113,7 +889,9 @@ impl Codegen {
                         self.fetch_to_rdi(&mut ctx, src);
                         ctx.release(ret);
                         if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
+                            let mut ir = AsmIr::new();
+                            ir.recompile_and_deopt(&ctx, pc, position);
+                            self.gen_code(ir);
                             return;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
@@ -1164,7 +942,8 @@ impl Codegen {
                     self.fetch_binary(&mut ctx, &mode);
                     ctx.release(dst);
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        self.recompile_and_deopt(position, deopt);
                         return;
                     } else {
                         self.load_binary_args_with_mode(&mode);
@@ -1207,7 +986,8 @@ impl Codegen {
                         self.fetch_binary(&mut ctx, &mode);
                         ctx.release(ret);
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
+                            let deopt = self.gen_side_deopt(pc, &ctx);
+                            self.recompile_and_deopt(position, deopt);
                             return;
                         } else {
                             self.load_binary_args_with_mode(&mode);
@@ -1306,7 +1086,9 @@ impl Codegen {
                     if let Some(fid) = pc.cached_fid() {
                         self.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        let mut ir = AsmIr::new();
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
                         return;
                     }
                 }
@@ -1550,11 +1332,11 @@ impl Codegen {
         }
     }
 
-    fn recompile_and_deopt(&mut self, ctx: &mut BBContext, position: Option<BcPc>, pc: BcPc) {
+    fn recompile_and_deopt(&mut self, position: Option<BcPc>, deopt: DestLabel) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
         let counter = self.jit.const_i32(5);
-        let deopt = self.gen_side_deopt(pc, ctx);
+
         monoasm!( &mut self.jit,
             xorq rdi, rdi;
             cmpl [rip + counter], 0;
@@ -1746,12 +1528,12 @@ impl Codegen {
     ///
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
-    fn go_deopt(&mut self, ctx: &BBContext, pc: BcPc) {
+    /*fn go_deopt(&mut self, ctx: &BBContext, pc: BcPc) {
         let fallback = self.gen_side_deopt(pc, ctx);
         monoasm!( &mut self.jit,
             jmp fallback;
         );
-    }
+    }*/
 
     fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
         self.load_rdi(lhs);

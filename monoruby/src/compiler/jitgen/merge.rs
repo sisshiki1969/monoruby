@@ -127,7 +127,7 @@ impl BBContext {
         let len = self.reg_num();
 
         if let Some(slot) = self.clear_r15() {
-            ir.push(AsmInst::AccToStack(slot));
+            ir.acc2stack(slot);
         }
 
         for i in 0..len {
@@ -136,10 +136,10 @@ impl BBContext {
                 match self[reg] {
                     LinkMode::Xmm(freg) => {
                         self.xmm_to_both(freg);
-                        ir.push(AsmInst::XmmToBoth(freg, self.xmm_slots(freg).to_vec()));
+                        ir.xmm2both(freg, self.xmm_slots(freg).to_vec());
                     }
                     LinkMode::Literal(v) => {
-                        ir.push(AsmInst::LitToStack(v, reg));
+                        ir.lit2stack(v, reg);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
@@ -157,10 +157,10 @@ impl BBContext {
                     if l == r {
                     } else if self.is_xmm_vacant(r) {
                         self.link_xmm(reg, r);
-                        ir.push(AsmInst::XmmMove(l, r));
+                        ir.xmm_move(l, r);
                     } else {
                         self.xmm_swap(l, r);
-                        ir.push(AsmInst::XmmSwap(l, r));
+                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
@@ -168,34 +168,34 @@ impl BBContext {
                         self[reg] = LinkMode::Xmm(l);
                     } else if self.is_xmm_vacant(r) {
                         self.link_xmm(reg, r);
-                        ir.push(AsmInst::XmmMove(l, r));
+                        ir.xmm_move(l, r);
                     } else {
                         self.xmm_swap(l, r);
-                        ir.push(AsmInst::XmmSwap(l, r));
+                        ir.xmm_swap(l, r);
                     }
                     guard_list.push(reg);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    ir.push(AsmInst::XmmToBoth(l, vec![reg]));
+                    ir.xmm2both(l, vec![reg]);
                     if l == r {
                         self[reg] = LinkMode::Both(l);
                     } else if self.is_xmm_vacant(r) {
                         self.link_both(reg, r);
-                        ir.push(AsmInst::XmmMove(l, r));
+                        ir.xmm_move(l, r);
                     } else {
                         self.xmm_swap(l, r);
-                        ir.push(AsmInst::XmmSwap(l, r));
+                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
                     } else if self.is_xmm_vacant(r) {
                         self.link_both(reg, r);
-                        ir.push(AsmInst::XmmMove(l, r));
+                        ir.xmm_move(l, r);
                     } else {
                         self.xmm_swap(l, r);
-                        ir.push(AsmInst::XmmSwap(l, r));
+                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
@@ -206,7 +206,7 @@ impl BBContext {
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
                         self.link_xmm(reg, r);
-                        ir.push(AsmInst::F64ToXmm(f, r));
+                        ir.f64toxmm(f, r);
                     } else {
                         unreachable!()
                     }
@@ -215,14 +215,14 @@ impl BBContext {
             }
         }
 
-        let side_exit = ir.new_deopt(pc + 1, self.get_write_back());
+        let deopt = ir.new_deopt(pc + 1, self.get_write_back());
 
         for (r, x) in conv_list {
-            ir.push(AsmInst::NumToXmm(r, x, side_exit));
+            ir.inst.push(AsmInst::NumToXmm(r, x, deopt));
         }
 
         for r in guard_list {
-            ir.push(AsmInst::GuardFloat(r, side_exit));
+            ir.inst.push(AsmInst::GuardFloat(r, deopt));
         }
 
         ir

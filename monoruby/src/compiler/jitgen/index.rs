@@ -10,10 +10,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            let exit = self.jit.label();
             let out_range = self.jit.label();
-            let heap = self.jit.label();
-
             self.fetch_to_rdi(ctx, base);
 
             let side_exit = if let Some(i) = ctx.is_u16_literal(idx) {
@@ -39,44 +36,13 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     addq rsi, rax;
                     js   out_range;
-                    exit:
+                exit:
                 }
                 side_exit
             };
             ctx.release(dst);
-
             self.guard_rdi_array(side_exit);
-
-            monoasm! { &mut self.jit,
-                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                cmpq rax, (ARRAY_INLINE_CAPA);
-                jgt  heap;
-                // inline
-                // rsi must be a positive integer.
-                cmpq rax, rsi;
-                // upper bound check
-                jle  out_range;
-                movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-            exit:
-            }
-
-            self.jit.select_page(1);
-            monoasm! { &mut self.jit,
-            heap:
-                // heap
-                // rsi must be a positive integer.
-                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                cmpq rax, rsi;
-                // upper bound check
-                jle  out_range;
-                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                movq rax, [rdi + rsi * 8];
-                jmp exit;
-            out_range:
-                movl rax, (NIL_VALUE);
-                jmp  exit;
-            }
-            self.jit.select_page(0);
+            self.array_index(out_range);
         } else {
             self.fetch_slots(ctx, &[base, idx]);
             ctx.release(dst);
@@ -85,6 +51,46 @@ impl Codegen {
         }
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, dst);
+    }
+
+    ///
+    /// ### in
+    /// - rdi: base Value
+    /// - rsi: index non-negative i64
+    ///
+    fn array_index(&mut self, out_range: DestLabel) {
+        let exit = self.jit.label();
+        let heap = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  heap;
+            // inline
+            // rsi must be a positive integer.
+            cmpq rax, rsi;
+            // upper bound check
+            jle  out_range;
+            movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
+        exit:
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        heap:
+            // heap
+            // rsi must be a positive integer.
+            movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmpq rax, rsi;
+            // upper bound check
+            jle  out_range;
+            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            movq rax, [rdi + rsi * 8];
+            jmp exit;
+        out_range:
+            movl rax, (NIL_VALUE);
+            jmp  exit;
+        }
+        self.jit.select_page(0);
     }
 
     ///
@@ -119,6 +125,7 @@ impl Codegen {
             let exit = self.jit.label();
             let heap = self.jit.label();
             let generic = self.jit.label();
+            self.writeback_acc(ctx);
             self.fetch_to_rdi(ctx, base);
             self.fetch_to_r15(ctx, src);
 

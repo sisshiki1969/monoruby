@@ -27,28 +27,28 @@ impl Codegen {
     /// Fetch *arg* and store in *rax*.
     ///
     pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, 0)
+        self.fetch_to_reg(ctx, reg, GP::Rax)
     }
 
     ///
     /// Fetch *arg* and store in *rdi*.
     ///
     pub(super) fn fetch_to_rdi(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, 7)
+        self.fetch_to_reg(ctx, reg, GP::Rdi)
     }
 
     ///
     /// Fetch *arg* and store in *rsi*.
     ///
     pub(super) fn fetch_to_rsi(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, 6)
+        self.fetch_to_reg(ctx, reg, GP::Rsi)
     }
 
     ///
     /// Fetch *arg* and store in *r15*.
     ///
     pub(super) fn fetch_to_r15(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, 15)
+        self.fetch_to_reg(ctx, reg, GP::R15)
     }
 
     ///
@@ -59,49 +59,14 @@ impl Codegen {
     /// 7 : rdi
     /// 15: r15
     ///
-    fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: u64) {
+    fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: GP) {
         if reg >= ctx.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
             panic!();
         };
-        match ctx[reg] {
-            LinkMode::Xmm(x) => {
-                self.writeback_acc(ctx);
-                let f64_to_val = self.f64_to_val;
-                monoasm! { &mut self.jit,
-                        movq xmm0, xmm(x.enc());
-                        call f64_to_val;
-                }
-                if dst != 0 {
-                    monoasm! { &mut self.jit,
-                        movq R(dst), rax;
-                    }
-                }
-                monoasm! { &mut self.jit,
-                    movq [r14 - (conv(reg))], rax;
-                }
-                ctx[reg] = LinkMode::Both(x);
-            }
-            LinkMode::Literal(v) => {
-                self.writeback_acc(ctx);
-                monoasm!(&mut self.jit,
-                    movq R(dst), (v.id());
-                );
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                self.writeback_acc(ctx);
-                monoasm!( &mut self.jit,
-                    movq R(dst), [r14 - (conv(reg))];
-                );
-            }
-            LinkMode::R15 => {
-                if dst != 15 {
-                    monoasm!(&mut self.jit,
-                        movq R(dst), r15;
-                    );
-                }
-            }
-        }
+        let mut ir = AsmIr::new();
+        ctx.fetch_to_reg(&mut ir, reg, dst);
+        self.gen_code(ir);
     }
 
     ///
@@ -210,15 +175,15 @@ impl BBContext {
         match self[reg] {
             LinkMode::Xmm(freg) => {
                 self[reg] = LinkMode::Both(freg);
-                ir.push(AsmInst::XmmToBoth(freg, vec![reg]));
+                ir.xmm2both(freg, vec![reg]);
             }
             LinkMode::Literal(v) => {
                 self[reg] = LinkMode::Stack;
-                ir.push(AsmInst::LitToStack(v, reg));
+                ir.lit2stack(v, reg);
             }
             LinkMode::R15 => {
                 self.release(reg);
-                ir.push(AsmInst::AccToStack(reg));
+                ir.acc2stack(reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
@@ -245,6 +210,38 @@ impl BBContext {
         self.fetch_range(ir, *args, *len as u16);
     }
 
+    pub(super) fn fetch_to_reg(&mut self, ir: &mut AsmIr, reg: SlotId, dst: GP) {
+        if reg >= self.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, self.sp);
+            panic!();
+        };
+        match self[reg] {
+            LinkMode::Xmm(x) => {
+                if let Some(slot) = self.clear_r15() {
+                    ir.acc2stack(slot);
+                }
+                ir.xmm2both(x, vec![reg]);
+                ir.reg_move(GP::Rax, dst);
+                self[reg] = LinkMode::Both(x);
+            }
+            LinkMode::Literal(v) => {
+                if let Some(slot) = self.clear_r15() {
+                    ir.acc2stack(slot);
+                }
+                ir.inst.push(AsmInst::LitToReg(v, dst));
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                if let Some(slot) = self.clear_r15() {
+                    ir.acc2stack(slot);
+                }
+                ir.inst.push(AsmInst::StackToReg(reg, dst));
+            }
+            LinkMode::R15 => {
+                ir.reg_move(GP::R15, dst);
+            }
+        }
+    }
+
     ///
     /// Read from a slot *reg* as f64, and store in xmm register.
     ///
@@ -256,24 +253,22 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.link_new_both(reg);
-                let label = ir.new_deopt(pc, self.get_write_back());
-                ir.push(AsmInst::IntToXmm(Some(reg), x, label));
+                ir.int2xmm(self, pc, Some(reg), x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.link_new_both(reg);
-                let label = ir.new_deopt(pc, self.get_write_back());
-                ir.push(AsmInst::IntToXmm(None, x, label));
+                ir.int2xmm(self, pc, None, x);
                 x
             }
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     let x = self.link_new_xmm(reg);
-                    ir.push(AsmInst::F64ToXmm(f, x));
+                    ir.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     let x = self.link_new_both(reg);
-                    ir.push(AsmInst::I64ToBoth(i, reg, x));
+                    ir.i64toboth(i, reg, x);
                     x
                 } else {
                     unreachable!()
@@ -294,24 +289,22 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.link_new_both(reg);
-                let label = ir.new_deopt(pc, self.get_write_back());
-                ir.push(AsmInst::FloatToXmm(Some(reg), x, label));
+                ir.float2xmm(self, pc, Some(reg), x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.link_new_both(reg);
-                let label = ir.new_deopt(pc, self.get_write_back());
-                ir.push(AsmInst::FloatToXmm(None, x, label));
+                ir.float2xmm(self, pc, None, x);
                 x
             }
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     let x = self.link_new_xmm(reg);
-                    ir.push(AsmInst::F64ToXmm(f, x));
+                    ir.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     let x = self.link_new_both(reg);
-                    ir.push(AsmInst::I64ToBoth(i, reg, x));
+                    ir.i64toboth(i, reg, x);
                     x
                 } else {
                     unreachable!()
