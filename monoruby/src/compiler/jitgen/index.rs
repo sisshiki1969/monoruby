@@ -17,11 +17,11 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
-                self.gen_side_deopt(pc, ctx)
+                self.gen_deopt(pc, ctx)
             } else {
                 let exit = self.jit.label();
                 self.fetch_to_rsi(ctx, idx);
-                let side_exit = self.gen_side_deopt(pc, ctx);
+                let side_exit = self.gen_deopt(pc, ctx);
                 monoasm! { &mut self.jit,
                     xchgq rdi, rsi;
                     testq rdi, 0b01;
@@ -133,10 +133,10 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movl rsi, (i);
                 }
-                self.gen_side_deopt(pc, ctx)
+                self.gen_deopt(pc, ctx)
             } else {
                 self.fetch_to_rsi(ctx, idx);
-                let side_exit = self.gen_side_deopt(pc, ctx);
+                let side_exit = self.gen_deopt(pc, ctx);
                 monoasm! { &mut self.jit,
                     testq rsi, 0b01;
                     jeq side_exit;

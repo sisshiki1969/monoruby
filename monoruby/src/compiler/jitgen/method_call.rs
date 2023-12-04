@@ -26,7 +26,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         self.writeback_acc(ctx);
-        let deopt = self.gen_side_deopt(pc, ctx);
+        let deopt = self.gen_deopt(pc, ctx);
         self.guard_version(pc, ctx, deopt);
         inline_gen(self, ctx, callsite, pc, deopt);
     }
@@ -71,7 +71,7 @@ impl Codegen {
             ..
         } = store[callid];
         let cached_class = pc.cached_class1().unwrap();
-        let deopt = self.gen_side_deopt(pc, ctx);
+        let deopt = self.gen_deopt(pc, ctx);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_zero() {

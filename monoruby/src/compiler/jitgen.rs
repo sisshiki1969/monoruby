@@ -37,7 +37,6 @@ pub mod trace_ir;
 /// Context for JIT compilation.
 ///
 struct JitContext {
-    fid: FuncId,
     ///
     /// Destination labels for jump instructions.
     ///
@@ -46,6 +45,9 @@ struct JitContext {
     /// Basic block information.
     ///
     bb_scan: Vec<(ExitType, SlotInfo)>,
+    ///
+    /// Back edges to the loop head.
+    ///
     loop_backedges: HashMap<BasicBlockId, SlotInfo>,
     ///
     /// Loop
@@ -104,6 +106,9 @@ struct JitContext {
     start_codepos: usize,
 }
 
+///
+/// Information of incoming branches to an each basic block.
+///
 #[derive(Clone)]
 pub(crate) struct Incoming(Vec<Vec<BcIndex>>);
 
@@ -147,7 +152,6 @@ impl JitContext {
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
-            fid: func.id(),
             labels,
             bb_scan,
             loop_backedges: HashMap::default(),
@@ -168,7 +172,7 @@ impl JitContext {
     }
 
     ///
-    /// Add new branch from *src_idx to *dest* with *bbctx*.
+    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
     ///
     fn new_branch(
         &mut self,
@@ -189,6 +193,9 @@ impl JitContext {
         });
     }
 
+    ///
+    /// Add new continuation branch from *src_idx* to *dest* with the context *bbctx*.
+    ///
     fn new_continue(
         &mut self,
         func: &ISeqInfo,
@@ -208,6 +215,9 @@ impl JitContext {
         })
     }
 
+    ///
+    /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
+    ///
     fn new_backedge(
         &mut self,
         func: &ISeqInfo,
@@ -224,11 +234,19 @@ impl JitContext {
     }
 }
 
+///
+/// The information for branches.
+///
 #[derive(Debug)]
 struct BranchEntry {
+    /// source instruction index of the branch.
     src_idx: BcIndex,
+    /// context of the source basic block.
     bbctx: BBContext,
+    /// `DestLabel` for the destination basic block.
     label: DestLabel,
+    /// true if the branch is a continuation branch.
+    /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
 }
 
@@ -236,6 +254,11 @@ pub(crate) fn conv(reg: SlotId) -> i64 {
     reg.0 as i64 * 8 + LBP_SELF
 }
 
+///
+/// The strust holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
+///
+/// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
+///
 struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
@@ -253,18 +276,17 @@ impl WriteBack {
 }
 
 ///
-/// Context of the current Basic block.
+/// Context of an each basic block.
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BBContext {
-    fid: FuncId,
-    /// Information for stack slots.
+    /// state stack slots.
     slot_state: SlotState,
-    /// Stack top register.
+    /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
+    /// *self* value
     self_value: Value,
-    local_num: usize,
 }
 
 impl std::ops::Deref for BBContext {
@@ -283,12 +305,10 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            fid: cc.fid,
             slot_state: SlotState::new(cc),
             sp: SlotId(cc.local_num as u16),
             next_sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,
-            local_num: cc.local_num,
         }
     }
 
@@ -394,11 +414,11 @@ pub(crate) enum LinkMode {
     ///
     Xmm(Xmm),
     ///
-    /// Linked to an xmm register but we can only read.
+    /// Linked to an xmm register but we can only read to keep consistency.
     ///
     Both(Xmm),
     ///
-    /// No linkage with any xmm regiter.
+    /// No linkage with xmm regiter.
     ///
     Stack,
     ///
@@ -440,7 +460,7 @@ impl Codegen {
         if let Some(pc) = position {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let side_exit = self.gen_side_deopt(pc + 1, &bbctx);
+            let side_exit = self.gen_deopt(pc + 1, &bbctx);
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
             );
@@ -769,7 +789,7 @@ impl Codegen {
 
                     if let (version, base_class, Some(v)) = store[id].cache {
                         let base_slot = store[id].base;
-                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        let deopt = self.gen_deopt(pc, &ctx);
                         if let Some(f) = v.try_float() {
                             let fdst = ctx.link_new_both(dst);
                             self.load_float_constant(
@@ -963,7 +983,7 @@ impl Codegen {
                     } else if mode.is_integer_op(&pc) {
                         self.fetch_binary(&mut ctx, &mode);
                         ctx.release(ret);
-                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        let deopt = self.gen_deopt(pc, &ctx);
                         self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
                         self.jit_handle_error(&ctx, pc);
@@ -1471,10 +1491,10 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_side_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
+    fn gen_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let entry = self.jit.label();
         let wb = ctx.get_write_back();
-        self.gen_side_deopt_with_label(pc, &wb, entry);
+        self.gen_deopt_with_label(pc, &wb, entry);
         entry
     }
 
@@ -1484,7 +1504,7 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_side_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+    fn gen_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);

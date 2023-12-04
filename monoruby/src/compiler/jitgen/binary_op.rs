@@ -190,7 +190,7 @@ impl Codegen {
         let is_rhs_smi = ctx.is_i16_literal(rhs).is_some();
         self.fetch_to_rdi(ctx, lhs);
         self.fetch_to_rsi(ctx, rhs);
-        let deopt = self.gen_side_deopt(pc, ctx);
+        let deopt = self.gen_deopt(pc, ctx);
         ctx.release(dst);
         if !is_lhs_smi {
             self.guard_rdi_fixnum(deopt);
@@ -210,7 +210,7 @@ impl Codegen {
     ) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rdi(ctx, slot);
-        let deopt = self.gen_side_deopt(pc, ctx);
+        let deopt = self.gen_deopt(pc, ctx);
         ctx.release(dst);
         if !is_smi {
             self.guard_rdi_fixnum(deopt);
@@ -227,7 +227,7 @@ impl Codegen {
     ) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rsi(ctx, slot);
-        let deopt = self.gen_side_deopt(pc, ctx);
+        let deopt = self.gen_deopt(pc, ctx);
         ctx.release(dst);
         if !is_smi {
             self.guard_rsi_fixnum(deopt);
@@ -505,7 +505,7 @@ impl Codegen {
                     self.fetch_binary(ctx, &mode);
                     ctx.release(ret);
                     if mode.is_integer_op(&pc) {
-                        let deopt = self.gen_side_deopt(pc, ctx);
+                        let deopt = self.gen_deopt(pc, ctx);
                         match mode {
                             OpMode::RR(lhs, rhs) => {
                                 self.load_guard_binary_fixnum(lhs, rhs, deopt);

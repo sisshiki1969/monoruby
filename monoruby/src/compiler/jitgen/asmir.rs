@@ -317,7 +317,7 @@ impl Codegen {
         for side_exit in ir.side_exit {
             match side_exit {
                 SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_side_deopt_with_label(pc, &wb, labels[label])
+                    self.gen_deopt_with_label(pc, &wb, labels[label])
                 }
                 SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
             }
@@ -346,7 +346,7 @@ impl Codegen {
         for side_exit in ir.side_exit {
             match side_exit {
                 SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_side_deopt_with_label(pc, &wb, labels[label])
+                    self.gen_deopt_with_label(pc, &wb, labels[label])
                 }
                 SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
             }
@@ -526,7 +526,7 @@ impl Codegen {
             }
 
             AsmInst::BlockArgProxy { ret, outer } => {
-                self.gen_proxy(*outer);
+                self.get_outer_lfp(*outer);
                 monoasm! { &mut self.jit,
                     movq rax, [rax - (LBP_BLOCK)];
                     xorq rdi, rdi;
@@ -543,7 +543,7 @@ impl Codegen {
                 using_xmm,
                 error: side_exit,
             } => {
-                self.gen_proxy(*outer);
+                self.get_outer_lfp(*outer);
                 self.xmm_save(*using_xmm);
                 monoasm! { &mut self.jit,
                     movq rdx, [rax - (LBP_BLOCK)];
@@ -597,33 +597,7 @@ impl Codegen {
                 error,
             } => {
                 self.xmm_save(*using_xmm);
-                // rcx <- superclass: Option<Value>
-                if superclass.is_zero() {
-                    monoasm! { &mut self.jit,
-                        xorq rcx, rcx;
-                    }
-                } else {
-                    monoasm! { &mut self.jit,
-                        movq rcx, [r14 - (conv(*superclass))];
-                    }
-                }
-                // r8 <- is_module
-                if *is_module {
-                    monoasm! { &mut self.jit,
-                        movl r8, 1;
-                    }
-                } else {
-                    monoasm! { &mut self.jit,
-                        xorq r8, r8;
-                    }
-                }
-                monoasm! { &mut self.jit,
-                    movl rdx, (name.get());  // rdx <- name
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    movq rax, (runtime::define_class);
-                    call rax;  // rax <- self: Value
-                };
+                self.class_def(*superclass, *name, *is_module);
                 self.handle_error(labels, *error);
                 self.jit_class_def_sub(*func_id, *dst);
                 self.handle_error(labels, *error);
@@ -637,13 +611,7 @@ impl Codegen {
                 error,
             } => {
                 self.xmm_save(*using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdx, [r14 - (conv(*base))];  // rdx <- name
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    movq rax, (runtime::define_singleton_class);
-                    call rax;  // rax <- self: Value
-                };
+                self.singleton_class_def(*base);
                 self.handle_error(labels, *error);
                 self.jit_class_def_sub(*func_id, *dst);
                 self.handle_error(labels, *error);
@@ -655,14 +623,7 @@ impl Codegen {
                 using_xmm,
             } => {
                 self.xmm_save(*using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx; // &mut Interp
-                    movq rsi, r12; // &Globals
-                    movq rdx, (u32::from(*name)); // IdentId
-                    movq rcx, (u32::from(*func_id)); // FuncId
-                    movq rax, (runtime::define_method);
-                    call rax;
-                );
+                self.method_def(*name, *func_id);
                 self.xmm_restore(*using_xmm);
             }
             AsmInst::SingletonMethodDef {
@@ -672,15 +633,7 @@ impl Codegen {
                 using_xmm,
             } => {
                 self.xmm_save(*using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx; // &mut Interp
-                    movq rsi, r12; // &Globals
-                    movq rdx, (u32::from(*name)); // IdentId
-                    movq rcx, (u32::from(*func_id)); // FuncId
-                    movq r8, [r14 - (conv(*obj))];
-                    movq rax, (runtime::singleton_define_method);
-                    call rax;
-                );
+                self.singleton_method_def(*obj, *name, *func_id);
                 self.xmm_restore(*using_xmm);
             }
         }
@@ -703,7 +656,7 @@ impl Codegen {
     /// ### out
     /// - rax: outer lfp
     ///
-    fn gen_proxy(&mut self, outer: usize) {
+    fn get_outer_lfp(&mut self, outer: usize) {
         if outer == 0 {
             monoasm! { &mut self.jit,
                 movq rax, r14;
@@ -721,5 +674,70 @@ impl Codegen {
                 lea rax, [rax + (LBP_OUTER)];
             );
         }
+    }
+}
+
+impl Codegen {
+    fn class_def(&mut self, superclass: SlotId, name: IdentId, is_module: bool) {
+        // rcx <- superclass: Option<Value>
+        if superclass.is_zero() {
+            monoasm! { &mut self.jit,
+                xorq rcx, rcx;
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rcx, [r14 - (conv(superclass))];
+            }
+        }
+        // r8 <- is_module
+        if is_module {
+            monoasm! { &mut self.jit,
+                movl r8, 1;
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                xorq r8, r8;
+            }
+        }
+        monoasm! { &mut self.jit,
+            movl rdx, (name.get());  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::define_class);
+            call rax;  // rax <- self: Value
+        };
+    }
+
+    fn singleton_class_def(&mut self, base: SlotId) {
+        monoasm! { &mut self.jit,
+            movq rdx, [r14 - (conv(base))];  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::define_singleton_class);
+            call rax;  // rax <- self: Value
+        };
+    }
+
+    fn method_def(&mut self, name: IdentId, func_id: FuncId) {
+        monoasm!( &mut self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &Globals
+            movq rdx, (u32::from(name)); // IdentId
+            movq rcx, (u32::from(func_id)); // FuncId
+            movq rax, (runtime::define_method);
+            call rax;
+        );
+    }
+
+    fn singleton_method_def(&mut self, obj: SlotId, name: IdentId, func_id: FuncId) {
+        monoasm!( &mut self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &Globals
+            movq rdx, (u32::from(name)); // IdentId
+            movq rcx, (u32::from(func_id)); // FuncId
+            movq r8, [r14 - (conv(obj))];
+            movq rax, (runtime::singleton_define_method);
+            call rax;
+        );
     }
 }
