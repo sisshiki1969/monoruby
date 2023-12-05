@@ -50,7 +50,7 @@ impl BBContext {
     ) {
         self.fetch_slots(ir, &[superclass]);
         self.release(dst);
-        let using_xmm = self.get_xmm_using();
+        let using_xmm = self.get_using_xmm();
         let error = ir.new_error(pc, self.get_write_back());
         ir.inst.push(AsmInst::ClassDef {
             superclass,
@@ -73,7 +73,7 @@ impl BBContext {
     ) {
         self.fetch_slots(ir, &[base]);
         self.release(dst);
-        let using_xmm = self.get_xmm_using();
+        let using_xmm = self.get_using_xmm();
         let error = ir.new_error(pc, self.get_write_back());
         ir.inst.push(AsmInst::SingletonClassDef {
             base,

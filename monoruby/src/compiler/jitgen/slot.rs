@@ -330,7 +330,7 @@ impl SlotState {
         WriteBack::new(xmm, literal, r15)
     }
 
-    pub(super) fn get_xmm_using(&self, sp: SlotId) -> UsingXmm {
+    pub(super) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
         let mut b = UsingXmm::new([0; 1]);
         self.xmm.iter().enumerate().for_each(|(i, v)| {
             if v.iter().any(|slot| slot < &sp) {

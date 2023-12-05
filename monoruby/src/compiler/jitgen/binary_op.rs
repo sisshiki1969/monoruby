@@ -69,15 +69,15 @@ impl Codegen {
             }
             BinOpK::Exp => {
                 self.fetch_fixnum_mode(ctx, mode, dst, pc);
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(xmm_using);
+                let using_xmm = ctx.get_using_xmm();
+                self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     sarq rdi, 1;
                     sarq rsi, 1;
                     movq rax, (pow_ii as u64);
                     call rax;
                 );
-                self.xmm_restore(xmm_using);
+                self.xmm_restore(using_xmm);
                 self.save_rax_to_acc(ctx, dst);
             }
             BinOpK::Mul | BinOpK::Div => {
@@ -540,8 +540,8 @@ impl Codegen {
     }
 
     pub(super) fn generic_cmp(&mut self, kind: CmpKind, ctx: &BBContext) {
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
+        let using_xmm = ctx.get_using_xmm();
+        self.xmm_save(using_xmm);
         match kind {
             CmpKind::Eq => self.call_binop(cmp_eq_values),
             CmpKind::Ne => self.call_binop(cmp_ne_values),
@@ -552,7 +552,7 @@ impl Codegen {
             CmpKind::TEq => self.call_binop(cmp_teq_values),
             CmpKind::Cmp => self.call_binop(cmp_cmp_values),
         }
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
     }
 
     pub(super) fn integer_cmp(&mut self, kind: CmpKind) {
@@ -829,10 +829,10 @@ impl Codegen {
         pc: BcPc,
     ) {
         let func = kind.generic_func();
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
+        let using_xmm = ctx.get_using_xmm();
+        self.xmm_save(using_xmm);
         self.call_binop(func);
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, dst);
     }

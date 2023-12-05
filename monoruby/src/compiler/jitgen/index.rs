@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_get_array_index(
+    pub(super) fn jit_array_index(
         &mut self,
         ctx: &mut BBContext,
         dst: SlotId,
@@ -9,48 +9,52 @@ impl Codegen {
         idx: SlotId,
         pc: BcPc,
     ) {
-        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            let out_range = self.jit.label();
-            self.fetch_to_rdi(ctx, base);
+        let out_range = self.jit.label();
+        self.fetch_to_rdi(ctx, base);
 
-            let side_exit = if let Some(i) = ctx.is_u16_literal(idx) {
-                monoasm! { &mut self.jit,
-                    movl rsi, (i);
-                }
-                self.gen_deopt(pc, ctx)
-            } else {
-                let exit = self.jit.label();
-                self.fetch_to_rsi(ctx, idx);
-                let side_exit = self.gen_deopt(pc, ctx);
-                monoasm! { &mut self.jit,
-                    xchgq rdi, rsi;
-                    testq rdi, 0b01;
-                    jeq side_exit;
-                    xchgq rdi, rsi;
-                    sarq rsi, 1;
-                    // lower bound check
-                    cmpq rsi, 0;
-                    jge  exit;
-                }
-                self.get_array_length();
-                monoasm! { &mut self.jit,
-                    addq rsi, rax;
-                    js   out_range;
-                exit:
-                }
-                side_exit
-            };
-            ctx.release(dst);
-            self.guard_rdi_array(side_exit);
-            self.array_index(out_range);
+        let side_exit = self.gen_deopt(pc, ctx);
+        if let Some(i) = ctx.is_u16_literal(idx) {
+            monoasm! { &mut self.jit,
+                movl rsi, (i);
+            }
         } else {
-            self.fetch_slots(ctx, &[base, idx]);
-            ctx.release(dst);
-            let xmm_using = ctx.get_xmm_using();
-            self.generic_index(xmm_using, base, idx, pc);
+            let exit = self.jit.label();
+            self.fetch_to_rsi(ctx, idx);
+            monoasm! { &mut self.jit,
+                xchgq rdi, rsi;
+                testq rdi, 0b01;
+                jeq side_exit;
+                xchgq rdi, rsi;
+                sarq rsi, 1;
+                // lower bound check
+                cmpq rsi, 0;
+                jge  exit;
+            }
+            self.get_array_length();
+            monoasm! { &mut self.jit,
+                addq rsi, rax;
+                js   out_range;
+            exit:
+            }
         }
-        self.jit_handle_error(ctx, pc);
-        self.save_rax_to_acc(ctx, dst);
+        ctx.release(dst);
+        self.guard_rdi_array(side_exit);
+        self.array_index(out_range);
+    }
+
+    pub(super) fn jit_generic_index(
+        &mut self,
+        ctx: &mut BBContext,
+        dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        let mut ir = AsmIr::new();
+        ctx.fetch_slots(&mut ir, &[base, idx]);
+        ctx.release(dst);
+        ir.generic_index(ctx, base, idx, pc);
+        self.gen_code(ir);
     }
 
     ///
@@ -120,7 +124,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            let xmm_using = ctx.get_xmm_using();
+            let using_xmm = ctx.get_using_xmm();
             let store = self.jit.label();
             let exit = self.jit.label();
             let heap = self.jit.label();
@@ -176,7 +180,7 @@ impl Codegen {
                 jmp  store;
             };
             self.jit.bind_label(generic);
-            self.xmm_save(xmm_using);
+            self.xmm_save(using_xmm);
             monoasm! { &mut self.jit,
                 movq rdx, rbx;
                 movq rcx, r12;
@@ -184,15 +188,15 @@ impl Codegen {
                 movq rax, (set_array_integer_index);
                 call rax;
             };
-            self.xmm_restore(xmm_using);
+            self.xmm_restore(using_xmm);
             monoasm! { &mut self.jit,
                 jmp  exit;
             };
             self.jit.select_page(0);
         } else {
             self.fetch_slots(ctx, &[base, idx, src]);
-            let xmm_using = ctx.get_xmm_using();
-            self.generic_index_assign(xmm_using, base, idx, src, pc);
+            let using_xmm = ctx.get_using_xmm();
+            self.generic_index_assign(using_xmm, base, idx, src, pc);
         }
         self.jit_handle_error(ctx, pc);
     }
@@ -212,7 +216,7 @@ impl Codegen {
         }
     }
 
-    fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
+    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
         self.xmm_save(using);
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Interp

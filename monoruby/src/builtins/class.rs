@@ -86,7 +86,7 @@ fn inline_class_new(
     ctx.fetch_callargs(&mut ir, callsite);
     gen.gen_code(ir);
     ctx.release(ret);
-    let using = ctx.get_xmm_using();
+    let using = ctx.get_using_xmm();
     gen.xmm_save(using);
     gen.load_rdi(recv);
     let cached_version = gen.jit.const_i32(-1);

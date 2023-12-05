@@ -9,9 +9,9 @@ impl Codegen {
     ///
     pub(super) fn jit_store_constant(&mut self, ctx: &mut BBContext, id: IdentId, src: SlotId) {
         let const_version = self.const_version;
-        let xmm_using = ctx.get_xmm_using();
+        let using_xmm = ctx.get_using_xmm();
         self.fetch_to_rax(ctx, src);
-        self.xmm_save(xmm_using);
+        self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
           movq rdx, (id.get());  // name: IdentId
           movq rcx, rax;  // val: Value
@@ -21,7 +21,7 @@ impl Codegen {
           movq rax, (runtime::set_constant);
           call rax;
         );
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
     }
 
     ///

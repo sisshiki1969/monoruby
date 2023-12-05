@@ -61,7 +61,7 @@ fn object_object_id(
     gen.fetch_slots(ctx, &[recv]);
     ctx.release(ret);
     gen.load_rdi(recv);
-    let using = ctx.get_xmm_using();
+    let using = ctx.get_using_xmm();
     gen.xmm_save(using);
     monoasm! {&mut gen.jit,
         movq rax, (crate::executor::op::i64_to_value);
@@ -403,7 +403,7 @@ fn object_send(
     ctx.fetch_callargs(&mut ir, callsite);
     gen.gen_code(ir);
     ctx.release(ret);
-    let using = ctx.get_xmm_using();
+    let using = ctx.get_using_xmm();
     let bh = match block_func_id {
         None => 0,
         Some(func_id) => BlockHandler::from(func_id).0.id(),

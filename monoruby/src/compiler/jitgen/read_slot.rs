@@ -60,10 +60,6 @@ impl Codegen {
     /// 15: r15
     ///
     fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: GP) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_rax()", reg, ctx.sp);
-            panic!();
-        };
         let mut ir = AsmIr::new();
         ctx.fetch_to_reg(&mut ir, reg, dst);
         self.gen_code(ir);

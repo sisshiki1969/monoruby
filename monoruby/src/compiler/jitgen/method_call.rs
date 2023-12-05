@@ -127,9 +127,9 @@ impl Codegen {
         let resolved = self.jit.label();
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
-        let xmm_using = ctx.get_xmm_using();
+        let using_xmm = ctx.get_using_xmm();
         self.writeback_acc(ctx);
-        self.xmm_save(xmm_using);
+        self.xmm_save(using_xmm);
         // r15 <- recv's class
         if recv.is_zero() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -196,7 +196,7 @@ impl Codegen {
 
         self.call_funcdata();
 
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
 
@@ -269,7 +269,7 @@ impl Codegen {
                 self.load_ivar_heap_index();
             }
         } else {
-            let xmm_using = ctx.get_xmm_using();
+            let using_xmm = ctx.get_using_xmm();
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -278,12 +278,12 @@ impl Codegen {
                 cmpl rsi, (-1);
                 jeq  slow_path;
             );
-            self.get_ivar(xmm_using);
+            self.get_ivar(using_xmm);
             self.jit.bind_label(exit);
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(xmm_using);
+            self.xmm_save(using_xmm);
             monoasm!( &mut self.jit,
                 movq rsi, (ivar_name.get()); // IvarId
                 movq rdx, r12; // &mut Globals
@@ -291,7 +291,7 @@ impl Codegen {
                 movq rax, (get_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(xmm_using);
+            self.xmm_restore(using_xmm);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -342,7 +342,7 @@ impl Codegen {
     ) {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
-        let xmm_using = ctx.get_xmm_using();
+        let using_xmm = ctx.get_using_xmm();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             monoasm!( &mut self.jit,
@@ -359,14 +359,14 @@ impl Codegen {
                 );
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
-                self.set_ivar(xmm_using);
+                self.set_ivar(using_xmm);
                 self.jit_handle_error(ctx, pc);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
-                self.set_ivar(xmm_using);
+                self.set_ivar(using_xmm);
                 self.jit_handle_error(ctx, pc);
             }
         } else {
@@ -389,7 +389,7 @@ impl Codegen {
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(xmm_using);
+            self.xmm_save(using_xmm);
             monoasm!( &mut self.jit,
                 movq rdx, rdi;  // recv: Value
                 movq rcx, (ivar_name.get()); // name: IdentId
@@ -400,7 +400,7 @@ impl Codegen {
                 movq rax, (set_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(xmm_using);
+            self.xmm_restore(using_xmm);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -409,7 +409,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdx, [r14 - (conv(args))];   // val: Value
             );
-            self.set_ivar(xmm_using);
+            self.set_ivar(using_xmm);
             self.jit_handle_error(ctx, pc);
             monoasm!( &mut self.jit,
                 jmp exit;
@@ -429,10 +429,10 @@ impl Codegen {
         recv_classid: ClassId,
         native: bool,
     ) {
-        let xmm_using = ctx.get_xmm_using();
+        let using_xmm = ctx.get_using_xmm();
         let ret = store[callid].ret;
         self.writeback_acc(ctx);
-        self.xmm_save(xmm_using);
+        self.xmm_save(using_xmm);
         self.execute_gc();
         let callsite = &store[callid];
         monoasm! { &mut self.jit,
@@ -524,7 +524,7 @@ impl Codegen {
         }
         self.pop_frame();
 
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
     }
@@ -542,8 +542,8 @@ impl Codegen {
         self.gen_code(ir);
         ctx.release(ret);
         self.writeback_acc(ctx);
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
+        let using_xmm = ctx.get_using_xmm();
+        self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -592,7 +592,7 @@ impl Codegen {
 
         self.call_funcdata();
 
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
         self.jit_handle_error(ctx, pc);
         self.save_rax_to_acc(ctx, ret);
     }

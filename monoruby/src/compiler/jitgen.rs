@@ -369,8 +369,8 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn get_xmm_using(&self) -> UsingXmm {
-        self.slot_state.get_xmm_using(self.sp)
+    pub(crate) fn get_using_xmm(&self) -> UsingXmm {
+        self.slot_state.get_using_xmm(self.sp)
     }
 
     fn get_write_back(&self) -> WriteBack {
@@ -579,17 +579,17 @@ impl Codegen {
         );
     }
 
-    pub(crate) fn xmm_save(&mut self, xmm_using: UsingXmm) {
-        if xmm_using.not_any() {
+    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        if using_xmm.not_any() {
             return;
         }
-        let len = xmm_using.count_ones();
+        let len = using_xmm.count_ones();
         let sp_offset = (len + len % 2) * 8;
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
         let mut i = 0;
-        for b in xmm_using {
+        for b in using_xmm {
             if b {
                 monoasm!( &mut self.jit,
                     movq [rsp + (8 * i)], xmm(Xmm::new(i as _).enc());
@@ -599,14 +599,14 @@ impl Codegen {
         }
     }
 
-    pub(crate) fn xmm_restore(&mut self, xmm_using: UsingXmm) {
-        if xmm_using.not_any() {
+    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        if using_xmm.not_any() {
             return;
         }
-        let len = xmm_using.count_ones();
+        let len = using_xmm.count_ones();
         let sp_offset = (len + len % 2) * 8;
         let mut i = 0;
-        for b in xmm_using {
+        for b in using_xmm {
             if b {
                 monoasm!( &mut self.jit,
                     movq xmm(Xmm::new(i as _).enc()), [rsp + (8 * i)];
@@ -779,7 +779,13 @@ impl Codegen {
                     self.gen_code(ir);
                 }
                 TraceIr::Index { dst, base, idx } => {
-                    self.jit_get_array_index(&mut ctx, dst, base, idx, pc);
+                    if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+                        self.jit_array_index(&mut ctx, dst, base, idx, pc);
+                    } else {
+                        self.jit_generic_index(&mut ctx, dst, base, idx, pc);
+                    }
+                    self.jit_handle_error(&ctx, pc);
+                    self.save_rax_to_acc(&mut ctx, dst);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     self.jit_array_index_assign(&mut ctx, src, base, idx, pc);
@@ -936,7 +942,7 @@ impl Codegen {
                     };
                     if let Some(ret) = dst {
                         let dst = ctx.xmm_write(ret);
-                        let using_xmm = ctx.get_xmm_using();
+                        let using_xmm = ctx.get_using_xmm();
                         ir.xmm_binop(kind, fmode, dst, using_xmm);
                     }
                     self.gen_code(ir);
@@ -1018,7 +1024,7 @@ impl Codegen {
                     if let Some(dst) = dst {
                         ctx.release(dst);
                     }
-                    let using_xmm = ctx.get_xmm_using();
+                    let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::ConcatStr {
                         arg,
                         len,
@@ -1034,8 +1040,8 @@ impl Codegen {
                     if let Some(ret) = ret {
                         ctx.release(ret);
                     }
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
+                    let using_xmm = ctx.get_using_xmm();
+                    self.xmm_save(using_xmm);
                     monoasm!( &mut self.jit,
                         movq rdi, rbx;
                         movq rsi, r12;
@@ -1044,7 +1050,7 @@ impl Codegen {
                         movq rax, (runtime::concatenate_regexp);
                         call rax;
                     );
-                    self.xmm_restore(xmm_using);
+                    self.xmm_restore(using_xmm);
                     self.jit_handle_error(&ctx, pc);
                     self.store_rax(ret);
                 }
@@ -1053,8 +1059,8 @@ impl Codegen {
                     for reg in dst.0..dst.0 + len {
                         ctx.release(SlotId(reg));
                     }
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
+                    let using_xmm = ctx.get_using_xmm();
+                    self.xmm_save(using_xmm);
                     self.load_rdi(src);
                     monoasm!( &mut self.jit,
                         lea rsi, [r14 - (conv(dst))];
@@ -1062,12 +1068,12 @@ impl Codegen {
                         movq rax, (runtime::expand_array);
                         call rax;
                     );
-                    self.xmm_restore(xmm_using);
+                    self.xmm_restore(using_xmm);
                 }
                 TraceIr::AliasMethod { new, old } => {
                     self.fetch_slots(&mut ctx, &[new, old]);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(xmm_using);
+                    let using_xmm = ctx.get_using_xmm();
+                    self.xmm_save(using_xmm);
                     monoasm!( &mut self.jit,
                         movq rdi, rbx;
                         movq rsi, r12;
@@ -1078,7 +1084,7 @@ impl Codegen {
                         movq rax, (runtime::alias_method);
                         call rax;
                     );
-                    self.xmm_restore(xmm_using);
+                    self.xmm_restore(using_xmm);
                     self.jit_handle_error(&ctx, pc);
                 }
                 TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
@@ -1107,7 +1113,7 @@ impl Codegen {
                 TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {
                     let mut ir = AsmIr::new();
-                    let using_xmm = ctx.get_xmm_using();
+                    let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::MethodDef {
                         name,
                         func_id,
@@ -1118,7 +1124,7 @@ impl Codegen {
                 TraceIr::SingletonMethodDef { obj, name, func_id } => {
                     let mut ir = AsmIr::new();
                     self.fetch_slots(&mut ctx, &[obj]);
-                    let using_xmm = ctx.get_xmm_using();
+                    let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::SingletonMethodDef {
                         obj,
                         name,
@@ -1543,10 +1549,10 @@ impl Codegen {
     /// - rax: result
     ///
     fn jit_call_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(xmm_using);
+        let using_xmm = ctx.get_using_xmm();
+        self.xmm_save(using_xmm);
         self.call_unop(func);
-        self.xmm_restore(xmm_using);
+        self.xmm_restore(using_xmm);
         self.jit_handle_error(&ctx, pc);
     }
 }
