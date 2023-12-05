@@ -779,16 +779,23 @@ impl Codegen {
                     self.gen_code(ir);
                 }
                 TraceIr::Index { dst, base, idx } => {
+                    let mut ir = AsmIr::new();
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-                        self.jit_array_index(&mut ctx, dst, base, idx, pc);
+                        ctx.jit_array_index(&mut ir, dst, base, idx, pc);
                     } else {
-                        self.jit_generic_index(&mut ctx, dst, base, idx, pc);
+                        ctx.jit_generic_index(&mut ir, dst, base, idx, pc);
                     }
-                    self.jit_handle_error(&ctx, pc);
-                    self.save_rax_to_acc(&mut ctx, dst);
+                    ir.rax2acc(&mut ctx, dst);
+                    self.gen_code(ir);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    self.jit_array_index_assign(&mut ctx, src, base, idx, pc);
+                    let mut ir = AsmIr::new();
+                    if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+                        ctx.jit_array_index_assign(&mut ir, src, base, idx, pc);
+                    } else {
+                        ctx.jit_generic_index_assign(&mut ir, src, base, idx, pc);
+                    }
+                    self.gen_code(ir);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.release(dst);

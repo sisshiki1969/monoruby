@@ -45,13 +45,6 @@ impl Codegen {
     }
 
     ///
-    /// Fetch *arg* and store in *r15*.
-    ///
-    pub(super) fn fetch_to_r15(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, GP::R15)
-    }
-
-    ///
     /// Fetch *arg* and store in *reg*.
     ///
     /// 0 : rax
