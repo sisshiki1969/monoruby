@@ -4,44 +4,27 @@ impl Codegen {
     pub(super) fn jit_load_ivar(
         &mut self,
         ctx: &mut BBContext,
-        id: IdentId,
-        ret: SlotId,
+        name: IdentId,
+        dst: SlotId,
         cached_class: ClassId,
         cached_ivarid: IvarId,
     ) {
+        let mut ir = AsmIr::new();
         assert!(!cached_class.is_always_frozen());
-        ctx.release(ret);
-        monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LBP_SELF)];  // base: Value
-        );
+        ctx.release(dst);
+        ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = ctx.get_using_xmm();
         let is_object_ty = ctx.self_value.ty() == Some(ObjKind::OBJECT);
-        if is_object_ty && ctx.self_value.class() == cached_class {
-            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!( &mut self.jit,
-                    movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
-                );
-                // We must check whether the ivar slot is None.
-                monoasm!( &mut self.jit,
-                    movq rdi, (NIL_VALUE);
-                    testq rax, rax;
-                    cmoveqq rax, rdi;
-                );
-            } else {
-                self.load_ivar_heap(cached_ivarid, is_object_ty);
-            }
-        } else {
-            // ctx.self_class != cached_class merely happens, but possible.
-            self.xmm_save(using_xmm);
-            monoasm!( &mut self.jit,
-                movq rsi, (id.get());  // id: IdentId
-                movq rdx, r12; // &mut Globals
-                movq rax, (get_instance_var);
-                call rax;
-            );
-            self.xmm_restore(using_xmm);
-        }
-        self.save_rax_to_acc(ctx, ret);
+        let is_self_cached = ctx.self_value.class() == cached_class;
+        ir.inst.push(AsmInst::LoadIVar {
+            name,
+            cached_ivarid,
+            is_object_ty,
+            is_self_cached,
+            using_xmm,
+        });
+        ir.rax2acc(ctx, dst);
+        self.gen_code(ir);
     }
 
     pub(super) fn jit_store_ivar(
@@ -60,7 +43,8 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
-        if ctx.self_value.class() == cached_class {
+        let is_self_cached = ctx.self_value.class() == cached_class;
+        if is_self_cached {
             let is_object_ty = ctx.self_value.ty() == Some(ObjKind::OBJECT);
             if is_object_ty && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
@@ -98,7 +82,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
@@ -208,7 +192,11 @@ impl Codegen {
 ///
 /// rax <= the value of instance variable. <Value>
 ///
-extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
+pub(super) extern "C" fn get_instance_var(
+    base: Value,
+    name: IdentId,
+    globals: &mut Globals,
+) -> Value {
     globals.get_ivar(base, name).unwrap_or_default()
 }
 

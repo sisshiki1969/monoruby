@@ -183,7 +183,7 @@ impl BBContext {
                 if dst == GP::R15 {
                     self.writeback_acc(ir);
                 }
-                ir.inst.push(AsmInst::StackToReg(reg, dst));
+                ir.stack2reg(reg, dst);
             }
             LinkMode::R15 => {
                 ir.reg_move(GP::R15, dst);

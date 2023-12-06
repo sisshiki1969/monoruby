@@ -37,17 +37,6 @@ impl AsmIr {
         label
     }
 
-    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: SlotId) {
-        ctx.clear();
-        if let Some(acc) = ctx.clear_r15() {
-            if acc != dst {
-                self.inst.push(AsmInst::AccToStack(acc));
-            }
-        }
-        ctx.link_r15(dst);
-        self.inst.push(AsmInst::RegToAcc(GP::Rax));
-    }
-
     pub(super) fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
         let exit = self.new_deopt(pc, ctx.get_write_back());
         self.inst.push(AsmInst::Deopt(exit));
@@ -63,15 +52,31 @@ impl AsmIr {
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
+    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: SlotId) {
+        ctx.clear();
+        if let Some(acc) = ctx.clear_r15() {
+            if acc != dst {
+                self.inst.push(AsmInst::AccToStack(acc));
+            }
+        }
+        ctx.link_r15(dst);
+        self.inst.push(AsmInst::RegToAcc(GP::Rax));
+    }
+
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.inst.push(AsmInst::RegMove(src, dst));
         }
     }
+
     pub(super) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
             self.inst.push(AsmInst::RegToStack(src, dst));
         }
+    }
+
+    pub(super) fn stack2reg(&mut self, src: SlotId, dst: GP) {
+        self.inst.push(AsmInst::StackToReg(src, dst));
     }
 
     pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
@@ -367,6 +372,15 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
         error: usize,
     },
+
+    LoadIVar {
+        name: IdentId,
+        cached_ivarid: IvarId,
+        is_object_ty: bool,
+        is_self_cached: bool,
+        using_xmm: UsingXmm,
+    },
+
     /// rax = DynVar(src)
     LoadDynVar {
         src: DynVar,
@@ -737,6 +751,40 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rax, [rax - (offset)];
                 );
+            }
+
+            AsmInst::LoadIVar {
+                name,
+                cached_ivarid,
+                is_object_ty,
+                is_self_cached,
+                using_xmm,
+            } => {
+                if *is_object_ty && *is_self_cached {
+                    if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+                        monoasm!( &mut self.jit,
+                            movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
+                        );
+                        // We must check whether the ivar slot is None.
+                        monoasm!( &mut self.jit,
+                            movq rdi, (NIL_VALUE);
+                            testq rax, rax;
+                            cmoveqq rax, rdi;
+                        );
+                    } else {
+                        self.load_ivar_heap(*cached_ivarid, *is_object_ty);
+                    }
+                } else {
+                    // ctx.self_class != cached_class merely happens, but possible.
+                    self.xmm_save(*using_xmm);
+                    monoasm!( &mut self.jit,
+                        movq rsi, (name.get());  // id: IdentId
+                        movq rdx, r12; // &mut Globals
+                        movq rax, (ivar::get_instance_var);
+                        call rax;
+                    );
+                    self.xmm_restore(*using_xmm);
+                }
             }
             AsmInst::StoreDynVar { dst, src } => {
                 self.get_outer(dst.outer);
