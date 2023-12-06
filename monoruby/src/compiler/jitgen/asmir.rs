@@ -2,6 +2,8 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+mod index;
+
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     pub(super) side_exit: Vec<SideExit>,
@@ -125,6 +127,61 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
+    pub(super) fn generic_index(&mut self, ctx: &BBContext, pc: BcPc, base: SlotId, idx: SlotId) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericIndex {
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn array_u16_index_assign(&mut self, ctx: &BBContext, pc: BcPc, idx: u16) {
+        let using_xmm = ctx.get_using_xmm();
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::ArrayU16IndexAssign {
+            idx,
+            using_xmm,
+            deopt,
+            error,
+        });
+    }
+
+    pub(super) fn array_index_assign(&mut self, ctx: &BBContext, pc: BcPc) {
+        let using_xmm = ctx.get_using_xmm();
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::ArrayIndexAssign {
+            using_xmm,
+            deopt,
+            error,
+        });
+    }
+
+    pub(super) fn generic_index_assign(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+    ) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericIndexAssign {
+            src,
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn new_array(&mut self, ctx: &BBContext, callid: CallSiteId) {
         let using_xmm = ctx.get_using_xmm();
         self.inst.push(AsmInst::NewArray(callid, using_xmm));
@@ -226,6 +283,26 @@ pub(super) enum AsmInst {
     RecompileDeopt {
         position: Option<BcPc>,
         deopt: usize,
+    },
+
+    GuardBaseClass {
+        base_class: Value,
+        deopt: usize,
+    },
+    LoadFloatConstant {
+        fdst: Xmm,
+        f: f64,
+        cached_version: usize,
+        deopt: usize,
+    },
+    LoadGenericConstant {
+        cached_val: Value,
+        cached_version: usize,
+        deopt: usize,
+    },
+    StoreConstant {
+        name: IdentId,
+        using_xmm: UsingXmm,
     },
 
     GenericIndex {
@@ -523,6 +600,46 @@ impl Codegen {
                 self.recompile_and_deopt(*position, deopt)
             }
 
+            AsmInst::GuardBaseClass { base_class, deopt } => {
+                let deopt = labels[*deopt];
+                let cached_base_class = self.jit.const_i64(base_class.id() as _);
+                monoasm! { &mut self.jit,
+                    cmpq rax, [rip + cached_base_class];  // rax: base_class
+                    jne  deopt;
+                }
+            }
+            AsmInst::LoadFloatConstant {
+                fdst,
+                f,
+                cached_version: version,
+                deopt,
+            } => {
+                let deopt = labels[*deopt];
+                self.load_float_constant(*fdst, deopt, *f, *version);
+            }
+            AsmInst::LoadGenericConstant {
+                cached_val,
+                cached_version,
+                deopt,
+            } => {
+                let deopt = labels[*deopt];
+                self.load_generic_constant(deopt, *cached_val, *cached_version);
+            }
+            AsmInst::StoreConstant { name, using_xmm } => {
+                let const_version = self.const_version;
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                  movq rdx, (name.get());  // name: IdentId
+                  movq rcx, rax;  // val: Value
+                  movq rdi, rbx;  // &mut Interp
+                  movq rsi, r12;  // &mut Globals
+                  addq [rip + const_version], 1;
+                  movq rax, (runtime::set_constant);
+                  call rax;
+                );
+                self.xmm_restore(*using_xmm);
+            }
+
             AsmInst::GenericIndex {
                 base,
                 idx,
@@ -534,29 +651,12 @@ impl Codegen {
                 self.handle_error(labels, *error);
             }
             AsmInst::ArrayU16Index { idx, deopt } => {
-                let out_range = self.jit.label();
-                monoasm! { &mut self.jit,
-                    movl rsi, (*idx);
-                }
-                self.guard_rdi_array(labels[*deopt]);
-                self.array_index(out_range);
+                let deopt = labels[*deopt];
+                self.gen_array_u16_index(*idx, deopt);
             }
             AsmInst::ArrayIndex { deopt } => {
                 let deopt = labels[*deopt];
-                let out_range = self.jit.label();
-                let exit = self.jit.label();
-                self.array_bound_check(deopt);
-                monoasm! { &mut self.jit,
-                    jge  exit;
-                }
-                self.get_array_length();
-                monoasm! { &mut self.jit,
-                    addq rsi, rax;
-                    js   out_range;
-                exit:
-                }
-                self.guard_rdi_array(deopt);
-                self.array_index(out_range);
+                self.gen_array_index(deopt);
             }
             AsmInst::GenericIndexAssign {
                 src,
@@ -575,13 +675,8 @@ impl Codegen {
                 deopt,
                 error,
             } => {
-                let generic = self.jit.label();
                 let deopt = labels[*deopt];
-                monoasm! { &mut self.jit,
-                    movl rsi, (*idx);
-                }
-                self.guard_rdi_array(deopt);
-                self.array_index_assign(*using_xmm, generic);
+                self.gen_array_u16_index_assign(*using_xmm, *idx, deopt);
                 self.handle_error(labels, *error);
             }
             AsmInst::ArrayIndexAssign {
@@ -589,14 +684,8 @@ impl Codegen {
                 deopt,
                 error,
             } => {
-                let generic = self.jit.label();
                 let deopt = labels[*deopt];
-                self.array_bound_check(deopt);
-                monoasm! { &mut self.jit,
-                    jlt generic;
-                };
-                self.guard_rdi_array(deopt);
-                self.array_index_assign(*using_xmm, generic);
+                self.gen_array_index_assign(*using_xmm, deopt);
                 self.handle_error(labels, *error);
             }
 
@@ -934,5 +1023,47 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+    }
+}
+
+impl BBContext {
+    pub(super) fn jit_array_index(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        self.fetch_to_reg(ir, base, GP::Rdi);
+
+        let deopt = ir.new_deopt(pc, self.get_write_back());
+        if let Some(idx) = self.is_u16_literal(idx) {
+            ir.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+        } else {
+            self.fetch_to_reg(ir, idx, GP::Rsi);
+            ir.inst.push(AsmInst::ArrayIndex { deopt });
+        }
+        self.release(dst);
+    }
+
+    pub(super) fn jit_array_index_assign(
+        &mut self,
+        ir: &mut AsmIr,
+        src: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        self.writeback_acc(ir);
+        self.fetch_to_reg(ir, base, GP::Rdi);
+        self.fetch_to_reg(ir, src, GP::R15);
+
+        if let Some(idx) = self.is_u16_literal(idx) {
+            ir.array_u16_index_assign(self, pc, idx);
+        } else {
+            self.fetch_to_reg(ir, idx, GP::Rsi);
+            ir.array_index_assign(self, pc);
+        }
     }
 }

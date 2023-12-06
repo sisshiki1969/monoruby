@@ -1,12 +1,100 @@
 use super::*;
 
 impl Codegen {
+    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
+        self.xmm_save(using);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rdx, [r14 - (conv(base))]; // base: Value
+            movq rcx, [r14 - (conv(idx))]; // idx: Value
+            movq r8, (pc.get_u64() + 8);
+            movq rax, (runtime::get_index);
+            call rax;
+        }
+        self.xmm_restore(using);
+    }
+
+    pub(super) fn gen_array_u16_index(&mut self, idx: u16, deopt: DestLabel) {
+        let out_range = self.jit.label();
+        monoasm! { &mut self.jit,
+            movl rsi, (idx);
+        }
+        self.guard_rdi_array(deopt);
+        self.array_index(out_range);
+    }
+
+    pub(super) fn gen_array_index(&mut self, deopt: DestLabel) {
+        let out_range = self.jit.label();
+        let exit = self.jit.label();
+        self.array_bound_check(deopt);
+        monoasm! { &mut self.jit,
+            jge  exit;
+        }
+        self.get_array_length();
+        monoasm! { &mut self.jit,
+            addq rsi, rax;
+            js   out_range;
+        exit:
+        }
+        self.guard_rdi_array(deopt);
+        self.array_index(out_range);
+    }
+
+    pub(super) fn generic_index_assign(
+        &mut self,
+        using: UsingXmm,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+        pc: BcPc,
+    ) {
+        self.xmm_save(using);
+        monoasm! { &mut self.jit,
+            movq rdx, [r14 - (conv(base))]; // base: Value
+            movq rcx, [r14 - (conv(idx))]; // idx: Value
+            movq r8, [r14 - (conv(src))];  // src: Value
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq r9, (pc.get_u64() + 8);
+            movq rax, (runtime::set_index);
+            call rax;
+        };
+        self.xmm_restore(using);
+    }
+
+    pub(super) fn gen_array_u16_index_assign(
+        &mut self,
+        using_xmm: UsingXmm,
+        idx: u16,
+        deopt: DestLabel,
+    ) {
+        let generic = self.jit.label();
+        monoasm! { &mut self.jit,
+            movl rsi, (idx);
+        }
+        self.guard_rdi_array(deopt);
+        self.array_index_assign(using_xmm, generic);
+    }
+
+    pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, deopt: DestLabel) {
+        let generic = self.jit.label();
+        self.array_bound_check(deopt);
+        monoasm! { &mut self.jit,
+            jlt generic;
+        };
+        self.guard_rdi_array(deopt);
+        self.array_index_assign(using_xmm, generic);
+    }
+}
+
+impl Codegen {
     ///
     /// ### in
     /// - rdi: base Value
     /// - rsi: index non-negative i64
     ///
-    pub(super) fn array_index(&mut self, out_range: DestLabel) {
+    fn array_index(&mut self, out_range: DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
@@ -41,7 +129,7 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    pub(super) fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: DestLabel) {
+    fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         let store = self.jit.label();
@@ -97,8 +185,7 @@ impl Codegen {
     /// ### out
     /// - rax: the length.
     ///
-    pub(super) fn get_array_length(&mut self) {
-        //let inline = self.jit.label();
+    fn get_array_length(&mut self) {
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
@@ -112,7 +199,7 @@ impl Codegen {
     /// #### out
     /// - rdi: ptr to Array.
     ///
-    pub(super) fn guard_rdi_array(&mut self, side_exit: DestLabel) {
+    fn guard_rdi_array(&mut self, side_exit: DestLabel) {
         self.guard_class(ARRAY_CLASS, side_exit);
         monoasm! { &mut self.jit,
             cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
@@ -120,7 +207,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn array_bound_check(&mut self, deopt: DestLabel) {
+    fn array_bound_check(&mut self, deopt: DestLabel) {
         monoasm! { &mut self.jit,
             xchgq rdi, rsi;
             testq rdi, 0b01;
@@ -130,141 +217,6 @@ impl Codegen {
             // lower bound check
             cmpq rsi, 0;
         }
-    }
-
-    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
-        self.xmm_save(using);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, (pc.get_u64() + 8);
-            movq rax, (runtime::get_index);
-            call rax;
-        }
-        self.xmm_restore(using);
-    }
-
-    pub(super) fn generic_index_assign(
-        &mut self,
-        using: UsingXmm,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-        pc: BcPc,
-    ) {
-        self.xmm_save(using);
-        monoasm! { &mut self.jit,
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, [r14 - (conv(src))];  // src: Value
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq r9, (pc.get_u64() + 8);
-            movq rax, (runtime::set_index);
-            call rax;
-        };
-        self.xmm_restore(using);
-    }
-}
-
-impl BBContext {
-    pub(super) fn jit_array_index(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.fetch_to_reg(ir, base, GP::Rdi);
-
-        let deopt = ir.new_deopt(pc, self.get_write_back());
-        if let Some(idx) = self.is_u16_literal(idx) {
-            ir.inst.push(AsmInst::ArrayU16Index { idx, deopt });
-        } else {
-            self.fetch_to_reg(ir, idx, GP::Rsi);
-            ir.inst.push(AsmInst::ArrayIndex { deopt });
-        }
-        self.release(dst);
-    }
-
-    pub(super) fn jit_generic_index(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.fetch_slots(ir, &[base, idx]);
-        self.release(dst);
-        let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(pc, self.get_write_back());
-        ir.inst.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
-    }
-
-    pub(super) fn jit_array_index_assign(
-        &mut self,
-        ir: &mut AsmIr,
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(ir);
-        self.fetch_to_reg(ir, base, GP::Rdi);
-        self.fetch_to_reg(ir, src, GP::R15);
-
-        if let Some(idx) = self.is_u16_literal(idx) {
-            let using_xmm = self.get_using_xmm();
-            let deopt = ir.new_deopt(pc, self.get_write_back());
-            let error = ir.new_error(pc, self.get_write_back());
-            ir.inst.push(AsmInst::ArrayU16IndexAssign {
-                idx,
-                using_xmm,
-                deopt,
-                error,
-            });
-        } else {
-            self.fetch_to_reg(ir, idx, GP::Rsi);
-            let using_xmm = self.get_using_xmm();
-            let deopt = ir.new_deopt(pc, self.get_write_back());
-            let error = ir.new_error(pc, self.get_write_back());
-            ir.inst.push(AsmInst::ArrayIndexAssign {
-                using_xmm,
-                deopt,
-                error,
-            });
-        }
-    }
-
-    pub(super) fn jit_generic_index_assign(
-        &mut self,
-        ir: &mut AsmIr,
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.fetch_slots(ir, &[base, idx, src]);
-        let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(pc, self.get_write_back());
-        ir.inst.push(AsmInst::GenericIndexAssign {
-            src,
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
     }
 }
 

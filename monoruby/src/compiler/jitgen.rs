@@ -20,7 +20,6 @@ mod binary_op;
 mod constants;
 mod definition;
 mod guard;
-mod index;
 mod init_method;
 mod ivar;
 mod merge;
@@ -783,7 +782,9 @@ impl Codegen {
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
                         ctx.jit_array_index(&mut ir, dst, base, idx, pc);
                     } else {
-                        ctx.jit_generic_index(&mut ir, dst, base, idx, pc);
+                        ctx.fetch_slots(&mut ir, &[base, idx]);
+                        ctx.release(dst);
+                        ir.generic_index(&ctx, pc, base, idx);
                     }
                     ir.rax2acc(&mut ctx, dst);
                     self.gen_code(ir);
@@ -793,36 +794,58 @@ impl Codegen {
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
                         ctx.jit_array_index_assign(&mut ir, src, base, idx, pc);
                     } else {
-                        ctx.jit_generic_index_assign(&mut ir, src, base, idx, pc);
+                        ctx.fetch_slots(&mut ir, &[base, idx, src]);
+                        ir.generic_index_assign(&ctx, pc, base, idx, src);
                     }
                     self.gen_code(ir);
                 }
                 TraceIr::LoadConst(dst, id) => {
+                    let mut ir = AsmIr::new();
                     ctx.release(dst);
 
-                    if let (version, base_class, Some(v)) = store[id].cache {
+                    if let (cached_version, cached_baseclass, Some(cached_val)) = store[id].cache {
                         let base_slot = store[id].base;
-                        let deopt = self.gen_deopt(pc, &ctx);
-                        if let Some(f) = v.try_float() {
-                            let fdst = ctx.link_new_both(dst);
-                            self.load_float_constant(
-                                &mut ctx, fdst, deopt, f, version, base_class, base_slot,
-                            );
-                        } else {
-                            self.load_generic_constant(
-                                &mut ctx, deopt, v, version, base_class, base_slot,
-                            );
+                        if let Some(slot) = base_slot {
+                            if let Some(base_class) = cached_baseclass {
+                                ctx.fetch_to_reg(&mut ir, slot, GP::Rax);
+                                let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                                ir.inst.push(AsmInst::GuardBaseClass { base_class, deopt });
+                            } else {
+                                ir.recompile_and_deopt(&ctx, pc, position);
+                                self.gen_code(ir);
+                                return;
+                            }
                         }
-                        self.save_rax_to_acc(&mut ctx, dst);
+                        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                        if let Some(f) = cached_val.try_float() {
+                            let fdst = ctx.link_new_both(dst);
+                            ir.inst.push(AsmInst::LoadFloatConstant {
+                                fdst,
+                                f,
+                                cached_version,
+                                deopt,
+                            });
+                        } else {
+                            ir.inst.push(AsmInst::LoadGenericConstant {
+                                cached_val,
+                                cached_version,
+                                deopt,
+                            });
+                        }
+                        ir.rax2acc(&mut ctx, dst);
                     } else {
-                        let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
                         self.gen_code(ir);
                         return;
                     }
+                    self.gen_code(ir);
                 }
-                TraceIr::StoreConst(src, id) => {
-                    self.jit_store_constant(&mut ctx, id, src);
+                TraceIr::StoreConst(src, name) => {
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_to_reg(&mut ir, src, GP::Rax);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::StoreConstant { name, using_xmm });
+                    self.gen_code(ir);
                 }
                 TraceIr::BlockArgProxy(ret, outer) => {
                     let mut ir = AsmIr::new();
