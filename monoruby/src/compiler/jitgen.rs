@@ -588,10 +588,10 @@ impl Codegen {
             subq rsp, (sp_offset);
         );
         let mut i = 0;
-        for b in using_xmm {
-            if b {
+        for (x, b) in using_xmm.iter().enumerate() {
+            if *b {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (8 * i)], xmm(Xmm::new(i as _).enc());
+                    movq [rsp + (8 * i)], xmm(Xmm::new(x as _).enc());
                 );
                 i += 1;
             }
@@ -605,10 +605,10 @@ impl Codegen {
         let len = using_xmm.count_ones();
         let sp_offset = (len + len % 2) * 8;
         let mut i = 0;
-        for b in using_xmm {
-            if b {
+        for (x, b) in using_xmm.iter().enumerate() {
+            if *b {
                 monoasm!( &mut self.jit,
-                    movq xmm(Xmm::new(i as _).enc()), [rsp + (8 * i)];
+                    movq xmm(Xmm::new(x as _).enc()), [rsp + (8 * i)];
                 );
                 i += 1;
             }
