@@ -173,31 +173,18 @@ impl Codegen {
     }
 
     pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
+        let mut ir = AsmIr::new();
         ctx.release(dst);
-        let using_xmm = ctx.get_using_xmm();
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
-            movq rax, (runtime::get_global_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-        self.save_rax_to_acc(ctx, dst);
+        ir.load_gvar(ctx, name);
+        ir.rax2acc(ctx, dst);
+        self.gen_code(ir);
     }
 
-    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, val: SlotId) {
-        self.fetch_slots(ctx, &[val]);
-        let using_xmm = ctx.get_using_xmm();
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
-            movq rdx, [r14 - (conv(val))];
-            movq rax, (runtime::set_global_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
+    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, src: SlotId) {
+        let mut ir = AsmIr::new();
+        ctx.fetch_slots(&mut ir, &[src]);
+        ir.store_gvar(ctx, name, src);
+        self.gen_code(ir);
     }
 
     pub(super) fn jit_load_svar(&mut self, ctx: &mut BBContext, id: u32, dst: SlotId) {

@@ -178,6 +178,20 @@ impl AsmIr {
             error,
         });
     }
+
+    pub(super) fn load_gvar(&mut self, ctx: &BBContext, name: IdentId) {
+        let using_xmm = ctx.get_using_xmm();
+        self.inst.push(AsmInst::LoadGVar { name, using_xmm });
+    }
+
+    pub(super) fn store_gvar(&mut self, ctx: &BBContext, name: IdentId, src: SlotId) {
+        let using_xmm = ctx.get_using_xmm();
+        self.inst.push(AsmInst::StoreGVar {
+            name,
+            src,
+            using_xmm,
+        });
+    }
 }
 
 pub(super) enum AsmInst {
@@ -268,15 +282,23 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
         error: usize,
     },
-    /// %dst = DynVar(src)
+    /// rax = DynVar(src)
     LoadDynVar {
-        dst: SlotId,
         src: DynVar,
     },
     /// DynVar(dst) = src
     StoreDynVar {
         dst: DynVar,
         src: GP,
+    },
+    LoadGVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    StoreGVar {
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
     },
 
     ClassDef {
@@ -544,37 +566,46 @@ impl Codegen {
                 self.handle_error(labels, *error);
                 self.store_rax(*ret);
             }
-            AsmInst::LoadDynVar { dst, src } => {
-                monoasm!( &mut self.jit,
-                    movq rax, [r14 - (LBP_OUTER)];
-                );
-                for _ in 0..src.outer - 1 {
-                    monoasm!( &mut self.jit,
-                        movq rax, [rax];
-                    );
-                }
+            AsmInst::LoadDynVar { src } => {
+                self.get_outer(src.outer);
                 let offset = conv(src.reg) - LBP_OUTER;
                 monoasm!( &mut self.jit,
                     movq rax, [rax - (offset)];
                 );
-                if !dst.is_zero() {
-                    self.store_rax(*dst);
-                }
             }
             AsmInst::StoreDynVar { dst, src } => {
-                monoasm!( &mut self.jit,
-                    movq rax, [r14 - (LBP_OUTER)];
-                );
-                for _ in 0..dst.outer - 1 {
-                    monoasm!( &mut self.jit,
-                        movq rax, [rax];
-                    );
-                }
+                self.get_outer(dst.outer);
                 let offset = conv(dst.reg) - LBP_OUTER;
                 monoasm!( &mut self.jit,
                     movq [rax - (offset)], R(*src as _);
                 );
             }
+            AsmInst::LoadGVar { name, using_xmm } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, r12;
+                    movl rsi, (name.get());
+                    movq rax, (runtime::get_global_var);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::StoreGVar {
+                name,
+                src,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, r12;
+                    movl rsi, (name.get());
+                    movq rdx, [r14 - (conv(*src))];
+                    movq rax, (runtime::set_global_var);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+
             AsmInst::ClassDef {
                 superclass,
                 dst,
@@ -610,9 +641,7 @@ impl Codegen {
                 func_id,
                 using_xmm,
             } => {
-                self.xmm_save(*using_xmm);
-                self.method_def(*name, *func_id);
-                self.xmm_restore(*using_xmm);
+                self.method_def(*name, *func_id, *using_xmm);
             }
             AsmInst::SingletonMethodDef {
                 obj,
@@ -620,9 +649,7 @@ impl Codegen {
                 func_id,
                 using_xmm,
             } => {
-                self.xmm_save(*using_xmm);
-                self.singleton_method_def(*obj, *name, *func_id);
-                self.xmm_restore(*using_xmm);
+                self.singleton_method_def(*obj, *name, *func_id, *using_xmm);
             }
         }
     }
@@ -660,6 +687,17 @@ impl Codegen {
             }
             monoasm!( &mut self.jit,
                 lea rax, [rax + (LBP_OUTER)];
+            );
+        }
+    }
+
+    fn get_outer(&mut self, outer: usize) {
+        monoasm!( &mut self.jit,
+            movq rax, [r14 - (LBP_OUTER)];
+        );
+        for _ in 0..outer - 1 {
+            monoasm!( &mut self.jit,
+                movq rax, [rax];
             );
         }
     }
@@ -789,7 +827,8 @@ impl Codegen {
         };
     }
 
-    fn method_def(&mut self, name: IdentId, func_id: FuncId) {
+    fn method_def(&mut self, name: IdentId, func_id: FuncId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &Globals
@@ -798,9 +837,17 @@ impl Codegen {
             movq rax, (runtime::define_method);
             call rax;
         );
+        self.xmm_restore(using_xmm);
     }
 
-    fn singleton_method_def(&mut self, obj: SlotId, name: IdentId, func_id: FuncId) {
+    fn singleton_method_def(
+        &mut self,
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+    ) {
+        self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &Globals
@@ -810,5 +857,6 @@ impl Codegen {
             movq rax, (runtime::singleton_define_method);
             call rax;
         );
+        self.xmm_restore(using_xmm);
     }
 }

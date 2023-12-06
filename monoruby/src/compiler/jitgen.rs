@@ -855,7 +855,10 @@ impl Codegen {
                 TraceIr::LoadDynVar(dst, src) => {
                     let mut ir = AsmIr::new();
                     ctx.release(dst);
-                    ir.inst.push(AsmInst::LoadDynVar { dst, src });
+                    if !dst.is_zero() {
+                        ir.inst.push(AsmInst::LoadDynVar { src });
+                        ir.reg2stack(GP::Rax, dst);
+                    }
                     self.gen_code(ir);
                 }
                 TraceIr::StoreDynVar(dst, src) => {
