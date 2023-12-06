@@ -17,11 +17,9 @@ pub mod analysis;
 pub mod asmir;
 mod basic_block;
 mod binary_op;
-mod constants;
 mod definition;
 mod guard;
 mod init_method;
-mod ivar;
 mod merge;
 mod method_call;
 mod read_slot;
@@ -860,24 +858,26 @@ impl Codegen {
                     self.gen_code(ir);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
+                    let mut ir = AsmIr::new();
                     if let Some(cached_class) = cached_class {
-                        self.jit_load_ivar(&mut ctx, id, ret, cached_class, cached_ivarid);
+                        ctx.jit_load_ivar(&mut ir, id, ret, cached_class, cached_ivarid);
                     } else {
-                        let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
                         self.gen_code(ir);
                         return;
                     }
+                    self.gen_code(ir);
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
+                    let mut ir = AsmIr::new();
                     if let Some(cached_class) = cached_class {
-                        self.jit_store_ivar(&mut ctx, id, src, pc, cached_class, cached_ivarid);
+                        ctx.jit_store_ivar(&mut ir, id, src, pc, cached_class, cached_ivarid);
                     } else {
-                        let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
                         self.gen_code(ir);
                         return;
                     }
+                    self.gen_code(ir);
                 }
                 TraceIr::LoadGvar { dst, name } => self.jit_load_gvar(&mut ctx, name, dst),
                 TraceIr::StoreGvar { src: val, name } => self.jit_store_gvar(&mut ctx, name, val),
@@ -909,10 +909,16 @@ impl Codegen {
                         self.gen_code(ir);
                         return;
                     } else {
-                        self.gen_code(ir);
-                        self.jit_call_unop(&ctx, pc, bitnot_value);
-                        self.store_rax(dst);
+                        let using_xmm = ctx.get_using_xmm();
+                        let error = ir.new_deopt(pc, ctx.get_write_back());
+                        ir.inst.push(AsmInst::GenericUnOp {
+                            func: bitnot_value,
+                            using_xmm,
+                            error,
+                        });
+                        ir.reg2stack(GP::Rax, dst);
                     }
+                    self.gen_code(ir);
                 }
                 TraceIr::Not { dst, src } => {
                     self.fetch_to_rdi(&mut ctx, src);
@@ -924,18 +930,10 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     if pc.is_float1() {
                         let fsrc = ctx.fetch_float_assume_float(&mut ir, src, pc);
-                        let fdst = ctx.xmm_write(dst);
-                        ir.xmm_move(fsrc, fdst);
+                        let dst = ctx.xmm_write(dst);
+                        ir.xmm_move(fsrc, dst);
+                        ir.inst.push(AsmInst::XmmUnOp { kind, dst });
                         self.gen_code(ir);
-                        match kind {
-                            UnOpK::Neg => {
-                                let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                                monoasm!( &mut self.jit,
-                                    xorps xmm(fdst.enc()), [rip + imm];
-                                );
-                            }
-                            UnOpK::Pos => {}
-                        }
                     } else {
                         ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
                         ctx.release(dst);
@@ -944,10 +942,16 @@ impl Codegen {
                             self.gen_code(ir);
                             return;
                         } else {
-                            self.gen_code(ir);
-                            self.jit_call_unop(&ctx, pc, kind.generic_func());
-                            self.store_rax(dst);
+                            let using_xmm = ctx.get_using_xmm();
+                            let error = ir.new_deopt(pc, ctx.get_write_back());
+                            ir.inst.push(AsmInst::GenericUnOp {
+                                func: kind.generic_func(),
+                                using_xmm,
+                                error,
+                            });
+                            ir.reg2stack(GP::Rax, dst);
                         }
+                        self.gen_code(ir);
                     }
                 }
                 TraceIr::IBinOp {
@@ -1570,23 +1574,6 @@ impl Codegen {
     fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
         self.load_rdi(lhs);
         self.load_rsi(rhs);
-    }
-
-    ///
-    /// Call unary operator function.
-    ///
-    /// ### in
-    /// - rdi: receiver
-    ///
-    /// ### out
-    /// - rax: result
-    ///
-    fn jit_call_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
-        let using_xmm = ctx.get_using_xmm();
-        self.xmm_save(using_xmm);
-        self.call_unop(func);
-        self.xmm_restore(using_xmm);
-        self.jit_handle_error(&ctx, pc);
     }
 }
 

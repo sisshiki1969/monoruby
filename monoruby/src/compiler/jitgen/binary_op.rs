@@ -16,7 +16,8 @@ impl Codegen {
             BinOpK::Add => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        let deopt = self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc);
+                        let deopt = self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, 1;
@@ -25,7 +26,8 @@ impl Codegen {
                         );
                     }
                     OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
-                        let deopt = self.fetch_fixnum_rdi(ctx, slot, dst, pc);
+                        let deopt = self.fetch_fixnum_rdi(ctx, slot, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             // fastpath
                             addq rdi, (Value::i32(i as i32).id() - 1);
@@ -38,7 +40,8 @@ impl Codegen {
             BinOpK::Sub => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        let deopt = self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc);
+                        let deopt = self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, rsi;
@@ -47,7 +50,8 @@ impl Codegen {
                         );
                     }
                     OpMode::RI(lhs, rhs) => {
-                        let deopt = self.fetch_fixnum_rdi(ctx, lhs, dst, pc);
+                        let deopt = self.fetch_fixnum_rdi(ctx, lhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, (Value::i32(rhs as i32).id() - 1);
@@ -55,7 +59,8 @@ impl Codegen {
                         );
                     }
                     OpMode::IR(lhs, rhs) => {
-                        let deopt = self.fetch_fixnum_rsi(ctx, rhs, dst, pc);
+                        let deopt = self.fetch_fixnum_rsi(ctx, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             // fastpath
                             movq rdi, (Value::i32(lhs as i32).id());
@@ -86,7 +91,8 @@ impl Codegen {
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    self.fetch_fixnum_rdi(ctx, lhs, dst, pc);
+                    self.fetch_fixnum_rdi(ctx, lhs, pc);
+                    ctx.release(dst);
                     monoasm!( &mut self.jit,
                         andq rdi, (rhs * 2 - 1);
                     );
@@ -100,13 +106,15 @@ impl Codegen {
             BinOpK::BitOr => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc);
+                        self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             orq rdi, rsi;
                         );
                     }
                     OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
-                        self.fetch_fixnum_rdi(ctx, slot, dst, pc);
+                        self.fetch_fixnum_rdi(ctx, slot, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             orq rdi, (Value::i32(i as i32).id());
                         );
@@ -117,13 +125,15 @@ impl Codegen {
             BinOpK::BitAnd => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc);
+                        self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             andq rdi, rsi;
                         );
                     }
                     OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
-                        self.fetch_fixnum_rdi(ctx, slot, dst, pc);
+                        self.fetch_fixnum_rdi(ctx, slot, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             andq rdi, (Value::i32(i as i32).id());
                         );
@@ -134,14 +144,16 @@ impl Codegen {
             BinOpK::BitXor => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc);
+                        self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             xorq rdi, rsi;
                             addq rdi, 1;
                         );
                     }
                     OpMode::RI(slot, i) | OpMode::IR(i, slot) => {
-                        self.fetch_fixnum_rdi(ctx, slot, dst, pc);
+                        self.fetch_fixnum_rdi(ctx, slot, pc);
+                        ctx.release(dst);
                         monoasm!( &mut self.jit,
                             xorq rdi, (Value::i32(i as i32).id() - 1);
                         );
@@ -160,16 +172,22 @@ impl Codegen {
         pc: BcPc,
     ) -> DestLabel {
         match mode {
-            OpMode::RR(lhs, rhs) => self.fetch_fixnum_rr(ctx, lhs, rhs, dst, pc),
+            OpMode::RR(lhs, rhs) => {
+                let deopt = self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                ctx.release(dst);
+                deopt
+            }
             OpMode::RI(lhs, rhs) => {
-                let deopt = self.fetch_fixnum_rdi(ctx, lhs, dst, pc);
+                let deopt = self.fetch_fixnum_rdi(ctx, lhs, pc);
+                ctx.release(dst);
                 monoasm!( &mut self.jit,
                     movq rsi, (Value::i32(rhs as i32).id());
                 );
                 deopt
             }
             OpMode::IR(lhs, rhs) => {
-                let deopt = self.fetch_fixnum_rsi(ctx, rhs, dst, pc);
+                let deopt = self.fetch_fixnum_rsi(ctx, rhs, pc);
+                ctx.release(dst);
                 monoasm!( &mut self.jit,
                     movq rdi, (Value::i32(lhs as i32).id());
                 );
@@ -183,7 +201,6 @@ impl Codegen {
         ctx: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        dst: Option<SlotId>,
         pc: BcPc,
     ) -> DestLabel {
         let is_lhs_smi = ctx.is_i16_literal(lhs).is_some();
@@ -191,7 +208,7 @@ impl Codegen {
         self.fetch_to_rdi(ctx, lhs);
         self.fetch_to_rsi(ctx, rhs);
         let deopt = self.gen_deopt(pc, ctx);
-        ctx.release(dst);
+
         if !is_lhs_smi {
             self.guard_rdi_fixnum(deopt);
         }
@@ -201,34 +218,22 @@ impl Codegen {
         deopt
     }
 
-    fn fetch_fixnum_rdi(
-        &mut self,
-        ctx: &mut BBContext,
-        slot: SlotId,
-        dst: Option<SlotId>,
-        pc: BcPc,
-    ) -> DestLabel {
+    fn fetch_fixnum_rdi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rdi(ctx, slot);
         let deopt = self.gen_deopt(pc, ctx);
-        ctx.release(dst);
+
         if !is_smi {
             self.guard_rdi_fixnum(deopt);
         }
         deopt
     }
 
-    fn fetch_fixnum_rsi(
-        &mut self,
-        ctx: &mut BBContext,
-        slot: SlotId,
-        dst: Option<SlotId>,
-        pc: BcPc,
-    ) -> DestLabel {
+    fn fetch_fixnum_rsi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> DestLabel {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_rsi(ctx, slot);
         let deopt = self.gen_deopt(pc, ctx);
-        ctx.release(dst);
+
         if !is_smi {
             self.guard_rsi_fixnum(deopt);
         }

@@ -2,7 +2,9 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+mod constants;
 mod index;
+mod ivar;
 
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
@@ -267,6 +269,10 @@ pub(super) enum AsmInst {
         dst: Xmm,
         using_xmm: UsingXmm,
     },
+    XmmUnOp {
+        kind: UnOpK,
+        dst: Xmm,
+    },
 
     /// move f64 to xmm
     F64ToXmm(f64, Xmm),
@@ -288,6 +294,12 @@ pub(super) enum AsmInst {
     RecompileDeopt {
         position: Option<BcPc>,
         deopt: usize,
+    },
+
+    GenericUnOp {
+        func: UnaryOpFn,
+        using_xmm: UsingXmm,
+        error: usize,
     },
 
     GuardBaseClass {
@@ -379,6 +391,14 @@ pub(super) enum AsmInst {
         is_object_ty: bool,
         is_self_cached: bool,
         using_xmm: UsingXmm,
+    },
+    StoreIVar {
+        name: IdentId,
+        cached_ivarid: IvarId,
+        is_object_ty: bool,
+        is_self_cached: bool,
+        using_xmm: UsingXmm,
+        error: usize,
     },
 
     /// rax = DynVar(src)
@@ -552,6 +572,15 @@ impl Codegen {
                 FMode::RI(l, r) => self.gen_binop_float_ri(*kind, *using_xmm, *dst, *l, *r),
                 FMode::IR(l, r) => self.gen_binop_float_ir(*kind, *using_xmm, *dst, *l, *r),
             },
+            AsmInst::XmmUnOp { kind, dst } => match kind {
+                UnOpK::Neg => {
+                    let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
+                    monoasm!( &mut self.jit,
+                        xorps xmm(dst.enc()), [rip + imm];
+                    );
+                }
+                UnOpK::Pos => {}
+            },
 
             AsmInst::NumToXmm(r, x, side_exit) => {
                 self.load_rdi(*r);
@@ -614,6 +643,17 @@ impl Codegen {
                 self.recompile_and_deopt(*position, deopt)
             }
 
+            AsmInst::GenericUnOp {
+                func,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                self.call_unop(*func);
+                self.xmm_restore(*using_xmm);
+                self.handle_error(labels, *error);
+            }
+
             AsmInst::GuardBaseClass { base_class, deopt } => {
                 let deopt = labels[*deopt];
                 let cached_base_class = self.jit.const_i64(base_class.id() as _);
@@ -640,18 +680,7 @@ impl Codegen {
                 self.load_generic_constant(deopt, *cached_val, *cached_version);
             }
             AsmInst::StoreConstant { name, using_xmm } => {
-                let const_version = self.const_version;
-                self.xmm_save(*using_xmm);
-                monoasm!( &mut self.jit,
-                  movq rdx, (name.get());  // name: IdentId
-                  movq rcx, rax;  // val: Value
-                  movq rdi, rbx;  // &mut Interp
-                  movq rsi, r12;  // &mut Globals
-                  addq [rip + const_version], 1;
-                  movq rax, (runtime::set_constant);
-                  call rax;
-                );
-                self.xmm_restore(*using_xmm);
+                self.store_constant(*name, *using_xmm);
             }
 
             AsmInst::GenericIndex {
@@ -786,6 +815,40 @@ impl Codegen {
                     self.xmm_restore(*using_xmm);
                 }
             }
+            AsmInst::StoreIVar {
+                name,
+                cached_ivarid,
+                is_object_ty,
+                is_self_cached,
+                using_xmm,
+                error,
+            } => {
+                let exit = self.jit.label();
+                if *is_self_cached {
+                    if *is_object_ty && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+                        monoasm!( &mut self.jit,
+                            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
+                        );
+                    } else {
+                        self.store_ivar_heap(*cached_ivarid, *is_object_ty, *using_xmm);
+                    }
+                } else {
+                    self.xmm_save(*using_xmm);
+                    monoasm!( &mut self.jit,
+                        movq rdx, rdi;  // base: Value
+                        movq rcx, (name.get());  // id: IdentId
+                        movq r8, rax;   // val: Value
+                        movq rdi, rbx; //&mut Executor
+                        movq rsi, r12; //&mut Globals
+                        movq rax, (ivar::set_instance_var);
+                        call rax;
+                    );
+                    self.xmm_restore(*using_xmm);
+                    self.handle_error(labels, *error);
+                }
+                self.jit.bind_label(exit);
+            }
+
             AsmInst::StoreDynVar { dst, src } => {
                 self.get_outer(dst.outer);
                 let offset = conv(dst.reg) - LBP_OUTER;

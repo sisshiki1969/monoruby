@@ -1,75 +1,6 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_load_ivar(
-        &mut self,
-        ctx: &mut BBContext,
-        name: IdentId,
-        dst: SlotId,
-        cached_class: ClassId,
-        cached_ivarid: IvarId,
-    ) {
-        let mut ir = AsmIr::new();
-        assert!(!cached_class.is_always_frozen());
-        ctx.release(dst);
-        ir.stack2reg(SlotId(0), GP::Rdi);
-        let using_xmm = ctx.get_using_xmm();
-        let is_object_ty = ctx.self_value.ty() == Some(ObjKind::OBJECT);
-        let is_self_cached = ctx.self_value.class() == cached_class;
-        ir.inst.push(AsmInst::LoadIVar {
-            name,
-            cached_ivarid,
-            is_object_ty,
-            is_self_cached,
-            using_xmm,
-        });
-        ir.rax2acc(ctx, dst);
-        self.gen_code(ir);
-    }
-
-    pub(super) fn jit_store_ivar(
-        &mut self,
-        ctx: &mut BBContext,
-        id: IdentId,
-        src: SlotId,
-        pc: BcPc,
-        cached_class: ClassId,
-        cached_ivarid: IvarId,
-    ) {
-        assert!(!cached_class.is_always_frozen());
-        let exit = self.jit.label();
-        let using = ctx.get_using_xmm();
-        self.fetch_to_rax(ctx, src);
-        monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LBP_SELF)];  // base: Value
-        );
-        let is_self_cached = ctx.self_value.class() == cached_class;
-        if is_self_cached {
-            let is_object_ty = ctx.self_value.ty() == Some(ObjKind::OBJECT);
-            if is_object_ty && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!( &mut self.jit,
-                    movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
-                );
-            } else {
-                self.store_ivar_heap(cached_ivarid, is_object_ty, using);
-            }
-        } else {
-            self.xmm_save(using);
-            monoasm!( &mut self.jit,
-                movq rdx, rdi;  // base: Value
-                movq rcx, (id.get());  // id: IdentId
-                movq r8, rax;   // val: Value
-                movq rdi, rbx; //&mut Executor
-                movq rsi, r12; //&mut Globals
-                movq rax, (set_instance_var);
-                call rax;
-            );
-            self.xmm_restore(using);
-            self.jit_handle_error(ctx, pc);
-        }
-        self.jit.bind_label(exit);
-    }
-
     ///
     /// Load ivar on `var_table`.
     ///
@@ -116,7 +47,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
+    pub(super) fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
         let exit = self.jit.label();
         let generic = self.jit.label();
         let ivar = ivarid.get() as i32;
@@ -156,7 +87,12 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
+    pub(in crate::compiler::jitgen) fn jit_load_gvar(
+        &mut self,
+        ctx: &mut BBContext,
+        name: IdentId,
+        dst: SlotId,
+    ) {
         let mut ir = AsmIr::new();
         ctx.release(dst);
         ir.load_gvar(ctx, name);
@@ -164,14 +100,24 @@ impl Codegen {
         self.gen_code(ir);
     }
 
-    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, src: SlotId) {
+    pub(in crate::compiler::jitgen) fn jit_store_gvar(
+        &mut self,
+        ctx: &mut BBContext,
+        name: IdentId,
+        src: SlotId,
+    ) {
         let mut ir = AsmIr::new();
         ctx.fetch_slots(&mut ir, &[src]);
         ir.store_gvar(ctx, name, src);
         self.gen_code(ir);
     }
 
-    pub(super) fn jit_load_svar(&mut self, ctx: &mut BBContext, id: u32, dst: SlotId) {
+    pub(in crate::compiler::jitgen) fn jit_load_svar(
+        &mut self,
+        ctx: &mut BBContext,
+        id: u32,
+        dst: SlotId,
+    ) {
         ctx.release(dst);
         let using_xmm = ctx.get_using_xmm();
         self.xmm_save(using_xmm);
@@ -184,6 +130,58 @@ impl Codegen {
         };
         self.xmm_restore(using_xmm);
         self.save_rax_to_acc(ctx, dst);
+    }
+}
+
+impl BBContext {
+    pub(in crate::compiler::jitgen) fn jit_load_ivar(
+        &mut self,
+        ir: &mut AsmIr,
+        name: IdentId,
+        dst: SlotId,
+        cached_class: ClassId,
+        cached_ivarid: IvarId,
+    ) {
+        assert!(!cached_class.is_always_frozen());
+        self.release(dst);
+        ir.stack2reg(SlotId(0), GP::Rdi);
+        let using_xmm = self.get_using_xmm();
+        let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
+        let is_self_cached = self.self_value.class() == cached_class;
+        ir.inst.push(AsmInst::LoadIVar {
+            name,
+            cached_ivarid,
+            is_object_ty,
+            is_self_cached,
+            using_xmm,
+        });
+        ir.rax2acc(self, dst);
+    }
+
+    pub(in crate::compiler::jitgen) fn jit_store_ivar(
+        &mut self,
+        ir: &mut AsmIr,
+        name: IdentId,
+        src: SlotId,
+        pc: BcPc,
+        cached_class: ClassId,
+        cached_ivarid: IvarId,
+    ) {
+        assert!(!cached_class.is_always_frozen());
+        self.fetch_to_reg(ir, src, GP::Rax);
+        ir.stack2reg(SlotId(0), GP::Rdi);
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(pc, self.get_write_back());
+        let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
+        let is_self_cached = self.self_value.class() == cached_class;
+        ir.inst.push(AsmInst::StoreIVar {
+            name,
+            cached_ivarid,
+            is_object_ty,
+            is_self_cached,
+            using_xmm,
+            error,
+        });
     }
 }
 
@@ -205,7 +203,7 @@ pub(super) extern "C" fn get_instance_var(
 ///
 /// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
 ///
-extern "C" fn set_instance_var(
+pub(super) extern "C" fn set_instance_var(
     vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
