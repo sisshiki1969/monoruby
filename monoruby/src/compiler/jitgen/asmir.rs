@@ -125,16 +125,6 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    pub(super) fn generic_index(&mut self, ctx: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
-        let using_xmm = ctx.get_using_xmm();
-        self.inst.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-        });
-    }
-
     pub(super) fn new_array(&mut self, ctx: &BBContext, callid: CallSiteId) {
         let using_xmm = ctx.get_using_xmm();
         self.inst.push(AsmInst::NewArray(callid, using_xmm));
@@ -243,17 +233,35 @@ pub(super) enum AsmInst {
         idx: SlotId,
         pc: BcPc,
         using_xmm: UsingXmm,
+        error: usize,
     },
-    /*ArrayU16Index {
-        base: SlotId,
+    ArrayU16Index {
         idx: u16,
         deopt: usize,
     },
     ArrayIndex {
+        deopt: usize,
+    },
+    GenericIndexAssign {
+        src: SlotId,
         base: SlotId,
         idx: SlotId,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    ArrayU16IndexAssign {
+        idx: u16,
+        using_xmm: UsingXmm,
         deopt: usize,
-    },*/
+        error: usize,
+    },
+    ArrayIndexAssign {
+        using_xmm: UsingXmm,
+        deopt: usize,
+        error: usize,
+    },
+
     /// create a new Array object and store it to rax
     NewArray(CallSiteId, UsingXmm),
     /// create a new Hash object and store it to rax
@@ -520,8 +528,76 @@ impl Codegen {
                 idx,
                 pc,
                 using_xmm,
+                error,
             } => {
                 self.generic_index(*using_xmm, *base, *idx, *pc);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::ArrayU16Index { idx, deopt } => {
+                let out_range = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movl rsi, (*idx);
+                }
+                self.guard_rdi_array(labels[*deopt]);
+                self.array_index(out_range);
+            }
+            AsmInst::ArrayIndex { deopt } => {
+                let deopt = labels[*deopt];
+                let out_range = self.jit.label();
+                let exit = self.jit.label();
+                self.array_bound_check(deopt);
+                monoasm! { &mut self.jit,
+                    jge  exit;
+                }
+                self.get_array_length();
+                monoasm! { &mut self.jit,
+                    addq rsi, rax;
+                    js   out_range;
+                exit:
+                }
+                self.guard_rdi_array(deopt);
+                self.array_index(out_range);
+            }
+            AsmInst::GenericIndexAssign {
+                src,
+                base,
+                idx,
+                pc,
+                using_xmm,
+                error,
+            } => {
+                self.generic_index_assign(*using_xmm, *base, *idx, *src, *pc);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::ArrayU16IndexAssign {
+                idx,
+                using_xmm,
+                deopt,
+                error,
+            } => {
+                let generic = self.jit.label();
+                let deopt = labels[*deopt];
+                monoasm! { &mut self.jit,
+                    movl rsi, (*idx);
+                }
+                self.guard_rdi_array(deopt);
+                self.array_index_assign(*using_xmm, generic);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::ArrayIndexAssign {
+                using_xmm,
+                deopt,
+                error,
+            } => {
+                let generic = self.jit.label();
+                let deopt = labels[*deopt];
+                self.array_bound_check(deopt);
+                monoasm! { &mut self.jit,
+                    jlt generic;
+                };
+                self.guard_rdi_array(deopt);
+                self.array_index_assign(*using_xmm, generic);
+                self.handle_error(labels, *error);
             }
 
             AsmInst::NewArray(callid, using_xmm) => {
@@ -654,8 +730,8 @@ impl Codegen {
         }
     }
 
-    fn handle_error(&mut self, labels: &[DestLabel], side_exit: usize) {
-        let error = labels[side_exit];
+    fn handle_error(&mut self, labels: &[DestLabel], error: usize) {
+        let error = labels[error];
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq   error;
