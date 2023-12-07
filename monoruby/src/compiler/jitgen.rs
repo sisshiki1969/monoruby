@@ -954,17 +954,17 @@ impl Codegen {
                 } => {
                     let mut ir = AsmIr::new();
                     let fmode = match mode {
-                        OpMode::RR(lhs, rhs) => {
-                            let (flhs, frhs) = ctx.fetch_float_binary(&mut ir, lhs, rhs, pc);
+                        OpMode::RR(l, r) => {
+                            let (flhs, frhs) = ctx.fetch_float_binary(&mut ir, l, r, pc);
                             FMode::RR(flhs, frhs)
                         }
-                        OpMode::RI(lhs, rhs) => {
-                            let flhs = ctx.fetch_float_assume_float(&mut ir, lhs, pc);
-                            FMode::RI(flhs, rhs)
+                        OpMode::RI(l, r) => {
+                            let flhs = ctx.fetch_float_assume_float(&mut ir, l, pc);
+                            FMode::RI(flhs, r)
                         }
-                        OpMode::IR(lhs, rhs) => {
-                            let frhs = ctx.fetch_float_assume_float(&mut ir, rhs, pc);
-                            FMode::IR(lhs, frhs)
+                        OpMode::IR(l, r) => {
+                            let frhs = ctx.fetch_float_assume_float(&mut ir, r, pc);
+                            FMode::IR(l, frhs)
                         }
                     };
                     if let Some(ret) = dst {
@@ -992,17 +992,17 @@ impl Codegen {
                 TraceIr::Cmp(kind, ret, mode, false) => {
                     if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
                         match mode {
-                            OpMode::RR(lhs, rhs) => {
-                                let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);
+                            OpMode::RR(l, r) => {
+                                let (flhs, frhs) = self.fetch_float_binary(&mut ctx, l, r, pc);
                                 ctx.release(ret);
                                 monoasm! { &mut self.jit,
                                     xorq rax, rax;
                                     ucomisd xmm(flhs.enc()), xmm(frhs.enc());
                                 };
                             }
-                            OpMode::RI(lhs, rhs) => {
-                                let rhs_label = self.jit.const_f64(rhs as f64);
-                                let flhs = self.fetch_float_assume_float(&mut ctx, lhs, pc);
+                            OpMode::RI(l, r) => {
+                                let rhs_label = self.jit.const_f64(r as f64);
+                                let flhs = self.fetch_float_assume_float(&mut ctx, l, pc);
                                 ctx.release(ret);
                                 monoasm! { &mut self.jit,
                                     xorq rax, rax;

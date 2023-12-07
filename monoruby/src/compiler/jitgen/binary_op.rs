@@ -8,27 +8,20 @@ impl Codegen {
         &mut self,
         kind: BinOpK,
         using_xmm: UsingXmm,
-        fret: Xmm,
+        dst: Xmm,
         mode: FMode,
     ) {
         match mode {
-            FMode::RR(l, r) => self.binop_float_rr(kind, using_xmm, fret, l, r),
-            FMode::RI(l, r) => self.binop_float_ri(kind, using_xmm, fret, l, r),
-            FMode::IR(l, r) => self.binop_float_ir(kind, using_xmm, fret, l, r),
+            FMode::RR(l, r) => self.binop_float_rr(kind, using_xmm, dst, l, r),
+            FMode::RI(l, r) => self.binop_float_ri(kind, using_xmm, dst, l, r),
+            FMode::IR(l, r) => self.binop_float_ir(kind, using_xmm, dst, l, r),
         }
     }
 
-    fn binop_float_rr(
-        &mut self,
-        kind: BinOpK,
-        using_xmm: UsingXmm,
-        fret: Xmm,
-        flhs: Xmm,
-        frhs: Xmm,
-    ) {
-        let lhs = flhs.enc();
-        let rhs = frhs.enc();
-        let ret = fret.enc();
+    fn binop_float_rr(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: Xmm, r: Xmm) {
+        let lhs = l.enc();
+        let rhs = r.enc();
+        let ret = dst.enc();
         match kind {
             BinOpK::Add => {
                 if ret == rhs {
@@ -36,7 +29,7 @@ impl Codegen {
                         addsd xmm(ret), xmm(lhs);
                     );
                 } else {
-                    self.xmm_mov(flhs, fret);
+                    self.xmm_mov(l, dst);
                     monoasm!( &mut self.jit,
                         addsd xmm(ret), xmm(rhs);
                     );
@@ -50,7 +43,7 @@ impl Codegen {
                         movq  xmm(ret), xmm0;
                     );
                 } else {
-                    self.xmm_mov(flhs, fret);
+                    self.xmm_mov(l, dst);
                     monoasm!( &mut self.jit,
                         subsd xmm(ret), xmm(rhs);
                     );
@@ -62,7 +55,7 @@ impl Codegen {
                         mulsd xmm(ret), xmm(lhs);
                     );
                 } else {
-                    self.xmm_mov(flhs, fret);
+                    self.xmm_mov(l, dst);
                     monoasm!( &mut self.jit,
                         mulsd xmm(ret), xmm(rhs);
                     );
@@ -76,7 +69,7 @@ impl Codegen {
                         movq  xmm(ret), xmm0;
                     );
                 } else {
-                    self.xmm_mov(flhs, fret);
+                    self.xmm_mov(l, dst);
                     monoasm!( &mut self.jit,
                         divsd xmm(ret), xmm(rhs);
                     );
@@ -99,43 +92,36 @@ impl Codegen {
         }
     }
 
-    fn binop_float_ri(
-        &mut self,
-        kind: BinOpK,
-        using_xmm: UsingXmm,
-        fret: Xmm,
-        flhs: Xmm,
-        rhs: i16,
-    ) {
-        let rhs_label = self.jit.const_f64(rhs as f64);
-        let ret = fret.enc();
+    fn binop_float_ri(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: Xmm, r: i16) {
+        let rhs_label = self.jit.const_f64(r as f64);
+        let ret = dst.enc();
         match kind {
             BinOpK::Add => {
-                self.xmm_mov(flhs, fret);
+                self.xmm_mov(l, dst);
                 monoasm!( &mut self.jit,
                     addsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Sub => {
-                self.xmm_mov(flhs, fret);
+                self.xmm_mov(l, dst);
                 monoasm!( &mut self.jit,
                     subsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Mul => {
-                self.xmm_mov(flhs, fret);
+                self.xmm_mov(l, dst);
                 monoasm!( &mut self.jit,
                     mulsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Div => {
-                self.xmm_mov(flhs, fret);
+                self.xmm_mov(l, dst);
                 monoasm!( &mut self.jit,
                     divsd xmm(ret), [rip + rhs_label];
                 )
             }
             BinOpK::Exp => {
-                let lhs = flhs.enc();
+                let lhs = l.enc();
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
@@ -152,17 +138,10 @@ impl Codegen {
         }
     }
 
-    fn binop_float_ir(
-        &mut self,
-        kind: BinOpK,
-        using_xmm: UsingXmm,
-        fret: Xmm,
-        lhs: i16,
-        frhs: Xmm,
-    ) {
-        let lhs = self.jit.const_f64(lhs as f64);
-        let rhs = frhs.enc();
-        let ret = fret.enc();
+    fn binop_float_ir(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: i16, r: Xmm) {
+        let lhs = self.jit.const_f64(l as f64);
+        let rhs = r.enc();
+        let ret = dst.enc();
         match kind {
             BinOpK::Add => {
                 if ret != rhs {
