@@ -106,6 +106,10 @@ impl AsmIr {
         self.inst.push(AsmInst::LitToStack(v, reg));
     }
 
+    pub(super) fn lit2reg(&mut self, v: Value, reg: GP) {
+        self.inst.push(AsmInst::LitToReg(v, reg));
+    }
+
     pub(super) fn acc2stack(&mut self, reg: SlotId) {
         self.inst.push(AsmInst::AccToStack(reg));
     }
@@ -132,6 +136,23 @@ impl AsmIr {
     pub(super) fn deep_copy_lit(&mut self, ctx: &BBContext, val: Value) {
         let using_xmm = ctx.get_using_xmm();
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
+    }
+
+    pub(super) fn guard_reg_fixnum(&mut self, r: GP, deopt: usize) {
+        self.inst.push(AsmInst::GuardRegFixnum(r, deopt));
+    }
+
+    pub(super) fn integer_binop(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
+        let using_xmm = ctx.get_using_xmm();
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::IntegerBinOp {
+            kind,
+            mode,
+            using_xmm,
+            deopt,
+            error,
+        });
     }
 
     pub(super) fn generic_index(&mut self, ctx: &BBContext, pc: BcPc, base: SlotId, idx: SlotId) {
@@ -288,6 +309,7 @@ pub(super) enum AsmInst {
 
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
     GuardFloat(SlotId, usize),
+    GuardRegFixnum(GP, usize),
     /// deoptimize
     Deopt(usize),
     /// recompile and deoptimize
@@ -299,6 +321,14 @@ pub(super) enum AsmInst {
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
+        error: usize,
+    },
+
+    IntegerBinOp {
+        kind: BinOpK,
+        mode: OpMode,
+        using_xmm: UsingXmm,
+        deopt: usize,
         error: usize,
     },
 
@@ -449,6 +479,7 @@ pub(super) enum AsmInst {
     },
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum FMode {
     RR(Xmm, Xmm),
     RI(Xmm, i16),
@@ -567,11 +598,7 @@ impl Codegen {
                 mode,
                 dst,
                 using_xmm,
-            } => match mode {
-                FMode::RR(l, r) => self.gen_binop_float_rr(*kind, *using_xmm, *dst, *l, *r),
-                FMode::RI(l, r) => self.gen_binop_float_ri(*kind, *using_xmm, *dst, *l, *r),
-                FMode::IR(l, r) => self.gen_binop_float_ir(*kind, *using_xmm, *dst, *l, *r),
-            },
+            } => self.gen_float_binop(*kind, *using_xmm, *dst, mode.clone()),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -632,6 +659,13 @@ impl Codegen {
             }
 
             AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
+            AsmInst::GuardRegFixnum(r, deopt) => {
+                let deopt = labels[*deopt];
+                monoasm!( &mut self.jit,
+                    testq R(*r as u64), 0x1;
+                    jz deopt;
+                );
+            }
             AsmInst::Deopt(side_exit) => {
                 let exit = labels[*side_exit];
                 monoasm!( &mut self.jit,
@@ -652,6 +686,116 @@ impl Codegen {
                 self.call_unop(*func);
                 self.xmm_restore(*using_xmm);
                 self.handle_error(labels, *error);
+            }
+
+            AsmInst::IntegerBinOp {
+                kind,
+                mode,
+                using_xmm,
+                deopt,
+                error,
+            } => {
+                let deopt = labels[*deopt];
+                match kind {
+                    BinOpK::Add => match mode {
+                        OpMode::RR(_, _) => {
+                            monoasm!( &mut self.jit,
+                                subq rdi, 1;
+                                addq rdi, rsi;
+                                jo deopt;
+                            );
+                        }
+                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                            monoasm!( &mut self.jit,
+                                addq rdi, (Value::i32(*i as i32).id() - 1);
+                                jo deopt;
+                            );
+                        }
+                    },
+                    BinOpK::Sub => match mode {
+                        OpMode::RR(_, _) => {
+                            monoasm!( &mut self.jit,
+                                subq rdi, rsi;
+                                jo deopt;
+                                addq rdi, 1;
+                            );
+                        }
+                        OpMode::RI(_, rhs) => {
+                            monoasm!( &mut self.jit,
+                                subq rdi, (Value::i32(*rhs as i32).id() - 1);
+                                jo deopt;
+                            );
+                        }
+                        OpMode::IR(lhs, _) => {
+                            monoasm!( &mut self.jit,
+                                movq rdi, (Value::i32(*lhs as i32).id());
+                                subq rdi, rsi;
+                                jo deopt;
+                                addq rdi, 1;
+                            );
+                        }
+                    },
+                    BinOpK::Exp => {
+                        self.xmm_save(*using_xmm);
+                        monoasm!( &mut self.jit,
+                            sarq rdi, 1;
+                            sarq rsi, 1;
+                            movq rax, (pow_ii as u64);
+                            call rax;
+                        );
+                        self.xmm_restore(*using_xmm);
+                    }
+                    BinOpK::Mul | BinOpK::Div => {
+                        self.gen_generic_binop(*kind, labels, *using_xmm, *error);
+                    }
+                    BinOpK::Rem => match mode {
+                        OpMode::RI(_, rhs) if *rhs > 0 && (*rhs as u64).is_power_of_two() => {
+                            monoasm!( &mut self.jit,
+                                andq rdi, (*rhs * 2 - 1);
+                            );
+                        }
+                        _ => {
+                            self.gen_generic_binop(*kind, labels, *using_xmm, *error);
+                        }
+                    },
+                    BinOpK::BitOr => match mode {
+                        OpMode::RR(_, _) => {
+                            monoasm!( &mut self.jit,
+                                orq rdi, rsi;
+                            );
+                        }
+                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                            monoasm!( &mut self.jit,
+                                orq rdi, (Value::i32(*i as i32).id());
+                            );
+                        }
+                    },
+                    BinOpK::BitAnd => match mode {
+                        OpMode::RR(_, _) => {
+                            monoasm!( &mut self.jit,
+                                andq rdi, rsi;
+                            );
+                        }
+                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                            monoasm!( &mut self.jit,
+                                andq rdi, (Value::i32(*i as i32).id());
+                            );
+                        }
+                    },
+                    BinOpK::BitXor => match mode {
+                        OpMode::RR(_, _) => {
+                            monoasm!( &mut self.jit,
+                                xorq rdi, rsi;
+                                addq rdi, 1;
+                            );
+                        }
+                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                            monoasm!( &mut self.jit,
+                                xorq rdi, (Value::i32(*i as i32).id() - 1);
+                            );
+                        }
+                    },
+                }
             }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {
@@ -1026,6 +1170,20 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+    }
+
+    fn gen_generic_binop(
+        &mut self,
+        kind: BinOpK,
+        labels: &[DestLabel],
+        using_xmm: UsingXmm,
+        error: usize,
+    ) {
+        let func = kind.generic_func();
+        self.xmm_save(using_xmm);
+        self.call_binop(func);
+        self.xmm_restore(using_xmm);
+        self.handle_error(labels, error);
     }
 
     ///

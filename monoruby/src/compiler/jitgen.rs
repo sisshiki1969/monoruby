@@ -660,18 +660,6 @@ impl Codegen {
         }
     }
 
-    fn save_rdi_to_acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
-        let dst = dst.into();
-        if let Some(dst) = dst {
-            ctx.clear();
-            self.writeback_acc(ctx);
-            monoasm! { &mut self.jit,
-                movq r15, rdi;
-            }
-            ctx.link_r15(dst);
-        }
-    }
-
     fn save_rax_to_acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
         let dst = dst.into();
         if let Some(dst) = dst {
@@ -957,7 +945,9 @@ impl Codegen {
                 TraceIr::IBinOp {
                     kind, dst, mode, ..
                 } => {
-                    self.gen_binop_integer(&mut ctx, pc, kind, dst, mode);
+                    let mut ir = AsmIr::new();
+                    ctx.gen_binop_integer(&mut ir, pc, kind, dst, mode);
+                    self.gen_code(ir);
                 }
                 TraceIr::FBinOp {
                     kind, dst, mode, ..
