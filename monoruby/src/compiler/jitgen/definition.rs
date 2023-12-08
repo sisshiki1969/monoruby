@@ -38,7 +38,7 @@ impl Codegen {
 }
 
 impl BBContext {
-    pub(super) fn jit_class_def(
+    pub(super) fn class_def(
         &mut self,
         ir: &mut AsmIr,
         dst: Option<SlotId>,
@@ -63,7 +63,7 @@ impl BBContext {
         });
     }
 
-    pub(super) fn jit_singleton_class_def(
+    pub(super) fn singleton_class_def(
         &mut self,
         ir: &mut AsmIr,
         dst: Option<SlotId>,

@@ -299,6 +299,48 @@ impl AsmIr {
             using_xmm,
         });
     }
+
+    pub(super) fn concat_str(&mut self, ctx: &BBContext, arg: SlotId, len: u16) {
+        let using_xmm = ctx.get_using_xmm();
+        self.inst.push(AsmInst::ConcatStr {
+            arg,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn concat_regexp(&mut self, ctx: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        let len = len as _;
+        self.inst.push(AsmInst::ConcatRegexp {
+            arg,
+            len,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn expand_array(&mut self, ctx: &BBContext, dst: SlotId, len: u16) {
+        let using_xmm = ctx.get_using_xmm();
+        let len = len as _;
+        self.inst.push(AsmInst::ExpandArray {
+            dst,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn alias_method(&mut self, ctx: &BBContext, pc: BcPc, new: SlotId, old: SlotId) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::AliasMethod {
+            new,
+            old,
+            using_xmm,
+            error,
+        });
+    }
 }
 
 impl AsmIr {
@@ -417,6 +459,10 @@ pub(super) enum AsmInst {
     IntegerCmp {
         kind: CmpKind,
         error: usize,
+    },
+    FloatCmp {
+        kind: CmpKind,
+        mode: FMode,
     },
 
     GuardBaseClass {
@@ -562,6 +608,49 @@ pub(super) enum AsmInst {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
+        using_xmm: UsingXmm,
+    },
+
+    ExpandArray {
+        dst: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    },
+    ConcatRegexp {
+        arg: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    AliasMethod {
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    DefinedYield {
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    },
+    DefinedConst {
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    },
+    DefinedMethod {
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    DefinedGvar {
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    DefinedIvar {
+        dst: SlotId,
+        name: IdentId,
         using_xmm: UsingXmm,
     },
 }
@@ -904,6 +993,25 @@ impl Codegen {
                 self.integer_cmp(*kind);
                 self.handle_error(labels, *error);
             }
+            AsmInst::FloatCmp { kind, mode } => {
+                match mode {
+                    FMode::RR(l, r) => {
+                        monoasm! { &mut self.jit,
+                            xorq rax, rax;
+                            ucomisd xmm(l.enc()), xmm(r.enc());
+                        };
+                    }
+                    FMode::RI(l, r) => {
+                        let rhs_label = self.jit.const_f64(*r as f64);
+                        monoasm! { &mut self.jit,
+                            xorq rax, rax;
+                            ucomisd xmm(l.enc()), [rip + rhs_label];
+                        };
+                    }
+                    _ => unreachable!(),
+                }
+                self.setflag_float(*kind);
+            }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {
                 let deopt = labels[*deopt];
@@ -1000,13 +1108,6 @@ impl Codegen {
                 self.load_rsi(*end);
                 self.new_range(*exclude_end, *using_xmm);
                 self.handle_error(labels, *error);
-            }
-            AsmInst::ConcatStr {
-                arg,
-                len,
-                using_xmm,
-            } => {
-                self.concat_string(*arg, *len, *using_xmm);
             }
 
             AsmInst::BlockArgProxy { ret, outer } => {
@@ -1177,6 +1278,143 @@ impl Codegen {
                 using_xmm,
             } => {
                 self.singleton_method_def(*obj, *name, *func_id, *using_xmm);
+            }
+
+            AsmInst::ExpandArray {
+                dst,
+                len,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    lea rsi, [r14 - (conv(*dst))];
+                    movq rdx, (*len);
+                    movq rax, (runtime::expand_array);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::ConcatStr {
+                arg,
+                len,
+                using_xmm,
+            } => {
+                self.concat_string(*arg, *len, *using_xmm);
+            }
+            AsmInst::ConcatRegexp {
+                arg,
+                len,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    lea rdx, [r14 - (conv(*arg))];
+                    movq rcx, (*len);
+                    movq rax, (runtime::concatenate_regexp);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::AliasMethod {
+                new,
+                old,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    movq rdx, [r14 - (LBP_SELF)];
+                    movq rcx, [r14 - (conv(*new))];
+                    movq r8, [r14 - (conv(*old))];
+                    movq r9, [r14 - (LBP_META)];
+                    movq rax, (runtime::alias_method);
+                    call rax;
+                );
+                self.xmm_restore(*using_xmm);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::DefinedYield { dst, using_xmm } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    lea  rdx, [r14 - (conv(*dst))];
+                    movq rax, (runtime::defined_yield);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::DefinedConst {
+                dst,
+                siteid,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    lea  rdx, [r14 - (conv(*dst))];
+                    movl rcx, (siteid.0);
+                    movq rax, (runtime::defined_const);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::DefinedMethod {
+                dst,
+                recv,
+                name,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    lea  rdx, [r14 - (conv(*dst))];
+                    movq rcx, [r14 - (conv(*recv))];
+                    movl r8, (name.get());
+                    movq rax, (runtime::defined_method);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::DefinedGvar {
+                dst,
+                name,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    lea  rdx, [r14 - (conv(*dst))];
+                    movl rcx, (name.get());
+                    movq rax, (runtime::defined_gvar);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
+            }
+            AsmInst::DefinedIvar {
+                dst,
+                name,
+                using_xmm,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;  // &mut Interp
+                    movq rsi, r12;  // &mut Globals
+                    lea  rdx, [r14 - (conv(*dst))];
+                    movl rcx, (name.get());
+                    movq rax, (runtime::defined_ivar);
+                    call rax;
+                };
+                self.xmm_restore(*using_xmm);
             }
         }
     }
@@ -1403,7 +1641,7 @@ impl Codegen {
 }
 
 impl BBContext {
-    pub(super) fn jit_array_index(
+    pub(super) fn array_index(
         &mut self,
         ir: &mut AsmIr,
         dst: SlotId,
@@ -1423,7 +1661,7 @@ impl BBContext {
         self.release(dst);
     }
 
-    pub(super) fn jit_array_index_assign(
+    pub(super) fn array_index_assign(
         &mut self,
         ir: &mut AsmIr,
         src: SlotId,

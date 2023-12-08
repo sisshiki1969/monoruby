@@ -630,30 +630,6 @@ impl Codegen {
         self.guard_float(side_exit);
     }
 
-    ///
-    /// Copy *src* to *dst*.
-    ///
-    fn copy_slot(&mut self, ctx: &mut BBContext, src: SlotId, dst: SlotId) {
-        match ctx[src] {
-            LinkMode::Xmm(x) | LinkMode::Both(x) => {
-                ctx.link_xmm(dst, x);
-            }
-            LinkMode::Stack => {
-                ctx.release(dst);
-                self.load_rax(src);
-                self.store_rax(dst);
-            }
-            LinkMode::Literal(v) => {
-                ctx.link_literal(dst, v);
-            }
-            LinkMode::R15 => {
-                self.store_r15(src);
-                ctx.release(src);
-                ctx.link_r15(dst);
-            }
-        }
-    }
-
     fn writeback_acc(&mut self, ctx: &mut BBContext) {
         if let Some(slot) = ctx.clear_r15() {
             self.store_r15(slot);
@@ -765,8 +741,13 @@ impl Codegen {
                 }
                 TraceIr::Index { dst, base, idx } => {
                     let mut ir = AsmIr::new();
+                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
+                        return;
+                    }
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-                        ctx.jit_array_index(&mut ir, dst, base, idx, pc);
+                        ctx.array_index(&mut ir, dst, base, idx, pc);
                     } else {
                         ctx.fetch_slots(&mut ir, &[base, idx]);
                         ctx.release(dst);
@@ -777,8 +758,13 @@ impl Codegen {
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     let mut ir = AsmIr::new();
+                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
+                        return;
+                    }
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-                        ctx.jit_array_index_assign(&mut ir, src, base, idx, pc);
+                        ctx.array_index_assign(&mut ir, src, base, idx, pc);
                     } else {
                         ctx.fetch_slots(&mut ir, &[base, idx, src]);
                         ir.generic_index_assign(&ctx, pc, base, idx, src);
@@ -890,6 +876,11 @@ impl Codegen {
                 }
                 TraceIr::BitNot { dst, src } => {
                     let mut ir = AsmIr::new();
+                    if pc.classid1().0 == 0 {
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
+                        return;
+                    }
                     ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
                     ctx.release(dst);
                     if pc.classid1().0 == 0 {
@@ -897,20 +888,16 @@ impl Codegen {
                         self.gen_code(ir);
                         return;
                     } else {
-                        let using_xmm = ctx.get_using_xmm();
-                        let error = ir.new_deopt(pc, ctx.get_write_back());
-                        ir.inst.push(AsmInst::GenericUnOp {
-                            func: bitnot_value,
-                            using_xmm,
-                            error,
-                        });
+                        ir.generic_unop(&ctx, pc, bitnot_value);
                         ir.reg2stack(GP::Rax, dst);
                     }
                     self.gen_code(ir);
                 }
                 TraceIr::Not { dst, src } => {
-                    self.fetch_to_rdi(&mut ctx, src);
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
                     ctx.release(dst);
+                    self.gen_code(ir);
                     self.not_rdi_to_rax();
                     self.store_rax(dst);
                 }
@@ -983,53 +970,41 @@ impl Codegen {
                     self.gen_code(ir);
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
+                    let mut ir = AsmIr::new();
+                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        ir.recompile_and_deopt(&ctx, pc, position);
+                        self.gen_code(ir);
+                        return;
+                    }
                     if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
-                        match mode {
+                        let mode = match mode {
                             OpMode::RR(l, r) => {
-                                let (flhs, frhs) = self.fetch_float_binary(&mut ctx, l, r, pc);
-                                monoasm! { &mut self.jit,
-                                    xorq rax, rax;
-                                    ucomisd xmm(flhs.enc()), xmm(frhs.enc());
-                                };
+                                let (flhs, frhs) = ctx.fetch_float_binary(&mut ir, l, r, pc);
+                                FMode::RR(flhs, frhs)
                             }
                             OpMode::RI(l, r) => {
-                                let rhs_label = self.jit.const_f64(r as f64);
-                                let flhs = self.fetch_float_assume_float(&mut ctx, l, pc);
-                                monoasm! { &mut self.jit,
-                                    xorq rax, rax;
-                                    ucomisd xmm(flhs.enc()), [rip + rhs_label];
-                                };
+                                let flhs = ctx.fetch_float_assume_float(&mut ir, l, pc);
+                                FMode::RI(flhs, r)
                             }
                             _ => unreachable!(),
-                        }
+                        };
                         ctx.release(ret);
-                        self.setflag_float(kind);
-                        self.store_rax(ret);
+                        ir.inst.push(AsmInst::FloatCmp { kind, mode });
                     } else if mode.is_integer_op(&pc) {
-                        let mut ir = AsmIr::new();
                         ctx.fetch_binary(&mut ir, &mode);
                         ctx.release(ret);
                         let deopt = ir.new_deopt(pc, ctx.get_write_back());
                         let error = ir.new_error(pc, ctx.get_write_back());
                         ir.load_binary_fixnum_with_mode(mode, deopt);
                         ir.inst.push(AsmInst::IntegerCmp { kind, error });
-                        ir.reg2stack(GP::Rax, ret);
-                        self.gen_code(ir);
                     } else {
-                        let mut ir = AsmIr::new();
                         ctx.fetch_binary(&mut ir, &mode);
                         ctx.release(ret);
-                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            ir.recompile_and_deopt(&ctx, pc, position);
-                            self.gen_code(ir);
-                            return;
-                        } else {
-                            ir.load_binary_with_mode(mode);
-                            ir.generic_cmp(&ctx, pc, kind);
-                            ir.reg2stack(GP::Rax, ret);
-                        }
-                        self.gen_code(ir);
+                        ir.load_binary_with_mode(mode);
+                        ir.generic_cmp(&ctx, pc, kind);
                     }
+                    ir.reg2stack(GP::Rax, ret);
+                    self.gen_code(ir);
                 }
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
@@ -1058,72 +1033,41 @@ impl Codegen {
                     }
                 }
                 TraceIr::Mov(dst, src) => {
-                    self.copy_slot(&mut ctx, src, dst);
+                    let mut ir = AsmIr::new();
+                    ctx.copy_slot(&mut ir, src, dst);
+                    self.gen_code(ir);
                 }
                 TraceIr::ConcatStr(dst, arg, len) => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_range(&mut ir, arg, len);
                     ctx.release(dst);
-                    let using_xmm = ctx.get_using_xmm();
-                    ir.inst.push(AsmInst::ConcatStr {
-                        arg,
-                        len,
-                        using_xmm,
-                    });
+                    ir.concat_str(&ctx, arg, len);
                     ir.reg2stack(GP::Rax, dst);
                     self.gen_code(ir);
                 }
-                TraceIr::ConcatRegexp(ret, arg, len) => {
+                TraceIr::ConcatRegexp(dst, arg, len) => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_range(&mut ir, arg, len);
+                    ctx.release(dst);
+                    ir.concat_regexp(&ctx, pc, arg, len);
+                    ir.reg2stack(GP::Rax, dst);
                     self.gen_code(ir);
-                    ctx.release(ret);
-                    let using_xmm = ctx.get_using_xmm();
-                    self.xmm_save(using_xmm);
-                    monoasm!( &mut self.jit,
-                        movq rdi, rbx;
-                        movq rsi, r12;
-                        lea rdx, [r14 - (conv(arg))];
-                        movq rcx, (len);
-                        movq rax, (runtime::concatenate_regexp);
-                        call rax;
-                    );
-                    self.xmm_restore(using_xmm);
-                    self.jit_handle_error(&ctx, pc);
-                    self.store_rax(ret);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
-                    self.fetch_slots(&mut ctx, &[src]);
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[src]);
                     for reg in dst.0..dst.0 + len {
                         ctx.release(SlotId(reg));
                     }
-                    let using_xmm = ctx.get_using_xmm();
-                    self.xmm_save(using_xmm);
-                    self.load_rdi(src);
-                    monoasm!( &mut self.jit,
-                        lea rsi, [r14 - (conv(dst))];
-                        movq rdx, (len);
-                        movq rax, (runtime::expand_array);
-                        call rax;
-                    );
-                    self.xmm_restore(using_xmm);
+                    ir.stack2reg(src, GP::Rdi);
+                    ir.expand_array(&ctx, dst, len);
+                    self.gen_code(ir);
                 }
                 TraceIr::AliasMethod { new, old } => {
-                    self.fetch_slots(&mut ctx, &[new, old]);
-                    let using_xmm = ctx.get_using_xmm();
-                    self.xmm_save(using_xmm);
-                    monoasm!( &mut self.jit,
-                        movq rdi, rbx;
-                        movq rsi, r12;
-                        movq rdx, [r14 - (LBP_SELF)];
-                        movq rcx, [r14 - (conv(new))];
-                        movq r8, [r14 - (conv(old))];
-                        movq r9, [r14 - (LBP_META)];
-                        movq rax, (runtime::alias_method);
-                        call rax;
-                    );
-                    self.xmm_restore(using_xmm);
-                    self.jit_handle_error(&ctx, pc);
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[new, old]);
+                    ir.alias_method(&ctx, pc, new, old);
+                    self.gen_code(ir);
                 }
                 TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
@@ -1178,73 +1122,73 @@ impl Codegen {
                     func_id,
                 } => {
                     let mut ir = AsmIr::new();
-                    ctx.jit_class_def(&mut ir, ret, superclass, name, func_id, false, pc);
+                    ctx.class_def(&mut ir, ret, superclass, name, func_id, false, pc);
                     self.gen_code(ir);
                 }
                 TraceIr::ModuleDef { ret, name, func_id } => {
                     let mut ir = AsmIr::new();
-                    ctx.jit_class_def(&mut ir, ret, SlotId::new(0), name, func_id, true, pc);
+                    ctx.class_def(&mut ir, ret, SlotId::new(0), name, func_id, true, pc);
                     self.gen_code(ir);
                 }
                 TraceIr::SingletonClassDef { ret, base, func_id } => {
                     let mut ir = AsmIr::new();
-                    ctx.jit_singleton_class_def(&mut ir, ret, base, func_id, pc);
+                    ctx.singleton_class_def(&mut ir, ret, base, func_id, pc);
                     self.gen_code(ir);
                 }
                 TraceIr::DefinedYield { ret } => {
-                    self.fetch_slots(&mut ctx, &[ret]);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        lea  rdx, [r14 - (conv(ret))];
-                        movq rax, (runtime::defined_yield);
-                        call rax;
-                    };
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[ret]);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::DefinedYield {
+                        dst: ret,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::DefinedConst { ret, siteid } => {
-                    self.fetch_slots(&mut ctx, &[ret]);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        lea  rdx, [r14 - (conv(ret))];
-                        movl rcx, (siteid.0);
-                        movq rax, (runtime::defined_const);
-                        call rax;
-                    };
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[ret]);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::DefinedConst {
+                        dst: ret,
+                        siteid,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::DefinedMethod { ret, recv, name } => {
-                    self.fetch_slots(&mut ctx, &[ret, recv]);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        lea  rdx, [r14 - (conv(ret))];
-                        movq rcx, [r14 - (conv(recv))];
-                        movl r8, (name.get());
-                        movq rax, (runtime::defined_method);
-                        call rax;
-                    };
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[ret, recv]);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::DefinedMethod {
+                        dst: ret,
+                        recv,
+                        name,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::DefinedGvar { ret, name } => {
-                    self.fetch_slots(&mut ctx, &[ret]);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        lea  rdx, [r14 - (conv(ret))];
-                        movl rcx, (name.get());
-                        movq rax, (runtime::defined_gvar);
-                        call rax;
-                    };
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[ret]);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::DefinedGvar {
+                        dst: ret,
+                        name,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::DefinedIvar { ret, name } => {
-                    self.fetch_slots(&mut ctx, &[ret]);
-                    monoasm! { &mut self.jit,
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        lea  rdx, [r14 - (conv(ret))];
-                        movl rcx, (name.get());
-                        movq rax, (runtime::defined_ivar);
-                        call rax;
-                    };
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_slots(&mut ir, &[ret]);
+                    let using_xmm = ctx.get_using_xmm();
+                    ir.inst.push(AsmInst::DefinedIvar {
+                        dst: ret,
+                        name,
+                        using_xmm,
+                    });
+                    self.gen_code(ir);
                 }
                 TraceIr::Ret(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
@@ -1621,5 +1565,31 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using);
+    }
+}
+
+impl BBContext {
+    ///
+    /// Copy *src* to *dst*.
+    ///
+    fn copy_slot(&mut self, ir: &mut AsmIr, src: SlotId, dst: SlotId) {
+        match self[src] {
+            LinkMode::Xmm(x) | LinkMode::Both(x) => {
+                self.link_xmm(dst, x);
+            }
+            LinkMode::Stack => {
+                self.release(dst);
+                ir.stack2reg(src, GP::Rax);
+                ir.reg2stack(GP::Rax, dst);
+            }
+            LinkMode::Literal(v) => {
+                self.link_literal(dst, v);
+            }
+            LinkMode::R15 => {
+                ir.reg2stack(GP::R15, src);
+                self.release(src);
+                self.link_r15(dst);
+            }
+        }
     }
 }
