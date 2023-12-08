@@ -1,6 +1,5 @@
 use monoasm::*;
 use monoasm_macro::monoasm;
-use paste::paste;
 
 pub mod jitgen;
 pub mod runtime;
@@ -51,58 +50,6 @@ type FiberInvoker = extern "C" fn(
     usize,
     &mut Executor,
 ) -> Option<Value>;
-
-macro_rules! cmp_main {
-    ($op:ident) => {
-        paste! {
-            fn [<icmp_ $op>](&mut self) {
-                monoasm! { &mut self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                };
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_main!($op1);
-        cmp_main!($($op2),+);
-    };
-}
-
-macro_rules! cmp_opt_main {
-    (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
-        paste! {
-            fn [<condbr_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { &mut self.jit,
-                        [<j $sop>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { &mut self.jit,
-                        [<j $rev_sop>] branch_dest;
-                    },
-                }
-            }
-
-            fn [<condbr_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { &mut self.jit,
-                        [<j $op>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { &mut self.jit,
-                        [<j $rev_op>] branch_dest;
-                    },
-                }
-            }
-        }
-    };
-    (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
-        cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
-        cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
-    };
-}
 
 ///
 /// Bytecode compiler
@@ -278,28 +225,16 @@ impl Codegen {
         unsafe { *self.class_version_addr += 1 }
     }
 
-    cmp_main!(eq, ne, lt, le, gt, ge);
-    cmp_opt_main!(
-        (eq, ne, eq, ne),
-        (ne, eq, ne, eq),
-        (a, be, gt, le),
-        (b, ae, lt, ge),
-        (ae, b, ge, lt),
-        (be, a, le, gt)
-    );
-
     fn icmp_teq(&mut self) {
         self.icmp_eq()
     }
 
     fn icmp_cmp(&mut self) {
-        let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            xorq rax, rax;
+            movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());
             movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
             cmpq rdi, rsi;
-            jeq  exit;
-            cmovgeq rax, rdx;
+            cmovgtq rax, rdx;
             movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
             cmovltq rax, rdx;
         };

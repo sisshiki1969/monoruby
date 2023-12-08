@@ -54,15 +54,17 @@ impl AsmIr {
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
-    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: SlotId) {
-        ctx.clear();
-        if let Some(acc) = ctx.clear_r15() {
-            if acc != dst {
-                self.inst.push(AsmInst::AccToStack(acc));
+    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            ctx.clear();
+            if let Some(acc) = ctx.clear_r15() {
+                if acc != dst {
+                    self.inst.push(AsmInst::AccToStack(acc));
+                }
             }
+            ctx.link_r15(dst);
+            self.inst.push(AsmInst::RegToAcc(GP::Rax));
         }
-        ctx.link_r15(dst);
-        self.inst.push(AsmInst::RegToAcc(GP::Rax));
     }
 
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
@@ -142,6 +144,26 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardRegFixnum(r, deopt));
     }
 
+    pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericUnOp {
+            func,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn generic_binop(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericBinOp {
+            kind,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn integer_binop(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = ctx.get_using_xmm();
         let deopt = self.new_deopt(pc, ctx.get_write_back());
@@ -151,6 +173,16 @@ impl AsmIr {
             mode,
             using_xmm,
             deopt,
+            error,
+        });
+    }
+
+    pub(super) fn generic_cmp(&mut self, ctx: &BBContext, pc: BcPc, kind: CmpKind) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericCmp {
+            kind,
+            using_xmm,
             error,
         });
     }
@@ -269,6 +301,46 @@ impl AsmIr {
     }
 }
 
+impl AsmIr {
+    pub(super) fn load_binary_with_mode(&mut self, mode: OpMode) {
+        match mode {
+            OpMode::RR(lhs, rhs) => {
+                self.stack2reg(lhs, GP::Rdi);
+                self.stack2reg(rhs, GP::Rsi);
+            }
+            OpMode::RI(lhs, rhs) => {
+                self.stack2reg(lhs, GP::Rdi);
+                self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
+            }
+            OpMode::IR(lhs, rhs) => {
+                self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
+                self.stack2reg(rhs, GP::Rsi);
+            }
+        }
+    }
+
+    pub(super) fn load_binary_fixnum_with_mode(&mut self, mode: OpMode, deopt: usize) {
+        match mode {
+            OpMode::RR(lhs, rhs) => {
+                self.stack2reg(lhs, GP::Rdi);
+                self.guard_reg_fixnum(GP::Rdi, deopt);
+                self.stack2reg(rhs, GP::Rsi);
+                self.guard_reg_fixnum(GP::Rsi, deopt);
+            }
+            OpMode::RI(lhs, rhs) => {
+                self.stack2reg(lhs, GP::Rdi);
+                self.guard_reg_fixnum(GP::Rdi, deopt);
+                self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
+            }
+            OpMode::IR(lhs, rhs) => {
+                self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
+                self.stack2reg(rhs, GP::Rsi);
+                self.guard_reg_fixnum(GP::Rsi, deopt);
+            }
+        }
+    }
+}
+
 pub(super) enum AsmInst {
     /// move acc to stack
     AccToStack(SlotId),
@@ -324,11 +396,26 @@ pub(super) enum AsmInst {
         error: usize,
     },
 
+    GenericBinOp {
+        kind: BinOpK,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
     IntegerBinOp {
         kind: BinOpK,
         mode: OpMode,
         using_xmm: UsingXmm,
         deopt: usize,
+        error: usize,
+    },
+
+    GenericCmp {
+        kind: CmpKind,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    IntegerCmp {
+        kind: CmpKind,
         error: usize,
     },
 
@@ -688,6 +775,13 @@ impl Codegen {
                 self.handle_error(labels, *error);
             }
 
+            AsmInst::GenericBinOp {
+                kind,
+                using_xmm,
+                error,
+            } => {
+                self.gen_generic_binop(*kind, labels, *using_xmm, *error);
+            }
             AsmInst::IntegerBinOp {
                 kind,
                 mode,
@@ -796,6 +890,19 @@ impl Codegen {
                         }
                     },
                 }
+            }
+
+            AsmInst::GenericCmp {
+                kind,
+                using_xmm,
+                error,
+            } => {
+                self.generic_cmp(kind, *using_xmm);
+                self.handle_error(labels, *error);
+            }
+            AsmInst::IntegerCmp { kind, error } => {
+                self.integer_cmp(*kind);
+                self.handle_error(labels, *error);
             }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {

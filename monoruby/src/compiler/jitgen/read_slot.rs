@@ -12,14 +12,7 @@ impl Codegen {
 
     pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
         let mut ir = AsmIr::new();
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                ctx.fetch_slots(&mut ir, &[*lhs, *rhs]);
-            }
-            OpMode::RI(r, _) | OpMode::IR(_, r) => {
-                ctx.fetch_slots(&mut ir, &[*r]);
-            }
-        }
+        ctx.fetch_binary(&mut ir, mode);
         self.gen_code(ir);
     }
 
@@ -133,6 +126,17 @@ impl BBContext {
 
     pub(crate) fn fetch_slots(&mut self, ir: &mut AsmIr, reg: &[SlotId]) {
         reg.iter().for_each(|r| self.fetch_slot(ir, *r));
+    }
+
+    pub(crate) fn fetch_binary(&mut self, ir: &mut AsmIr, mode: &OpMode) {
+        match mode {
+            OpMode::RR(lhs, rhs) => {
+                self.fetch_slots(ir, &[*lhs, *rhs]);
+            }
+            OpMode::RI(r, _) | OpMode::IR(_, r) => {
+                self.fetch_slots(ir, &[*r]);
+            }
+        }
     }
 
     ///
