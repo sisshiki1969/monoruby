@@ -10,12 +10,6 @@ impl Codegen {
         self.gen_code(ir);
     }
 
-    pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
-        let mut ir = AsmIr::new();
-        ctx.fetch_binary(&mut ir, mode);
-        self.gen_code(ir);
-    }
-
     ///
     /// Fetch *arg* and store in *rax*.
     ///
@@ -44,25 +38,6 @@ impl Codegen {
         self.gen_code(ir);
     }
 
-    ///
-    /// Fetch *lhs* and *rhs* as f64, and store in xmm registers.
-    ///
-    /// ### destroy
-    /// - rdi, rax
-    ///
-    pub(super) fn fetch_float_binary(
-        &mut self,
-        ctx: &mut BBContext,
-        lhs: SlotId,
-        rhs: SlotId,
-        pc: BcPc,
-    ) -> (Xmm, Xmm) {
-        let mut ir = AsmIr::new();
-        let res = ctx.fetch_float_binary(&mut ir, lhs, rhs, pc);
-        self.gen_code(ir);
-        res
-    }
-
     pub(crate) fn fetch_float_assume_float(
         &mut self,
         ctx: &mut BBContext,
@@ -70,7 +45,8 @@ impl Codegen {
         pc: BcPc,
     ) -> Xmm {
         let mut ir = AsmIr::new();
-        let x = ctx.fetch_float_assume_float(&mut ir, reg, pc);
+        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+        let x = ctx.fetch_float_assume_float(&mut ir, reg, deopt);
         self.gen_code(ir);
         x
     }
@@ -200,18 +176,18 @@ impl BBContext {
     /// ### destroy
     /// - rdi
     ///
-    fn fetch_float_assume_integer(&mut self, ir: &mut AsmIr, reg: SlotId, pc: BcPc) -> Xmm {
+    fn fetch_float_assume_integer(&mut self, ir: &mut AsmIr, reg: SlotId, deopt: usize) -> Xmm {
         match self[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                ir.int2xmm(self, pc, Some(reg), x);
+                ir.int2xmm(Some(reg), x, deopt);
                 self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                ir.int2xmm(self, pc, None, x);
+                ir.int2xmm(None, x, deopt);
                 self.link_both(reg, x);
                 x
             }
@@ -242,19 +218,19 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         reg: SlotId,
-        pc: BcPc,
+        deopt: usize,
     ) -> Xmm {
         match self[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                ir.float2xmm(self, pc, Some(reg), x);
+                ir.float2xmm(Some(reg), x, deopt);
                 self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                ir.float2xmm(self, pc, None, x);
+                ir.float2xmm(None, x, deopt);
                 self.link_both(reg, x);
                 x
             }
@@ -280,10 +256,16 @@ impl BBContext {
     /// ### destroy
     /// - rdi, rax
     ///
-    fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: ClassId, pc: BcPc) -> Xmm {
+    fn fetch_float_assume(
+        &mut self,
+        ir: &mut AsmIr,
+        rhs: SlotId,
+        class: ClassId,
+        deopt: usize,
+    ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(ir, rhs, pc),
-            FLOAT_CLASS => self.fetch_float_assume_float(ir, rhs, pc),
+            INTEGER_CLASS => self.fetch_float_assume_integer(ir, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(ir, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -294,14 +276,15 @@ impl BBContext {
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
+        deopt: usize,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.fetch_float_assume(ir, lhs, pc.classid1(), pc),
-                self.fetch_float_assume(ir, rhs, pc.classid2(), pc),
+                self.fetch_float_assume(ir, lhs, pc.classid1(), deopt),
+                self.fetch_float_assume(ir, rhs, pc.classid2(), deopt),
             )
         } else {
-            let lhs = self.fetch_float_assume(ir, lhs, pc.classid1(), pc);
+            let lhs = self.fetch_float_assume(ir, lhs, pc.classid1(), deopt);
             (lhs, lhs)
         }
     }

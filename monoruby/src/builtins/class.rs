@@ -126,7 +126,7 @@ fn inline_class_new(
         movq rax, r15;
     );
     gen.xmm_restore(using);
-    gen.jit_handle_error(ctx, pc);
+    gen.jit_handle_error(&ctx.get_write_back(), pc);
     gen.store_rax(ret);
 
     gen.jit.select_page(1);

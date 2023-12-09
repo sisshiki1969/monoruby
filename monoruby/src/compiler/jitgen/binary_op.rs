@@ -104,16 +104,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn cmp_opt_generic(
-        &mut self,
-        ctx: &BBContext,
-        kind: CmpKind,
-        branch_dest: DestLabel,
-        brkind: BrKind,
-        pc: BcPc,
-    ) {
-        self.generic_cmp(&kind, ctx.get_using_xmm());
-        self.jit_handle_error(ctx, pc);
+    pub(super) fn cond_br(&mut self, branch_dest: DestLabel, brkind: BrKind) {
         monoasm!( &mut self.jit,
             orq  rax, 0x10;
             cmpq rax, (FALSE_VALUE);
@@ -164,51 +155,31 @@ impl Codegen {
         }
     }
 
-    pub(super) fn cmp_opt_float(
-        &mut self,
-        ctx: &mut BBContext,
-        mode: OpMode,
-        ret: Option<SlotId>,
-        pc: BcPc,
-    ) {
+    ///
+    /// Compare two values with *mode*, and set flags.
+    ///
+    pub(super) fn opt_integer_cmp(&mut self, mode: &OpMode, deopt: DestLabel) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                let (flhs, frhs) = self.fetch_float_binary(ctx, lhs, rhs, pc);
-                monoasm! { &mut self.jit,
-                    ucomisd xmm(flhs.enc()), xmm(frhs.enc());
-                };
-            }
-            OpMode::RI(lhs, rhs) => {
-                let rhs_label = self.jit.const_f64(rhs as f64);
-                let flhs = self.fetch_float_assume_float(ctx, lhs, pc);
-                monoasm! { &mut self.jit,
-                    ucomisd xmm(flhs.enc()), [rip + rhs_label];
-                };
-            }
-            _ => unreachable!(),
-        }
-        ctx.release(ret);
-    }
-
-    pub(super) fn cmp_opt_integer(&mut self, ctx: &mut BBContext, mode: OpMode, pc: BcPc) {
-        let deopt = self.gen_deopt(pc, ctx);
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                self.load_binary_args(*lhs, *rhs);
+                self.guard_rdi_fixnum(deopt);
+                self.guard_rsi_fixnum(deopt);
                 monoasm!( &mut self.jit,
                     cmpq rdi, rsi;
                 );
             }
             OpMode::RI(lhs, rhs) => {
-                self.load_guard_rdi_fixnum(lhs, deopt);
+                self.load_rdi(*lhs);
+                self.guard_rdi_fixnum(deopt);
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (Value::i32(rhs as i32).id());
+                    cmpq rdi, (Value::i32(*rhs as i32).id());
                 );
             }
             OpMode::IR(lhs, rhs) => {
-                self.load_guard_rsi_fixnum(rhs, deopt);
+                self.load_rsi(*rhs);
+                self.guard_rsi_fixnum(deopt);
                 monoasm!( &mut self.jit,
-                    movq rdi, (Value::i32(lhs as i32).id());
+                    movq rdi, (Value::i32(*lhs as i32).id());
                     cmpq rdi, rsi;
                 );
             }
@@ -222,33 +193,10 @@ impl Codegen {
         self.guard_rdi_fixnum(deopt);
     }
 
-    fn load_guard_rsi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
-        self.load_rsi(reg);
-        self.guard_rsi_fixnum(deopt);
-    }
-
     pub(crate) fn load_guard_binary_fixnum(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
         self.load_binary_args(lhs, rhs);
         self.guard_rdi_fixnum(deopt);
         self.guard_rsi_fixnum(deopt);
-    }
-
-    pub(super) fn load_binary_args_with_mode(&mut self, mode: &OpMode) {
-        match *mode {
-            OpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
-            OpMode::RI(lhs, rhs) => {
-                self.load_rdi(lhs);
-                monoasm!( &mut self.jit,
-                    movq rsi, (Value::i32(rhs as i32).id());
-                );
-            }
-            OpMode::IR(lhs, rhs) => {
-                monoasm!( &mut self.jit,
-                    movq rdi, (Value::i32(lhs as i32).id());
-                );
-                self.load_rsi(rhs);
-            }
-        }
     }
 
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {

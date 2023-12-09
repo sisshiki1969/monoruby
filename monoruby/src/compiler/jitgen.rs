@@ -256,7 +256,8 @@ pub(crate) fn conv(reg: SlotId) -> i64 {
 ///
 /// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
 ///
-struct WriteBack {
+#[derive(Clone)]
+pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     r15: Option<SlotId>,
@@ -370,7 +371,7 @@ impl BBContext {
         self.slot_state.get_using_xmm(self.sp)
     }
 
-    fn get_write_back(&self) -> WriteBack {
+    pub(crate) fn get_write_back(&self) -> WriteBack {
         self.slot_state.get_write_back(self.sp)
     }
 
@@ -909,7 +910,8 @@ impl Codegen {
                         return;
                     }
                     if pc.is_float1() {
-                        let fsrc = ctx.fetch_float_assume_float(&mut ir, src, pc);
+                        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                        let fsrc = ctx.fetch_float_assume_float(&mut ir, src, deopt);
                         let dst = ctx.xmm_write(dst);
                         ir.xmm_move(fsrc, dst);
                         ir.inst.push(AsmInst::XmmUnOp { kind, dst });
@@ -932,20 +934,8 @@ impl Codegen {
                     kind, dst, mode, ..
                 } => {
                     let mut ir = AsmIr::new();
-                    let fmode = match mode {
-                        OpMode::RR(l, r) => {
-                            let (flhs, frhs) = ctx.fetch_float_binary(&mut ir, l, r, pc);
-                            FMode::RR(flhs, frhs)
-                        }
-                        OpMode::RI(l, r) => {
-                            let flhs = ctx.fetch_float_assume_float(&mut ir, l, pc);
-                            FMode::RI(flhs, r)
-                        }
-                        OpMode::IR(l, r) => {
-                            let frhs = ctx.fetch_float_assume_float(&mut ir, r, pc);
-                            FMode::IR(l, frhs)
-                        }
-                    };
+                    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                    let fmode = ir.fmode(&mode, &mut ctx, pc, deopt);
                     if let Some(ret) = dst {
                         let dst = ctx.xmm_write(ret);
                         let using_xmm = ctx.get_using_xmm();
@@ -977,24 +967,16 @@ impl Codegen {
                         return;
                     }
                     if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
-                        let mode = match mode {
-                            OpMode::RR(l, r) => {
-                                let (flhs, frhs) = ctx.fetch_float_binary(&mut ir, l, r, pc);
-                                FMode::RR(flhs, frhs)
-                            }
-                            OpMode::RI(l, r) => {
-                                let flhs = ctx.fetch_float_assume_float(&mut ir, l, pc);
-                                FMode::RI(flhs, r)
-                            }
-                            _ => unreachable!(),
-                        };
+                        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                        let mode = ir.fmode(&mode, &mut ctx, pc, deopt);
                         ctx.release(ret);
                         ir.inst.push(AsmInst::FloatCmp { kind, mode });
                     } else if mode.is_integer_op(&pc) {
                         ctx.fetch_binary(&mut ir, &mode);
                         ctx.release(ret);
-                        let deopt = ir.new_deopt(pc, ctx.get_write_back());
-                        let error = ir.new_error(pc, ctx.get_write_back());
+                        let wb = ctx.get_write_back();
+                        let deopt = ir.new_deopt(pc, wb.clone());
+                        let error = ir.new_error(pc, wb);
                         ir.load_binary_fixnum_with_mode(mode, deopt);
                         ir.inst.push(AsmInst::IntegerCmp { kind, error });
                     } else {
@@ -1008,29 +990,42 @@ impl Codegen {
                 }
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
+                    let mut ir = AsmIr::new();
                     let index = bb_pos + 1;
                     match (pc + 1).trace_ir() {
                         TraceIr::CondBr(_, disp, true, brkind) => {
                             let dest_idx = index + disp + 1;
                             let branch_dest = self.jit.label();
                             if mode.is_float_op(&pc) {
-                                self.cmp_opt_float(&mut ctx, mode, ret, pc);
-                                self.condbr_float(kind, branch_dest, brkind);
-                            } else {
-                                self.fetch_binary(&mut ctx, &mode);
+                                let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                                let mode = ir.fmode(&mode, &mut ctx, pc, deopt);
                                 ctx.release(ret);
+                                ir.inst.push(AsmInst::FloatCmpBr {
+                                    kind,
+                                    mode,
+                                    brkind,
+                                    branch_dest,
+                                });
+                            } else {
+                                ctx.fetch_binary(&mut ir, &mode);
+                                ctx.release(ret);
+
                                 if mode.is_integer_op(&pc) {
-                                    self.cmp_opt_integer(&mut ctx, mode, pc);
-                                    self.condbr_int(kind, branch_dest, brkind);
+                                    ir.integer_cmp_br(&ctx, pc, mode, kind, brkind, branch_dest);
                                 } else {
-                                    self.load_binary_args_with_mode(&mode);
-                                    self.cmp_opt_generic(&mut ctx, kind, branch_dest, brkind, pc);
+                                    ir.load_binary_with_mode(mode);
+                                    ir.generic_cmp(&ctx, pc, kind);
+                                    ir.inst.push(AsmInst::GenericCondBr {
+                                        kind: brkind,
+                                        dst: branch_dest,
+                                    });
                                 }
                             }
                             cc.new_branch(func, index, dest_idx, ctx.clone(), branch_dest);
                         }
                         _ => unreachable!(),
                     }
+                    self.gen_code(ir);
                 }
                 TraceIr::Mov(dst, src) => {
                     let mut ir = AsmIr::new();
@@ -1372,9 +1367,8 @@ impl Codegen {
     ///
     /// - pc: current PC
     ///
-    pub(crate) fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
+    pub(crate) fn jit_handle_error(&mut self, wb: &WriteBack, pc: BcPc) {
         let raise = self.entry_raise;
-        let wb = ctx.get_write_back();
         if self.jit.get_page() == 0 {
             let error = self.jit.label();
             monoasm!( &mut self.jit,
@@ -1385,7 +1379,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
             error:
             );
-            self.gen_write_back(&wb);
+            self.gen_write_back(wb);
             monoasm!( &mut self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;
@@ -1397,7 +1391,7 @@ impl Codegen {
                 testq rax, rax; // Option<Value>
                 jne  cont;
             );
-            self.gen_write_back(&wb);
+            self.gen_write_back(wb);
             monoasm!( &mut self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;

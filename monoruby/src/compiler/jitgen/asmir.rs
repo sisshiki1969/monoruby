@@ -116,14 +116,12 @@ impl AsmIr {
         self.inst.push(AsmInst::AccToStack(reg));
     }
 
-    pub(super) fn int2xmm(&mut self, ctx: &BBContext, pc: BcPc, reg: Option<SlotId>, x: Xmm) {
-        let label = self.new_deopt(pc, ctx.get_write_back());
-        self.inst.push(AsmInst::IntToXmm(reg, x, label));
+    pub(super) fn int2xmm(&mut self, reg: Option<SlotId>, x: Xmm, deopt: usize) {
+        self.inst.push(AsmInst::IntToXmm(reg, x, deopt));
     }
 
-    pub(super) fn float2xmm(&mut self, ctx: &BBContext, pc: BcPc, reg: Option<SlotId>, x: Xmm) {
-        let label = self.new_deopt(pc, ctx.get_write_back());
-        self.inst.push(AsmInst::FloatToXmm(reg, x, label));
+    pub(super) fn float2xmm(&mut self, reg: Option<SlotId>, x: Xmm, deopt: usize) {
+        self.inst.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
     pub(super) fn f64toxmm(&mut self, f: f64, x: Xmm) {
@@ -184,6 +182,25 @@ impl AsmIr {
             kind,
             using_xmm,
             error,
+        });
+    }
+
+    pub(super) fn integer_cmp_br(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+    ) {
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::IntegerCmpBr {
+            mode,
+            kind,
+            brkind,
+            branch_dest,
+            deopt,
         });
     }
 
@@ -381,6 +398,29 @@ impl AsmIr {
             }
         }
     }
+
+    pub(super) fn fmode(
+        &mut self,
+        mode: &OpMode,
+        ctx: &mut BBContext,
+        pc: BcPc,
+        deopt: usize,
+    ) -> FMode {
+        match mode {
+            OpMode::RR(l, r) => {
+                let (flhs, frhs) = ctx.fetch_float_binary(self, *l, *r, pc, deopt);
+                FMode::RR(flhs, frhs)
+            }
+            OpMode::RI(l, r) => {
+                let l = ctx.fetch_float_assume_float(self, *l, deopt);
+                FMode::RI(l, *r)
+            }
+            OpMode::IR(l, r) => {
+                let r = ctx.fetch_float_assume_float(self, *r, deopt);
+                FMode::IR(*l, r)
+            }
+        }
+    }
 }
 
 pub(super) enum AsmInst {
@@ -451,18 +491,52 @@ pub(super) enum AsmInst {
         error: usize,
     },
 
+    ///
+    /// Generic comparison
+    ///
+    /// Compare two Values in `rdi` and `rsi` with *kind*, and return the result in `rax` as Value.
+    ///
+    /// If error occurs in comparison operation, raise error.
+    ///
+    ///
     GenericCmp {
         kind: CmpKind,
         using_xmm: UsingXmm,
         error: usize,
     },
+    ///
+    /// Integer comparison
+    ///
+    /// Compare two Values in `rdi` and `rsi` with *kind*, and return the result in `rax` as Value.
+    ///
+    /// If error occurs in comparison operation, raise error.
+    ///
     IntegerCmp {
         kind: CmpKind,
         error: usize,
     },
+    ///
+    /// Integer comparison and conditional branch
+    ///
+    /// Compare two values with *mode*, jump to *branch_dest* if the condition specified by *kind*
+    /// and *brkind* is met.
+    ///
+    IntegerCmpBr {
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+        deopt: usize,
+    },
     FloatCmp {
         kind: CmpKind,
         mode: FMode,
+    },
+    FloatCmpBr {
+        kind: CmpKind,
+        mode: FMode,
+        brkind: BrKind,
+        branch_dest: DestLabel,
     },
 
     GuardBaseClass {
@@ -653,6 +727,19 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
+
+    ///
+    /// Conditional branch
+    ///
+    /// When *kind* is BrKind::BrIf, jump to *dst* if the Value in `rax` is true.
+    ///
+    /// ### in
+    /// - rax: Value
+    ///
+    GenericCondBr {
+        kind: BrKind,
+        dst: DestLabel,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -834,7 +921,11 @@ impl Codegen {
                 self.xmm_restore(*using_xmm);
             }
 
-            AsmInst::GuardFloat(r, side_exit) => self.slot_guard_float(*r, labels[*side_exit]),
+            AsmInst::GuardFloat(r, side_exit) => {
+                let side_exit = labels[*side_exit];
+                self.load_rdi(*r);
+                self.guard_float(side_exit);
+            }
             AsmInst::GuardRegFixnum(r, deopt) => {
                 let deopt = labels[*deopt];
                 monoasm!( &mut self.jit,
@@ -993,6 +1084,17 @@ impl Codegen {
                 self.integer_cmp(*kind);
                 self.handle_error(labels, *error);
             }
+            AsmInst::IntegerCmpBr {
+                mode,
+                kind,
+                brkind,
+                branch_dest,
+                deopt,
+            } => {
+                let deopt = labels[*deopt];
+                self.opt_integer_cmp(mode, deopt);
+                self.condbr_int(*kind, *branch_dest, *brkind);
+            }
             AsmInst::FloatCmp { kind, mode } => {
                 match mode {
                     FMode::RR(l, r) => {
@@ -1011,6 +1113,28 @@ impl Codegen {
                     _ => unreachable!(),
                 }
                 self.setflag_float(*kind);
+            }
+            AsmInst::FloatCmpBr {
+                kind,
+                mode,
+                brkind,
+                branch_dest,
+            } => {
+                match mode {
+                    FMode::RR(l, r) => {
+                        monoasm! { &mut self.jit,
+                            ucomisd xmm(l.enc()), xmm(r.enc());
+                        };
+                    }
+                    FMode::RI(l, r) => {
+                        let r = self.jit.const_f64(*r as f64);
+                        monoasm! { &mut self.jit,
+                            ucomisd xmm(l.enc()), [rip + r];
+                        };
+                    }
+                    _ => unreachable!(),
+                }
+                self.condbr_float(*kind, *branch_dest, *brkind);
             }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {
@@ -1415,6 +1539,10 @@ impl Codegen {
                     call rax;
                 };
                 self.xmm_restore(*using_xmm);
+            }
+
+            AsmInst::GenericCondBr { kind, dst } => {
+                self.cond_br(*dst, *kind);
             }
         }
     }

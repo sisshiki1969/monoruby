@@ -128,6 +128,7 @@ impl Codegen {
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
         let using_xmm = ctx.get_using_xmm();
+        let wb = ctx.get_write_back();
         self.writeback_acc(ctx);
         self.xmm_save(using_xmm);
         // r15 <- recv's class
@@ -192,12 +193,12 @@ impl Codegen {
             movl rdx, (id.get()); // CallSiteId
         }
         self.handle_arguments();
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
 
         self.call_funcdata();
 
         self.xmm_restore(using_xmm);
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
         self.save_rax_to_acc(ctx, ret);
 
         // slow path
@@ -211,7 +212,7 @@ impl Codegen {
             movq rax, (runtime::find_method);
             call rax;
         }
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
         monoasm! { &mut self.jit,
             // FuncId was returned to rax.
             movl [r13 + (CACHED_FUNCID)], rax;
@@ -343,6 +344,7 @@ impl Codegen {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
         let using_xmm = ctx.get_using_xmm();
+        let wb = ctx.get_write_back();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             monoasm!( &mut self.jit,
@@ -360,14 +362,14 @@ impl Codegen {
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
                 self.set_ivar(using_xmm);
-                self.jit_handle_error(ctx, pc);
+                self.jit_handle_error(&wb, pc);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
                 self.set_ivar(using_xmm);
-                self.jit_handle_error(ctx, pc);
+                self.jit_handle_error(&wb, pc);
             }
         } else {
             let slow_path = self.jit.label();
@@ -410,7 +412,7 @@ impl Codegen {
                 movq rdx, [r14 - (conv(args))];   // val: Value
             );
             self.set_ivar(using_xmm);
-            self.jit_handle_error(ctx, pc);
+            self.jit_handle_error(&wb, pc);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -432,6 +434,7 @@ impl Codegen {
         let using_xmm = ctx.get_using_xmm();
         let ret = store[callid].ret;
         self.writeback_acc(ctx);
+        let wb = ctx.get_write_back();
         self.xmm_save(using_xmm);
         self.execute_gc();
         let callsite = &store[callid];
@@ -480,7 +483,7 @@ impl Codegen {
                         movl rdx, (callid.get());
                     }
                     self.handle_arguments();
-                    self.jit_handle_error(ctx, pc);
+                    self.jit_handle_error(&wb, pc);
                 }
             }
             _ => {}
@@ -525,7 +528,7 @@ impl Codegen {
         self.pop_frame();
 
         self.xmm_restore(using_xmm);
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
         self.save_rax_to_acc(ctx, ret);
     }
 
@@ -543,6 +546,7 @@ impl Codegen {
         ctx.release(ret);
         self.writeback_acc(ctx);
         let using_xmm = ctx.get_using_xmm();
+        let wb = ctx.get_write_back();
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
@@ -550,7 +554,7 @@ impl Codegen {
             movq rax, (runtime::get_yield_data);
             call rax;
         }
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
         monoasm! { &mut self.jit,
             lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rdi, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
@@ -588,12 +592,12 @@ impl Codegen {
             movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
 
         self.call_funcdata();
 
         self.xmm_restore(using_xmm);
-        self.jit_handle_error(ctx, pc);
+        self.jit_handle_error(&wb, pc);
         self.save_rax_to_acc(ctx, ret);
     }
 
@@ -720,7 +724,8 @@ impl Codegen {
             call rax;   // rax <- Option<FuncId>
             movl rax, rax;
         }
-        self.jit_handle_error(ctx, pc);
+        let wb = ctx.get_write_back();
+        self.jit_handle_error(&wb, pc);
         monoasm! { &mut self.jit,
             cmpl rax, (cached_fid);
             jne  deopt;
