@@ -202,16 +202,16 @@ impl JitContext {
                 }
                 TraceIr::LoopStart(_) => {}
                 TraceIr::LoopEnd => {}
-                TraceIr::DefinedYield { ret }
-                | TraceIr::DefinedConst { ret, .. }
-                | TraceIr::DefinedGvar { ret, .. }
-                | TraceIr::DefinedIvar { ret, .. }
+                TraceIr::DefinedYield { dst: ret }
+                | TraceIr::DefinedConst { dst: ret, .. }
+                | TraceIr::DefinedGvar { dst: ret, .. }
+                | TraceIr::DefinedIvar { dst: ret, .. }
                 | TraceIr::Integer(ret, ..)
                 | TraceIr::Symbol(ret, ..)
                 | TraceIr::Nil(ret) => {
                     info.def(ret);
                 }
-                TraceIr::DefinedMethod { ret, recv, .. } => {
+                TraceIr::DefinedMethod { dst: ret, recv, .. } => {
                     info.def(ret);
                     info.r#use(recv);
                 }
@@ -249,17 +249,17 @@ impl JitContext {
                     info.r#use(idx);
                 }
                 TraceIr::ClassDef {
-                    ret,
+                    dst: ret,
                     superclass: base,
                     ..
                 }
-                | TraceIr::SingletonClassDef { ret, base, .. } => {
+                | TraceIr::SingletonClassDef { dst: ret, base, .. } => {
                     info.r#use(base);
                     if let Some(ret) = ret {
                         info.def(ret);
                     }
                 }
-                TraceIr::ModuleDef { ret, .. } => {
+                TraceIr::ModuleDef { dst: ret, .. } => {
                     if let Some(ret) = ret {
                         info.def(ret);
                     }

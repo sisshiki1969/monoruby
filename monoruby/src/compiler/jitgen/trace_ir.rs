@@ -148,18 +148,18 @@ pub(crate) enum TraceIr {
     },
     /// class definition(method_name, func_id)
     ClassDef {
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         superclass: SlotId,
         name: IdentId,
         func_id: FuncId,
     },
     ModuleDef {
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
     },
     SingletonClassDef {
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
     },
@@ -172,23 +172,23 @@ pub(crate) enum TraceIr {
         old: SlotId,
     },
     DefinedYield {
-        ret: SlotId,
+        dst: SlotId,
     },
     DefinedConst {
-        ret: SlotId,
+        dst: SlotId,
         siteid: ConstSiteId,
     },
     DefinedMethod {
-        ret: SlotId,
+        dst: SlotId,
         recv: SlotId,
         name: IdentId,
     },
     DefinedGvar {
-        ret: SlotId,
+        dst: SlotId,
         name: IdentId,
     },
     DefinedIvar {
-        ret: SlotId,
+        dst: SlotId,
         name: IdentId,
     },
     /// loop start marker

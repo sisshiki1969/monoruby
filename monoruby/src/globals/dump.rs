@@ -553,7 +553,7 @@ impl Globals {
                 format!("singleton_method_def {:?}.{name}: {:?}", obj, func_id)
             }
             TraceIr::ClassDef {
-                ret,
+                dst: ret,
                 superclass,
                 name,
                 func_id,
@@ -565,10 +565,18 @@ impl Globals {
                     func_id
                 )
             }
-            TraceIr::ModuleDef { ret, name, func_id } => {
+            TraceIr::ModuleDef {
+                dst: ret,
+                name,
+                func_id,
+            } => {
                 format!("{} = module_def {name}: {:?}", ret_str(ret), func_id)
             }
-            TraceIr::SingletonClassDef { ret, base, func_id } => {
+            TraceIr::SingletonClassDef {
+                dst: ret,
+                base,
+                func_id,
+            } => {
                 format!(
                     "{} = singleton_class_def << {:?}: {:?}",
                     ret_str(ret),
@@ -588,8 +596,8 @@ impl Globals {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
-            TraceIr::DefinedYield { ret } => format!("{:?} = defined?(yield)", ret),
-            TraceIr::DefinedConst { ret, siteid } => {
+            TraceIr::DefinedYield { dst: ret } => format!("{:?} = defined?(yield)", ret),
+            TraceIr::DefinedConst { dst: ret, siteid } => {
                 let ConstSiteInfo {
                     name,
                     prefix,
@@ -604,13 +612,17 @@ impl Globals {
                 name.append_to(&mut const_name);
                 format!("{:?} = defined?(constant) {const_name}", ret)
             }
-            TraceIr::DefinedMethod { ret, recv, name } => {
+            TraceIr::DefinedMethod {
+                dst: ret,
+                recv,
+                name,
+            } => {
                 format!("{:?} = defined?(method) {:?}.{}", ret, recv, name)
             }
-            TraceIr::DefinedGvar { ret, name } => {
+            TraceIr::DefinedGvar { dst: ret, name } => {
                 format!("{:?} = defined?(gvar) {}", ret, name)
             }
-            TraceIr::DefinedIvar { ret, name } => {
+            TraceIr::DefinedIvar { dst: ret, name } => {
                 format!("{:?} = defined?(ivar) {}", ret, name)
             }
             TraceIr::LoopStart(count) => format!(

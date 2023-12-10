@@ -152,6 +152,21 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
+    pub(super) fn opt_case(
+        &mut self,
+        max: u16,
+        min: u16,
+        jump_table: DestLabel,
+        else_dest: DestLabel,
+    ) {
+        self.inst.push(AsmInst::OptCase {
+            max,
+            min,
+            jump_table,
+            else_dest,
+        });
+    }
+
     pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = ctx.get_using_xmm();
         let error = self.new_error(pc, ctx.get_write_back());
@@ -421,6 +436,12 @@ impl AsmIr {
             }
         }
     }
+
+    pub(super) fn write_back_locals(&mut self, ctx: &mut BBContext) {
+        let wb = ctx.get_locals_write_back();
+        self.inst.push(AsmInst::WriteBack(wb));
+        ctx.release_locals();
+    }
 }
 
 pub(super) enum AsmInst {
@@ -465,6 +486,12 @@ pub(super) enum AsmInst {
     GuardFloat(GP, usize),
     GuardFixnum(GP, usize),
 
+    Break,
+    Raise,
+    EnsureEnd,
+    Br(DestLabel),
+    CondBr(BrKind, DestLabel),
+    CheckLocal(DestLabel),
     ///
     /// Conditional branch
     ///
@@ -477,6 +504,13 @@ pub(super) enum AsmInst {
         brkind: BrKind,
         branch_dest: DestLabel,
     },
+    OptCase {
+        max: u16,
+        min: u16,
+        jump_table: DestLabel,
+        else_dest: DestLabel,
+    },
+
     /// deoptimize
     Deopt(usize),
     /// recompile and deoptimize
@@ -484,6 +518,7 @@ pub(super) enum AsmInst {
         position: Option<BcPc>,
         deopt: usize,
     },
+    WriteBack(WriteBack),
 
     GenericUnOp {
         func: UnaryOpFn,
@@ -860,7 +895,7 @@ impl Codegen {
                 mode,
                 dst,
                 using_xmm,
-            } => self.gen_float_binop(*kind, *using_xmm, *dst, mode.clone()),
+            } => self.float_binop(*kind, *using_xmm, *dst, mode.clone()),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -911,10 +946,7 @@ impl Codegen {
             }
             AsmInst::GuardFixnum(r, deopt) => {
                 let deopt = labels[*deopt];
-                monoasm!( &mut self.jit,
-                    testq R(*r as u64), 0x1;
-                    jz deopt;
-                );
+                self.guard_fixnum(*r, deopt)
             }
             AsmInst::Deopt(deopt) => {
                 let deopt = labels[*deopt];
@@ -926,6 +958,74 @@ impl Codegen {
                 let deopt = labels[*deopt];
                 self.recompile_and_deopt(*position, deopt)
             }
+            AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
+
+            AsmInst::Break => {
+                self.block_break();
+                self.epilogue();
+            }
+            AsmInst::Raise => {
+                let raise = self.entry_raise;
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, rax;
+                    movq rax, (runtime::raise_err);
+                    call rax;
+                    jmp  raise;
+                };
+            }
+            AsmInst::EnsureEnd => {
+                let raise = self.entry_raise;
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;
+                    movq rax, (runtime::check_err);
+                    call rax;
+                    testq rax, rax;
+                    jne  raise;
+                };
+            }
+            AsmInst::Br(branch_dest) => {
+                let branch_dest = *branch_dest;
+                monoasm!( &mut self.jit,
+                    jmp branch_dest;
+                );
+            }
+            AsmInst::CondBr(brkind, branch_dest) => {
+                monoasm!( &mut self.jit,
+                    orq rax, 0x10;
+                    cmpq rax, (FALSE_VALUE);
+                );
+                let branch_dest = *branch_dest;
+                match brkind {
+                    BrKind::BrIf => monoasm!( &mut self.jit, jne branch_dest;),
+                    BrKind::BrIfNot => monoasm!( &mut self.jit, jeq branch_dest;),
+                }
+            }
+            AsmInst::CheckLocal(branch_dest) => {
+                let branch_dest = *branch_dest;
+                monoasm!( &mut self.jit,
+                    testq rax, rax;
+                    jnz  branch_dest;
+                );
+            }
+            AsmInst::OptCase {
+                max,
+                min,
+                jump_table,
+                else_dest,
+            } => {
+                let jump_table = *jump_table;
+                let else_dest = *else_dest;
+                monoasm! {&mut self.jit,
+                    sarq rdi, 1;
+                    cmpq rdi, (*max);
+                    jgt  else_dest;
+                    subq rdi, (*min);
+                    jlt  else_dest;
+                    lea  rax, [rip + jump_table];
+                    jmp  [rax + rdi * 8];
+                };
+            }
 
             AsmInst::GenericUnOp {
                 func,
@@ -935,7 +1035,7 @@ impl Codegen {
                 self.xmm_save(*using_xmm);
                 self.call_unop(*func);
                 self.xmm_restore(*using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
 
             AsmInst::GenericBinOp {
@@ -943,7 +1043,8 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.gen_generic_binop(*kind, labels, *using_xmm, *error);
+                let error = labels[*error];
+                self.generic_binop(*kind, *using_xmm, error);
             }
             AsmInst::IntegerBinOp {
                 kind,
@@ -953,106 +1054,8 @@ impl Codegen {
                 error,
             } => {
                 let deopt = labels[*deopt];
-                match kind {
-                    BinOpK::Add => match mode {
-                        OpMode::RR(_, _) => {
-                            monoasm!( &mut self.jit,
-                                subq rdi, 1;
-                                addq rdi, rsi;
-                                jo deopt;
-                            );
-                        }
-                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                            monoasm!( &mut self.jit,
-                                addq rdi, (Value::i32(*i as i32).id() - 1);
-                                jo deopt;
-                            );
-                        }
-                    },
-                    BinOpK::Sub => match mode {
-                        OpMode::RR(_, _) => {
-                            monoasm!( &mut self.jit,
-                                subq rdi, rsi;
-                                jo deopt;
-                                addq rdi, 1;
-                            );
-                        }
-                        OpMode::RI(_, rhs) => {
-                            monoasm!( &mut self.jit,
-                                subq rdi, (Value::i32(*rhs as i32).id() - 1);
-                                jo deopt;
-                            );
-                        }
-                        OpMode::IR(lhs, _) => {
-                            monoasm!( &mut self.jit,
-                                movq rdi, (Value::i32(*lhs as i32).id());
-                                subq rdi, rsi;
-                                jo deopt;
-                                addq rdi, 1;
-                            );
-                        }
-                    },
-                    BinOpK::Exp => {
-                        self.xmm_save(*using_xmm);
-                        monoasm!( &mut self.jit,
-                            sarq rdi, 1;
-                            sarq rsi, 1;
-                            movq rax, (pow_ii as u64);
-                            call rax;
-                        );
-                        self.xmm_restore(*using_xmm);
-                    }
-                    BinOpK::Mul | BinOpK::Div => {
-                        self.gen_generic_binop(*kind, labels, *using_xmm, *error);
-                    }
-                    BinOpK::Rem => match mode {
-                        OpMode::RI(_, rhs) if *rhs > 0 && (*rhs as u64).is_power_of_two() => {
-                            monoasm!( &mut self.jit,
-                                andq rdi, (*rhs * 2 - 1);
-                            );
-                        }
-                        _ => {
-                            self.gen_generic_binop(*kind, labels, *using_xmm, *error);
-                        }
-                    },
-                    BinOpK::BitOr => match mode {
-                        OpMode::RR(_, _) => {
-                            monoasm!( &mut self.jit,
-                                orq rdi, rsi;
-                            );
-                        }
-                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                            monoasm!( &mut self.jit,
-                                orq rdi, (Value::i32(*i as i32).id());
-                            );
-                        }
-                    },
-                    BinOpK::BitAnd => match mode {
-                        OpMode::RR(_, _) => {
-                            monoasm!( &mut self.jit,
-                                andq rdi, rsi;
-                            );
-                        }
-                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                            monoasm!( &mut self.jit,
-                                andq rdi, (Value::i32(*i as i32).id());
-                            );
-                        }
-                    },
-                    BinOpK::BitXor => match mode {
-                        OpMode::RR(_, _) => {
-                            monoasm!( &mut self.jit,
-                                xorq rdi, rsi;
-                                addq rdi, 1;
-                            );
-                        }
-                        OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                            monoasm!( &mut self.jit,
-                                xorq rdi, (Value::i32(*i as i32).id() - 1);
-                            );
-                        }
-                    },
-                }
+                let error = labels[*error];
+                self.integer_binop(mode, *kind, deopt, error, *using_xmm);
             }
 
             AsmInst::GenericCmp {
@@ -1061,7 +1064,7 @@ impl Codegen {
                 error,
             } => {
                 self.generic_cmp(kind, *using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::IntegerCmp { kind, mode } => {
                 if matches!(kind, CmpKind::Cmp) {
@@ -1083,7 +1086,7 @@ impl Codegen {
                     monoasm! { &mut self.jit,
                         xorq rax, rax;
                     };
-                    self.opt_integer_cmp(mode);
+                    self.cmp_integer(mode);
                     self.flag_to_bool(*kind);
                 }
             }
@@ -1093,26 +1096,14 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                self.opt_integer_cmp(mode);
+                self.cmp_integer(mode);
                 self.condbr_int(*kind, *branch_dest, *brkind);
             }
             AsmInst::FloatCmp { kind, mode } => {
-                match mode {
-                    FMode::RR(l, r) => {
-                        monoasm! { &mut self.jit,
-                            xorq rax, rax;
-                            ucomisd xmm(l.enc()), xmm(r.enc());
-                        };
-                    }
-                    FMode::RI(l, r) => {
-                        let rhs_label = self.jit.const_f64(*r as f64);
-                        monoasm! { &mut self.jit,
-                            xorq rax, rax;
-                            ucomisd xmm(l.enc()), [rip + rhs_label];
-                        };
-                    }
-                    _ => unreachable!(),
-                }
+                monoasm! { &mut self.jit,
+                    xorq rax, rax;
+                };
+                self.cmp_float(mode);
                 self.setflag_float(*kind);
             }
             AsmInst::FloatCmpBr {
@@ -1121,20 +1112,7 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                match mode {
-                    FMode::RR(l, r) => {
-                        monoasm! { &mut self.jit,
-                            ucomisd xmm(l.enc()), xmm(r.enc());
-                        };
-                    }
-                    FMode::RI(l, r) => {
-                        let r = self.jit.const_f64(*r as f64);
-                        monoasm! { &mut self.jit,
-                            ucomisd xmm(l.enc()), [rip + r];
-                        };
-                    }
-                    _ => unreachable!(),
-                }
+                self.cmp_float(mode);
                 self.condbr_float(*kind, *branch_dest, *brkind);
             }
 
@@ -1175,7 +1153,7 @@ impl Codegen {
                 error,
             } => {
                 self.generic_index(*using_xmm, *base, *idx, *pc);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::ArrayU16Index { idx, deopt } => {
                 let deopt = labels[*deopt];
@@ -1194,7 +1172,7 @@ impl Codegen {
                 error,
             } => {
                 self.generic_index_assign(*using_xmm, *base, *idx, *src, *pc);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::ArrayU16IndexAssign {
                 idx,
@@ -1204,7 +1182,7 @@ impl Codegen {
             } => {
                 let deopt = labels[*deopt];
                 self.gen_array_u16_index_assign(*using_xmm, *idx, deopt);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::ArrayIndexAssign {
                 using_xmm,
@@ -1213,7 +1191,7 @@ impl Codegen {
             } => {
                 let deopt = labels[*deopt];
                 self.gen_array_index_assign(*using_xmm, deopt);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
 
             AsmInst::NewArray(callid, using_xmm) => {
@@ -1232,7 +1210,7 @@ impl Codegen {
                 self.load_rdi(*start);
                 self.load_rsi(*end);
                 self.new_range(*exclude_end, *using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
 
             AsmInst::BlockArgProxy { ret, outer } => {
@@ -1248,7 +1226,7 @@ impl Codegen {
             } => {
                 self.get_method_lfp(*outer);
                 self.block_arg(*using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
                 self.store_rax(*ret);
             }
             AsmInst::LoadDynVar { src } => {
@@ -1321,7 +1299,7 @@ impl Codegen {
                         call rax;
                     );
                     self.xmm_restore(*using_xmm);
-                    self.handle_error(labels, *error);
+                    self.handle_error(labels[*error]);
                 }
                 self.jit.bind_label(exit);
             }
@@ -1370,9 +1348,9 @@ impl Codegen {
             } => {
                 self.xmm_save(*using_xmm);
                 self.class_def(*superclass, *name, *is_module);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
                 self.jit_class_def_sub(*func_id, *dst);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
                 self.xmm_restore(*using_xmm);
             }
             AsmInst::SingletonClassDef {
@@ -1384,9 +1362,9 @@ impl Codegen {
             } => {
                 self.xmm_save(*using_xmm);
                 self.singleton_class_def(*base);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
                 self.jit_class_def_sub(*func_id, *dst);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
                 self.xmm_restore(*using_xmm);
             }
             AsmInst::MethodDef {
@@ -1442,7 +1420,7 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(*using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::AliasMethod {
                 new,
@@ -1462,7 +1440,7 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(*using_xmm);
-                self.handle_error(labels, *error);
+                self.handle_error(labels[*error]);
             }
             AsmInst::DefinedYield { dst, using_xmm } => {
                 self.xmm_save(*using_xmm);
@@ -1551,8 +1529,7 @@ impl Codegen {
         }
     }
 
-    fn handle_error(&mut self, labels: &[DestLabel], error: usize) {
-        let error = labels[error];
+    fn handle_error(&mut self, error: DestLabel) {
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq   error;
@@ -1647,20 +1624,6 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
-    }
-
-    fn gen_generic_binop(
-        &mut self,
-        kind: BinOpK,
-        labels: &[DestLabel],
-        using_xmm: UsingXmm,
-        error: usize,
-    ) {
-        let func = kind.generic_func();
-        self.xmm_save(using_xmm);
-        self.call_binop(func);
-        self.xmm_restore(using_xmm);
-        self.handle_error(labels, error);
     }
 
     ///

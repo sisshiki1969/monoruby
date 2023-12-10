@@ -10,34 +10,6 @@ impl Codegen {
         self.gen_code(ir);
     }
 
-    ///
-    /// Fetch *arg* and store in *rax*.
-    ///
-    pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, GP::Rax)
-    }
-
-    ///
-    /// Fetch *arg* and store in *rdi*.
-    ///
-    pub(super) fn fetch_to_rdi(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        self.fetch_to_reg(ctx, reg, GP::Rdi)
-    }
-
-    ///
-    /// Fetch *arg* and store in *reg*.
-    ///
-    /// 0 : rax
-    /// 6 : rsi
-    /// 7 : rdi
-    /// 15: r15
-    ///
-    fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: GP) {
-        let mut ir = AsmIr::new();
-        ctx.fetch_to_reg(&mut ir, reg, dst);
-        self.gen_code(ir);
-    }
-
     pub(crate) fn fetch_float_assume_float(
         &mut self,
         ctx: &mut BBContext,

@@ -1175,20 +1175,20 @@ impl BcPc {
                     TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
                 18 => TraceIr::ClassDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     superclass: SlotId::new(op2 as u16),
                     name: IdentId::from((self.op2.0) as u32),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 19 => TraceIr::ModuleDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     name: IdentId::from((self.op2.0) as u32),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => TraceIr::SingletonClassDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     base: SlotId::new(op2 as u16),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
@@ -1239,23 +1239,23 @@ impl BcPc {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 64 => TraceIr::DefinedYield {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                 },
                 65 => TraceIr::DefinedConst {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     siteid: ConstSiteId(self.op2.0 as u32),
                 },
                 66 => TraceIr::DefinedMethod {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     recv: SlotId::new(op2),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 67 => TraceIr::DefinedGvar {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 68 => TraceIr::DefinedIvar {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 80 => TraceIr::Ret(SlotId::new(op1)),
