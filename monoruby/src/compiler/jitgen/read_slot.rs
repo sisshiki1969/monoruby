@@ -165,7 +165,9 @@ impl BBContext {
     }
 
     pub(super) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.clear_r15() {
+        if let Some(slot) = self.clear_r15()
+            && slot < self.sp
+        {
             ir.acc2stack(slot);
         }
     }

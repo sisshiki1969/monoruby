@@ -2,6 +2,7 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+mod binary_op;
 mod constants;
 mod index;
 mod ivar;
@@ -55,15 +56,20 @@ impl AsmIr {
     }
 
     pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc(ctx, GP::Rax, dst);
+    }
+
+    fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
             ctx.clear();
-            if let Some(acc) = ctx.clear_r15() {
-                if acc != dst {
-                    self.inst.push(AsmInst::AccToStack(acc));
-                }
+            if let Some(acc) = ctx.clear_r15()
+                && acc < ctx.sp
+                && acc != dst
+            {
+                self.inst.push(AsmInst::AccToStack(acc));
             }
             ctx.link_r15(dst);
-            self.inst.push(AsmInst::RegToAcc(GP::Rax));
+            self.inst.push(AsmInst::RegToAcc(src));
         }
     }
 

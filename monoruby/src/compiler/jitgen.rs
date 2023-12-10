@@ -16,7 +16,6 @@ use trace_ir::*;
 pub mod analysis;
 pub mod asmir;
 mod basic_block;
-mod binary_op;
 mod definition;
 mod guard;
 mod init_method;
@@ -617,20 +616,6 @@ impl Codegen {
         );
     }
 
-    ///
-    /// Confirm a value in the slot is Float.
-    ///
-    /// side-exit if not Float.
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rdi
-    ///
-    fn slot_guard_float(&mut self, reg: SlotId, side_exit: DestLabel) {
-        self.load_rdi(reg);
-        self.guard_float(side_exit);
-    }
-
     fn writeback_acc(&mut self, ctx: &mut BBContext) {
         if let Some(slot) = ctx.clear_r15() {
             self.store_r15(slot);
@@ -927,7 +912,7 @@ impl Codegen {
                     kind, dst, mode, ..
                 } => {
                     let mut ir = AsmIr::new();
-                    ctx.gen_binop_integer(&mut ir, pc, kind, dst, mode);
+                    ir.gen_binop_integer(&mut ctx, pc, kind, dst, mode);
                     self.gen_code(ir);
                 }
                 TraceIr::FBinOp {
