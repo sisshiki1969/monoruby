@@ -343,6 +343,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 
 fn array_shl(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
@@ -351,7 +352,7 @@ fn array_shl(
     let CallSiteInfo {
         recv, ret, args, ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv, args]);
+    gen.fetch_slots(store, ctx, &[recv, args]);
     ctx.release(ret);
     gen.load_rdi(recv);
     gen.guard_class_rdi(ARRAY_CLASS, deopt);

@@ -89,6 +89,7 @@ impl Codegen {
 
     pub(in crate::compiler::jitgen) fn jit_load_gvar(
         &mut self,
+        store: &Store,
         ctx: &mut BBContext,
         name: IdentId,
         dst: SlotId,
@@ -97,11 +98,12 @@ impl Codegen {
         ctx.release(dst);
         ir.load_gvar(ctx, name);
         ir.rax2acc(ctx, dst);
-        self.gen_code(ir);
+        self.gen_code(store, ir);
     }
 
     pub(in crate::compiler::jitgen) fn jit_store_gvar(
         &mut self,
+        store: &Store,
         ctx: &mut BBContext,
         name: IdentId,
         src: SlotId,
@@ -109,7 +111,7 @@ impl Codegen {
         let mut ir = AsmIr::new();
         ctx.fetch_slots(&mut ir, &[src]);
         ir.store_gvar(ctx, name, src);
-        self.gen_code(ir);
+        self.gen_code(store, ir);
     }
 
     pub(in crate::compiler::jitgen) fn jit_load_svar(

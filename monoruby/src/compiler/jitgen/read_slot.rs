@@ -4,14 +4,15 @@ impl Codegen {
     ///
     /// Fetch *reg*s and store in corresponding stack slots.
     ///
-    pub(crate) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
+    pub(crate) fn fetch_slots(&mut self, store: &Store, ctx: &mut BBContext, reg: &[SlotId]) {
         let mut ir = AsmIr::new();
         ctx.fetch_slots(&mut ir, reg);
-        self.gen_code(ir);
+        self.gen_code(store, ir);
     }
 
     pub(crate) fn fetch_float_assume_float(
         &mut self,
+        store: &Store,
         ctx: &mut BBContext,
         reg: SlotId,
         pc: BcPc,
@@ -19,7 +20,7 @@ impl Codegen {
         let mut ir = AsmIr::new();
         let deopt = ir.new_deopt(pc, ctx.get_write_back());
         let x = ctx.fetch_float_assume_float(&mut ir, reg, deopt);
-        self.gen_code(ir);
+        self.gen_code(store, ir);
         x
     }
 

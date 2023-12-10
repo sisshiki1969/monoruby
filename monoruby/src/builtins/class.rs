@@ -70,6 +70,7 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 
 fn inline_class_new(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -84,7 +85,7 @@ fn inline_class_new(
     } = *callsite;
     let mut ir = AsmIr::new();
     ctx.fetch_callargs(&mut ir, callsite);
-    gen.gen_code(ir);
+    gen.gen_code(store, ir);
     ctx.release(ret);
     let using = ctx.get_using_xmm();
     gen.xmm_save(using);

@@ -20,7 +20,7 @@ use prng::*;
 pub use store::*;
 
 pub(crate) type InlineGen =
-    fn(&mut Codegen, &mut jitgen::BBContext, &CallSiteInfo, BcPc, DestLabel);
+    fn(&mut Codegen, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc, DestLabel);
 pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]

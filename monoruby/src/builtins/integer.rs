@@ -151,13 +151,14 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 
 fn integer_tof(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
     deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class_rdi(pc.cached_class1().unwrap(), deopt);
@@ -287,6 +288,7 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 
 fn integer_shr(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
@@ -296,12 +298,12 @@ fn integer_shr(
         recv, ret, args, ..
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
-        gen.fetch_slots(ctx, &[recv]);
+        gen.fetch_slots(store, ctx, &[recv]);
         ctx.release(ret);
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shr_imm(rhs);
     } else {
-        gen.fetch_slots(ctx, &[recv, args]);
+        gen.fetch_slots(store, ctx, &[recv, args]);
         ctx.release(ret);
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shr(deopt);
@@ -330,6 +332,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 
 fn integer_shl(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
@@ -339,12 +342,12 @@ fn integer_shl(
         recv, ret, args, ..
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
-        gen.fetch_slots(ctx, &[recv]);
+        gen.fetch_slots(store, ctx, &[recv]);
         ctx.release(ret);
         gen.load_guard_rdi_fixnum(recv, deopt);
         gen.gen_shl_imm(rhs, deopt);
     } else {
-        gen.fetch_slots(ctx, &[recv, args]);
+        gen.fetch_slots(store, ctx, &[recv, args]);
         ctx.release(ret);
         gen.load_guard_binary_fixnum(recv, args, deopt);
         gen.gen_shl(deopt);

@@ -74,6 +74,7 @@ fn cos(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result
 
 fn math_sqrt(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -82,12 +83,12 @@ fn math_sqrt(
     let CallSiteInfo {
         recv, args, ret, ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class_rdi(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
+    let fsrc = gen.fetch_float_assume_float(store, ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         monoasm!( &mut gen.jit,
@@ -98,6 +99,7 @@ fn math_sqrt(
 
 fn math_cos(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -106,12 +108,12 @@ fn math_cos(
     let CallSiteInfo {
         recv, args, ret, ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class_rdi(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
+    let fsrc = gen.fetch_float_assume_float(store, ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let using_xmm = ctx.get_using_xmm();
@@ -130,6 +132,7 @@ fn math_cos(
 
 fn math_sin(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -138,12 +141,12 @@ fn math_sin(
     let CallSiteInfo {
         recv, args, ret, ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
         gen.guard_class_rdi(pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = gen.fetch_float_assume_float(ctx, args, pc).enc();
+    let fsrc = gen.fetch_float_assume_float(store, ctx, args, pc).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let using_xmm = ctx.get_using_xmm();

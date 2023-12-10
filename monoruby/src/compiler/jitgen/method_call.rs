@@ -20,6 +20,7 @@ const CACHED_FUNCID: usize = 16;
 impl Codegen {
     pub(super) fn gen_inlinable(
         &mut self,
+        store: &Store,
         ctx: &mut BBContext,
         callsite: &CallSiteInfo,
         inline_gen: InlineGen,
@@ -27,8 +28,8 @@ impl Codegen {
     ) {
         self.writeback_acc(ctx);
         let deopt = self.gen_deopt(pc, ctx);
-        self.guard_version(pc, ctx, deopt);
-        inline_gen(self, ctx, callsite, pc, deopt);
+        self.guard_class_version(pc, ctx, deopt);
+        inline_gen(self, store, ctx, callsite, pc, deopt);
     }
 
     pub(super) fn gen_call(
@@ -42,7 +43,7 @@ impl Codegen {
         let CallSiteInfo { ret, .. } = store[callid];
         let mut ir = AsmIr::new();
         ctx.fetch_callargs(&mut ir, &store[callid]);
-        self.gen_code(ir);
+        self.gen_code(store, ir);
         ctx.release(ret);
         if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
             // the cache is invalid because the receiver class is not matched.
@@ -78,7 +79,7 @@ impl Codegen {
             self.load_rdi(recv);
             self.guard_class_rdi(cached_class, deopt);
         }
-        self.guard_version(pc, ctx, deopt);
+        self.guard_class_version(pc, ctx, deopt);
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
@@ -532,19 +533,13 @@ impl Codegen {
         self.save_rax_to_acc(ctx, ret);
     }
 
-    pub(super) fn gen_yield(
+    /*pub(super) fn gen_yield(
         &mut self,
         ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
         pc: BcPc,
     ) {
-        let CallSiteInfo { ret, .. } = store[callid];
-        let mut ir = AsmIr::new();
-        ctx.fetch_callargs(&mut ir, &store[callid]);
-        self.gen_code(ir);
-        ctx.release(ret);
-        self.writeback_acc(ctx);
         let using_xmm = ctx.get_using_xmm();
         let wb = ctx.get_write_back();
         self.xmm_save(using_xmm);
@@ -598,8 +593,7 @@ impl Codegen {
 
         self.xmm_restore(using_xmm);
         self.jit_handle_error(&wb, pc);
-        self.save_rax_to_acc(ctx, ret);
-    }
+    }*/
 
     fn push_block(&mut self, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_fid {
@@ -627,7 +621,7 @@ impl Codegen {
         }
     }
 
-    fn call_funcdata(&mut self) {
+    pub(super) fn call_funcdata(&mut self) {
         monoasm! { &mut self.jit,
             movq rdx, rdi;
             // set pc
@@ -686,7 +680,7 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Version guard fro JIT.
+    /// Class version guard fro JIT.
     ///
     /// Check the cached class version, and jump to `side_exit` if the version is changed.
     ///
@@ -694,7 +688,7 @@ impl Codegen {
     /// - caller save registers
     /// - r13
     ///
-    fn guard_version(&mut self, pc: BcPc, ctx: &BBContext, side_exit: DestLabel) {
+    pub(super) fn guard_class_version(&mut self, pc: BcPc, ctx: &BBContext, side_exit: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         let global_version = self.class_version;
         let unmatch = self.jit.label();
@@ -749,7 +743,7 @@ impl Codegen {
     ///
     /// - caller save registers
     ///
-    fn jit_set_arguments(&mut self, callsite: &CallSiteInfo) {
+    pub(super) fn jit_set_arguments(&mut self, callsite: &CallSiteInfo) {
         let CallSiteInfo { args, pos_num, .. } = *callsite;
         let pos_num = pos_num as u16;
         // set arguments

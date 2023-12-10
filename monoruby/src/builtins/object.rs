@@ -52,13 +52,14 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<V
 
 fn object_object_id(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     ctx.release(ret);
     gen.load_rdi(recv);
     let using = ctx.get_using_xmm();
@@ -386,6 +387,7 @@ const CACHE_SIZE: usize = 8;
 
 fn object_send(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
@@ -401,7 +403,7 @@ fn object_send(
     } = *callsite;
     let mut ir = AsmIr::new();
     ctx.fetch_callargs(&mut ir, callsite);
-    gen.gen_code(ir);
+    gen.gen_code(store, ir);
     ctx.release(ret);
     let using = ctx.get_using_xmm();
     let bh = match block_func_id {

@@ -59,7 +59,7 @@ impl AsmIr {
         self.reg2acc(ctx, GP::Rax, dst);
     }
 
-    fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
+    pub(super) fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
             ctx.clear();
             if let Some(acc) = ctx.clear_r15()
@@ -520,6 +520,12 @@ pub(super) enum AsmInst {
     },
     WriteBack(WriteBack),
 
+    Yield {
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
@@ -797,13 +803,19 @@ pub(super) enum SideExit {
 }
 
 impl Codegen {
-    pub(super) fn gen_asm(&mut self, ctx: &mut JitContext) {
+    pub(super) fn gen_asm(&mut self, store: &Store, ctx: &mut JitContext) {
         for (ir, entry, exit) in std::mem::take(&mut ctx.asmir) {
-            self.gen_code_block(ir, entry, exit);
+            self.gen_code_block(store, ir, entry, exit);
         }
     }
 
-    fn gen_code_block(&mut self, ir: AsmIr, entry: DestLabel, exit: Option<DestLabel>) {
+    fn gen_code_block(
+        &mut self,
+        store: &Store,
+        ir: AsmIr,
+        entry: DestLabel,
+        exit: Option<DestLabel>,
+    ) {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -822,7 +834,7 @@ impl Codegen {
         }
         self.jit.bind_label(entry);
         for inst in ir.inst {
-            self.gen_asmir(&labels, &inst);
+            self.gen_asmir(store, &labels, &inst);
         }
         if let Some(exit) = exit {
             monoasm!( &mut self.jit,
@@ -832,7 +844,7 @@ impl Codegen {
         }
     }
 
-    pub(crate) fn gen_code(&mut self, ir: AsmIr) {
+    pub(crate) fn gen_code(&mut self, store: &Store, ir: AsmIr) {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -847,11 +859,11 @@ impl Codegen {
             }
         }
         for inst in ir.inst {
-            self.gen_asmir(&labels, &inst);
+            self.gen_asmir(store, &labels, &inst);
         }
     }
 
-    fn gen_asmir(&mut self, labels: &[DestLabel], inst: &AsmInst) {
+    fn gen_asmir(&mut self, store: &Store, labels: &[DestLabel], inst: &AsmInst) {
         match inst {
             AsmInst::AccToStack(r) => {
                 self.store_r15(*r);
@@ -1025,6 +1037,64 @@ impl Codegen {
                     lea  rax, [rip + jump_table];
                     jmp  [rax + rdi * 8];
                 };
+            }
+
+            AsmInst::Yield {
+                callid,
+                using_xmm,
+                error,
+            } => {
+                self.xmm_save(*using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    movq rax, (runtime::get_yield_data);
+                    call rax;
+                }
+                self.handle_error(labels[*error]);
+                monoasm! { &mut self.jit,
+                    lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
+                    movq rdi, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
+                    // rdi <- outer_cfp, r15 <- &FuncData
+                }
+
+                monoasm! { &mut self.jit,
+                    subq  rsp, 16;
+                    // set prev_cfp
+                    pushq [rbx + (EXECUTOR_CFP)];
+                    // set lfp
+                    lea   rax, [rsp + 8];
+                    pushq rax;
+                    // set outer
+                    lea  rax, [rdi - (LBP_OUTER)];
+                    pushq rax;
+                    // set meta
+                    pushq [r15 + (FUNCDATA_META)];
+                    // set block
+                    movq rax, 0;
+                    pushq rax;
+                    // set self
+                    pushq [rdi - (LBP_SELF)];
+                    addq  rsp, 64;
+                };
+                // set arguments
+                self.jit_set_arguments(&store[*callid]);
+
+                monoasm! { &mut self.jit,
+                    movq rsi, [r15 + (FUNCDATA_PC)];
+                }
+                self.block_arg_expand();
+
+                monoasm! { &mut self.jit,
+                    movl rdx, (callid.get()); // CallSiteId
+                }
+                self.handle_arguments();
+                self.handle_error(labels[*error]);
+
+                self.call_funcdata();
+
+                self.xmm_restore(*using_xmm);
+                self.handle_error(labels[*error]);
             }
 
             AsmInst::GenericUnOp {

@@ -494,7 +494,7 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
-        self.gen_asm(&mut ctx);
+        self.gen_asm(store, &mut ctx);
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
         self.jit.finalize();
@@ -647,7 +647,7 @@ impl Codegen {
         let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
             ctx
         } else if let Some(ctx) = cc.incoming_context(func, bb_begin) {
-            self.gen_asm(cc);
+            self.gen_asm(store, cc);
             ctx
         } else {
             #[cfg(feature = "jit-debug")]
@@ -671,7 +671,7 @@ impl Codegen {
                     if cc.is_loop && cc.loop_count == 0 {
                         let mut ir = AsmIr::new();
                         ir.deopt(&ctx, pc);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         break;
                     }
                 }
@@ -693,7 +693,7 @@ impl Codegen {
                         ir.deep_copy_lit(&ctx, val);
                         ir.rax2acc(&mut ctx, dst);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Array { dst, callid } => {
                     let mut ir = AsmIr::new();
@@ -702,7 +702,7 @@ impl Codegen {
                     ctx.release(dst);
                     ir.new_array(&ctx, callid);
                     ir.rax2acc(&mut ctx, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Hash { dst, args, len } => {
                     let mut ir = AsmIr::new();
@@ -710,7 +710,7 @@ impl Codegen {
                     ctx.release(dst);
                     ir.new_hash(&ctx, args, len as _);
                     ir.rax2acc(&mut ctx, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Range {
                     dst,
@@ -723,13 +723,13 @@ impl Codegen {
                     ctx.release(dst);
                     ir.new_range(&mut ctx, pc, start, end, exclude_end);
                     ir.rax2acc(&mut ctx, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Index { dst, base, idx } => {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
@@ -740,13 +740,13 @@ impl Codegen {
                         ir.generic_index(&ctx, pc, base, idx);
                     }
                     ir.rax2acc(&mut ctx, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
@@ -755,7 +755,7 @@ impl Codegen {
                         ctx.fetch_slots(&mut ir, &[base, idx, src]);
                         ir.generic_index_assign(&ctx, pc, base, idx, src);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     let mut ir = AsmIr::new();
@@ -770,7 +770,7 @@ impl Codegen {
                                 ir.inst.push(AsmInst::GuardBaseClass { base_class, deopt });
                             } else {
                                 ir.recompile_and_deopt(&ctx, pc, position);
-                                self.gen_code(ir);
+                                self.gen_code(store, ir);
                                 return;
                             }
                         }
@@ -793,29 +793,29 @@ impl Codegen {
                         ir.rax2acc(&mut ctx, dst);
                     } else {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::StoreConst(src, name) => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_to_reg(&mut ir, src, GP::Rax);
                     let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::StoreConstant { name, using_xmm });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::BlockArgProxy(ret, outer) => {
                     let mut ir = AsmIr::new();
                     ctx.release(ret);
                     ir.block_arg_proxy(ret, outer);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::BlockArg(ret, outer) => {
                     let mut ir = AsmIr::new();
                     ctx.release(ret);
                     ir.block_arg(&ctx, pc, ret, outer);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     let mut ir = AsmIr::new();
@@ -823,10 +823,10 @@ impl Codegen {
                         ctx.jit_load_ivar(&mut ir, id, ret, cached_class, cached_ivarid);
                     } else {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
                     let mut ir = AsmIr::new();
@@ -834,13 +834,15 @@ impl Codegen {
                         ctx.jit_store_ivar(&mut ir, id, src, pc, cached_class, cached_ivarid);
                     } else {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
-                TraceIr::LoadGvar { dst, name } => self.jit_load_gvar(&mut ctx, name, dst),
-                TraceIr::StoreGvar { src: val, name } => self.jit_store_gvar(&mut ctx, name, val),
+                TraceIr::LoadGvar { dst, name } => self.jit_load_gvar(store, &mut ctx, name, dst),
+                TraceIr::StoreGvar { src: val, name } => {
+                    self.jit_store_gvar(store, &mut ctx, name, val)
+                }
                 TraceIr::LoadSvar { dst, id } => self.jit_load_svar(&mut ctx, id, dst),
                 TraceIr::LoadDynVar(dst, src) => {
                     let mut ir = AsmIr::new();
@@ -849,7 +851,7 @@ impl Codegen {
                         ir.inst.push(AsmInst::LoadDynVar { src });
                         ir.reg2stack(GP::Rax, dst);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::StoreDynVar(dst, src) => {
                     let mut ir = AsmIr::new();
@@ -858,32 +860,32 @@ impl Codegen {
                         dst: dst.clone(),
                         src: GP::Rdi,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::BitNot { dst, src } => {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
                     ctx.release(dst);
                     if pc.classid1().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     } else {
                         ir.generic_unop(&ctx, pc, bitnot_value);
                         ir.reg2stack(GP::Rax, dst);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Not { dst, src } => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_to_reg(&mut ir, src, GP::Rdi);
                     ctx.release(dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     self.not_rdi_to_rax();
                     self.store_rax(dst);
                 }
@@ -891,7 +893,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     if pc.is_float1() {
@@ -906,14 +908,14 @@ impl Codegen {
                         ir.generic_unop(&ctx, pc, kind.generic_func());
                         ir.reg2stack(GP::Rax, dst);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::IBinOp {
                     kind, dst, mode, ..
                 } => {
                     let mut ir = AsmIr::new();
                     ir.gen_binop_integer(&mut ctx, pc, kind, dst, mode);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::FBinOp {
                     kind, dst, mode, ..
@@ -926,7 +928,7 @@ impl Codegen {
                         let using_xmm = ctx.get_using_xmm();
                         ir.xmm_binop(kind, fmode, dst, using_xmm);
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::BinOp {
                     kind, dst, mode, ..
@@ -934,7 +936,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     ctx.fetch_binary(&mut ir, &mode);
@@ -942,13 +944,13 @@ impl Codegen {
                     ir.load_binary_with_mode(mode);
                     ir.generic_binop(&ctx, pc, kind);
                     ir.rax2acc(&mut ctx, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
                     let mut ir = AsmIr::new();
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                     if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
@@ -967,7 +969,7 @@ impl Codegen {
                         ir.generic_cmp(&ctx, pc, kind);
                     }
                     ir.reg2stack(GP::Rax, ret);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
@@ -1002,12 +1004,12 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     }
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Mov(dst, src) => {
                     let mut ir = AsmIr::new();
                     ctx.copy_slot(&mut ir, src, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::ConcatStr(dst, arg, len) => {
                     let mut ir = AsmIr::new();
@@ -1015,7 +1017,7 @@ impl Codegen {
                     ctx.release(dst);
                     ir.concat_str(&ctx, arg, len);
                     ir.reg2stack(GP::Rax, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::ConcatRegexp(dst, arg, len) => {
                     let mut ir = AsmIr::new();
@@ -1023,7 +1025,7 @@ impl Codegen {
                     ctx.release(dst);
                     ir.concat_regexp(&ctx, pc, arg, len);
                     ir.reg2stack(GP::Rax, dst);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
                     let mut ir = AsmIr::new();
@@ -1033,13 +1035,13 @@ impl Codegen {
                     }
                     ir.stack2reg(src, GP::Rdi);
                     ir.expand_array(&ctx, dst, len);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::AliasMethod { new, old } => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_slots(&mut ir, &[new, old]);
                     ir.alias_method(&ctx, pc, new, old);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
@@ -1051,18 +1053,35 @@ impl Codegen {
                     } else {
                         let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
-                        self.gen_code(ir);
+                        self.gen_code(store, ir);
                         return;
                     }
                 }
                 TraceIr::InlineCall {
                     inline_id, callid, ..
                 } => {
-                    let gen = store.get_inline_info(inline_id).0;
-                    self.gen_inlinable(&mut ctx, &store[callid], gen, pc);
+                    let inline_gen = store.get_inline_info(inline_id).0;
+                    self.writeback_acc(&mut ctx);
+                    let deopt = self.gen_deopt(pc, &ctx);
+                    self.guard_class_version(pc, &ctx, deopt);
+                    inline_gen(self, store, &mut ctx, &store[callid], pc, deopt);
                 }
                 TraceIr::Yield { callid } => {
-                    self.gen_yield(&mut ctx, store, callid, pc);
+                    let mut ir = AsmIr::new();
+                    ctx.fetch_callargs(&mut ir, &store[callid]);
+                    ctx.release(store[callid].ret);
+                    ctx.writeback_acc(&mut ir);
+                    let using_xmm = ctx.get_using_xmm();
+                    let error = ir.new_deopt(pc, ctx.get_write_back());
+                    ir.inst.push(AsmInst::Yield {
+                        callid,
+                        using_xmm,
+                        error,
+                    });
+                    ir.reg2acc(&mut ctx, GP::Rax, store[callid].ret);
+                    self.gen_code(store, ir);
+                    //self.gen_yield(&mut ctx, store, callid, pc);
+                    //self.save_rax_to_acc(&mut ctx, store[callid].ret);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {
@@ -1073,11 +1092,11 @@ impl Codegen {
                         func_id,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::SingletonMethodDef { obj, name, func_id } => {
                     let mut ir = AsmIr::new();
-                    self.fetch_slots(&mut ctx, &[obj]);
+                    ctx.fetch_slots(&mut ir, &[obj]);
                     let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::SingletonMethodDef {
                         obj,
@@ -1085,7 +1104,7 @@ impl Codegen {
                         func_id,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::ClassDef {
                     dst,
@@ -1095,24 +1114,24 @@ impl Codegen {
                 } => {
                     let mut ir = AsmIr::new();
                     ctx.class_def(&mut ir, dst, superclass, name, func_id, false, pc);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::ModuleDef { dst, name, func_id } => {
                     let mut ir = AsmIr::new();
                     ctx.class_def(&mut ir, dst, SlotId::new(0), name, func_id, true, pc);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::SingletonClassDef { dst, base, func_id } => {
                     let mut ir = AsmIr::new();
                     ctx.singleton_class_def(&mut ir, dst, base, func_id, pc);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::DefinedYield { dst } => {
                     let mut ir = AsmIr::new();
                     ctx.fetch_slots(&mut ir, &[dst]);
                     let using_xmm = ctx.get_using_xmm();
                     ir.inst.push(AsmInst::DefinedYield { dst, using_xmm });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::DefinedConst { dst, siteid } => {
                     let mut ir = AsmIr::new();
@@ -1123,7 +1142,7 @@ impl Codegen {
                         siteid,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::DefinedMethod { dst, recv, name } => {
                     let mut ir = AsmIr::new();
@@ -1135,7 +1154,7 @@ impl Codegen {
                         name,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::DefinedGvar { dst, name } => {
                     let mut ir = AsmIr::new();
@@ -1146,7 +1165,7 @@ impl Codegen {
                         name,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::DefinedIvar { dst, name } => {
                     let mut ir = AsmIr::new();
@@ -1157,13 +1176,13 @@ impl Codegen {
                         name,
                         using_xmm,
                     });
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Ret(ret) => {
                     let mut ir = AsmIr::new();
                     ir.write_back_locals(&mut ctx);
                     ctx.fetch_to_reg(&mut ir, ret, GP::Rax);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     self.epilogue();
                     return;
                 }
@@ -1171,7 +1190,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     ir.write_back_locals(&mut ctx);
                     ctx.fetch_to_reg(&mut ir, ret, GP::Rax);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     monoasm! { &mut self.jit,
                         movq r13, ((pc + 1).get_u64());
                     };
@@ -1183,7 +1202,7 @@ impl Codegen {
                     ir.write_back_locals(&mut ctx);
                     ctx.fetch_to_reg(&mut ir, ret, GP::Rax);
                     ir.inst.push(AsmInst::Break);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     return;
                 }
                 TraceIr::Raise(ret) => {
@@ -1191,14 +1210,14 @@ impl Codegen {
                     ir.write_back_locals(&mut ctx);
                     ctx.fetch_to_reg(&mut ir, ret, GP::Rax);
                     ir.inst.push(AsmInst::Raise);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     return;
                 }
                 TraceIr::EnsureEnd => {
                     let mut ir = AsmIr::new();
                     ir.write_back_locals(&mut ctx);
                     ir.inst.push(AsmInst::EnsureEnd);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                 }
                 TraceIr::Br(disp) => {
                     let next_idx = bb_pos + 1;
@@ -1206,7 +1225,7 @@ impl Codegen {
                     let branch_dest = self.jit.label();
                     let mut ir = AsmIr::new();
                     ir.inst.push(AsmInst::Br(branch_dest));
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     cc.new_branch(func, bb_pos, dest_idx, ctx, branch_dest);
                     return;
                 }
@@ -1216,7 +1235,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     ctx.fetch_to_reg(&mut ir, cond_, GP::Rax);
                     ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
                 }
                 TraceIr::CondBr(_, _, true, _) => {}
@@ -1226,7 +1245,7 @@ impl Codegen {
                     let mut ir = AsmIr::new();
                     ctx.fetch_to_reg(&mut ir, local, GP::Rax);
                     ir.inst.push(AsmInst::CheckLocal(branch_dest));
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
                 }
                 TraceIr::OptCase { cond, optid } => {
@@ -1258,7 +1277,7 @@ impl Codegen {
                     ctx.fetch_to_reg(&mut ir, cond, GP::Rdi);
                     ir.guard_fixnum(GP::Rdi, deopt);
                     ir.opt_case(*max, *min, jump_table, else_dest);
-                    self.gen_code(ir);
+                    self.gen_code(store, ir);
                     return;
                 }
             }
@@ -1270,7 +1289,7 @@ impl Codegen {
             let branch_dest = self.jit.label();
             cc.new_continue(func, bb_end, next_idx, ctx, branch_dest);
             if let Some(target_ctx) = cc.incoming_context(func, next_idx) {
-                self.gen_asm(cc);
+                self.gen_asm(store, cc);
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
             }
         }

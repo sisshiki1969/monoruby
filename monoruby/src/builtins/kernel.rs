@@ -58,13 +58,14 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 
 fn object_nil(
     gen: &mut Codegen,
+    store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
+    gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     ctx.release(ret);
     monoasm!( &mut gen.jit,
