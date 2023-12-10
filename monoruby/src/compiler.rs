@@ -526,7 +526,7 @@ impl Codegen {
         guard:
             movq rdi, [r14 - (LBP_SELF)];
         }
-        self.guard_class(self_class, vm_entry);
+        self.guard_class_rdi(self_class, vm_entry);
         monoasm! { &mut self.jit,
         patch_point:
             jmp entry;

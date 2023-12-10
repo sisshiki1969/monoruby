@@ -216,11 +216,13 @@ impl BBContext {
         let deopt = ir.new_deopt(pc + 1, self.get_write_back());
 
         for (r, x) in conv_list {
-            ir.inst.push(AsmInst::NumToXmm(r, x, deopt));
+            ir.stack2reg(r, GP::Rax);
+            ir.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
         }
 
         for r in guard_list {
-            ir.inst.push(AsmInst::GuardFloat(r, deopt));
+            ir.stack2reg(r, GP::Rax);
+            ir.guard_float(GP::Rax, deopt);
         }
 
         ir

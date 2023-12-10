@@ -57,18 +57,18 @@ impl Codegen {
     /// side-exit if not Integer.
     ///
     /// ### in
-    /// - rdi: Value
+    /// - R(*reg*): Value
     ///
     /// ### out
     /// - xmm(*xmm*)
     ///
     /// ### destroy
     /// - none
-    pub(super) fn integer_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn integer_val_to_f64(&mut self, reg: GP, xmm: u64, side_exit: DestLabel) {
         monoasm!(&mut self.jit,
-            testq rdi, 0b01;
+            testq R(reg as _), 0b01;
             jz side_exit;
-            sarq rdi, 1;
+            sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm), rdi;
         );
     }
@@ -183,13 +183,14 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                ir.int2xmm(Some(reg), x, deopt);
+                ir.stack2reg(reg, GP::Rdi);
+                ir.int2xmm(GP::Rdi, x, deopt);
                 self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                ir.int2xmm(None, x, deopt);
+                ir.int2xmm(GP::R15, x, deopt);
                 self.link_both(reg, x);
                 x
             }
@@ -226,13 +227,14 @@ impl BBContext {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 let x = self.alloc_xmm();
-                ir.float2xmm(Some(reg), x, deopt);
+                ir.stack2reg(reg, GP::Rdi);
+                ir.float2xmm(GP::Rdi, x, deopt);
                 self.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
                 let x = self.alloc_xmm();
-                ir.float2xmm(None, x, deopt);
+                ir.float2xmm(GP::R15, x, deopt);
                 self.link_both(reg, x);
                 x
             }
@@ -336,7 +338,7 @@ mod test {
         assume_int_to_f64:
             pushq rbp;
         );
-        gen.integer_val_to_f64(0, panic);
+        gen.integer_val_to_f64(GP::Rdi, 0, panic);
         monoasm!(&mut gen.jit,
             popq rbp;
             ret;

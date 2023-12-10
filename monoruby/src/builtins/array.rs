@@ -354,7 +354,7 @@ fn array_shl(
     gen.fetch_slots(ctx, &[recv, args]);
     ctx.release(ret);
     gen.load_rdi(recv);
-    gen.guard_class(ARRAY_CLASS, deopt);
+    gen.guard_class_rdi(ARRAY_CLASS, deopt);
     gen.load_rsi(args);
     monoasm!( &mut gen.jit,
         movq rax, (ary_shl);

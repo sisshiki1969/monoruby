@@ -76,7 +76,7 @@ impl Codegen {
         // Thus, we can omit a class guard.
         if !recv.is_zero() {
             self.load_rdi(recv);
-            self.guard_class(cached_class, deopt);
+            self.guard_class_rdi(cached_class, deopt);
         }
         self.guard_version(pc, ctx, deopt);
         match store[fid].kind {

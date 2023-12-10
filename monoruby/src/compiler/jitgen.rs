@@ -461,7 +461,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
             );
-            self.guard_class(self_value.class(), side_exit);
+            self.guard_class_rdi(self_value.class(), side_exit);
         } else {
             // for method JIT, class of *self* is already checked in an entry stub.
             let pc = func.get_top_pc();
@@ -957,13 +957,9 @@ impl Codegen {
                         ctx.release(ret);
                         ir.inst.push(AsmInst::FloatCmp { kind, mode });
                     } else if mode.is_integer_op(&pc) {
-                        ctx.fetch_binary(&mut ir, &mode);
+                        ir.fetch_fixnum_binary(&mut ctx, pc, &mode);
                         ctx.release(ret);
-                        let wb = ctx.get_write_back();
-                        let deopt = ir.new_deopt(pc, wb.clone());
-                        let error = ir.new_error(pc, wb);
-                        ir.load_binary_fixnum_with_mode(mode, deopt);
-                        ir.inst.push(AsmInst::IntegerCmp { kind, error });
+                        ir.inst.push(AsmInst::IntegerCmp { kind, mode });
                     } else {
                         ctx.fetch_binary(&mut ir, &mode);
                         ctx.release(ret);
@@ -985,24 +981,20 @@ impl Codegen {
                                 let deopt = ir.new_deopt(pc, ctx.get_write_back());
                                 let mode = ir.fmode(&mode, &mut ctx, pc, deopt);
                                 ctx.release(ret);
-                                ir.inst.push(AsmInst::FloatCmpBr {
-                                    kind,
-                                    mode,
-                                    brkind,
-                                    branch_dest,
-                                });
+                                ir.float_cmp_br(mode, kind, brkind, branch_dest);
                             } else {
-                                ctx.fetch_binary(&mut ir, &mode);
-                                ctx.release(ret);
-
                                 if mode.is_integer_op(&pc) {
-                                    ir.integer_cmp_br(&ctx, pc, mode, kind, brkind, branch_dest);
+                                    ir.fetch_fixnum_binary(&mut ctx, pc, &mode);
+                                    ctx.release(ret);
+                                    ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                                 } else {
+                                    ctx.fetch_binary(&mut ir, &mode);
+                                    ctx.release(ret);
                                     ir.load_binary_with_mode(mode);
                                     ir.generic_cmp(&ctx, pc, kind);
                                     ir.inst.push(AsmInst::GenericCondBr {
-                                        kind: brkind,
-                                        dst: branch_dest,
+                                        brkind,
+                                        branch_dest,
                                     });
                                 }
                             }
@@ -1275,7 +1267,7 @@ impl Codegen {
                     }
 
                     self.fetch_to_rdi(&mut ctx, cond);
-                    self.guard_class(INTEGER_CLASS, else_dest);
+                    self.guard_class_rdi(INTEGER_CLASS, else_dest);
 
                     monoasm! {&mut self.jit,
                         sarq rdi, 1;

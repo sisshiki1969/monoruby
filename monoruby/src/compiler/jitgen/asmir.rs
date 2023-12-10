@@ -122,11 +122,11 @@ impl AsmIr {
         self.inst.push(AsmInst::AccToStack(reg));
     }
 
-    pub(super) fn int2xmm(&mut self, reg: Option<SlotId>, x: Xmm, deopt: usize) {
+    pub(super) fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: usize) {
         self.inst.push(AsmInst::IntToXmm(reg, x, deopt));
     }
 
-    pub(super) fn float2xmm(&mut self, reg: Option<SlotId>, x: Xmm, deopt: usize) {
+    pub(super) fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: usize) {
         self.inst.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
@@ -144,8 +144,12 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    pub(super) fn guard_reg_fixnum(&mut self, r: GP, deopt: usize) {
-        self.inst.push(AsmInst::GuardRegFixnum(r, deopt));
+    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: usize) {
+        self.inst.push(AsmInst::GuardFixnum(r, deopt));
+    }
+
+    pub(super) fn guard_float(&mut self, r: GP, deopt: usize) {
+        self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
     pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
@@ -193,20 +197,31 @@ impl AsmIr {
 
     pub(super) fn integer_cmp_br(
         &mut self,
-        ctx: &BBContext,
-        pc: BcPc,
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: DestLabel,
     ) {
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
         self.inst.push(AsmInst::IntegerCmpBr {
             mode,
             kind,
             brkind,
             branch_dest,
-            deopt,
+        });
+    }
+
+    pub(super) fn float_cmp_br(
+        &mut self,
+        mode: FMode,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+    ) {
+        self.inst.push(AsmInst::FloatCmpBr {
+            mode,
+            kind,
+            brkind,
+            branch_dest,
         });
     }
 
@@ -384,27 +399,6 @@ impl AsmIr {
         }
     }
 
-    pub(super) fn load_binary_fixnum_with_mode(&mut self, mode: OpMode, deopt: usize) {
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                self.stack2reg(lhs, GP::Rdi);
-                self.guard_reg_fixnum(GP::Rdi, deopt);
-                self.stack2reg(rhs, GP::Rsi);
-                self.guard_reg_fixnum(GP::Rsi, deopt);
-            }
-            OpMode::RI(lhs, rhs) => {
-                self.stack2reg(lhs, GP::Rdi);
-                self.guard_reg_fixnum(GP::Rdi, deopt);
-                self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
-            }
-            OpMode::IR(lhs, rhs) => {
-                self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
-                self.stack2reg(rhs, GP::Rsi);
-                self.guard_reg_fixnum(GP::Rsi, deopt);
-            }
-        }
-    }
-
     pub(super) fn fmode(
         &mut self,
         mode: &OpMode,
@@ -462,14 +456,27 @@ pub(super) enum AsmInst {
     XmmToBoth(Xmm, Vec<SlotId>),
     LitToStack(Value, SlotId),
     DeepCopyLit(Value, UsingXmm),
-    NumToXmm(SlotId, Xmm, usize),
-    IntToXmm(Option<SlotId>, Xmm, usize),
-    /// move a Flonum Value in a stack slot or acc to xmm, and deoptimize if it is not a Flonum.
-    FloatToXmm(Option<SlotId>, Xmm, usize),
+    NumToXmm(GP, Xmm, usize),
+    IntToXmm(GP, Xmm, usize),
+    /// move a Flonum Value in a reg to xmm reg, and deoptimize if it is not a Flonum.
+    FloatToXmm(GP, Xmm, usize),
 
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
-    GuardFloat(SlotId, usize),
-    GuardRegFixnum(GP, usize),
+    GuardFloat(GP, usize),
+    GuardFixnum(GP, usize),
+
+    ///
+    /// Conditional branch
+    ///
+    /// When *kind* is BrKind::BrIf, jump to *dst* if the Value in `rax` is true.
+    ///
+    /// ### in
+    /// - rax: Value
+    ///
+    GenericCondBr {
+        brkind: BrKind,
+        branch_dest: DestLabel,
+    },
     /// deoptimize
     Deopt(usize),
     /// recompile and deoptimize
@@ -518,8 +525,8 @@ pub(super) enum AsmInst {
     /// If error occurs in comparison operation, raise error.
     ///
     IntegerCmp {
+        mode: OpMode,
         kind: CmpKind,
-        error: usize,
     },
     ///
     /// Integer comparison and conditional branch
@@ -532,7 +539,6 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: DestLabel,
-        deopt: usize,
     },
     FloatCmp {
         kind: CmpKind,
@@ -733,19 +739,6 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
-
-    ///
-    /// Conditional branch
-    ///
-    /// When *kind* is BrKind::BrIf, jump to *dst* if the Value in `rax` is true.
-    ///
-    /// ### in
-    /// - rax: Value
-    ///
-    GenericCondBr {
-        kind: BrKind,
-        dst: DestLabel,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -878,9 +871,8 @@ impl Codegen {
                 UnOpK::Pos => {}
             },
 
-            AsmInst::NumToXmm(r, x, side_exit) => {
-                self.load_rdi(*r);
-                self.numeric_val_to_f64(x.enc(), labels[*side_exit]);
+            AsmInst::NumToXmm(reg, x, side_exit) => {
+                self.numeric_val_to_f64(*reg, x.enc(), labels[*side_exit]);
             }
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(*f);
@@ -889,24 +881,10 @@ impl Codegen {
                 );
             }
             AsmInst::IntToXmm(r, x, side_exit) => {
-                if let Some(r) = r {
-                    self.load_rdi(*r);
-                } else {
-                    monoasm! {&mut self.jit,
-                        movq rdi, r15;
-                    }
-                }
-                self.integer_val_to_f64(x.enc(), labels[*side_exit]);
+                self.integer_val_to_f64(*r, x.enc(), labels[*side_exit]);
             }
-            AsmInst::FloatToXmm(r, x, side_exit) => {
-                if let Some(r) = r {
-                    self.load_rdi(*r);
-                } else {
-                    monoasm! {&mut self.jit,
-                        movq rdi, r15;
-                    }
-                }
-                self.float_to_f64(x.enc(), labels[*side_exit]);
+            AsmInst::FloatToXmm(reg, x, side_exit) => {
+                self.float_to_f64(*reg, x.enc(), labels[*side_exit]);
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(*i as f64);
@@ -927,22 +905,21 @@ impl Codegen {
                 self.xmm_restore(*using_xmm);
             }
 
-            AsmInst::GuardFloat(r, side_exit) => {
-                let side_exit = labels[*side_exit];
-                self.load_rdi(*r);
-                self.guard_float(side_exit);
+            AsmInst::GuardFloat(r, deopt) => {
+                let deopt = labels[*deopt];
+                self.guard_float(*r, deopt);
             }
-            AsmInst::GuardRegFixnum(r, deopt) => {
+            AsmInst::GuardFixnum(r, deopt) => {
                 let deopt = labels[*deopt];
                 monoasm!( &mut self.jit,
                     testq R(*r as u64), 0x1;
                     jz deopt;
                 );
             }
-            AsmInst::Deopt(side_exit) => {
-                let exit = labels[*side_exit];
+            AsmInst::Deopt(deopt) => {
+                let deopt = labels[*deopt];
                 monoasm!( &mut self.jit,
-                    jmp exit;
+                    jmp deopt;
                 );
             }
             AsmInst::RecompileDeopt { position, deopt } => {
@@ -1086,19 +1063,37 @@ impl Codegen {
                 self.generic_cmp(kind, *using_xmm);
                 self.handle_error(labels, *error);
             }
-            AsmInst::IntegerCmp { kind, error } => {
-                self.integer_cmp(*kind);
-                self.handle_error(labels, *error);
+            AsmInst::IntegerCmp { kind, mode } => {
+                if matches!(kind, CmpKind::Cmp) {
+                    match mode {
+                        OpMode::RR(..) => {}
+                        OpMode::RI(_, r) => {
+                            monoasm!( &mut self.jit,
+                                movq rsi, (Value::i32(*r as i32).id());
+                            );
+                        }
+                        OpMode::IR(l, _) => {
+                            monoasm!( &mut self.jit,
+                                movq rdi, (Value::i32(*l as i32).id());
+                            );
+                        }
+                    }
+                    self.icmp_cmp();
+                } else {
+                    monoasm! { &mut self.jit,
+                        xorq rax, rax;
+                    };
+                    self.opt_integer_cmp(mode);
+                    self.flag_to_bool(*kind);
+                }
             }
             AsmInst::IntegerCmpBr {
                 mode,
                 kind,
                 brkind,
                 branch_dest,
-                deopt,
             } => {
-                let deopt = labels[*deopt];
-                self.opt_integer_cmp(mode, deopt);
+                self.opt_integer_cmp(mode);
                 self.condbr_int(*kind, *branch_dest, *brkind);
             }
             AsmInst::FloatCmp { kind, mode } => {
@@ -1547,7 +1542,10 @@ impl Codegen {
                 self.xmm_restore(*using_xmm);
             }
 
-            AsmInst::GenericCondBr { kind, dst } => {
+            AsmInst::GenericCondBr {
+                brkind: kind,
+                branch_dest: dst,
+            } => {
                 self.cond_br(*dst, *kind);
             }
         }

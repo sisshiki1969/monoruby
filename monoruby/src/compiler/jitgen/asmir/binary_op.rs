@@ -15,6 +15,14 @@ macro_rules! cmp_main {
                     orq rax, (FALSE_VALUE);
                 };
             }
+
+            pub(in crate::compiler) fn [<set_ $op>](&mut self) {
+                monoasm! { &mut self.jit,
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                };
+            }
         }
     };
     ($op1:ident, $($op2:ident),+) => {
@@ -89,16 +97,16 @@ impl Codegen {
 
     cmp_main!(eq, ne, lt, le, gt, ge);
 
-    pub(super) fn integer_cmp(&mut self, kind: CmpKind) {
+    pub(super) fn flag_to_bool(&mut self, kind: CmpKind) {
         match kind {
-            CmpKind::Eq => self.icmp_eq(),
-            CmpKind::Ne => self.icmp_ne(),
-            CmpKind::Ge => self.icmp_ge(),
-            CmpKind::Gt => self.icmp_gt(),
-            CmpKind::Le => self.icmp_le(),
-            CmpKind::Lt => self.icmp_lt(),
-            CmpKind::TEq => self.icmp_eq(),
-            CmpKind::Cmp => self.icmp_cmp(),
+            CmpKind::Eq => self.set_eq(),
+            CmpKind::Ne => self.set_ne(),
+            CmpKind::Ge => self.set_ge(),
+            CmpKind::Gt => self.set_gt(),
+            CmpKind::Le => self.set_le(),
+            CmpKind::Lt => self.set_lt(),
+            CmpKind::TEq => self.set_eq(),
+            CmpKind::Cmp => unreachable!(),
         }
     }
 
@@ -156,28 +164,21 @@ impl Codegen {
     ///
     /// Compare two values with *mode*, and set flags.
     ///
-    pub(super) fn opt_integer_cmp(&mut self, mode: &OpMode, deopt: DestLabel) {
+    pub(super) fn opt_integer_cmp(&mut self, mode: &OpMode) {
         match mode {
-            OpMode::RR(lhs, rhs) => {
-                self.load_binary_args(*lhs, *rhs);
-                self.guard_rdi_fixnum(deopt);
-                self.guard_rsi_fixnum(deopt);
+            OpMode::RR(..) => {
                 monoasm!( &mut self.jit,
                     cmpq rdi, rsi;
                 );
             }
-            OpMode::RI(lhs, rhs) => {
-                self.load_rdi(*lhs);
-                self.guard_rdi_fixnum(deopt);
+            OpMode::RI(_, r) => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (Value::i32(*rhs as i32).id());
+                    cmpq rdi, (Value::i32(*r as i32).id());
                 );
             }
-            OpMode::IR(lhs, rhs) => {
-                self.load_rsi(*rhs);
-                self.guard_rsi_fixnum(deopt);
+            OpMode::IR(l, _) => {
                 monoasm!( &mut self.jit,
-                    movq rdi, (Value::i32(*lhs as i32).id());
+                    movq rdi, (Value::i32(*l as i32).id());
                     cmpq rdi, rsi;
                 );
             }
@@ -364,17 +365,7 @@ impl AsmIr {
                 self.reg2stack(GP::Rdi, dst);
             }
             BinOpK::Sub => {
-                match mode {
-                    OpMode::RR(lhs, rhs) => {
-                        self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
-                    }
-                    OpMode::RI(lhs, _) => {
-                        self.fetch_fixnum_rdi(ctx, lhs, pc);
-                    }
-                    OpMode::IR(_, rhs) => {
-                        self.fetch_fixnum_rsi(ctx, rhs, pc);
-                    }
-                }
+                self.fetch_fixnum_binary(ctx, pc, &mode);
                 ctx.release(dst);
                 self.integer_binop(ctx, pc, kind, mode);
                 self.reg2stack(GP::Rdi, dst);
@@ -402,6 +393,25 @@ impl AsmIr {
         }
     }
 
+    pub(in crate::compiler::jitgen) fn fetch_fixnum_binary(
+        &mut self,
+        ctx: &mut BBContext,
+        pc: BcPc,
+        mode: &OpMode,
+    ) {
+        match mode {
+            OpMode::RR(l, r) => {
+                self.fetch_fixnum_rr(ctx, *l, *r, pc);
+            }
+            OpMode::RI(l, _) => {
+                self.fetch_fixnum_rdi(ctx, *l, pc);
+            }
+            OpMode::IR(_, r) => {
+                self.fetch_fixnum_rsi(ctx, *r, pc);
+            }
+        }
+    }
+
     fn fetch_fixnum_rr(
         &mut self,
         ctx: &mut BBContext,
@@ -416,10 +426,10 @@ impl AsmIr {
         let deopt = self.new_deopt(pc, ctx.get_write_back());
 
         if !is_lhs_smi {
-            self.guard_reg_fixnum(GP::Rdi, deopt);
+            self.guard_fixnum(GP::Rdi, deopt);
         }
         if !is_rhs_smi {
-            self.guard_reg_fixnum(GP::Rsi, deopt);
+            self.guard_fixnum(GP::Rsi, deopt);
         }
         deopt
     }
@@ -438,7 +448,7 @@ impl AsmIr {
         let deopt = self.new_deopt(pc, ctx.get_write_back());
 
         if !is_smi {
-            self.guard_reg_fixnum(reg, deopt);
+            self.guard_fixnum(reg, deopt);
         }
         deopt
     }

@@ -200,7 +200,7 @@ impl Codegen {
     /// - rdi: ptr to Array.
     ///
     fn guard_rdi_array(&mut self, side_exit: DestLabel) {
-        self.guard_class(ARRAY_CLASS, side_exit);
+        self.guard_class_rdi(ARRAY_CLASS, side_exit);
         monoasm! { &mut self.jit,
             cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
             jne  side_exit;

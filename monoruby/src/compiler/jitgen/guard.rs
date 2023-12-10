@@ -10,50 +10,53 @@ impl Codegen {
     /// ### in
     /// - rdi: Value
     ///
-    pub(crate) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+    pub(crate) fn guard_class_rdi(&mut self, class_id: ClassId, side_exit: DestLabel) {
+        self.guard_class(GP::Rdi, class_id, side_exit)
+    }
+    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,
-                    testq rdi, 0b001;
+                    testq R(reg as _), 0b001;
                     jz side_exit;
                 );
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
-                    testq rdi, 0b001;
+                    testq R(reg as _), 0b001;
                     jnz side_exit;
-                    testq rdi, 0b010;
+                    testq R(reg as _), 0b010;
                     jnz exit;
                 );
-                self.guard_rvalue(FLOAT_CLASS, side_exit);
+                self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (NIL_VALUE);
+                    cmpq R(reg as _), (NIL_VALUE);
                     jnz side_exit;
                 );
             }
             SYMBOL_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpb rdi, (TAG_SYMBOL);
+                    cmpb R(reg as _), (TAG_SYMBOL);
                     jnz side_exit;
                 );
             }
             TRUE_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (TRUE_VALUE);
+                    cmpq R(reg as _), (TRUE_VALUE);
                     jnz side_exit;
                 );
             }
             FALSE_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (FALSE_VALUE);
+                    cmpq R(reg as _), (FALSE_VALUE);
                     jnz side_exit;
                 );
             }
-            _ => self.guard_rvalue(class_id, side_exit),
+            _ => self.guard_rvalue(reg, class_id, side_exit),
         }
     }
 
@@ -66,8 +69,8 @@ impl Codegen {
     /// ### in
     /// - rdi: Value
     ///
-    pub(super) fn guard_float(&mut self, side_exit: DestLabel) {
-        self.guard_class(FLOAT_CLASS, side_exit)
+    pub(super) fn guard_float(&mut self, reg: GP, side_exit: DestLabel) {
+        self.guard_class(reg, FLOAT_CLASS, side_exit)
     }
 
     ///
@@ -79,7 +82,7 @@ impl Codegen {
     ///
     /// ### in
     ///
-    /// - rdi: Value
+    /// - R(*reg*): Value
     ///
     /// ### out
     ///
@@ -89,12 +92,12 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: u64, side_exit: DestLabel) {
         monoasm!( &mut self.jit,
-            testq rdi, 0b001;
+            testq R(reg as _), 0b001;
             jnz side_exit;
         );
-        self.float_val_to_f64(xmm, side_exit);
+        self.float_val_to_f64(reg, xmm, side_exit);
     }
 
     ///
@@ -114,19 +117,19 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn numeric_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: u64, side_exit: DestLabel) {
         let integer = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            testq rdi, 0b001;
+            testq R(reg as _), 0b001;
             jnz integer;
         }
-        self.float_val_to_f64(xmm, side_exit);
+        self.float_val_to_f64(reg, xmm, side_exit);
         monoasm! {&mut self.jit,
             jmp  exit;
         integer:
-            sarq rdi, 1;
-            cvtsi2sdq xmm(xmm), rdi;
+            sarq R(reg as _), 1;
+            cvtsi2sdq xmm(xmm), R(reg as _);
         exit:
         };
     }
@@ -135,7 +138,7 @@ impl Codegen {
     /// Copy the value(f64) of Float to *xmm*.
     ///
     /// ### in
-    /// - rdi: Value (must be a flonum or heap-allocated Float)
+    /// - R(*reg*): Value (must be a flonum or heap-allocated Float)
     ///
     /// ### out
     /// - xmm(*xmm*)
@@ -143,19 +146,26 @@ impl Codegen {
     /// ### destroy
     /// - rax, rdi
     ///
-    fn float_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+    fn float_val_to_f64(&mut self, reg: GP, xmm: u64, side_exit: DestLabel) {
         let flonum = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            testq rdi, 0b010;
+            testq R(reg as _), 0b010;
             jnz flonum;
         }
-        self.guard_rvalue(FLOAT_CLASS, side_exit);
+        self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
         let flonum_to_f64 = self.flonum_to_f64;
         monoasm! {&mut self.jit,
-            movq xmm(xmm), [rdi + 16];
+            movq xmm(xmm), [R(reg as _) + (RVALUE_OFFSET_KIND)];
             jmp  exit;
-        flonum:
+            flonum:
+        }
+        if reg != GP::Rdi {
+            monoasm! {&mut self.jit,
+                movq rdi, R(reg as _);
+            }
+        }
+        monoasm! {&mut self.jit,
             call flonum_to_f64;
             movq xmm(xmm), xmm0;
         exit:
@@ -166,13 +176,13 @@ impl Codegen {
     /// Class guard for RValue.
     ///
     /// ### in
-    /// - rdi: Value
+    /// - R(*reg*): Value
     ///
-    fn guard_rvalue(&mut self, class_id: ClassId, side_exit: DestLabel) {
+    fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, side_exit: DestLabel) {
         monoasm!( &mut self.jit,
-            testq rdi, 0b111;
+            testq R(reg as _), 0b111;
             jnz side_exit;
-            cmpl [rdi + 4], (class_id.0);
+            cmpl [R(reg as _) + 4], (class_id.0);
             jne side_exit;
         )
     }
@@ -201,7 +211,7 @@ mod test {
             (FALSE_CLASS, Value::bool(false)),
         ] {
             let entry_point = gen.jit.get_current_address();
-            gen.guard_class(class, side_exit);
+            gen.guard_class_rdi(class, side_exit);
             monoasm!( &mut gen.jit,
                 xorq rax, rax;
                 ret;
@@ -218,7 +228,7 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.float_to_f64(0, side_exit);
+        gen.float_to_f64(GP::Rdi, 0, side_exit);
         monoasm!( &mut gen.jit,
             ret;
         );
@@ -250,7 +260,7 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.numeric_val_to_f64(0, side_exit);
+        gen.numeric_val_to_f64(GP::Rdi, 0, side_exit);
         monoasm!( &mut gen.jit,
             ret;
         );
