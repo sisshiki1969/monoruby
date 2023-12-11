@@ -6,6 +6,7 @@ mod binary_op;
 mod constants;
 mod index;
 mod ivar;
+mod method_call;
 mod read_slot;
 
 pub(crate) struct AsmIr {
@@ -153,6 +154,14 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
+    pub(super) fn guard_class_version(&mut self, pc: BcPc, deopt: usize) {
+        self.inst.push(AsmInst::GuardClassVersion(pc, deopt));
+    }
+
+    pub(super) fn guard_class(&mut self, r: GP, class: ClassId, deopt: usize) {
+        self.inst.push(AsmInst::GuardClass(r, class, deopt));
+    }
+
     pub(super) fn opt_case(
         &mut self,
         max: u16,
@@ -200,6 +209,41 @@ impl AsmIr {
             using_xmm,
         });
     }
+
+    pub(super) fn send_cached(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        recv_classid: ClassId,
+        native: bool,
+    ) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::SendCached {
+            callid,
+            callee_fid,
+            recv_classid,
+            native,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn send_not_cached(&mut self, ctx: &BBContext, pc: BcPc, callsite: CallSiteId) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        let self_class = ctx.self_value.class();
+        self.inst.push(AsmInst::SendNotCached {
+            self_class,
+            callsite,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = ctx.get_using_xmm();
         let error = self.new_error(pc, ctx.get_write_back());
@@ -518,6 +562,8 @@ pub(super) enum AsmInst {
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
     GuardFloat(GP, usize),
     GuardFixnum(GP, usize),
+    GuardClassVersion(BcPc, usize),
+    GuardClass(GP, ClassId, usize),
 
     Break,
     Raise,
@@ -564,6 +610,21 @@ pub(super) enum AsmInst {
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
         using_xmm: UsingXmm,
+    },
+    SendCached {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        recv_classid: ClassId,
+        native: bool,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
+    SendNotCached {
+        self_class: ClassId,
+        callsite: CallSiteId,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: usize,
     },
     Yield {
         callid: CallSiteId,
@@ -1005,6 +1066,14 @@ impl Codegen {
                 let deopt = labels[*deopt];
                 self.guard_fixnum(*r, deopt)
             }
+            AsmInst::GuardClassVersion(pc, deopt) => {
+                let deopt = labels[*deopt];
+                self.guard_class_version(*pc, deopt);
+            }
+            AsmInst::GuardClass(r, class, deopt) => {
+                let deopt = labels[*deopt];
+                self.guard_class(*r, *class, deopt);
+            }
             AsmInst::Deopt(deopt) => {
                 let deopt = labels[*deopt];
                 monoasm!( &mut self.jit,
@@ -1100,62 +1169,42 @@ impl Codegen {
             } => {
                 self.attr_reader(*using_xmm, *ivar_name, *ivar_id);
             }
+            AsmInst::SendCached {
+                callid,
+                callee_fid,
+                recv_classid,
+                native,
+                using_xmm,
+                error,
+            } => {
+                let error = labels[*error];
+                self.send_cached(
+                    store,
+                    *callid,
+                    *callee_fid,
+                    *recv_classid,
+                    *native,
+                    *using_xmm,
+                    error,
+                );
+            }
+            AsmInst::SendNotCached {
+                self_class,
+                callsite,
+                pc,
+                using_xmm,
+                error,
+            } => {
+                let error = labels[*error];
+                self.send_not_cached(*self_class, &store[*callsite], *pc, *using_xmm, error);
+            }
             AsmInst::Yield {
                 callid,
                 using_xmm,
                 error,
             } => {
-                self.xmm_save(*using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rax, (runtime::get_yield_data);
-                    call rax;
-                }
-                self.handle_error(labels[*error]);
-                monoasm! { &mut self.jit,
-                    lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
-                    movq rdi, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
-                    // rdi <- outer_cfp, r15 <- &FuncData
-                }
-
-                monoasm! { &mut self.jit,
-                    subq  rsp, 16;
-                    // set prev_cfp
-                    pushq [rbx + (EXECUTOR_CFP)];
-                    // set lfp
-                    lea   rax, [rsp + 8];
-                    pushq rax;
-                    // set outer
-                    lea  rax, [rdi - (LBP_OUTER)];
-                    pushq rax;
-                    // set meta
-                    pushq [r15 + (FUNCDATA_META)];
-                    // set block
-                    movq rax, 0;
-                    pushq rax;
-                    // set self
-                    pushq [rdi - (LBP_SELF)];
-                    addq  rsp, 64;
-                };
-                // set arguments
-                self.jit_set_arguments(&store[*callid]);
-
-                monoasm! { &mut self.jit,
-                    movq rsi, [r15 + (FUNCDATA_PC)];
-                }
-                self.block_arg_expand();
-
-                monoasm! { &mut self.jit,
-                    movl rdx, (callid.get()); // CallSiteId
-                }
-                self.handle_arguments();
-                self.handle_error(labels[*error]);
-
-                self.call_funcdata();
-
-                self.xmm_restore(*using_xmm);
-                self.handle_error(labels[*error]);
+                let error = labels[*error];
+                self.gen_yield(store, *callid, *using_xmm, error);
             }
 
             AsmInst::GenericUnOp {
@@ -1258,11 +1307,11 @@ impl Codegen {
             AsmInst::LoadFloatConstant {
                 fdst,
                 f,
-                cached_version: version,
+                cached_version,
                 deopt,
             } => {
                 let deopt = labels[*deopt];
-                self.load_float_constant(*fdst, deopt, *f, *version);
+                self.load_float_constant(*fdst, deopt, *f, *cached_version);
             }
             AsmInst::LoadGenericConstant {
                 cached_val,

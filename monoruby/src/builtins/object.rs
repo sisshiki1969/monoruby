@@ -395,7 +395,7 @@ fn object_send(
 ) {
     let CallSiteInfo {
         recv,
-        dst: ret,
+        dst,
         args,
         pos_num,
         block_fid: block_func_id,
@@ -404,7 +404,7 @@ fn object_send(
     let mut ir = AsmIr::new();
     ir.fetch_callargs(ctx, callsite);
     gen.gen_code(store, ir);
-    ctx.release(ret);
+    ctx.release(dst);
     let using = ctx.get_using_xmm();
     let bh = match block_func_id {
         None => 0,
@@ -427,7 +427,7 @@ fn object_send(
         addq rsp, 16;
     }
     gen.xmm_restore(using);
-    gen.store_rax(ret);
+    gen.store_rax(dst);
 }
 
 #[repr(C)]

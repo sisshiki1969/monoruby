@@ -20,7 +20,6 @@ mod definition;
 mod guard;
 mod init_method;
 mod merge;
-mod method_call;
 mod slot;
 pub mod trace_ir;
 
@@ -1037,17 +1036,18 @@ impl Codegen {
                 }
                 TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                     // We must write back and unlink all local vars since they may be accessed from block.
+                    let mut ir = AsmIr::new();
                     if store[callid].block_fid.is_some() {
-                        self.gen_write_back_locals(&mut ctx);
+                        ir.write_back_locals(&mut ctx);
                     }
                     if let Some(fid) = pc.cached_fid() {
-                        self.gen_call(store, &mut ctx, fid, callid, pc);
+                        ir.gen_call(store, &mut ctx, fid, callid, pc);
                     } else {
-                        let mut ir = AsmIr::new();
                         ir.recompile_and_deopt(&ctx, pc, position);
                         self.gen_code(store, ir);
                         return;
                     }
+                    self.gen_code(store, ir);
                 }
                 TraceIr::InlineCall {
                     inline_id, callid, ..
@@ -1055,7 +1055,7 @@ impl Codegen {
                     let inline_gen = store.get_inline_info(inline_id).0;
                     self.writeback_acc(&mut ctx);
                     let deopt = self.gen_deopt(pc, &ctx);
-                    self.guard_class_version(pc, &ctx, deopt);
+                    self.guard_class_version(pc, deopt);
                     inline_gen(self, store, &mut ctx, &store[callid], pc, deopt);
                 }
                 TraceIr::Yield { callid } => {
@@ -1072,8 +1072,6 @@ impl Codegen {
                     });
                     ir.reg2acc(&mut ctx, GP::Rax, store[callid].dst);
                     self.gen_code(store, ir);
-                    //self.gen_yield(&mut ctx, store, callid, pc);
-                    //self.save_rax_to_acc(&mut ctx, store[callid].ret);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::MethodDef { name, func_id } => {
@@ -1428,12 +1426,6 @@ impl Codegen {
                 movq [r14 - (conv(reg))], rax;
             }
         }
-    }
-
-    fn gen_write_back_locals(&mut self, ctx: &mut BBContext) {
-        let wb = ctx.get_locals_write_back();
-        self.gen_write_back(&wb);
-        ctx.release_locals();
     }
 
     ///
