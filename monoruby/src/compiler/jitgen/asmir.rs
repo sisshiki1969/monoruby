@@ -6,6 +6,7 @@ mod binary_op;
 mod constants;
 mod index;
 mod ivar;
+mod read_slot;
 
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
@@ -397,19 +398,19 @@ impl AsmIr {
 }
 
 impl AsmIr {
-    pub(super) fn load_binary_with_mode(&mut self, mode: OpMode) {
+    pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.stack2reg(lhs, GP::Rdi);
-                self.stack2reg(rhs, GP::Rsi);
+                self.fetch_to_reg(ctx, lhs, GP::Rdi);
+                self.fetch_to_reg(ctx, rhs, GP::Rsi);
             }
             OpMode::RI(lhs, rhs) => {
-                self.stack2reg(lhs, GP::Rdi);
+                self.fetch_to_reg(ctx, lhs, GP::Rdi);
                 self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
                 self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
-                self.stack2reg(rhs, GP::Rsi);
+                self.fetch_to_reg(ctx, rhs, GP::Rsi);
             }
         }
     }
@@ -423,15 +424,15 @@ impl AsmIr {
     ) -> FMode {
         match mode {
             OpMode::RR(l, r) => {
-                let (flhs, frhs) = ctx.fetch_float_binary(self, *l, *r, pc, deopt);
+                let (flhs, frhs) = self.fetch_float_binary(ctx, *l, *r, pc, deopt);
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
-                let l = ctx.fetch_float_assume_float(self, *l, deopt);
+                let l = self.fetch_float_assume_float(ctx, *l, deopt);
                 FMode::RI(l, *r)
             }
             OpMode::IR(l, r) => {
-                let r = ctx.fetch_float_assume_float(self, *r, deopt);
+                let r = self.fetch_float_assume_float(ctx, *r, deopt);
                 FMode::IR(*l, r)
             }
         }
@@ -1814,13 +1815,13 @@ impl BBContext {
         idx: SlotId,
         pc: BcPc,
     ) {
-        self.fetch_to_reg(ir, base, GP::Rdi);
+        ir.fetch_to_reg(self, base, GP::Rdi);
 
         let deopt = ir.new_deopt(pc, self.get_write_back());
         if let Some(idx) = self.is_u16_literal(idx) {
             ir.inst.push(AsmInst::ArrayU16Index { idx, deopt });
         } else {
-            self.fetch_to_reg(ir, idx, GP::Rsi);
+            ir.fetch_to_reg(self, idx, GP::Rsi);
             ir.inst.push(AsmInst::ArrayIndex { deopt });
         }
         self.release(dst);
@@ -1834,14 +1835,14 @@ impl BBContext {
         idx: SlotId,
         pc: BcPc,
     ) {
-        self.writeback_acc(ir);
-        self.fetch_to_reg(ir, base, GP::Rdi);
-        self.fetch_to_reg(ir, src, GP::R15);
+        ir.writeback_acc(self);
+        ir.fetch_to_reg(self, base, GP::Rdi);
+        ir.fetch_to_reg(self, src, GP::R15);
 
         if let Some(idx) = self.is_u16_literal(idx) {
             ir.array_u16_index_assign(self, pc, idx);
         } else {
-            self.fetch_to_reg(ir, idx, GP::Rsi);
+            ir.fetch_to_reg(self, idx, GP::Rsi);
             ir.array_index_assign(self, pc);
         }
     }

@@ -84,7 +84,7 @@ fn inline_class_new(
         ..
     } = *callsite;
     let mut ir = AsmIr::new();
-    ctx.fetch_callargs(&mut ir, callsite);
+    ir.fetch_callargs(ctx, callsite);
     gen.gen_code(store, ir);
     ctx.release(ret);
     let using = ctx.get_using_xmm();

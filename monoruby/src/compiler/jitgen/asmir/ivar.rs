@@ -109,7 +109,7 @@ impl Codegen {
         src: SlotId,
     ) {
         let mut ir = AsmIr::new();
-        ctx.fetch_slots(&mut ir, &[src]);
+        ir.fetch_slots(ctx, &[src]);
         ir.store_gvar(ctx, name, src);
         self.gen_code(store, ir);
     }
@@ -170,7 +170,7 @@ impl BBContext {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.fetch_to_reg(ir, src, GP::Rax);
+        ir.fetch_to_reg(self, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(pc, self.get_write_back());

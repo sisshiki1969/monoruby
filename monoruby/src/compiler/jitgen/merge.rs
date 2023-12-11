@@ -126,7 +126,7 @@ impl BBContext {
         let mut ir = AsmIr::new();
         let len = self.reg_num();
 
-        self.writeback_acc(&mut ir);
+        ir.writeback_acc(&mut self);
 
         for i in 0..len {
             let reg = SlotId(i as u16);

@@ -48,7 +48,7 @@ impl BBContext {
         is_module: bool,
         pc: BcPc,
     ) {
-        self.fetch_slots(ir, &[superclass]);
+        ir.fetch_slots(self, &[superclass]);
         self.release(dst);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(pc, self.get_write_back());
@@ -71,7 +71,7 @@ impl BBContext {
         func_id: FuncId,
         pc: BcPc,
     ) {
-        self.fetch_slots(ir, &[base]);
+        ir.fetch_slots(self, &[base]);
         self.release(dst);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(pc, self.get_write_back());

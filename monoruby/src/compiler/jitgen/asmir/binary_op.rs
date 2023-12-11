@@ -438,8 +438,8 @@ impl AsmIr {
     ) -> usize {
         let is_lhs_smi = ctx.is_i16_literal(lhs).is_some();
         let is_rhs_smi = ctx.is_i16_literal(rhs).is_some();
-        ctx.fetch_to_reg(self, lhs, GP::Rdi);
-        ctx.fetch_to_reg(self, rhs, GP::Rsi);
+        self.fetch_to_reg(ctx, lhs, GP::Rdi);
+        self.fetch_to_reg(ctx, rhs, GP::Rsi);
         let deopt = self.new_deopt(pc, ctx.get_write_back());
 
         if !is_lhs_smi {
@@ -461,7 +461,7 @@ impl AsmIr {
 
     fn fetch_fixnum(&mut self, ctx: &mut BBContext, slot: SlotId, reg: GP, pc: BcPc) -> usize {
         let is_smi = ctx.is_i16_literal(slot).is_some();
-        ctx.fetch_to_reg(self, slot, reg);
+        self.fetch_to_reg(ctx, slot, reg);
         let deopt = self.new_deopt(pc, ctx.get_write_back());
 
         if !is_smi {

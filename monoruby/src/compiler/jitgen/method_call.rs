@@ -42,7 +42,7 @@ impl Codegen {
     ) {
         let CallSiteInfo { ret, .. } = store[callid];
         let mut ir = AsmIr::new();
-        ctx.fetch_callargs(&mut ir, &store[callid]);
+        ir.fetch_callargs(ctx, &store[callid]);
         self.gen_code(store, ir);
         ctx.release(ret);
         if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
