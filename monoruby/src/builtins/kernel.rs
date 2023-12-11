@@ -64,7 +64,7 @@ fn object_nil(
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
+    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     ctx.release(ret);

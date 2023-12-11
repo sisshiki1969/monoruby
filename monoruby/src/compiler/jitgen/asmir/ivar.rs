@@ -187,6 +187,52 @@ impl BBContext {
     }
 }
 
+impl Codegen {
+    ///
+    /// Get an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    ///
+    /// - rsi: IvarId
+    ///
+    /// #### out
+    ///
+    /// - rax: Value
+    ///
+    pub(in crate::compiler::jitgen) fn get_ivar(&mut self, using: UsingXmm) {
+        self.xmm_save(using);
+        monoasm!( &mut self.jit,
+            movq rax, (RValue::get_ivar);
+            call rax;
+        );
+        self.xmm_restore(using);
+    }
+
+    ///
+    /// Set an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: base: &mut RValue
+    /// - rsi: IvarId
+    /// - rdx: src: Value
+    ///
+    /// #### destroy
+    ///
+    /// - caller-save registers
+    ///
+    pub(in crate::compiler::jitgen) fn set_ivar(&mut self, using: UsingXmm) {
+        self.xmm_save(using);
+        monoasm!( &mut self.jit,
+            movq rax, (RValue::set_ivar);
+            call rax;
+        );
+        self.xmm_restore(using);
+    }
+}
+
 ///
 /// Get instance variable.
 ///

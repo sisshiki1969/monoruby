@@ -58,7 +58,7 @@ fn object_object_id(
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
+    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     ctx.release(ret);
     gen.load_rdi(recv);
@@ -395,7 +395,7 @@ fn object_send(
 ) {
     let CallSiteInfo {
         recv,
-        ret,
+        dst: ret,
         args,
         pos_num,
         block_fid: block_func_id,

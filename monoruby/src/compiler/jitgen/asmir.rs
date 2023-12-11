@@ -168,6 +168,25 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn attr_writer(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        ivar_name: IdentId,
+        ivar_id: Option<IvarId>,
+        args: SlotId,
+    ) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::AttrWriter {
+            using_xmm,
+            error,
+            ivar_name,
+            ivar_id,
+            args,
+        });
+    }
+
     pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = ctx.get_using_xmm();
         let error = self.new_error(pc, ctx.get_write_back());
@@ -521,6 +540,13 @@ pub(super) enum AsmInst {
     },
     WriteBack(WriteBack),
 
+    AttrWriter {
+        args: SlotId,
+        ivar_name: IdentId,
+        ivar_id: Option<IvarId>,
+        using_xmm: UsingXmm,
+        error: usize,
+    },
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
@@ -1040,6 +1066,15 @@ impl Codegen {
                 };
             }
 
+            AsmInst::AttrWriter {
+                args,
+                ivar_name,
+                ivar_id,
+                using_xmm,
+                error,
+            } => {
+                self.attr_writer(*using_xmm, labels[*error], *ivar_name, *ivar_id, *args);
+            }
             AsmInst::Yield {
                 callid,
                 using_xmm,
@@ -1600,7 +1635,7 @@ impl Codegen {
         }
     }
 
-    fn handle_error(&mut self, error: DestLabel) {
+    pub(super) fn handle_error(&mut self, error: DestLabel) {
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq   error;

@@ -469,7 +469,7 @@ impl Globals {
                     recv,
                     args,
                     pos_num,
-                    ret,
+                    dst: ret,
                     block_fid,
                     block_arg,
                     ..
@@ -517,7 +517,7 @@ impl Globals {
                     recv,
                     args,
                     pos_num,
-                    ret,
+                    dst: ret,
                     ..
                 } = self.store[callid];
                 let class = pc.cached_class1().unwrap();
@@ -537,7 +537,10 @@ impl Globals {
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {
-                    args, pos_num, ret, ..
+                    args,
+                    pos_num,
+                    dst: ret,
+                    ..
                 } = self.store[callid];
                 if pos_num == 0 {
                     format!("{} = yield", ret_str(ret))

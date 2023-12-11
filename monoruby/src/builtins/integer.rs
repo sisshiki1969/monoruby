@@ -157,7 +157,7 @@ fn integer_tof(
     pc: BcPc,
     deopt: DestLabel,
 ) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
+    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
     if !recv.is_zero() {
@@ -295,7 +295,10 @@ fn integer_shr(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, ret, args, ..
+        recv,
+        dst: ret,
+        args,
+        ..
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(store, ctx, &[recv]);
@@ -339,7 +342,10 @@ fn integer_shl(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, ret, args, ..
+        recv,
+        dst: ret,
+        args,
+        ..
     } = *callsite;
     if let Some(rhs) = ctx.is_u8_literal(args) {
         gen.fetch_slots(store, ctx, &[recv]);

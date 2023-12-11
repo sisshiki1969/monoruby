@@ -350,7 +350,10 @@ fn array_shl(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, ret, args, ..
+        recv,
+        dst: ret,
+        args,
+        ..
     } = *callsite;
     gen.fetch_slots(store, ctx, &[recv, args]);
     ctx.release(ret);

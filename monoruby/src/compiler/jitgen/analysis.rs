@@ -390,7 +390,12 @@ impl JitContext {
                     info.r#use(src);
                 }
                 TraceIr::Yield { callid } => {
-                    let CallSiteInfo { args, len, ret, .. } = store[callid];
+                    let CallSiteInfo {
+                        args,
+                        len,
+                        dst: ret,
+                        ..
+                    } = store[callid];
                     info.use_range(args, len as u16);
                     if let Some(ret) = ret {
                         info.def(ret);
@@ -402,7 +407,7 @@ impl JitContext {
                         recv,
                         args,
                         len,
-                        ret,
+                        dst: ret,
                         ..
                     } = store[callid];
                     info.r#use(recv);
@@ -778,7 +783,7 @@ pub(super) enum ExitType {
 ///
 pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def(ret);
     }
 }
@@ -789,7 +794,7 @@ pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def(ret);
     }
 }
@@ -802,7 +807,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
         recv,
         args,
         len,
-        ret,
+        dst: ret,
         ..
     } = *callsite;
     info.r#use(recv);
@@ -817,7 +822,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 ///
 pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def_as_float(ret);
     }
 }
@@ -828,7 +833,7 @@ pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 pub(crate) fn f_v_f(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.use_as_float(callsite.args, true);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def_as_float(ret);
     }
 }

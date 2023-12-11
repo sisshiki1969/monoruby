@@ -81,7 +81,10 @@ fn math_sqrt(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, args, ret, ..
+        recv,
+        args,
+        dst: ret,
+        ..
     } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
@@ -106,7 +109,10 @@ fn math_cos(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, args, ret, ..
+        recv,
+        args,
+        dst: ret,
+        ..
     } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);
@@ -139,7 +145,10 @@ fn math_sin(
     deopt: DestLabel,
 ) {
     let CallSiteInfo {
-        recv, args, ret, ..
+        recv,
+        args,
+        dst: ret,
+        ..
     } = *callsite;
     gen.fetch_slots(store, ctx, &[recv]);
     gen.load_rdi(recv);

@@ -1061,7 +1061,7 @@ impl Codegen {
                 TraceIr::Yield { callid } => {
                     let mut ir = AsmIr::new();
                     ir.fetch_callargs(&mut ctx, &store[callid]);
-                    ctx.release(store[callid].ret);
+                    ctx.release(store[callid].dst);
                     ir.writeback_acc(&mut ctx);
                     let using_xmm = ctx.get_using_xmm();
                     let error = ir.new_deopt(pc, ctx.get_write_back());
@@ -1070,7 +1070,7 @@ impl Codegen {
                         using_xmm,
                         error,
                     });
-                    ir.reg2acc(&mut ctx, GP::Rax, store[callid].ret);
+                    ir.reg2acc(&mut ctx, GP::Rax, store[callid].dst);
                     self.gen_code(store, ir);
                     //self.gen_yield(&mut ctx, store, callid, pc);
                     //self.save_rax_to_acc(&mut ctx, store[callid].ret);
@@ -1482,52 +1482,6 @@ impl Codegen {
     fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
         self.load_rdi(lhs);
         self.load_rsi(rhs);
-    }
-}
-
-impl Codegen {
-    ///
-    /// Get an instance variable.
-    ///
-    /// #### in
-    ///
-    /// - rdi: &RValue
-    ///
-    /// - rsi: IvarId
-    ///
-    /// #### out
-    ///
-    /// - rax: Value
-    ///
-    fn get_ivar(&mut self, using: UsingXmm) {
-        self.xmm_save(using);
-        monoasm!( &mut self.jit,
-            movq rax, (RValue::get_ivar);
-            call rax;
-        );
-        self.xmm_restore(using);
-    }
-
-    ///
-    /// Set an instance variable.
-    ///
-    /// #### in
-    ///
-    /// - rdi: base: &mut RValue
-    /// - rsi: IvarId
-    /// - rdx: src: Value
-    ///
-    /// #### destroy
-    ///
-    /// - caller-save registers
-    ///
-    fn set_ivar(&mut self, using: UsingXmm) {
-        self.xmm_save(using);
-        monoasm!( &mut self.jit,
-            movq rax, (RValue::set_ivar);
-            call rax;
-        );
-        self.xmm_restore(using);
     }
 }
 

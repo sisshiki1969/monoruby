@@ -18,20 +18,6 @@ const CACHED_VERSION: usize = 28;
 const CACHED_FUNCID: usize = 16;
 
 impl Codegen {
-    pub(super) fn gen_inlinable(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        callsite: &CallSiteInfo,
-        inline_gen: InlineGen,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(ctx);
-        let deopt = self.gen_deopt(pc, ctx);
-        self.guard_class_version(pc, ctx, deopt);
-        inline_gen(self, store, ctx, callsite, pc, deopt);
-    }
-
     pub(super) fn gen_call(
         &mut self,
         store: &Store,
@@ -40,7 +26,7 @@ impl Codegen {
         callid: CallSiteId,
         pc: BcPc,
     ) {
-        let CallSiteInfo { ret, .. } = store[callid];
+        let CallSiteInfo { dst: ret, .. } = store[callid];
         let mut ir = AsmIr::new();
         ir.fetch_callargs(ctx, &store[callid]);
         self.gen_code(store, ir);
@@ -68,7 +54,7 @@ impl Codegen {
             recv,
             args,
             len,
-            ret,
+            dst: ret,
             ..
         } = store[callid];
         let cached_class = pc.cached_class1().unwrap();
@@ -96,7 +82,8 @@ impl Codegen {
                 } else {
                     self.load_rdi(recv);
                     let ivar_id = store[cached_class].get_ivarid(ivar_name);
-                    self.attr_reader(ctx, ivar_name, ivar_id, ret);
+                    self.attr_reader(ctx.get_using_xmm(), ivar_name, ivar_id);
+                    self.save_rax_to_acc(ctx, ret);
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -104,9 +91,12 @@ impl Codegen {
                 assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                self.load_rdi(recv);
                 let ivar_id = store[cached_class].get_ivarid(ivar_name);
-                self.attr_writer(ctx, ivar_name, ivar_id, ret, args, pc);
+                let mut ir = AsmIr::new();
+                ir.stack2reg(recv, GP::Rdi);
+                ir.attr_writer(ctx, pc, ivar_name, ivar_id, args);
+                ir.reg2acc(ctx, GP::Rax, ret);
+                self.gen_code(store, ir);
             }
             FuncKind::Builtin { .. } => {
                 self.method_call_cached(ctx, store, callid, fid, pc, cached_class, true);
@@ -121,7 +111,9 @@ impl Codegen {
     /// generate JIT code for a method call which was not cached.
     ///
     fn gen_call_not_cached(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
-        let CallSiteInfo { id, recv, ret, .. } = *callsite;
+        let CallSiteInfo {
+            id, recv, dst: ret, ..
+        } = *callsite;
         // argument registers:
         //   rdi: args len
         //
@@ -226,12 +218,11 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn attr_reader(
+    pub(super) fn attr_reader(
         &mut self,
-        ctx: &mut BBContext,
+        using_xmm: UsingXmm,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        dst: Option<SlotId>,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
@@ -271,7 +262,6 @@ impl Codegen {
                 self.load_ivar_heap_index();
             }
         } else {
-            let using_xmm = ctx.get_using_xmm();
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -299,7 +289,6 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        self.save_rax_to_acc(ctx, dst);
     }
 
     ///
@@ -333,19 +322,16 @@ impl Codegen {
         );
     }
 
-    fn attr_writer(
+    pub(super) fn attr_writer(
         &mut self,
-        ctx: &mut BBContext,
+        using_xmm: UsingXmm,
+        error: DestLabel,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        dst: Option<SlotId>,
         args: SlotId,
-        pc: BcPc,
     ) {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
-        let using_xmm = ctx.get_using_xmm();
-        let wb = ctx.get_write_back();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             monoasm!( &mut self.jit,
@@ -363,14 +349,14 @@ impl Codegen {
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
                 self.set_ivar(using_xmm);
-                self.jit_handle_error(&wb, pc);
+                self.handle_error(error);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
                 self.set_ivar(using_xmm);
-                self.jit_handle_error(&wb, pc);
+                self.handle_error(error);
             }
         } else {
             let slow_path = self.jit.label();
@@ -413,13 +399,12 @@ impl Codegen {
                 movq rdx, [r14 - (conv(args))];   // val: Value
             );
             self.set_ivar(using_xmm);
-            self.jit_handle_error(&wb, pc);
+            self.handle_error(error);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
             self.jit.select_page(0);
         }
-        self.save_rax_to_acc(ctx, dst);
     }
 
     fn method_call_cached(
@@ -433,7 +418,7 @@ impl Codegen {
         native: bool,
     ) {
         let using_xmm = ctx.get_using_xmm();
-        let ret = store[callid].ret;
+        let ret = store[callid].dst;
         self.writeback_acc(ctx);
         let wb = ctx.get_write_back();
         self.xmm_save(using_xmm);

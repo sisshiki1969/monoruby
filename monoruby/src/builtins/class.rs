@@ -80,7 +80,7 @@ fn inline_class_new(
         recv,
         args,
         pos_num,
-        ret,
+        dst: ret,
         ..
     } = *callsite;
     let mut ir = AsmIr::new();

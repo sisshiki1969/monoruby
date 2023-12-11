@@ -264,7 +264,7 @@ impl Store {
             args,
             len,
             recv,
-            ret,
+            dst: ret,
         });
         id
     }
@@ -377,7 +377,7 @@ pub(crate) struct CallSiteInfo {
     /// Position of hash splat arguments.
     pub hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
-    pub ret: Option<SlotId>,
+    pub dst: Option<SlotId>,
 }
 
 impl CallSiteInfo {
