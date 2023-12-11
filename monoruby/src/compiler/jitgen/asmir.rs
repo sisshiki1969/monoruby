@@ -187,6 +187,19 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn attr_reader(
+        &mut self,
+        ctx: &BBContext,
+        ivar_name: IdentId,
+        ivar_id: Option<IvarId>,
+    ) {
+        let using_xmm = ctx.get_using_xmm();
+        self.inst.push(AsmInst::AttrReader {
+            ivar_name,
+            ivar_id,
+            using_xmm,
+        });
+    }
     pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = ctx.get_using_xmm();
         let error = self.new_error(pc, ctx.get_write_back());
@@ -546,6 +559,11 @@ pub(super) enum AsmInst {
         ivar_id: Option<IvarId>,
         using_xmm: UsingXmm,
         error: usize,
+    },
+    AttrReader {
+        ivar_name: IdentId,
+        ivar_id: Option<IvarId>,
+        using_xmm: UsingXmm,
     },
     Yield {
         callid: CallSiteId,
@@ -1074,6 +1092,13 @@ impl Codegen {
                 error,
             } => {
                 self.attr_writer(*using_xmm, labels[*error], *ivar_name, *ivar_id, *args);
+            }
+            AsmInst::AttrReader {
+                ivar_name,
+                ivar_id,
+                using_xmm,
+            } => {
+                self.attr_reader(*using_xmm, *ivar_name, *ivar_id);
             }
             AsmInst::Yield {
                 callid,

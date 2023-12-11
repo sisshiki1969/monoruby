@@ -54,7 +54,7 @@ impl Codegen {
             recv,
             args,
             len,
-            dst: ret,
+            dst,
             ..
         } = store[callid];
         let cached_class = pc.cached_class1().unwrap();
@@ -72,19 +72,19 @@ impl Codegen {
                 assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
+                let mut ir = AsmIr::new();
                 if cached_class.is_always_frozen() {
-                    if let Some(ret) = ret {
-                        monoasm!( &mut self.jit,
-                            movq rax, (NIL_VALUE);
-                        );
-                        self.store_rax(ret);
+                    if let Some(ret) = dst {
+                        ir.lit2reg(Value::nil(), GP::Rax);
+                        ir.reg2acc(ctx, GP::Rax, ret);
                     }
                 } else {
-                    self.load_rdi(recv);
                     let ivar_id = store[cached_class].get_ivarid(ivar_name);
-                    self.attr_reader(ctx.get_using_xmm(), ivar_name, ivar_id);
-                    self.save_rax_to_acc(ctx, ret);
+                    ir.stack2reg(recv, GP::Rdi);
+                    ir.attr_reader(ctx, ivar_name, ivar_id);
+                    ir.reg2acc(ctx, GP::Rax, dst);
                 }
+                self.gen_code(store, ir);
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
@@ -95,14 +95,16 @@ impl Codegen {
                 let mut ir = AsmIr::new();
                 ir.stack2reg(recv, GP::Rdi);
                 ir.attr_writer(ctx, pc, ivar_name, ivar_id, args);
-                ir.reg2acc(ctx, GP::Rax, ret);
+                ir.reg2acc(ctx, GP::Rax, dst);
                 self.gen_code(store, ir);
             }
             FuncKind::Builtin { .. } => {
                 self.method_call_cached(ctx, store, callid, fid, pc, cached_class, true);
+                self.save_rax_to_acc(ctx, dst);
             }
             FuncKind::ISeq(_) => {
                 self.method_call_cached(ctx, store, callid, fid, pc, cached_class, false);
+                self.save_rax_to_acc(ctx, dst);
             }
         };
     }
@@ -418,7 +420,6 @@ impl Codegen {
         native: bool,
     ) {
         let using_xmm = ctx.get_using_xmm();
-        let ret = store[callid].dst;
         self.writeback_acc(ctx);
         let wb = ctx.get_write_back();
         self.xmm_save(using_xmm);
@@ -515,7 +516,6 @@ impl Codegen {
 
         self.xmm_restore(using_xmm);
         self.jit_handle_error(&wb, pc);
-        self.save_rax_to_acc(ctx, ret);
     }
 
     /*pub(super) fn gen_yield(
