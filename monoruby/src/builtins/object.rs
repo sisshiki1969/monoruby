@@ -56,20 +56,23 @@ fn object_object_id(
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
-    _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    gen.fetch_slots(store, ctx, &[recv]);
+    let mut ir = AsmIr::new();
+    ir.fetch_slots(ctx, &[recv]);
     ctx.release(ret);
-    gen.load_rdi(recv);
+    ir.stack2reg(recv, GP::Rdi);
     let using = ctx.get_using_xmm();
-    gen.xmm_save(using);
-    monoasm! {&mut gen.jit,
-        movq rax, (crate::executor::op::i64_to_value);
-        call rax;
-    }
-    gen.xmm_restore(using);
-    gen.store_rax(ret);
+    ir.inline(move |gen| {
+        gen.xmm_save(using);
+        monoasm! {&mut gen.jit,
+            movq rax, (crate::executor::op::i64_to_value);
+            call rax;
+        }
+        gen.xmm_restore(using);
+    });
+    ir.reg2stack(GP::Rax, ret);
+    gen.gen_code(store, ir);
 }
 
 ///
@@ -391,7 +394,6 @@ fn object_send(
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
-    _deopt: DestLabel,
 ) {
     let CallSiteInfo {
         recv,
@@ -403,7 +405,6 @@ fn object_send(
     } = *callsite;
     let mut ir = AsmIr::new();
     ir.fetch_callargs(ctx, callsite);
-    gen.gen_code(store, ir);
     ctx.release(dst);
     let using = ctx.get_using_xmm();
     let bh = match block_func_id {
@@ -411,23 +412,26 @@ fn object_send(
         Some(func_id) => BlockHandler::from(func_id).0.id(),
     };
     let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
-    gen.xmm_save(using);
-    monoasm! {&mut gen.jit,
-        movq rdi, rbx;
-        movq rsi, r12;
-        movq rdx, [r14 - (conv(recv))];
-        lea  rcx, [r14 - (conv(args))];
-        movq r8, (pos_num);
-        movq r9, (bh);
-        subq rsp, 8;
-        lea  rax, [rip + cache];
-        pushq rax;
-        movq rax, (call_send_wrapper);
-        call rax;
-        addq rsp, 16;
-    }
-    gen.xmm_restore(using);
-    gen.store_rax(dst);
+    ir.inline(move |gen| {
+        gen.xmm_save(using);
+        monoasm! {&mut gen.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (conv(recv))];
+            lea  rcx, [r14 - (conv(args))];
+            movq r8, (pos_num);
+            movq r9, (bh);
+            subq rsp, 8;
+            lea  rax, [rip + cache];
+            pushq rax;
+            movq rax, (call_send_wrapper);
+            call rax;
+            addq rsp, 16;
+        }
+        gen.xmm_restore(using);
+    });
+    ir.reg2stack(GP::Rax, dst);
+    gen.gen_code(store, ir);
 }
 
 #[repr(C)]

@@ -1,5 +1,4 @@
 use fancy_regex::Regex;
-use monoasm::DestLabel;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -19,8 +18,7 @@ pub use error::*;
 use prng::*;
 pub use store::*;
 
-pub(crate) type InlineGen =
-    fn(&mut Codegen, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc, DestLabel);
+pub(crate) type InlineGen = fn(&mut Codegen, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc);
 pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]

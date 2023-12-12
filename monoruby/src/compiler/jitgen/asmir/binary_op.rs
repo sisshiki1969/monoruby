@@ -204,17 +204,6 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(crate) fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
-        self.load_rdi(reg);
-        self.guard_rdi_fixnum(deopt);
-    }
-
-    pub(crate) fn load_guard_binary_fixnum(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
-        self.load_binary_args(lhs, rhs);
-        self.guard_rdi_fixnum(deopt);
-        self.guard_rsi_fixnum(deopt);
-    }
-
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
         self.jit.select_page(1);
         let zero = self.jit.label();

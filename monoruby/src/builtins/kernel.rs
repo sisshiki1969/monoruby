@@ -62,19 +62,22 @@ fn object_nil(
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
-    _deopt: DestLabel,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    gen.fetch_slots(store, ctx, &[recv]);
-    gen.load_rdi(recv);
+    let mut ir = AsmIr::new();
+    ir.fetch_slots(ctx, &[recv]);
+    ir.stack2reg(recv, GP::Rdi);
     ctx.release(ret);
-    monoasm!( &mut gen.jit,
-        movq rax, (FALSE_VALUE);
-        movq rsi, (TRUE_VALUE);
-        cmpq rdi, (NIL_VALUE);
-        cmoveqq rax, rsi;
-    );
-    gen.store_rax(ret);
+    ir.inline(|gen| {
+        monoasm! { &mut gen.jit,
+            movq rax, (FALSE_VALUE);
+            movq rsi, (TRUE_VALUE);
+            cmpq rdi, (NIL_VALUE);
+            cmoveqq rax, rsi;
+        }
+    });
+    ir.reg2stack(GP::Rax, ret);
+    gen.gen_code(store, ir);
 }
 
 ///

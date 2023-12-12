@@ -2,29 +2,6 @@ use super::*;
 
 impl Codegen {
     ///
-    /// Fetch *reg*s and store in corresponding stack slots.
-    ///
-    pub(crate) fn fetch_slots(&mut self, store: &Store, ctx: &mut BBContext, reg: &[SlotId]) {
-        let mut ir = AsmIr::new();
-        ir.fetch_slots(ctx, reg);
-        self.gen_code(store, ir);
-    }
-
-    pub(crate) fn fetch_float_assume_float(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        reg: SlotId,
-        pc: BcPc,
-    ) -> Xmm {
-        let mut ir = AsmIr::new();
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
-        let x = ir.fetch_float_assume_float(ctx, reg, deopt);
-        self.gen_code(store, ir);
-        x
-    }
-
-    ///
     /// Assume the Value is Integer, and convert to f64.
     ///
     /// side-exit if not Integer.
@@ -189,7 +166,7 @@ impl AsmIr {
     /// - rdi, rax
     ///
     ///
-    pub(in crate::compiler::jitgen) fn fetch_float_assume_float(
+    pub(crate) fn fetch_float_assume_float(
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,

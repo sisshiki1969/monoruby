@@ -1063,8 +1063,7 @@ impl Codegen {
                     ir.guard_class_version(pc, deopt);
                     self.gen_code(store, ir);
 
-                    let deopt = self.gen_deopt(pc, &ctx);
-                    inline_gen(self, store, &mut ctx, &store[callid], pc, deopt);
+                    inline_gen(self, store, &mut ctx, &store[callid], pc);
                 }
                 TraceIr::Yield { callid } => {
                     let mut ir = AsmIr::new();
@@ -1442,7 +1441,7 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
+    pub(crate) fn gen_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let entry = self.jit.label();
         let wb = ctx.get_write_back();
         self.gen_deopt_with_label(pc, &wb, entry);
@@ -1477,11 +1476,6 @@ impl Codegen {
             jmp fetch;
         );
         self.jit.select_page(0);
-    }
-
-    fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
-        self.load_rdi(lhs);
-        self.load_rsi(rhs);
     }
 }
 
