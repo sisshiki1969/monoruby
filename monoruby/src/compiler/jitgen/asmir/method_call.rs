@@ -573,7 +573,10 @@ impl Codegen {
     ///
     /// Class version guard fro JIT.
     ///
-    /// Check the cached class version, and jump to *deopt* if the version is changed.
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
     ///
     /// ### destroy
     /// - caller save registers
@@ -721,7 +724,7 @@ impl AsmIr {
         fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
-    ) {
+    ) -> Option<()> {
         let CallSiteInfo { dst, .. } = store[callid];
         self.fetch_callargs(ctx, &store[callid]);
         ctx.release(dst);
@@ -731,9 +734,10 @@ impl AsmIr {
             self.send_not_cached(ctx, pc, callid);
             self.reg2acc(ctx, GP::Rax, dst);
         } else {
-            self.gen_call_cached(store, ctx, callid, fid, pc);
+            self.gen_call_cached(store, ctx, callid, fid, pc)?;
             self.reg2acc(ctx, GP::Rax, dst);
         }
+        Some(())
     }
 
     ///
@@ -746,7 +750,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) {
+    ) -> Option<()> {
         let CallSiteInfo {
             recv,
             args,
@@ -797,6 +801,7 @@ impl AsmIr {
                 self.send_cached(ctx, pc, callid, fid, cached_class, false);
             }
         };
+        Some(())
     }
 }
 

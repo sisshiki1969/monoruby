@@ -1041,7 +1041,11 @@ impl Codegen {
                         ir.write_back_locals(&mut ctx);
                     }
                     if let Some(fid) = pc.cached_fid() {
-                        ir.gen_call(store, &mut ctx, fid, callid, pc);
+                        if ir.gen_call(store, &mut ctx, fid, callid, pc).is_none() {
+                            ir.recompile_and_deopt(&ctx, pc, position);
+                            self.gen_code(store, ir);
+                            return;
+                        }
                     } else {
                         ir.recompile_and_deopt(&ctx, pc, position);
                         self.gen_code(store, ir);
@@ -1052,10 +1056,14 @@ impl Codegen {
                 TraceIr::InlineCall {
                     inline_id, callid, ..
                 } => {
+                    let mut ir = AsmIr::new();
                     let inline_gen = store.get_inline_info(inline_id).0;
-                    self.writeback_acc(&mut ctx);
+                    ir.writeback_acc(&mut ctx);
+                    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+                    ir.guard_class_version(pc, deopt);
+                    self.gen_code(store, ir);
+
                     let deopt = self.gen_deopt(pc, &ctx);
-                    self.guard_class_version(pc, deopt);
                     inline_gen(self, store, &mut ctx, &store[callid], pc, deopt);
                 }
                 TraceIr::Yield { callid } => {
