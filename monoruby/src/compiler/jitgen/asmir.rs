@@ -430,6 +430,11 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn load_svar(&mut self, ctx: &BBContext, id: u32) {
+        let using_xmm = ctx.get_using_xmm();
+        self.inst.push(AsmInst::LoadSVar { id, using_xmm });
+    }
+
     pub(super) fn concat_str(&mut self, ctx: &BBContext, arg: SlotId, len: u16) {
         let using_xmm = ctx.get_using_xmm();
         self.inst.push(AsmInst::ConcatStr {
@@ -474,6 +479,17 @@ impl AsmIr {
 
     pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &[DestLabel]) + 'static) {
         self.inst.push(AsmInst::Inline { proc: Box::new(f) });
+    }
+
+    pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
+        ctx.release(dst);
+        self.load_gvar(ctx, name);
+        self.rax2acc(ctx, dst);
+    }
+
+    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, src: SlotId) {
+        self.fetch_slots(ctx, &[src]);
+        self.store_gvar(ctx, name, src);
     }
 }
 
@@ -569,8 +585,10 @@ pub(super) enum AsmInst {
     GuardClassVersion(BcPc, usize),
     GuardClass(GP, ClassId, usize),
 
+    Ret,
     Break,
     Raise,
+    MethodRet(BcPc),
     EnsureEnd,
     Br(DestLabel),
     CondBr(BrKind, DestLabel),
@@ -636,6 +654,7 @@ pub(super) enum AsmInst {
         error: usize,
     },
 
+    Not,
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
@@ -817,6 +836,10 @@ pub(super) enum AsmInst {
     StoreGVar {
         name: IdentId,
         src: SlotId,
+        using_xmm: UsingXmm,
+    },
+    LoadSVar {
+        id: u32,
         using_xmm: UsingXmm,
     },
 
@@ -1093,6 +1116,15 @@ impl Codegen {
             }
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
 
+            AsmInst::Ret => {
+                self.epilogue();
+            }
+            AsmInst::MethodRet(pc) => {
+                monoasm! { &mut self.jit,
+                    movq r13, ((pc + 1).get_u64());
+                };
+                self.method_return();
+            }
             AsmInst::Break => {
                 self.block_break();
                 self.epilogue();
@@ -1209,6 +1241,9 @@ impl Codegen {
                 self.gen_yield(store, callid, using_xmm, error);
             }
 
+            AsmInst::Not => {
+                self.not_rdi_to_rax();
+            }
             AsmInst::GenericUnOp {
                 func,
                 using_xmm,
@@ -1514,6 +1549,17 @@ impl Codegen {
                     movl rsi, (name.get());
                     movq rdx, [r14 - (conv(src))];
                     movq rax, (runtime::set_global_var);
+                    call rax;
+                };
+                self.xmm_restore(using_xmm);
+            }
+            AsmInst::LoadSVar { id, using_xmm } => {
+                self.xmm_save(using_xmm);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;
+                    movl rsi, r12;
+                    movl rdx, (id);
+                    movq rax, (runtime::get_special_var);
                     call rax;
                 };
                 self.xmm_restore(using_xmm);

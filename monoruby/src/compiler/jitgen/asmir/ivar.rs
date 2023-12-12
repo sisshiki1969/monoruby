@@ -86,53 +86,6 @@ impl Codegen {
         );
         self.jit.select_page(0);
     }
-
-    pub(in crate::compiler::jitgen) fn jit_load_gvar(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        name: IdentId,
-        dst: SlotId,
-    ) {
-        let mut ir = AsmIr::new();
-        ctx.release(dst);
-        ir.load_gvar(ctx, name);
-        ir.rax2acc(ctx, dst);
-        self.gen_code(store, ir);
-    }
-
-    pub(in crate::compiler::jitgen) fn jit_store_gvar(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        name: IdentId,
-        src: SlotId,
-    ) {
-        let mut ir = AsmIr::new();
-        ir.fetch_slots(ctx, &[src]);
-        ir.store_gvar(ctx, name, src);
-        self.gen_code(store, ir);
-    }
-
-    pub(in crate::compiler::jitgen) fn jit_load_svar(
-        &mut self,
-        ctx: &mut BBContext,
-        id: u32,
-        dst: SlotId,
-    ) {
-        ctx.release(dst);
-        let using_xmm = ctx.get_using_xmm();
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movl rsi, r12;
-            movl rdx, (id);
-            movq rax, (runtime::get_special_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-        self.save_rax_to_acc(ctx, dst);
-    }
 }
 
 impl BBContext {
