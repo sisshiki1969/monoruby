@@ -57,18 +57,17 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 }
 
 fn object_nil(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ir.stack2reg(recv, GP::Rdi);
     ctx.release(ret);
-    ir.inline(|gen| {
+    ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,
             movq rax, (FALSE_VALUE);
             movq rsi, (TRUE_VALUE);
@@ -77,7 +76,6 @@ fn object_nil(
         }
     });
     ir.reg2stack(GP::Rax, ret);
-    gen.gen_code(store, ir);
 }
 
 ///

@@ -69,8 +69,8 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 }
 
 fn inline_class_new(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -82,19 +82,20 @@ fn inline_class_new(
         dst: ret,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_callargs(ctx, callsite);
     ctx.release(ret);
     ir.stack2reg(recv, GP::Rdi);
     let using = ctx.get_using_xmm();
     let wb = ctx.get_write_back();
-    ir.inline(move |gen| {
+    let error = ir.new_error(pc, wb);
+    ir.inline(move |gen, labels| {
         let cached_version = gen.jit.const_i32(-1);
         let cached_funcid = gen.jit.const_i32(-1);
         let class_version = gen.class_version_label();
         let slow_path = gen.jit.label();
         let checked = gen.jit.label();
         let exit = gen.jit.label();
+        let error = labels[error];
         gen.xmm_save(using);
         monoasm!( &mut gen.jit,
             movq rax, (allocate_instance);
@@ -127,7 +128,7 @@ fn inline_class_new(
             movq rax, r15;
         );
         gen.xmm_restore(using);
-        gen.jit_handle_error(&wb, pc);
+        gen.handle_error(error);
         gen.store_rax(ret);
 
         gen.jit.select_page(1);
@@ -144,7 +145,6 @@ fn inline_class_new(
         );
         gen.jit.select_page(0);
     });
-    gen.gen_code(store, ir);
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

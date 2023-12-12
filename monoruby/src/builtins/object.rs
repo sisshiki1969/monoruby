@@ -51,19 +51,18 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<V
 }
 
 fn object_object_id(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ctx.release(ret);
     ir.stack2reg(recv, GP::Rdi);
     let using = ctx.get_using_xmm();
-    ir.inline(move |gen| {
+    ir.inline(move |gen, _| {
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
@@ -72,7 +71,6 @@ fn object_object_id(
         gen.xmm_restore(using);
     });
     ir.reg2stack(GP::Rax, ret);
-    gen.gen_code(store, ir);
 }
 
 ///
@@ -389,8 +387,8 @@ fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
 const CACHE_SIZE: usize = 8;
 
 fn object_send(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
@@ -403,7 +401,6 @@ fn object_send(
         block_fid: block_func_id,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_callargs(ctx, callsite);
     ctx.release(dst);
     let using = ctx.get_using_xmm();
@@ -411,8 +408,8 @@ fn object_send(
         None => 0,
         Some(func_id) => BlockHandler::from(func_id).0.id(),
     };
-    let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
-    ir.inline(move |gen| {
+    ir.inline(move |gen, _| {
+        let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rdi, rbx;
@@ -431,7 +428,6 @@ fn object_send(
         gen.xmm_restore(using);
     });
     ir.reg2stack(GP::Rax, dst);
-    gen.gen_code(store, ir);
 }
 
 #[repr(C)]

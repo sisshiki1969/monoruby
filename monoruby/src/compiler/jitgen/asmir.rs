@@ -472,7 +472,7 @@ impl AsmIr {
         });
     }
 
-    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen) + 'static) {
+    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &[DestLabel]) + 'static) {
         self.inst.push(AsmInst::Inline { proc: Box::new(f) });
     }
 }
@@ -891,7 +891,7 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
     Inline {
-        proc: Box<dyn FnOnce(&mut Codegen)>,
+        proc: Box<dyn FnOnce(&mut Codegen, &[DestLabel])>,
     },
 }
 
@@ -1710,7 +1710,7 @@ impl Codegen {
             }
 
             AsmInst::Inline { proc } => {
-                proc(self);
+                proc(self, labels);
             }
         }
     }

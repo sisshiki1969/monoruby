@@ -1061,9 +1061,8 @@ impl Codegen {
                     ir.writeback_acc(&mut ctx);
                     let deopt = ir.new_deopt(pc, ctx.get_write_back());
                     ir.guard_class_version(pc, deopt);
+                    inline_gen(&mut ir, store, &mut ctx, &store[callid], pc);
                     self.gen_code(store, ir);
-
-                    inline_gen(self, store, &mut ctx, &store[callid], pc);
                 }
                 TraceIr::Yield { callid } => {
                     let mut ir = AsmIr::new();
@@ -1341,7 +1340,7 @@ impl Codegen {
     ///
     /// - pc: current PC
     ///
-    pub(crate) fn jit_handle_error(&mut self, wb: &WriteBack, pc: BcPc) {
+    /*pub(crate) fn jit_handle_error(&mut self, wb: &WriteBack, pc: BcPc) {
         let raise = self.entry_raise;
         if self.jit.get_page() == 0 {
             let error = self.jit.label();
@@ -1372,7 +1371,7 @@ impl Codegen {
             cont:
             );
         }
-    }
+    }*/
 
     fn gen_handle_error(&mut self, pc: BcPc, wb: WriteBack, entry: DestLabel) {
         let raise = self.entry_raise;

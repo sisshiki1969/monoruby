@@ -150,14 +150,13 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 }
 
 fn integer_tof(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ir.stack2reg(recv, GP::Rdi);
     let deopt = ir.new_deopt(pc, ctx.get_write_back());
@@ -166,14 +165,13 @@ fn integer_tof(
     }
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
-        ir.inline(move |gen| {
+        ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;
                 cvtsi2sdq xmm(fret), rdi;
             }
         });
     }
-    gen.gen_code(store, ir);
 }
 
 ///
@@ -291,8 +289,8 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 }
 
 fn integer_shr(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -303,14 +301,13 @@ fn integer_shr(
         args,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     if let Some(rhs) = ctx.is_u8_literal(args) {
         ir.fetch_slots(ctx, &[recv]);
         ctx.release(ret);
         let deopt = ir.new_deopt(pc, ctx.get_write_back());
         ir.stack2reg(recv, GP::Rdi);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
-        ir.inline(move |gen| gen.gen_shr_imm(rhs));
+        ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
         ir.fetch_slots(ctx, &[recv, args]);
         ctx.release(ret);
@@ -319,11 +316,9 @@ fn integer_shr(
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.stack2reg(args, GP::Rsi);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
-        let deopt = gen.gen_deopt(pc, ctx);
-        ir.inline(move |gen| gen.gen_shr(deopt));
+        ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
     ir.reg2stack(GP::Rdi, ret);
-    gen.gen_code(store, ir);
 }
 
 ///
@@ -346,8 +341,8 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 }
 
 fn integer_shl(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -358,15 +353,13 @@ fn integer_shl(
         args,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     if let Some(rhs) = ctx.is_u8_literal(args) {
         ir.fetch_slots(ctx, &[recv]);
         ctx.release(ret);
         let deopt = ir.new_deopt(pc, ctx.get_write_back());
         ir.stack2reg(recv, GP::Rdi);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
-        let deopt = gen.gen_deopt(pc, ctx);
-        ir.inline(move |gen| gen.gen_shl_imm(rhs, deopt));
+        ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
     } else {
         ir.fetch_slots(ctx, &[recv, args]);
         ctx.release(ret);
@@ -375,11 +368,9 @@ fn integer_shl(
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.stack2reg(args, GP::Rsi);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
-        let deopt = gen.gen_deopt(pc, ctx);
-        ir.inline(move |gen| gen.gen_shl(deopt));
+        ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
     ir.reg2stack(GP::Rdi, ret);
-    gen.gen_code(store, ir);
 }
 
 ///

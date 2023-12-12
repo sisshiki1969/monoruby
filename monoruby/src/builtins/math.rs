@@ -73,8 +73,8 @@ fn cos(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result
 }
 
 fn math_sqrt(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -85,7 +85,6 @@ fn math_sqrt(
         dst: ret,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ir.stack2reg(recv, GP::Rdi);
     let deopt = ir.new_deopt(pc, ctx.get_write_back());
@@ -95,18 +94,17 @@ fn math_sqrt(
     let fsrc = ir.fetch_float_assume_float(ctx, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
-        ir.inline(move |gen| {
+        ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
             );
         });
     }
-    gen.gen_code(store, ir);
 }
 
 fn math_cos(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -117,7 +115,6 @@ fn math_cos(
         dst: ret,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ir.stack2reg(recv, GP::Rdi);
     let deopt = ir.new_deopt(pc, ctx.get_write_back());
@@ -128,7 +125,7 @@ fn math_cos(
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let using_xmm = ctx.get_using_xmm();
-        ir.inline(move |gen| {
+        ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
             monoasm!( &mut gen.jit,
                 movq xmm0, xmm(fsrc);
@@ -141,12 +138,11 @@ fn math_cos(
             );
         });
     }
-    gen.gen_code(store, ir);
 }
 
 fn math_sin(
-    gen: &mut Codegen,
-    store: &Store,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
@@ -157,7 +153,6 @@ fn math_sin(
         dst: ret,
         ..
     } = *callsite;
-    let mut ir = AsmIr::new();
     ir.fetch_slots(ctx, &[recv]);
     ir.stack2reg(recv, GP::Rdi);
     let deopt = ir.new_deopt(pc, ctx.get_write_back());
@@ -168,7 +163,7 @@ fn math_sin(
     if let Some(ret) = ret {
         let fret = ctx.xmm_write_enc(ret);
         let using_xmm = ctx.get_using_xmm();
-        ir.inline(move |gen| {
+        ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
             monoasm! { &mut gen.jit,
                 movq xmm0, xmm(fsrc);
@@ -181,7 +176,6 @@ fn math_sin(
             }
         });
     }
-    gen.gen_code(store, ir);
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {
