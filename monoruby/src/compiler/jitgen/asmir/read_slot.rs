@@ -71,12 +71,7 @@ impl AsmIr {
         self.fetch_range(ctx, *args, *len as u16);
     }
 
-    pub(in crate::compiler::jitgen) fn fetch_to_reg(
-        &mut self,
-        ctx: &mut BBContext,
-        reg: SlotId,
-        dst: GP,
-    ) {
+    pub(crate) fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: GP) {
         if reg >= ctx.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, ctx.sp);
             panic!();

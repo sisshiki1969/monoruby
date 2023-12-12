@@ -57,11 +57,11 @@ impl AsmIr {
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
-    pub(super) fn rax2acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+    pub(crate) fn rax2acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
         self.reg2acc(ctx, GP::Rax, dst);
     }
 
-    pub(super) fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
+    pub(crate) fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
             ctx.clear();
             if let Some(acc) = ctx.clear_r15()

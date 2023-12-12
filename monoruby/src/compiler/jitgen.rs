@@ -23,6 +23,8 @@ mod merge;
 mod slot;
 pub mod trace_ir;
 
+const RECOMPILE_COUNT: i32 = 10;
+
 //
 // Just-in-time compiler module.
 //
@@ -852,21 +854,18 @@ impl Codegen {
             TraceIr::LoadSvar { dst, id } => {
                 ctx.release(dst);
                 ir.load_svar(&ctx, id);
-                ir.reg2acc(ctx, GP::Rax, dst);
+                ir.rax2acc(ctx, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
                 ctx.release(dst);
                 if !dst.is_zero() {
                     ir.inst.push(AsmInst::LoadDynVar { src });
-                    ir.reg2stack(GP::Rax, dst);
+                    ir.rax2acc(ctx, dst);
                 }
             }
             TraceIr::StoreDynVar(dst, src) => {
                 ir.fetch_to_reg(ctx, src, GP::Rdi);
-                ir.inst.push(AsmInst::StoreDynVar {
-                    dst: dst.clone(),
-                    src: GP::Rdi,
-                });
+                ir.inst.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
             }
             TraceIr::BitNot { dst, src } => {
                 if pc.classid1().0 == 0 {
@@ -878,14 +877,14 @@ impl Codegen {
                     return CompileResult::Recompile;
                 } else {
                     ir.generic_unop(&ctx, pc, bitnot_value);
-                    ir.reg2stack(GP::Rax, dst);
+                    ir.rax2acc(ctx, dst);
                 }
             }
             TraceIr::Not { dst, src } => {
                 ir.fetch_to_reg(ctx, src, GP::Rdi);
                 ctx.release(dst);
                 ir.inst.push(AsmInst::Not);
-                ir.reg2stack(GP::Rax, dst);
+                ir.rax2acc(ctx, dst);
             }
             TraceIr::UnOp { kind, dst, src } => {
                 if pc.classid1().0 == 0 {
@@ -901,7 +900,7 @@ impl Codegen {
                     ir.fetch_to_reg(ctx, src, GP::Rdi);
                     ctx.release(dst);
                     ir.generic_unop(&ctx, pc, kind.generic_func());
-                    ir.reg2stack(GP::Rax, dst);
+                    ir.rax2acc(ctx, dst);
                 }
             }
             TraceIr::IBinOp { kind, dst, mode } => {
@@ -945,7 +944,7 @@ impl Codegen {
                     ctx.release(ret);
                     ir.generic_cmp(&ctx, pc, kind);
                 }
-                ir.reg2stack(GP::Rax, ret);
+                ir.rax2acc(ctx, ret);
             }
 
             TraceIr::Cmp(kind, ret, mode, true) => {
@@ -986,20 +985,19 @@ impl Codegen {
                 ir.fetch_range(ctx, arg, len);
                 ctx.release(dst);
                 ir.concat_str(&ctx, arg, len);
-                ir.reg2stack(GP::Rax, dst);
+                ir.rax2acc(ctx, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 ir.fetch_range(ctx, arg, len);
                 ctx.release(dst);
                 ir.concat_regexp(&ctx, pc, arg, len);
-                ir.reg2stack(GP::Rax, dst);
+                ir.rax2acc(ctx, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {
-                ir.fetch_slots(ctx, &[src]);
+                ir.fetch_to_reg(ctx, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
                     ctx.release(SlotId(reg));
                 }
-                ir.stack2reg(src, GP::Rdi);
                 ir.expand_array(&ctx, dst, len);
             }
             TraceIr::AliasMethod { new, old } => {
@@ -1039,7 +1037,7 @@ impl Codegen {
                     using_xmm,
                     error,
                 });
-                ir.reg2acc(ctx, GP::Rax, store[callid].dst);
+                ir.rax2acc(ctx, store[callid].dst);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -1120,28 +1118,24 @@ impl Codegen {
                 ir.write_back_locals(ctx);
                 ir.fetch_to_reg(ctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::Ret);
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
             TraceIr::MethodRet(ret) => {
                 ir.write_back_locals(ctx);
                 ir.fetch_to_reg(ctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::MethodRet(pc));
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
             TraceIr::Break(ret) => {
                 ir.write_back_locals(ctx);
                 ir.fetch_to_reg(ctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::Break);
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
             TraceIr::Raise(ret) => {
                 ir.write_back_locals(ctx);
                 ir.fetch_to_reg(ctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::Raise);
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
             TraceIr::EnsureEnd => {
@@ -1154,7 +1148,6 @@ impl Codegen {
                 let branch_dest = self.jit.label();
                 ir.inst.push(AsmInst::Br(branch_dest));
                 cc.new_branch(func, bb_pos, dest_idx, ctx.clone(), branch_dest);
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
             TraceIr::CondBr(cond_, disp, false, brkind) => {
@@ -1200,7 +1193,6 @@ impl Codegen {
                 ir.fetch_to_reg(ctx, cond, GP::Rdi);
                 ir.guard_fixnum(GP::Rdi, deopt);
                 ir.opt_case(*max, *min, jump_table, else_dest);
-                //self.gen_code(store, ir);
                 return CompileResult::Exit;
             }
         }
@@ -1210,7 +1202,7 @@ impl Codegen {
     fn recompile_and_deopt(&mut self, position: Option<BcPc>, deopt: DestLabel) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
-        let counter = self.jit.const_i32(5);
+        let counter = self.jit.const_i32(RECOMPILE_COUNT);
 
         monoasm!( &mut self.jit,
             xorq rdi, rdi;

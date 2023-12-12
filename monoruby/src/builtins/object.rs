@@ -58,9 +58,8 @@ fn object_object_id(
     _pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    ir.fetch_slots(ctx, &[recv]);
+    ir.fetch_to_reg(ctx, recv, GP::Rdi);
     ctx.release(ret);
-    ir.stack2reg(recv, GP::Rdi);
     let using = ctx.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
@@ -70,7 +69,7 @@ fn object_object_id(
         }
         gen.xmm_restore(using);
     });
-    ir.reg2stack(GP::Rax, ret);
+    ir.rax2acc(ctx, ret);
 }
 
 ///

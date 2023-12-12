@@ -732,11 +732,10 @@ impl AsmIr {
             // the cache is invalid because the receiver class is not matched.
             self.writeback_acc(ctx);
             self.send_not_cached(ctx, pc, callid);
-            self.reg2acc(ctx, GP::Rax, dst);
         } else {
             self.gen_call_cached(store, ctx, callid, fid, pc)?;
-            self.reg2acc(ctx, GP::Rax, dst);
         }
+        self.rax2acc(ctx, dst);
         Some(())
     }
 
