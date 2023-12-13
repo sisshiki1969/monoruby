@@ -121,7 +121,7 @@ impl AsmIr {
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,
-        deopt: usize,
+        deopt: AsmDeopt,
     ) -> Xmm {
         match ctx[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
@@ -165,7 +165,7 @@ impl AsmIr {
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,
-        deopt: usize,
+        deopt: AsmDeopt,
     ) -> Xmm {
         match ctx[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
@@ -209,7 +209,7 @@ impl AsmIr {
         ctx: &mut BBContext,
         rhs: SlotId,
         class: ClassId,
-        deopt: usize,
+        deopt: AsmDeopt,
     ) -> Xmm {
         match class {
             INTEGER_CLASS => self.fetch_float_assume_integer(ctx, rhs, deopt),
@@ -224,7 +224,7 @@ impl AsmIr {
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
-        deopt: usize,
+        deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (

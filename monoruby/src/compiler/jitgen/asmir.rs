@@ -9,10 +9,44 @@ mod ivar;
 mod method_call;
 mod read_slot;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AsmDeopt(usize);
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AsmError(usize);
+
+pub(crate) struct AsmLabels(Vec<DestLabel>);
+
+impl AsmLabels {
+    fn new() -> Self {
+        Self(vec![])
+    }
+
+    fn push(&mut self, label: DestLabel) {
+        self.0.push(label);
+    }
+}
+
+impl std::ops::Index<AsmDeopt> for AsmLabels {
+    type Output = DestLabel;
+
+    fn index(&self, index: AsmDeopt) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl std::ops::Index<AsmError> for AsmLabels {
+    type Output = DestLabel;
+
+    fn index(&self, index: AsmError) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     pub(super) side_exit: Vec<SideExit>,
-    pub(super) label: usize,
+    //pub(super) label: usize,
 }
 
 impl AsmIr {
@@ -20,25 +54,23 @@ impl AsmIr {
         Self {
             inst: vec![],
             side_exit: vec![],
-            label: 0,
+            //label: 0,
         }
     }
 
-    pub(crate) fn new_deopt(&mut self, pc: BcPc, wb: WriteBack) -> usize {
-        let label = self.new_label();
-        self.side_exit.push(SideExit::Deoptimize(pc, wb, label));
-        label
+    pub(crate) fn new_deopt(&mut self, pc: BcPc, wb: WriteBack) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(pc, wb));
+        AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, pc: BcPc, wb: WriteBack) -> usize {
-        let label = self.new_label();
-        self.side_exit.push(SideExit::Error(pc, wb, label));
-        label
+    pub(crate) fn new_error(&mut self, pc: BcPc, wb: WriteBack) -> AsmError {
+        let i = self.new_label(SideExit::Error(pc, wb));
+        AsmError(i)
     }
 
-    fn new_label(&mut self) -> usize {
-        let label = self.label;
-        self.label += 1;
+    fn new_label(&mut self, side_exit: SideExit) -> usize {
+        let label = self.side_exit.len();
+        self.side_exit.push(side_exit);
         label
     }
 
@@ -124,11 +156,11 @@ impl AsmIr {
         self.inst.push(AsmInst::AccToStack(reg));
     }
 
-    pub(super) fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: usize) {
+    pub(super) fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::IntToXmm(reg, x, deopt));
     }
 
-    pub(super) fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: usize) {
+    pub(super) fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
@@ -146,19 +178,19 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: usize) {
+    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardFixnum(r, deopt));
     }
 
-    pub(super) fn guard_float(&mut self, r: GP, deopt: usize) {
+    pub(super) fn guard_float(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
-    pub(super) fn guard_class_version(&mut self, pc: BcPc, deopt: usize) {
+    pub(super) fn guard_class_version(&mut self, pc: BcPc, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardClassVersion(pc, deopt));
     }
 
-    pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: usize) {
+    pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
 
@@ -407,7 +439,7 @@ impl AsmIr {
 
     pub(super) fn block_arg(&mut self, ctx: &BBContext, pc: BcPc, ret: SlotId, outer: usize) {
         let using_xmm = ctx.get_using_xmm();
-        let error = self.new_deopt(pc, ctx.get_write_back());
+        let error = self.new_error(pc, ctx.get_write_back());
         self.inst.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -477,7 +509,7 @@ impl AsmIr {
         });
     }
 
-    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &[DestLabel]) + 'static) {
+    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &AsmLabels) + 'static) {
         self.inst.push(AsmInst::Inline { proc: Box::new(f) });
     }
 
@@ -520,7 +552,7 @@ impl AsmIr {
         mode: &OpMode,
         ctx: &mut BBContext,
         pc: BcPc,
-        deopt: usize,
+        deopt: AsmDeopt,
     ) -> FMode {
         match mode {
             OpMode::RR(l, r) => {
@@ -578,16 +610,16 @@ pub(super) enum AsmInst {
     XmmToBoth(Xmm, Vec<SlotId>),
     LitToStack(Value, SlotId),
     DeepCopyLit(Value, UsingXmm),
-    NumToXmm(GP, Xmm, usize),
-    IntToXmm(GP, Xmm, usize),
+    NumToXmm(GP, Xmm, AsmDeopt),
+    IntToXmm(GP, Xmm, AsmDeopt),
     /// move a Flonum Value in a reg to xmm reg, and deoptimize if it is not a Flonum.
-    FloatToXmm(GP, Xmm, usize),
+    FloatToXmm(GP, Xmm, AsmDeopt),
 
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
-    GuardFloat(GP, usize),
-    GuardFixnum(GP, usize),
-    GuardClassVersion(BcPc, usize),
-    GuardClass(GP, ClassId, usize),
+    GuardFloat(GP, AsmDeopt),
+    GuardFixnum(GP, AsmDeopt),
+    GuardClassVersion(BcPc, AsmDeopt),
+    GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,
     Break,
@@ -617,11 +649,11 @@ pub(super) enum AsmInst {
     },
 
     /// deoptimize
-    Deopt(usize),
+    Deopt(AsmDeopt),
     /// recompile and deoptimize
     RecompileDeopt {
         position: Option<BcPc>,
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     WriteBack(WriteBack),
 
@@ -630,7 +662,7 @@ pub(super) enum AsmInst {
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     AttrReader {
         ivar_name: IdentId,
@@ -643,42 +675,42 @@ pub(super) enum AsmInst {
         recv_classid: ClassId,
         native: bool,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     SendNotCached {
         self_class: ClassId,
         callsite: CallSiteId,
         pc: BcPc,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     Inline {
-        proc: Box<dyn FnOnce(&mut Codegen, &[DestLabel])>,
+        proc: Box<dyn FnOnce(&mut Codegen, &AsmLabels)>,
     },
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
 
     Not,
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
 
     GenericBinOp {
         kind: BinOpK,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     IntegerBinOp {
         kind: BinOpK,
         mode: OpMode,
         using_xmm: UsingXmm,
-        deopt: usize,
-        error: usize,
+        deopt: AsmDeopt,
+        error: AsmError,
     },
 
     ///
@@ -692,7 +724,7 @@ pub(super) enum AsmInst {
     GenericCmp {
         kind: CmpKind,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     ///
     /// Integer comparison
@@ -730,18 +762,18 @@ pub(super) enum AsmInst {
 
     GuardBaseClass {
         base_class: Value,
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     LoadFloatConstant {
         fdst: Xmm,
         f: f64,
         cached_version: usize,
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     LoadGenericConstant {
         cached_val: Value,
         cached_version: usize,
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     StoreConstant {
         name: IdentId,
@@ -753,14 +785,14 @@ pub(super) enum AsmInst {
         idx: SlotId,
         pc: BcPc,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     ArrayU16Index {
         idx: u16,
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     ArrayIndex {
-        deopt: usize,
+        deopt: AsmDeopt,
     },
     GenericIndexAssign {
         src: SlotId,
@@ -768,18 +800,18 @@ pub(super) enum AsmInst {
         idx: SlotId,
         pc: BcPc,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     ArrayU16IndexAssign {
         idx: u16,
         using_xmm: UsingXmm,
-        deopt: usize,
-        error: usize,
+        deopt: AsmDeopt,
+        error: AsmError,
     },
     ArrayIndexAssign {
         using_xmm: UsingXmm,
-        deopt: usize,
-        error: usize,
+        deopt: AsmDeopt,
+        error: AsmError,
     },
 
     /// create a new Array object and store it to rax
@@ -792,7 +824,7 @@ pub(super) enum AsmInst {
         end: SlotId,
         exclude_end: bool,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     ConcatStr {
         arg: SlotId,
@@ -808,7 +840,7 @@ pub(super) enum AsmInst {
         ret: SlotId,
         outer: usize,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
 
     LoadIVar {
@@ -824,7 +856,7 @@ pub(super) enum AsmInst {
         is_object_ty: bool,
         is_self_cached: bool,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
 
     /// rax = DynVar(src)
@@ -857,14 +889,14 @@ pub(super) enum AsmInst {
         func_id: FuncId,
         is_module: bool,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     SingletonClassDef {
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     MethodDef {
         name: IdentId,
@@ -887,13 +919,13 @@ pub(super) enum AsmInst {
         arg: SlotId,
         len: usize,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     AliasMethod {
         new: SlotId,
         old: SlotId,
         using_xmm: UsingXmm,
-        error: usize,
+        error: AsmError,
     },
     DefinedYield {
         dst: SlotId,
@@ -940,8 +972,8 @@ pub(crate) enum GP {
 }
 
 pub(super) enum SideExit {
-    Deoptimize(BcPc, WriteBack, usize),
-    Error(BcPc, WriteBack, usize),
+    Deoptimize(BcPc, WriteBack),
+    Error(BcPc, WriteBack),
 }
 
 impl Codegen {
@@ -962,17 +994,13 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<DestLabel>,
     ) -> Vec<(BcIndex, usize)> {
-        let mut labels = vec![];
-        for _ in 0..ir.label {
-            labels.push(self.jit.label());
-        }
-
+        let mut labels = AsmLabels::new();
         for side_exit in ir.side_exit {
+            let label = self.jit.label();
+            labels.push(label);
             match side_exit {
-                SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_deopt_with_label(pc, &wb, labels[label])
-                }
-                SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
+                SideExit::Deoptimize(pc, wb) => self.gen_deopt_with_label(pc, &wb, label),
+                SideExit::Error(pc, wb) => self.gen_handle_error(pc, wb, label),
             }
         }
         if exit.is_some() {
@@ -1001,7 +1029,7 @@ impl Codegen {
         _sourcemap
     }
 
-    fn gen_asmir(&mut self, store: &Store, labels: &[DestLabel], inst: AsmInst) {
+    fn gen_asmir(&mut self, store: &Store, labels: &AsmLabels, inst: AsmInst) {
         match inst {
             AsmInst::BcIndex(_) => {}
             AsmInst::AccToStack(r) => {

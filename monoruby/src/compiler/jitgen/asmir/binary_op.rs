@@ -424,7 +424,7 @@ impl AsmIr {
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
-    ) -> usize {
+    ) -> AsmDeopt {
         let is_lhs_smi = ctx.is_i16_literal(lhs).is_some();
         let is_rhs_smi = ctx.is_i16_literal(rhs).is_some();
         self.fetch_to_reg(ctx, lhs, GP::Rdi);
@@ -440,15 +440,15 @@ impl AsmIr {
         deopt
     }
 
-    fn fetch_fixnum_rdi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> usize {
+    fn fetch_fixnum_rdi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
         self.fetch_fixnum(ctx, slot, GP::Rdi, pc)
     }
 
-    fn fetch_fixnum_rsi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> usize {
+    fn fetch_fixnum_rsi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
         self.fetch_fixnum(ctx, slot, GP::Rsi, pc)
     }
 
-    fn fetch_fixnum(&mut self, ctx: &mut BBContext, slot: SlotId, reg: GP, pc: BcPc) -> usize {
+    fn fetch_fixnum(&mut self, ctx: &mut BBContext, slot: SlotId, reg: GP, pc: BcPc) -> AsmDeopt {
         let is_smi = ctx.is_i16_literal(slot).is_some();
         self.fetch_to_reg(ctx, slot, reg);
         let deopt = self.new_deopt(pc, ctx.get_write_back());
@@ -459,7 +459,7 @@ impl AsmIr {
         deopt
     }
 
-    fn fetch_fixnum_mode(&mut self, ctx: &mut BBContext, mode: &OpMode, pc: BcPc) -> usize {
+    fn fetch_fixnum_mode(&mut self, ctx: &mut BBContext, mode: &OpMode, pc: BcPc) -> AsmDeopt {
         match mode {
             OpMode::RR(lhs, rhs) => {
                 let deopt = self.fetch_fixnum_rr(ctx, *lhs, *rhs, pc);

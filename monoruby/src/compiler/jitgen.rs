@@ -1045,7 +1045,7 @@ impl Codegen {
                 ctx.release(store[callid].dst);
                 ir.writeback_acc(ctx);
                 let using_xmm = ctx.get_using_xmm();
-                let error = ir.new_deopt(pc, ctx.get_write_back());
+                let error = ir.new_error(pc, ctx.get_write_back());
                 ir.inst.push(AsmInst::Yield {
                     callid,
                     using_xmm,
