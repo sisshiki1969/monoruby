@@ -481,6 +481,10 @@ impl AsmIr {
         self.inst.push(AsmInst::Inline { proc: Box::new(f) });
     }
 
+    pub(crate) fn bc_index(&mut self, index: BcIndex) {
+        self.inst.push(AsmInst::BcIndex(index));
+    }
+
     pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
         ctx.release(dst);
         self.load_gvar(ctx, name);
@@ -647,6 +651,9 @@ pub(super) enum AsmInst {
         pc: BcPc,
         using_xmm: UsingXmm,
         error: usize,
+    },
+    Inline {
+        proc: Box<dyn FnOnce(&mut Codegen, &[DestLabel])>,
     },
     Yield {
         callid: CallSiteId,
@@ -913,9 +920,8 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
-    Inline {
-        proc: Box<dyn FnOnce(&mut Codegen, &[DestLabel])>,
-    },
+
+    BcIndex(BcIndex),
 }
 
 #[derive(Clone, Debug)]
@@ -980,7 +986,7 @@ impl Codegen {
         }
     }
 
-    pub(crate) fn gen_code(&mut self, store: &Store, ir: AsmIr) {
+    pub(crate) fn gen_code(&mut self, store: &Store, ir: AsmIr) -> Vec<(BcIndex, usize)> {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -994,13 +1000,22 @@ impl Codegen {
                 SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
             }
         }
+
+        let mut _sourcemap = vec![];
         for inst in ir.inst {
+            #[cfg(feature = "emit-asm")]
+            if let AsmInst::BcIndex(i) = &inst {
+                _sourcemap.push((*i, self.jit.get_current()));
+            }
             self.gen_asmir(store, &labels, inst);
         }
+
+        _sourcemap
     }
 
     fn gen_asmir(&mut self, store: &Store, labels: &[DestLabel], inst: AsmInst) {
         match inst {
+            AsmInst::BcIndex(_) => {}
             AsmInst::AccToStack(r) => {
                 self.store_r15(r);
             }

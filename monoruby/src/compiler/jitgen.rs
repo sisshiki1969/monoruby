@@ -633,7 +633,7 @@ impl Codegen {
         bb_end: BcIndex,
     ) {
         self.jit.bind_label(cc.labels[&bb_begin]);
-        let ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
+        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
             ctx
         } else if let Some(ctx) = cc.incoming_context(func, bb_begin) {
             self.gen_asm(store, cc);
@@ -644,45 +644,34 @@ impl Codegen {
             return;
         };
 
-        self.compile_bb_inner(store, func, cc, ctx, position, bb_begin, bb_end);
-    }
-
-    fn compile_bb_inner(
-        &mut self,
-        store: &Store,
-        func: &ISeqInfo,
-        cc: &mut JitContext,
-        mut ctx: BBContext,
-        position: Option<BcPc>,
-        bb_begin: BcIndex,
-        bb_end: BcIndex,
-    ) {
         let mut ir = AsmIr::new();
-        for bb_pos in bb_begin..=bb_end {
-            let pc = func.get_pc(bb_pos);
-            #[cfg(feature = "emit-asm")]
-            cc.sourcemap
-                .push((bb_pos, self.jit.get_current() - cc.start_codepos));
-            ctx.next_sp = func.get_sp(bb_pos);
-
-            match self.compile_inst(&mut ir, cc, &mut ctx, store, func, bb_pos, pc) {
-                CompileResult::Continue => {}
-                CompileResult::Exit => {
-                    self.gen_code(store, ir);
-                    return;
+        match self.compile_bb_inner(
+            &mut ir, store, func, cc, &mut ctx, position, bb_begin, bb_end,
+        ) {
+            CompileResult::Exit => {
+                let _map = self.gen_code(store, ir);
+                #[cfg(feature = "emit-asm")]
+                {
+                    let map = _map
+                        .into_iter()
+                        .map(|(pc, pos)| (pc, pos - cc.start_codepos));
+                    cc.sourcemap.extend(map);
                 }
-                CompileResult::Recompile => {
-                    ir.recompile_and_deopt(&ctx, pc, position);
-                    self.gen_code(store, ir);
-                    return;
-                }
-                CompileResult::Break => break,
+                return;
             }
-
-            ctx.clear();
-            ctx.sp = ctx.next_sp;
+            CompileResult::Continue => {
+                let _map = self.gen_code(store, ir);
+                #[cfg(feature = "emit-asm")]
+                {
+                    let map = _map
+                        .into_iter()
+                        .map(|(pc, pos)| (pc, pos - cc.start_codepos));
+                    cc.sourcemap.extend(map);
+                }
+            }
+            _ => unreachable!(),
         }
-        self.gen_code(store, ir);
+
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
             let branch_dest = self.jit.label();
@@ -694,6 +683,41 @@ impl Codegen {
         }
     }
 
+    fn compile_bb_inner(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        func: &ISeqInfo,
+        cc: &mut JitContext,
+        ctx: &mut BBContext,
+        position: Option<BcPc>,
+        bb_begin: BcIndex,
+        bb_end: BcIndex,
+    ) -> CompileResult {
+        for bb_pos in bb_begin..=bb_end {
+            ir.bc_index(bb_pos);
+            ctx.next_sp = func.get_sp(bb_pos);
+
+            match self.compile_inst(ir, cc, ctx, store, func, bb_pos) {
+                CompileResult::Continue => {}
+                CompileResult::Exit => {
+                    return CompileResult::Exit;
+                }
+                CompileResult::Recompile => {
+                    let pc = func.get_pc(bb_pos);
+                    ir.recompile_and_deopt(&ctx, pc, position);
+                    return CompileResult::Exit;
+                }
+                CompileResult::Break => break,
+            }
+
+            ctx.clear();
+            ctx.sp = ctx.next_sp;
+        }
+
+        CompileResult::Continue
+    }
+
     fn compile_inst(
         &mut self,
         ir: &mut AsmIr,
@@ -702,8 +726,8 @@ impl Codegen {
         store: &Store,
         func: &ISeqInfo,
         bb_pos: BcIndex,
-        pc: BcPc,
     ) -> CompileResult {
+        let pc = func.get_pc(bb_pos);
         match pc.trace_ir() {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart(_) => {
