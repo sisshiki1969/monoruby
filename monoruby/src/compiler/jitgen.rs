@@ -494,7 +494,7 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
-        self.gen_asm(store, &mut ctx);
+        self.gen_bridges(store, &mut ctx);
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
         self.jit.finalize();
@@ -636,7 +636,7 @@ impl Codegen {
         let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
             ctx
         } else if let Some(ctx) = cc.incoming_context(func, bb_begin) {
-            self.gen_asm(store, cc);
+            self.gen_bridges(store, cc);
             ctx
         } else {
             #[cfg(feature = "jit-debug")]
@@ -645,31 +645,21 @@ impl Codegen {
         };
 
         let mut ir = AsmIr::new();
-        match self.compile_bb_inner(
+        let res = self.compile_bb_inner(
             &mut ir, store, func, cc, &mut ctx, position, bb_begin, bb_end,
-        ) {
-            CompileResult::Exit => {
-                let _map = self.gen_code(store, ir);
-                #[cfg(feature = "emit-asm")]
-                {
-                    let map = _map
-                        .into_iter()
-                        .map(|(pc, pos)| (pc, pos - cc.start_codepos));
-                    cc.sourcemap.extend(map);
-                }
-                return;
-            }
-            CompileResult::Continue => {
-                let _map = self.gen_code(store, ir);
-                #[cfg(feature = "emit-asm")]
-                {
-                    let map = _map
-                        .into_iter()
-                        .map(|(pc, pos)| (pc, pos - cc.start_codepos));
-                    cc.sourcemap.extend(map);
-                }
-            }
-            _ => unreachable!(),
+        );
+        let _map = self.gen_code(store, ir);
+
+        #[cfg(feature = "emit-asm")]
+        {
+            let map = _map
+                .into_iter()
+                .map(|(pc, pos)| (pc, pos - cc.start_codepos));
+            cc.sourcemap.extend(map);
+        }
+
+        if res {
+            return;
         }
 
         let next_idx = bb_end + 1;
@@ -677,7 +667,7 @@ impl Codegen {
             let branch_dest = self.jit.label();
             cc.new_continue(func, bb_end, next_idx, ctx, branch_dest);
             if let Some(target_ctx) = cc.incoming_context(func, next_idx) {
-                self.gen_asm(store, cc);
+                self.gen_bridges(store, cc);
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
             }
         }
@@ -693,7 +683,7 @@ impl Codegen {
         position: Option<BcPc>,
         bb_begin: BcIndex,
         bb_end: BcIndex,
-    ) -> CompileResult {
+    ) -> bool {
         for bb_pos in bb_begin..=bb_end {
             ir.bc_index(bb_pos);
             ctx.next_sp = func.get_sp(bb_pos);
@@ -701,12 +691,12 @@ impl Codegen {
             match self.compile_inst(ir, cc, ctx, store, func, bb_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Exit => {
-                    return CompileResult::Exit;
+                    return true;
                 }
                 CompileResult::Recompile => {
                     let pc = func.get_pc(bb_pos);
                     ir.recompile_and_deopt(&ctx, pc, position);
-                    return CompileResult::Exit;
+                    return true;
                 }
                 CompileResult::Break => break,
             }
@@ -715,7 +705,7 @@ impl Codegen {
             ctx.sp = ctx.next_sp;
         }
 
-        CompileResult::Continue
+        false
     }
 
     fn compile_inst(

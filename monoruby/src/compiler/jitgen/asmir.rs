@@ -945,19 +945,23 @@ pub(super) enum SideExit {
 }
 
 impl Codegen {
-    pub(super) fn gen_asm(&mut self, store: &Store, ctx: &mut JitContext) {
+    pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
         for (ir, entry, exit) in std::mem::take(&mut ctx.asmir) {
-            self.gen_code_block(store, ir, entry, exit);
+            self.gen_bridge_code(store, ir, Some(entry), exit);
         }
     }
 
-    fn gen_code_block(
+    pub(super) fn gen_code(&mut self, store: &Store, ir: AsmIr) -> Vec<(BcIndex, usize)> {
+        self.gen_bridge_code(store, ir, None, None)
+    }
+
+    fn gen_bridge_code(
         &mut self,
         store: &Store,
         ir: AsmIr,
-        entry: DestLabel,
+        entry: Option<DestLabel>,
         exit: Option<DestLabel>,
-    ) {
+    ) -> Vec<(BcIndex, usize)> {
         let mut labels = vec![];
         for _ in 0..ir.label {
             labels.push(self.jit.label());
@@ -974,31 +978,8 @@ impl Codegen {
         if exit.is_some() {
             self.jit.select_page(1);
         }
-        self.jit.bind_label(entry);
-        for inst in ir.inst {
-            self.gen_asmir(store, &labels, inst);
-        }
-        if let Some(exit) = exit {
-            monoasm!( &mut self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
-        }
-    }
-
-    pub(crate) fn gen_code(&mut self, store: &Store, ir: AsmIr) -> Vec<(BcIndex, usize)> {
-        let mut labels = vec![];
-        for _ in 0..ir.label {
-            labels.push(self.jit.label());
-        }
-
-        for side_exit in ir.side_exit {
-            match side_exit {
-                SideExit::Deoptimize(pc, wb, label) => {
-                    self.gen_deopt_with_label(pc, &wb, labels[label])
-                }
-                SideExit::Error(pc, wb, label) => self.gen_handle_error(pc, wb, labels[label]),
-            }
+        if let Some(entry) = entry {
+            self.jit.bind_label(entry);
         }
 
         let mut _sourcemap = vec![];
@@ -1008,6 +989,13 @@ impl Codegen {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
             self.gen_asmir(store, &labels, inst);
+        }
+
+        if let Some(exit) = exit {
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
         }
 
         _sourcemap
