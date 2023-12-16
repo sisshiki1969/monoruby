@@ -46,7 +46,6 @@ impl std::ops::Index<AsmError> for SideExitLabels {
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     pub(super) side_exit: Vec<SideExit>,
-    //pub(super) label: usize,
 }
 
 impl AsmIr {
@@ -54,7 +53,6 @@ impl AsmIr {
         Self {
             inst: vec![],
             side_exit: vec![],
-            //label: 0,
         }
     }
 
@@ -972,23 +970,13 @@ pub(super) enum SideExit {
     Error(BcPc, WriteBack),
 }
 
-impl JitContext {
-    pub(super) fn gen_continuation(&mut self, ir: &mut AsmIr) {
-        if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
-            ir.inst.push(AsmInst::Label(entry));
-            if let Some((from, to, pc)) = data {
-                from.write_back_for_target(&to, ir, pc);
-            }
-        }
-    }
-}
-
 impl Codegen {
-    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext, ir: AsmIr) {
-        self.gen_asm(store, ctx, ir, None, None);
+    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext) {
+        self.gen_asm(store, ctx, None, None);
 
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            self.gen_asm(store, ctx, ir, Some(entry), Some(exit));
+            ctx.ir = ir;
+            self.gen_asm(store, ctx, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
     }
@@ -997,12 +985,11 @@ impl Codegen {
         &mut self,
         store: &Store,
         ctx: &mut JitContext,
-        ir: AsmIr,
         entry: Option<AsmLabel>,
         exit: Option<DestLabel>,
     ) {
         let mut side_exits = SideExitLabels::new();
-        for side_exit in ir.side_exit {
+        for side_exit in std::mem::take(&mut ctx.ir.side_exit) {
             let label = self.jit.label();
             side_exits.push(label);
             match side_exit {
@@ -1011,7 +998,7 @@ impl Codegen {
             }
         }
 
-        for label in ctx.branch_labels.iter_mut().filter(|i| i.is_none()) {
+        for label in ctx.asm_labels.iter_mut().filter(|i| i.is_none()) {
             *label = Some(self.jit.label());
         }
 
@@ -1025,7 +1012,7 @@ impl Codegen {
         #[cfg(feature = "emit-asm")]
         let mut _sourcemap = vec![];
 
-        for inst in ir.inst {
+        for inst in std::mem::take(&mut ctx.ir.inst) {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
@@ -2051,44 +2038,44 @@ impl Codegen {
     }
 }
 
-impl BBContext {
-    pub(super) fn array_index(
+impl AsmIr {
+    pub(super) fn gen_array_index(
         &mut self,
-        ir: &mut AsmIr,
+        ctx: &mut BBContext,
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
     ) {
-        ir.fetch_to_reg(self, base, GP::Rdi);
+        self.fetch_to_reg(ctx, base, GP::Rdi);
 
-        let deopt = ir.new_deopt(pc, self.get_write_back());
-        if let Some(idx) = self.is_u16_literal(idx) {
-            ir.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        if let Some(idx) = ctx.is_u16_literal(idx) {
+            self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
         } else {
-            ir.fetch_to_reg(self, idx, GP::Rsi);
-            ir.inst.push(AsmInst::ArrayIndex { deopt });
+            self.fetch_to_reg(ctx, idx, GP::Rsi);
+            self.inst.push(AsmInst::ArrayIndex { deopt });
         }
-        self.release(dst);
+        ctx.release(dst);
     }
 
-    pub(super) fn array_index_assign(
+    pub(super) fn gen_array_index_assign(
         &mut self,
-        ir: &mut AsmIr,
+        ctx: &mut BBContext,
         src: SlotId,
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
     ) {
-        ir.writeback_acc(self);
-        ir.fetch_to_reg(self, base, GP::Rdi);
-        ir.fetch_to_reg(self, src, GP::R15);
+        self.writeback_acc(ctx);
+        self.fetch_to_reg(ctx, base, GP::Rdi);
+        self.fetch_to_reg(ctx, src, GP::R15);
 
-        if let Some(idx) = self.is_u16_literal(idx) {
-            ir.array_u16_index_assign(self, pc, idx);
+        if let Some(idx) = ctx.is_u16_literal(idx) {
+            self.array_u16_index_assign(ctx, pc, idx);
         } else {
-            ir.fetch_to_reg(self, idx, GP::Rsi);
-            ir.array_index_assign(self, pc);
+            self.fetch_to_reg(ctx, idx, GP::Rsi);
+            self.array_index_assign(ctx, pc);
         }
     }
 }
