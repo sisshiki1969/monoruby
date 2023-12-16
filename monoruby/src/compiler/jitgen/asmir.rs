@@ -198,13 +198,13 @@ impl AsmIr {
         &mut self,
         max: u16,
         min: u16,
-        jump_table: DestLabel,
-        else_dest: DestLabel,
+        opt_case_id: usize,
+        else_dest: BranchLabel,
     ) {
         self.inst.push(AsmInst::OptCase {
             max,
             min,
-            jump_table,
+            opt_case_id,
             else_dest,
         });
     }
@@ -324,7 +324,7 @@ impl AsmIr {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: BranchLabel,
     ) {
         self.inst.push(AsmInst::IntegerCmpBr {
             mode,
@@ -339,7 +339,7 @@ impl AsmIr {
         mode: FMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: BranchLabel,
     ) {
         self.inst.push(AsmInst::FloatCmpBr {
             mode,
@@ -626,9 +626,9 @@ pub(super) enum AsmInst {
     Raise,
     MethodRet(BcPc),
     EnsureEnd,
-    Br(DestLabel),
-    CondBr(BrKind, DestLabel),
-    CheckLocal(DestLabel),
+    Br(BranchLabel),
+    CondBr(BrKind, BranchLabel),
+    CheckLocal(BranchLabel),
     ///
     /// Conditional branch
     ///
@@ -639,13 +639,13 @@ pub(super) enum AsmInst {
     ///
     GenericCondBr {
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: BranchLabel,
     },
     OptCase {
         max: u16,
         min: u16,
-        jump_table: DestLabel,
-        else_dest: DestLabel,
+        opt_case_id: usize,
+        else_dest: BranchLabel,
     },
 
     /// deoptimize
@@ -747,7 +747,7 @@ pub(super) enum AsmInst {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: BranchLabel,
     },
     FloatCmp {
         kind: CmpKind,
@@ -757,7 +757,7 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         mode: FMode,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: BranchLabel,
     },
 
     GuardBaseClass {
@@ -978,18 +978,24 @@ pub(super) enum SideExit {
 
 impl Codegen {
     pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
-        for (ir, entry, exit) in std::mem::take(&mut ctx.asmir) {
-            self.gen_bridge_code(store, ir, Some(entry), exit);
+        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+            self.gen_bridge_code(store, ctx, ir, Some(entry.0), exit);
         }
     }
 
-    pub(super) fn gen_code(&mut self, store: &Store, ir: AsmIr) -> Vec<(BcIndex, usize)> {
-        self.gen_bridge_code(store, ir, None, None)
+    pub(super) fn gen_code(
+        &mut self,
+        store: &Store,
+        ctx: &JitContext,
+        ir: AsmIr,
+    ) -> Vec<(BcIndex, usize)> {
+        self.gen_bridge_code(store, ctx, ir, None, None)
     }
 
     fn gen_bridge_code(
         &mut self,
         store: &Store,
+        ctx: &JitContext,
         ir: AsmIr,
         entry: Option<DestLabel>,
         exit: Option<DestLabel>,
@@ -1016,7 +1022,7 @@ impl Codegen {
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
-            self.gen_asmir(store, &labels, inst);
+            self.gen_asmir(store, ctx, &labels, inst);
         }
 
         if let Some(exit) = exit {
@@ -1029,7 +1035,7 @@ impl Codegen {
         _sourcemap
     }
 
-    fn gen_asmir(&mut self, store: &Store, labels: &AsmLabels, inst: AsmInst) {
+    fn gen_asmir(&mut self, store: &Store, ctx: &JitContext, labels: &AsmLabels, inst: AsmInst) {
         match inst {
             AsmInst::BcIndex(_) => {}
             AsmInst::AccToStack(r) => {
@@ -1181,11 +1187,13 @@ impl Codegen {
                 };
             }
             AsmInst::Br(branch_dest) => {
+                let branch_dest = branch_dest.0;
                 monoasm!( &mut self.jit,
                     jmp branch_dest;
                 );
             }
             AsmInst::CondBr(brkind, branch_dest) => {
+                let branch_dest = branch_dest.0;
                 monoasm!( &mut self.jit,
                     orq rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -1196,6 +1204,7 @@ impl Codegen {
                 }
             }
             AsmInst::CheckLocal(branch_dest) => {
+                let branch_dest = branch_dest.0;
                 monoasm!( &mut self.jit,
                     testq rax, rax;
                     jnz  branch_dest;
@@ -1204,9 +1213,22 @@ impl Codegen {
             AsmInst::OptCase {
                 max,
                 min,
-                jump_table,
+                opt_case_id,
                 else_dest,
             } => {
+                let OptCaseAsmInfo {
+                    id,
+                    bb_pos,
+                    label_map,
+                } = &ctx.opt_case[opt_case_id];
+                let jump_table = self.jit.const_align8();
+                for ofs in store[*id].branch_table.iter() {
+                    let idx = *bb_pos + 1 + (*ofs as i32);
+                    let dest_label = label_map.get(&idx).cloned().unwrap().0;
+                    self.jit.abs_address(dest_label);
+                }
+
+                let else_dest = else_dest.0;
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);
@@ -1345,7 +1367,7 @@ impl Codegen {
                 branch_dest,
             } => {
                 self.cmp_integer(&mode);
-                self.condbr_int(kind, branch_dest, brkind);
+                self.condbr_int(kind, branch_dest.0, brkind);
             }
             AsmInst::FloatCmp { kind, mode } => {
                 monoasm! { &mut self.jit,
@@ -1361,7 +1383,7 @@ impl Codegen {
                 branch_dest,
             } => {
                 self.cmp_float(&mode);
-                self.condbr_float(kind, branch_dest, brkind);
+                self.condbr_float(kind, branch_dest.0, brkind);
             }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {
@@ -1781,9 +1803,9 @@ impl Codegen {
 
             AsmInst::GenericCondBr {
                 brkind: kind,
-                branch_dest: dst,
+                branch_dest,
             } => {
-                self.cond_br(dst, kind);
+                self.cond_br(branch_dest.0, kind);
             }
 
             AsmInst::Inline { proc } => {

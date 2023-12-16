@@ -18,7 +18,7 @@ impl JitContext {
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 let ir = bbctx.write_back_for_target(&target_ctx, pc);
-                self.asmir.push((ir, label, Some(target_label)));
+                self.bridges.push((ir, label, Some(target_label)));
             }
         }
     }
@@ -88,7 +88,7 @@ impl JitContext {
         );
 
         let v = target_ctx.write_back_branches(entries, cur_label, pc + 1, bb_pos, &unused);
-        self.asmir.extend(v);
+        self.bridges.extend(v);
 
         self.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
 
@@ -101,8 +101,7 @@ impl JitContext {
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
-            self.asmir.push((AsmIr::new(), entry.label, None));
-            //self.jit.bind_label(entry.entry);
+            self.bridges.push((AsmIr::new(), entry.label, None));
             return Some(entry.bbctx);
         }
 
@@ -110,7 +109,7 @@ impl JitContext {
         let cur_label = self.labels[&bb_pos];
 
         let v = target_ctx.write_back_branches(entries, cur_label, pc, bb_pos, &[]);
-        self.asmir.extend(v);
+        self.bridges.extend(v);
 
         Some(target_ctx)
     }
@@ -235,7 +234,7 @@ impl BBContext {
         pc: BcPc,
         _bb_pos: BcIndex,
         unused: &[SlotId],
-    ) -> Vec<(AsmIr, DestLabel, Option<DestLabel>)> {
+    ) -> Vec<(AsmIr, BranchLabel, Option<DestLabel>)> {
         let mut target_ctx = self.clone();
         target_ctx.remove_unused(unused);
         let mut v = vec![];
