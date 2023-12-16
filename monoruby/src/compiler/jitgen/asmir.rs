@@ -15,9 +15,9 @@ pub(crate) struct AsmDeopt(usize);
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmError(usize);
 
-pub(crate) struct AsmLabels(Vec<DestLabel>);
+pub(crate) struct SideExitLabels(Vec<DestLabel>);
 
-impl AsmLabels {
+impl SideExitLabels {
     fn new() -> Self {
         Self(vec![])
     }
@@ -27,7 +27,7 @@ impl AsmLabels {
     }
 }
 
-impl std::ops::Index<AsmDeopt> for AsmLabels {
+impl std::ops::Index<AsmDeopt> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmDeopt) -> &Self::Output {
@@ -35,7 +35,7 @@ impl std::ops::Index<AsmDeopt> for AsmLabels {
     }
 }
 
-impl std::ops::Index<AsmError> for AsmLabels {
+impl std::ops::Index<AsmError> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmError) -> &Self::Output {
@@ -509,7 +509,7 @@ impl AsmIr {
         });
     }
 
-    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &AsmLabels) + 'static) {
+    pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &SideExitLabels) + 'static) {
         self.inst.push(AsmInst::Inline { proc: Box::new(f) });
     }
 
@@ -685,7 +685,7 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
     Inline {
-        proc: Box<dyn FnOnce(&mut Codegen, &AsmLabels)>,
+        proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
     },
     Yield {
         callid: CallSiteId,
@@ -979,7 +979,6 @@ pub(super) enum SideExit {
 impl Codegen {
     pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            let entry = ctx.branch_labels[entry.0].unwrap();
             self.gen_bridge_code(store, ctx, ir, Some(entry), exit);
         }
     }
@@ -998,29 +997,28 @@ impl Codegen {
         store: &Store,
         ctx: &mut JitContext,
         ir: AsmIr,
-        entry: Option<DestLabel>,
+        entry: Option<BranchLabel>,
         exit: Option<DestLabel>,
     ) -> Vec<(BcIndex, usize)> {
-        let mut labels = AsmLabels::new();
+        let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();
-            labels.push(label);
+            side_exits.push(label);
             match side_exit {
                 SideExit::Deoptimize(pc, wb) => self.gen_deopt_with_label(pc, &wb, label),
                 SideExit::Error(pc, wb) => self.gen_handle_error(pc, wb, label),
             }
         }
 
-        for label in ctx.branch_labels.iter_mut() {
-            if label.is_none() {
-                *label = Some(self.jit.label());
-            }
+        for label in ctx.branch_labels.iter_mut().filter(|i| i.is_none()) {
+            *label = Some(self.jit.label());
         }
 
         if exit.is_some() {
             self.jit.select_page(1);
         }
         if let Some(entry) = entry {
+            let entry = ctx.branch_labels[entry.0].unwrap();
             self.jit.bind_label(entry);
         }
 
@@ -1030,7 +1028,7 @@ impl Codegen {
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
-            self.gen_asmir(store, ctx, &labels, inst);
+            self.gen_asmir(store, ctx, &side_exits, inst);
         }
 
         if let Some(exit) = exit {
@@ -1043,7 +1041,13 @@ impl Codegen {
         _sourcemap
     }
 
-    fn gen_asmir(&mut self, store: &Store, ctx: &JitContext, labels: &AsmLabels, inst: AsmInst) {
+    fn gen_asmir(
+        &mut self,
+        store: &Store,
+        ctx: &JitContext,
+        labels: &SideExitLabels,
+        inst: AsmInst,
+    ) {
         match inst {
             AsmInst::BcIndex(_) => {}
             AsmInst::AccToStack(r) => {
