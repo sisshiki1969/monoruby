@@ -966,7 +966,7 @@ impl Codegen {
         };
     }
 
-    fn vm_generic_unop(&mut self, generic: DestLabel, func: usize) {
+    fn vm_generic_unop(&mut self, generic: DestLabel, func: UnaryOpFn) {
         self.jit.bind_label(generic);
         self.vm_save_lhs_class();
         self.call_unop(func);
@@ -1112,10 +1112,9 @@ impl Codegen {
         if !no_jit {
             monoasm!( &mut self.jit,
             compile:
-                movq rdi, r12;
-                movl rsi, [r14 - (LBP_META_FUNCID)];
-                movq rdx, [r14 - (LBP_SELF)];
-                lea rcx, [r13 - 16];
+                movq rdi, rbx;
+                movq rsi, r12;
+                lea  rdx, [r13 - 16];
                 movq rax, (exec_jit_partial_compile);
                 call rax;
                 jmp rax;
@@ -1438,7 +1437,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.vm_generic_unop(generic, bitnot_value as _);
+        self.vm_generic_unop(generic, bitnot_value);
         label
     }
 
@@ -1457,7 +1456,7 @@ impl Codegen {
         };
         self.vm_lhs_integer();
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, neg_value as _);
+        self.vm_generic_unop(generic, neg_value);
         label
     }
 
@@ -1473,7 +1472,7 @@ impl Codegen {
             movq [r15], rdi;
         }
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, pos_value as _);
+        self.vm_generic_unop(generic, pos_value);
         label
     }
 

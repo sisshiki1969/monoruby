@@ -342,25 +342,30 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 }
 
 fn array_shl(
-    gen: &mut Codegen,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
-    _pc: BcPc,
-    deopt: DestLabel,
+    pc: BcPc,
 ) {
     let CallSiteInfo {
-        recv, ret, args, ..
+        recv,
+        dst: ret,
+        args,
+        ..
     } = *callsite;
-    gen.fetch_slots(ctx, &[recv, args]);
+    ir.fetch_to_reg(ctx, recv, GP::Rdi);
+    ir.fetch_to_reg(ctx, args, GP::Rsi);
+    let deopt_ = ir.new_deopt(pc, ctx.get_write_back());
     ctx.release(ret);
-    gen.load_rdi(recv);
-    gen.guard_class(ARRAY_CLASS, deopt);
-    gen.load_rsi(args);
-    monoasm!( &mut gen.jit,
-        movq rax, (ary_shl);
-        call rax;
-    );
-    gen.store_rax(ret);
+    ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt_);
+    ir.inline(|gen, _| {
+        monoasm!( &mut gen.jit,
+            movq rax, (ary_shl);
+            call rax;
+        );
+    });
+    ir.rax2acc(ctx, ret);
 }
 
 /*fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {

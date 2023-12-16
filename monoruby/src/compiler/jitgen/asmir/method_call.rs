@@ -18,122 +18,31 @@ const CACHED_VERSION: usize = 28;
 const CACHED_FUNCID: usize = 16;
 
 impl Codegen {
-    pub(super) fn gen_inlinable(
-        &mut self,
-        ctx: &mut BBContext,
-        callsite: &CallSiteInfo,
-        inline_gen: InlineGen,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(ctx);
-        let deopt = self.gen_side_deopt(pc, ctx);
-        self.guard_version(pc, ctx, deopt);
-        inline_gen(self, ctx, callsite, pc, deopt);
-    }
-
-    pub(super) fn gen_call(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        fid: FuncId,
-        callid: CallSiteId,
-        pc: BcPc,
-    ) {
-        let CallSiteInfo { recv, ret, .. } = store[callid];
-        self.fetch_slots(ctx, &[recv]);
-        self.fetch_callargs(ctx, &store[callid]);
-        ctx.release(ret);
-        if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
-            // the cache is invalid because the receiver class is not matched.
-            self.gen_call_not_cached(ctx, &store[callid], pc);
-        } else {
-            self.gen_call_cached(store, ctx, callid, fid, pc);
-        }
-    }
-
-    ///
-    /// generate JIT code for a method call which was cached.
-    ///
-    fn gen_call_cached(
-        &mut self,
-        store: &Store,
-        ctx: &mut BBContext,
-        callid: CallSiteId,
-        fid: FuncId,
-        pc: BcPc,
-    ) {
-        let CallSiteInfo {
-            recv,
-            args,
-            len,
-            ret,
-            ..
-        } = store[callid];
-        let cached_class = pc.cached_class1().unwrap();
-        let deopt = self.gen_side_deopt(pc, ctx);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
-        if !recv.is_zero() {
-            self.load_rdi(recv);
-            self.guard_class(cached_class, deopt);
-        }
-        self.guard_version(pc, ctx, deopt);
-        match store[fid].kind {
-            FuncKind::AttrReader { ivar_name } => {
-                assert_eq!(0, len);
-                assert!(store[callid].kw_num() == 0);
-                assert!(store[callid].block_fid.is_none());
-                assert!(store[callid].block_arg.is_none());
-                if cached_class.is_always_frozen() {
-                    if let Some(ret) = ret {
-                        monoasm!( &mut self.jit,
-                            movq rax, (NIL_VALUE);
-                        );
-                        self.store_rax(ret);
-                    }
-                } else {
-                    self.load_rdi(recv);
-                    let ivar_id = store[cached_class].get_ivarid(ivar_name);
-                    self.attr_reader(ctx, ivar_name, ivar_id, ret);
-                }
-            }
-            FuncKind::AttrWriter { ivar_name } => {
-                assert_eq!(1, len);
-                assert!(store[callid].kw_num() == 0);
-                assert!(store[callid].block_fid.is_none());
-                assert!(store[callid].block_arg.is_none());
-                self.load_rdi(recv);
-                let ivar_id = store[cached_class].get_ivarid(ivar_name);
-                self.attr_writer(ctx, ivar_name, ivar_id, ret, args, pc);
-            }
-            FuncKind::Builtin { .. } => {
-                self.method_call_cached(ctx, store, callid, fid, pc, cached_class, true);
-            }
-            FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, store, callid, fid, pc, cached_class, false);
-            }
-        };
-    }
-
     ///
     /// generate JIT code for a method call which was not cached.
     ///
-    fn gen_call_not_cached(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
-        let CallSiteInfo { id, recv, ret, .. } = *callsite;
+    pub(super) fn send_not_cached(
+        &mut self,
+        self_class: ClassId,
+        callsite: &CallSiteInfo,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    ) {
+        let CallSiteInfo { id, recv, .. } = *callsite;
         // argument registers:
         //   rdi: args len
         //
         let resolved = self.jit.label();
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
-        let xmm_using = ctx.get_xmm_using();
-        self.writeback_acc(ctx);
-        self.xmm_save(&xmm_using);
+
+        self.xmm_save(using_xmm);
         // r15 <- recv's class
         if recv.is_zero() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             monoasm!( &mut self.jit,
-                movl r15, (ctx.self_value.class().0);
+                movl r15, (self_class.0);
             );
         } else {
             self.load_rdi(recv);
@@ -191,13 +100,12 @@ impl Codegen {
             movl rdx, (id.get()); // CallSiteId
         }
         self.handle_arguments();
-        self.jit_handle_error(ctx, pc);
+        self.handle_error(error);
 
         self.call_funcdata();
 
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-        self.save_rax_to_acc(ctx, ret);
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
 
         // slow path
         // r15: receiver's ClassId
@@ -210,7 +118,7 @@ impl Codegen {
             movq rax, (runtime::find_method);
             call rax;
         }
-        self.jit_handle_error(ctx, pc);
+        self.handle_error(error);
         monoasm! { &mut self.jit,
             // FuncId was returned to rax.
             movl [r13 + (CACHED_FUNCID)], rax;
@@ -223,12 +131,11 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn attr_reader(
+    pub(super) fn attr_reader(
         &mut self,
-        ctx: &mut BBContext,
+        using_xmm: UsingXmm,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        dst: Option<SlotId>,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
@@ -268,7 +175,6 @@ impl Codegen {
                 self.load_ivar_heap_index();
             }
         } else {
-            let xmm_using = ctx.get_xmm_using();
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -277,12 +183,12 @@ impl Codegen {
                 cmpl rsi, (-1);
                 jeq  slow_path;
             );
-            self.get_ivar(&xmm_using);
+            self.get_ivar(using_xmm);
             self.jit.bind_label(exit);
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(&xmm_using);
+            self.xmm_save(using_xmm);
             monoasm!( &mut self.jit,
                 movq rsi, (ivar_name.get()); // IvarId
                 movq rdx, r12; // &mut Globals
@@ -290,13 +196,12 @@ impl Codegen {
                 movq rax, (get_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(using_xmm);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
             self.jit.select_page(0);
         }
-        self.save_rax_to_acc(ctx, dst);
     }
 
     ///
@@ -330,18 +235,16 @@ impl Codegen {
         );
     }
 
-    fn attr_writer(
+    pub(super) fn attr_writer(
         &mut self,
-        ctx: &mut BBContext,
+        using_xmm: UsingXmm,
+        error: DestLabel,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
-        dst: Option<SlotId>,
         args: SlotId,
-        pc: BcPc,
     ) {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
-        let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             monoasm!( &mut self.jit,
@@ -358,15 +261,15 @@ impl Codegen {
                 );
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
-                self.set_ivar(&xmm_using);
-                self.jit_handle_error(ctx, pc);
+                self.set_ivar(using_xmm);
+                self.handle_error(error);
                 monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
-                self.set_ivar(&xmm_using);
-                self.jit_handle_error(ctx, pc);
+                self.set_ivar(using_xmm);
+                self.handle_error(error);
             }
         } else {
             let slow_path = self.jit.label();
@@ -388,7 +291,7 @@ impl Codegen {
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
-            self.xmm_save(&xmm_using);
+            self.xmm_save(using_xmm);
             monoasm!( &mut self.jit,
                 movq rdx, rdi;  // recv: Value
                 movq rcx, (ivar_name.get()); // name: IdentId
@@ -399,7 +302,7 @@ impl Codegen {
                 movq rax, (set_instance_var_with_cache);
                 call rax;
             );
-            self.xmm_restore(&xmm_using);
+            self.xmm_restore(using_xmm);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
@@ -408,30 +311,26 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rdx, [r14 - (conv(args))];   // val: Value
             );
-            self.set_ivar(&xmm_using);
-            self.jit_handle_error(ctx, pc);
+            self.set_ivar(using_xmm);
+            self.handle_error(error);
             monoasm!( &mut self.jit,
                 jmp exit;
             );
             self.jit.select_page(0);
         }
-        self.save_rax_to_acc(ctx, dst);
     }
 
-    fn method_call_cached(
+    pub(super) fn send_cached(
         &mut self,
-        ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-        pc: BcPc,
         recv_classid: ClassId,
         native: bool,
+        using_xmm: UsingXmm,
+        error: DestLabel,
     ) {
-        let xmm_using = ctx.get_xmm_using();
-        let ret = store[callid].ret;
-        self.writeback_acc(ctx);
-        self.xmm_save(&xmm_using);
+        self.xmm_save(using_xmm);
         self.execute_gc();
         let callsite = &store[callid];
         monoasm! { &mut self.jit,
@@ -479,7 +378,7 @@ impl Codegen {
                         movl rdx, (callid.get());
                     }
                     self.handle_arguments();
-                    self.jit_handle_error(ctx, pc);
+                    self.handle_error(error);
                 }
             }
             _ => {}
@@ -523,31 +422,25 @@ impl Codegen {
         }
         self.pop_frame();
 
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-        self.save_rax_to_acc(ctx, ret);
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
     }
 
     pub(super) fn gen_yield(
         &mut self,
-        ctx: &mut BBContext,
         store: &Store,
         callid: CallSiteId,
-        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: DestLabel,
     ) {
-        let CallSiteInfo { ret, .. } = store[callid];
-        self.fetch_callargs(ctx, &store[callid]);
-        ctx.release(ret);
-        self.writeback_acc(ctx);
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
         }
-        self.jit_handle_error(ctx, pc);
+        self.handle_error(error);
         monoasm! { &mut self.jit,
             lea  r15, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_FUNCDATA))];
             movq rdi, [rax + ((RVALUE_OFFSET_KIND as i64 + PROCINNER_OUTER))];
@@ -585,13 +478,12 @@ impl Codegen {
             movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
-        self.jit_handle_error(ctx, pc);
+        self.handle_error(error);
 
         self.call_funcdata();
 
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-        self.save_rax_to_acc(ctx, ret);
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
     }
 
     fn push_block(&mut self, callsite: &CallSiteInfo) {
@@ -620,7 +512,7 @@ impl Codegen {
         }
     }
 
-    fn call_funcdata(&mut self) {
+    pub(super) fn call_funcdata(&mut self) {
         monoasm! { &mut self.jit,
             movq rdx, rdi;
             // set pc
@@ -679,20 +571,23 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Version guard fro JIT.
+    /// Class version guard fro JIT.
     ///
-    /// Check the cached class version, and jump to `side_exit` if the version is changed.
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
     ///
     /// ### destroy
     /// - caller save registers
     /// - r13
     ///
-    fn guard_version(&mut self, pc: BcPc, ctx: &BBContext, side_exit: DestLabel) {
+    pub(in crate::compiler::jitgen) fn guard_class_version(&mut self, pc: BcPc, deopt: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         let global_version = self.class_version;
         let unmatch = self.jit.label();
         let exit = self.jit.label();
-        let deopt = self.jit.label();
+        let fail = self.jit.label();
         let cached_version = self.jit.const_i32((pc + 1).cached_version() as i32);
         let cached_fid = if let Some(fid) = pc.cached_fid() {
             fid.get()
@@ -717,16 +612,16 @@ impl Codegen {
             call rax;   // rax <- Option<FuncId>
             movl rax, rax;
         }
-        self.jit_handle_error(ctx, pc);
+        self.handle_error(deopt);
         monoasm! { &mut self.jit,
             cmpl rax, (cached_fid);
-            jne  deopt;
+            jne  fail;
             movl rax, [rip + global_version];
             movl [rip + cached_version], rax;
             jmp  exit;
-        deopt:
+        fail:
             movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
-            jmp  side_exit;
+            jmp  deopt;
         }
         self.jit.select_page(0);
     }
@@ -741,7 +636,7 @@ impl Codegen {
     ///
     /// - caller save registers
     ///
-    fn jit_set_arguments(&mut self, callsite: &CallSiteInfo) {
+    pub(super) fn jit_set_arguments(&mut self, callsite: &CallSiteInfo) {
         let CallSiteInfo { args, pos_num, .. } = *callsite;
         let pos_num = pos_num as u16;
         // set arguments
@@ -818,6 +713,94 @@ extern "C" fn jit_handle_hash_splat(
                 }
             }
         }
+    }
+}
+
+impl AsmIr {
+    pub(in crate::compiler::jitgen) fn gen_call(
+        &mut self,
+        store: &Store,
+        ctx: &mut BBContext,
+        fid: FuncId,
+        callid: CallSiteId,
+        pc: BcPc,
+    ) -> Option<()> {
+        let CallSiteInfo { dst, .. } = store[callid];
+        self.fetch_callargs(ctx, &store[callid]);
+        ctx.release(dst);
+        if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
+            // the cache is invalid because the receiver class is not matched.
+            self.writeback_acc(ctx);
+            self.send_not_cached(ctx, pc, callid);
+        } else {
+            self.gen_call_cached(store, ctx, callid, fid, pc)?;
+        }
+        self.rax2acc(ctx, dst);
+        Some(())
+    }
+
+    ///
+    /// generate JIT code for a method call which was cached.
+    ///
+    fn gen_call_cached(
+        &mut self,
+        store: &Store,
+        ctx: &mut BBContext,
+        callid: CallSiteId,
+        fid: FuncId,
+        pc: BcPc,
+    ) -> Option<()> {
+        let CallSiteInfo {
+            recv,
+            args,
+            len,
+            dst,
+            ..
+        } = store[callid];
+        let cached_class = pc.cached_class1().unwrap();
+        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+        // Thus, we can omit a class guard.
+        if !recv.is_zero() {
+            self.stack2reg(recv, GP::Rdi);
+            self.guard_class(GP::Rdi, cached_class, deopt);
+        }
+        self.guard_class_version(pc, deopt);
+        match store[fid].kind {
+            FuncKind::AttrReader { ivar_name } => {
+                assert_eq!(0, len);
+                assert!(store[callid].kw_num() == 0);
+                assert!(store[callid].block_fid.is_none());
+                assert!(store[callid].block_arg.is_none());
+                if cached_class.is_always_frozen() {
+                    if dst.is_some() {
+                        self.lit2reg(Value::nil(), GP::Rax);
+                    }
+                } else {
+                    let ivar_id = store[cached_class].get_ivarid(ivar_name);
+                    self.stack2reg(recv, GP::Rdi);
+                    self.attr_reader(ctx, ivar_name, ivar_id);
+                }
+            }
+            FuncKind::AttrWriter { ivar_name } => {
+                assert_eq!(1, len);
+                assert!(store[callid].kw_num() == 0);
+                assert!(store[callid].block_fid.is_none());
+                assert!(store[callid].block_arg.is_none());
+                let ivar_id = store[cached_class].get_ivarid(ivar_name);
+                self.stack2reg(recv, GP::Rdi);
+                self.attr_writer(ctx, pc, ivar_name, ivar_id, args);
+            }
+            FuncKind::Builtin { .. } => {
+                self.writeback_acc(ctx);
+                self.send_cached(ctx, pc, callid, fid, cached_class, true);
+            }
+            FuncKind::ISeq(_) => {
+                self.writeback_acc(ctx);
+                self.send_cached(ctx, pc, callid, fid, cached_class, false);
+            }
+        };
+        Some(())
     }
 }
 

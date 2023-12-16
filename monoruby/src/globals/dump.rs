@@ -344,12 +344,8 @@ impl Globals {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
                 format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
             }
-            TraceIr::Pos { dst, src } => {
-                let op1 = format!("{:?} = +{:?}", dst, src);
-                format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
-            }
-            TraceIr::Neg { dst, src } => {
-                let op1 = format!("{:?} = -{:?}", dst, src);
+            TraceIr::UnOp { kind, dst, src } => {
+                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
             }
             TraceIr::Not { dst, src } => {
@@ -473,7 +469,7 @@ impl Globals {
                     recv,
                     args,
                     pos_num,
-                    ret,
+                    dst: ret,
                     block_fid,
                     block_arg,
                     ..
@@ -521,7 +517,7 @@ impl Globals {
                     recv,
                     args,
                     pos_num,
-                    ret,
+                    dst: ret,
                     ..
                 } = self.store[callid];
                 let class = pc.cached_class1().unwrap();
@@ -541,7 +537,10 @@ impl Globals {
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {
-                    args, pos_num, ret, ..
+                    args,
+                    pos_num,
+                    dst: ret,
+                    ..
                 } = self.store[callid];
                 if pos_num == 0 {
                     format!("{} = yield", ret_str(ret))
@@ -557,7 +556,7 @@ impl Globals {
                 format!("singleton_method_def {:?}.{name}: {:?}", obj, func_id)
             }
             TraceIr::ClassDef {
-                ret,
+                dst: ret,
                 superclass,
                 name,
                 func_id,
@@ -569,10 +568,18 @@ impl Globals {
                     func_id
                 )
             }
-            TraceIr::ModuleDef { ret, name, func_id } => {
+            TraceIr::ModuleDef {
+                dst: ret,
+                name,
+                func_id,
+            } => {
                 format!("{} = module_def {name}: {:?}", ret_str(ret), func_id)
             }
-            TraceIr::SingletonClassDef { ret, base, func_id } => {
+            TraceIr::SingletonClassDef {
+                dst: ret,
+                base,
+                func_id,
+            } => {
                 format!(
                     "{} = singleton_class_def << {:?}: {:?}",
                     ret_str(ret),
@@ -592,8 +599,8 @@ impl Globals {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
-            TraceIr::DefinedYield { ret } => format!("{:?} = defined?(yield)", ret),
-            TraceIr::DefinedConst { ret, siteid } => {
+            TraceIr::DefinedYield { dst: ret } => format!("{:?} = defined?(yield)", ret),
+            TraceIr::DefinedConst { dst: ret, siteid } => {
                 let ConstSiteInfo {
                     name,
                     prefix,
@@ -608,13 +615,17 @@ impl Globals {
                 name.append_to(&mut const_name);
                 format!("{:?} = defined?(constant) {const_name}", ret)
             }
-            TraceIr::DefinedMethod { ret, recv, name } => {
+            TraceIr::DefinedMethod {
+                dst: ret,
+                recv,
+                name,
+            } => {
                 format!("{:?} = defined?(method) {:?}.{}", ret, recv, name)
             }
-            TraceIr::DefinedGvar { ret, name } => {
+            TraceIr::DefinedGvar { dst: ret, name } => {
                 format!("{:?} = defined?(gvar) {}", ret, name)
             }
-            TraceIr::DefinedIvar { ret, name } => {
+            TraceIr::DefinedIvar { dst: ret, name } => {
                 format!("{:?} = defined?(ivar) {}", ret, name)
             }
             TraceIr::LoopStart(count) => format!(

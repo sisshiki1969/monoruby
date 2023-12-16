@@ -1282,3 +1282,39 @@ impl BinOpK {
         }
     }
 }
+
+///
+/// kinds of unary operation.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum UnOpK {
+    Pos = 0,
+    Neg = 1,
+}
+
+impl std::fmt::Display for UnOpK {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match *self {
+            UnOpK::Pos => "+",
+            UnOpK::Neg => "-",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl UnOpK {
+    /*pub fn from(i: u16) -> Self {
+        match i {
+            0 => UnOpK::Pos,
+            1 => UnOpK::Neg,
+            _ => unreachable!(),
+        }
+    }*/
+
+    pub(crate) fn generic_func(&self) -> UnaryOpFn {
+        match self {
+            UnOpK::Pos => pos_value,
+            UnOpK::Neg => neg_value,
+        }
+    }
+}

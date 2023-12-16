@@ -57,23 +57,24 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 }
 
 fn object_nil(
-    gen: &mut Codegen,
+    ir: &mut AsmIr,
+    _store: &Store,
     ctx: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
-    _deopt: DestLabel,
 ) {
-    let CallSiteInfo { recv, ret, .. } = *callsite;
-    gen.fetch_slots(ctx, &[recv]);
-    gen.load_rdi(recv);
+    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
+    ir.fetch_to_reg(ctx, recv, GP::Rdi);
     ctx.release(ret);
-    monoasm!( &mut gen.jit,
-        movq rax, (FALSE_VALUE);
-        movq rsi, (TRUE_VALUE);
-        cmpq rdi, (NIL_VALUE);
-        cmoveqq rax, rsi;
-    );
-    gen.store_rax(ret);
+    ir.inline(|gen, _| {
+        monoasm! { &mut gen.jit,
+            movq rax, (FALSE_VALUE);
+            movq rsi, (TRUE_VALUE);
+            cmpq rdi, (NIL_VALUE);
+            cmoveqq rax, rsi;
+        }
+    });
+    ir.rax2acc(ctx, ret);
 }
 
 ///

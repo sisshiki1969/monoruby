@@ -15,6 +15,7 @@ use ruruby_parse::{CmpKind, Loc, SourceInfoRef};
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
+pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
 pub(crate) const BP_PREV_CFP: i64 = 8;
 pub(crate) const BP_LFP: i64 = 16;
@@ -1174,20 +1175,20 @@ impl BcPc {
                     TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
                 18 => TraceIr::ClassDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     superclass: SlotId::new(op2 as u16),
                     name: IdentId::from((self.op2.0) as u32),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 19 => TraceIr::ModuleDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     name: IdentId::from((self.op2.0) as u32),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => TraceIr::SingletonClassDef {
-                    ret: SlotId::from(op1),
+                    dst: SlotId::from(op1),
                     base: SlotId::new(op2 as u16),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
@@ -1238,23 +1239,23 @@ impl BcPc {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 64 => TraceIr::DefinedYield {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                 },
                 65 => TraceIr::DefinedConst {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     siteid: ConstSiteId(self.op2.0 as u32),
                 },
                 66 => TraceIr::DefinedMethod {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     recv: SlotId::new(op2),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 67 => TraceIr::DefinedGvar {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 68 => TraceIr::DefinedIvar {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     name: IdentId::from(self.op2.0 as u32),
                 },
                 80 => TraceIr::Ret(SlotId::new(op1)),
@@ -1263,7 +1264,8 @@ impl BcPc {
                 83 => TraceIr::Raise(SlotId::new(op1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1), SlotId::new(op2), op3),
-                126 => TraceIr::Pos {
+                126 => TraceIr::UnOp {
+                    kind: UnOpK::Pos,
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
@@ -1275,7 +1277,8 @@ impl BcPc {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
-                129 => TraceIr::Neg {
+                129 => TraceIr::UnOp {
+                    kind: UnOpK::Neg,
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
@@ -1567,11 +1570,9 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     globals.codegen.jit.apply_jmp_patch(entry, guard);
 }
 
-pub(crate) extern "C" fn exec_jit_recompile_method(
-    globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
-) {
+pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &mut Globals) {
+    let self_value = vm.cfp().lfp().self_val();
+    let func_id = vm.cfp().lfp().meta().func_id();
     let entry_label = globals.codegen.jit.label();
     globals.exec_jit_compile_method(func_id, self_value, entry_label);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
@@ -1585,12 +1586,13 @@ pub(crate) extern "C" fn exec_jit_recompile_method(
 /// Compile the loop.
 ///
 pub(crate) extern "C" fn exec_jit_partial_compile(
+    vm: &mut Executor,
     globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
     pc: BcPc,
 ) {
     let entry_label = globals.codegen.jit.label();
+    let self_value = vm.cfp().lfp().self_val();
+    let func_id = vm.cfp().lfp().meta().func_id();
     globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
     let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);

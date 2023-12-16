@@ -838,9 +838,8 @@ impl BytecodeGen {
 
     fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, op: String, loc: Loc) -> Result<()> {
         let len = nodes.len() + 1;
-        let arg = self.sp();
+        let arg = self.push();
         self.emit_literal(arg.into(), Value::string(format!("(?{op})")));
-        self.push();
         for expr in nodes {
             self.push_expr(expr)?;
         }

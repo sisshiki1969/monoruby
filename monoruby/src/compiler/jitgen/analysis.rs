@@ -202,16 +202,16 @@ impl JitContext {
                 }
                 TraceIr::LoopStart(_) => {}
                 TraceIr::LoopEnd => {}
-                TraceIr::DefinedYield { ret }
-                | TraceIr::DefinedConst { ret, .. }
-                | TraceIr::DefinedGvar { ret, .. }
-                | TraceIr::DefinedIvar { ret, .. }
+                TraceIr::DefinedYield { dst: ret }
+                | TraceIr::DefinedConst { dst: ret, .. }
+                | TraceIr::DefinedGvar { dst: ret, .. }
+                | TraceIr::DefinedIvar { dst: ret, .. }
                 | TraceIr::Integer(ret, ..)
                 | TraceIr::Symbol(ret, ..)
                 | TraceIr::Nil(ret) => {
                     info.def(ret);
                 }
-                TraceIr::DefinedMethod { ret, recv, .. } => {
+                TraceIr::DefinedMethod { dst: ret, recv, .. } => {
                     info.def(ret);
                     info.r#use(recv);
                 }
@@ -249,17 +249,17 @@ impl JitContext {
                     info.r#use(idx);
                 }
                 TraceIr::ClassDef {
-                    ret,
+                    dst: ret,
                     superclass: base,
                     ..
                 }
-                | TraceIr::SingletonClassDef { ret, base, .. } => {
+                | TraceIr::SingletonClassDef { dst: ret, base, .. } => {
                     info.r#use(base);
                     if let Some(ret) = ret {
                         info.def(ret);
                     }
                 }
-                TraceIr::ModuleDef { ret, .. } => {
+                TraceIr::ModuleDef { dst: ret, .. } => {
                     if let Some(ret) = ret {
                         info.def(ret);
                     }
@@ -290,7 +290,7 @@ impl JitContext {
                     info.r#use(src);
                     info.def(dst);
                 }
-                TraceIr::Neg { dst, src } | TraceIr::Pos { dst, src } => {
+                TraceIr::UnOp { kind: _, dst, src } => {
                     let is_float = pc.is_float1();
                     info.use_as(src, is_float, pc.classid1() == FLOAT_CLASS);
                     info.def_as(dst, is_float);
@@ -390,7 +390,12 @@ impl JitContext {
                     info.r#use(src);
                 }
                 TraceIr::Yield { callid } => {
-                    let CallSiteInfo { args, len, ret, .. } = store[callid];
+                    let CallSiteInfo {
+                        args,
+                        len,
+                        dst: ret,
+                        ..
+                    } = store[callid];
                     info.use_range(args, len as u16);
                     if let Some(ret) = ret {
                         info.def(ret);
@@ -402,7 +407,7 @@ impl JitContext {
                         recv,
                         args,
                         len,
-                        ret,
+                        dst: ret,
                         ..
                     } = store[callid];
                     info.r#use(recv);
@@ -778,7 +783,7 @@ pub(super) enum ExitType {
 ///
 pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def(ret);
     }
 }
@@ -789,7 +794,7 @@ pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def(ret);
     }
 }
@@ -802,7 +807,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
         recv,
         args,
         len,
-        ret,
+        dst: ret,
         ..
     } = *callsite;
     info.r#use(recv);
@@ -817,7 +822,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 ///
 pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def_as_float(ret);
     }
 }
@@ -828,7 +833,7 @@ pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 pub(crate) fn f_v_f(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.use_as_float(callsite.args, true);
-    if let Some(ret) = callsite.ret {
+    if let Some(ret) = callsite.dst {
         info.def_as_float(ret);
     }
 }
