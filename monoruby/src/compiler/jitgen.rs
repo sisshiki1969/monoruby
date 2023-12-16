@@ -36,7 +36,7 @@ struct JitContext {
     ///
     /// Destination labels for jump instructions.
     ///
-    labels: HashMap<BcIndex, DestLabel>,
+    inst_labels: HashMap<BcIndex, DestLabel>,
     branch_labels: Vec<Option<DestLabel>>,
     ///
     /// Basic block information.
@@ -104,6 +104,13 @@ struct JitContext {
     start_codepos: usize,
 }
 
+impl std::ops::Index<BranchLabel> for JitContext {
+    type Output = DestLabel;
+    fn index(&self, index: BranchLabel) -> &Self::Output {
+        self.branch_labels[index.0].as_ref().unwrap()
+    }
+}
+
 ///
 /// Information of incoming branches to an each basic block.
 ///
@@ -145,11 +152,11 @@ impl JitContext {
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let mut labels = HashMap::default();
+        let mut inst_labels = HashMap::default();
         for i in 0..func.bytecode_len() {
             let idx = BcIndex::from(i);
             if func.bb_info.is_bb_head(idx) {
-                labels.insert(idx, codegen.jit.label());
+                inst_labels.insert(idx, codegen.jit.label());
             }
         }
         let bb_scan = func.bb_info.init_bb_scan(func, store);
@@ -160,7 +167,7 @@ impl JitContext {
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
-            labels,
+            inst_labels,
             branch_labels: vec![],
             bb_scan,
             loop_backedges: HashMap::default(),
@@ -1189,7 +1196,7 @@ impl Codegen {
         bb_begin: BcIndex,
         bb_end: BcIndex,
     ) {
-        self.jit.bind_label(ctx.labels[&bb_begin]);
+        self.jit.bind_label(ctx.inst_labels[&bb_begin]);
         let mut bbctx = if let Some(bbctx) = ctx.target_ctx.remove(&bb_begin) {
             bbctx
         } else if let Some(bbctx) = ctx.incoming_context(func, bb_begin) {
@@ -1204,15 +1211,7 @@ impl Codegen {
         let mut ir = AsmIr::new();
         let res =
             ctx.compile_bb_inner(&mut ir, store, func, &mut bbctx, position, bb_begin, bb_end);
-        let _map = self.gen_code(store, ctx, ir);
-
-        #[cfg(feature = "emit-asm")]
-        {
-            let map = _map
-                .into_iter()
-                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
-            ctx.sourcemap.extend(map);
-        }
+        self.gen_code(store, ctx, ir);
 
         if res {
             return;

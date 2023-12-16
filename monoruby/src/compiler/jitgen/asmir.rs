@@ -983,13 +983,15 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_code(
-        &mut self,
-        store: &Store,
-        ctx: &mut JitContext,
-        ir: AsmIr,
-    ) -> Vec<(BcIndex, usize)> {
-        self.gen_bridge_code(store, ctx, ir, None, None)
+    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext, ir: AsmIr) {
+        let _map = self.gen_bridge_code(store, ctx, ir, None, None);
+        #[cfg(feature = "emit-asm")]
+        {
+            let map = _map
+                .into_iter()
+                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
+            ctx.sourcemap.extend(map);
+        }
     }
 
     fn gen_bridge_code(
@@ -1018,8 +1020,7 @@ impl Codegen {
             self.jit.select_page(1);
         }
         if let Some(entry) = entry {
-            let entry = ctx.branch_labels[entry.0].unwrap();
-            self.jit.bind_label(entry);
+            self.jit.bind_label(ctx[entry]);
         }
 
         let mut _sourcemap = vec![];
@@ -1199,13 +1200,13 @@ impl Codegen {
                 };
             }
             AsmInst::Br(branch_dest) => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 monoasm!( &mut self.jit,
                     jmp branch_dest;
                 );
             }
             AsmInst::CondBr(brkind, branch_dest) => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 monoasm!( &mut self.jit,
                     orq rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -1216,7 +1217,7 @@ impl Codegen {
                 }
             }
             AsmInst::CheckLocal(branch_dest) => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 monoasm!( &mut self.jit,
                     testq rax, rax;
                     jnz  branch_dest;
@@ -1238,12 +1239,11 @@ impl Codegen {
                 let jump_table = self.jit.const_align8();
                 for ofs in store[*id].branch_table.iter() {
                     let idx = *bb_pos + 1 + (*ofs as i32);
-                    let dest_label =
-                        ctx.branch_labels[label_map.get(&idx).cloned().unwrap().0].unwrap();
+                    let dest_label = ctx[label_map.get(&idx).cloned().unwrap()];
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = ctx.branch_labels[else_dest.0].unwrap();
+                let else_dest = ctx[else_dest];
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);
@@ -1381,7 +1381,7 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 self.cmp_integer(&mode);
                 self.condbr_int(kind, branch_dest, brkind);
             }
@@ -1398,7 +1398,7 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 self.cmp_float(&mode);
                 self.condbr_float(kind, branch_dest, brkind);
             }
@@ -1822,7 +1822,7 @@ impl Codegen {
                 brkind: kind,
                 branch_dest,
             } => {
-                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                let branch_dest = ctx[branch_dest];
                 self.cond_br(branch_dest, kind);
             }
 

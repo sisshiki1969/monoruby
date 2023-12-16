@@ -50,7 +50,7 @@ impl JitContext {
 
         let (use_set, unused) = self.analyse(func, bb_pos);
 
-        let cur_label = self.labels[&bb_pos];
+        let cur_label = self.inst_labels[&bb_pos];
 
         #[cfg(feature = "jit-debug")]
         {
@@ -106,7 +106,7 @@ impl JitContext {
         }
 
         let target_ctx = BBContext::merge_entries(&entries);
-        let cur_label = self.labels[&bb_pos];
+        let cur_label = self.inst_labels[&bb_pos];
 
         let v = target_ctx.write_back_branches(entries, cur_label, pc, bb_pos, &[]);
         self.bridges.extend(v);
