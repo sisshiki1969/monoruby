@@ -979,7 +979,11 @@ pub(super) enum SideExit {
 impl Codegen {
     pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            self.gen_bridge_code(store, ctx, ir, Some(entry), exit);
+            self.gen_bridge_code(store, ctx, ir, Some(entry), Some(exit));
+        }
+        assert!(ctx.continuation_bridge.is_none());
+        if let Some((ir, entry)) = std::mem::take(&mut ctx.continuation_bridge) {
+            self.gen_bridge_code(store, ctx, ir, Some(entry), None);
         }
     }
 
@@ -991,6 +995,12 @@ impl Codegen {
                 .into_iter()
                 .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
             ctx.sourcemap.extend(map);
+        }
+    }
+
+    pub(super) fn gen_continuation_code(&mut self, store: &Store, ctx: &mut JitContext) {
+        if let Some((ir, entry)) = std::mem::take(&mut ctx.continuation_bridge) {
+            self.gen_bridge_code(store, ctx, ir, Some(entry), None);
         }
     }
 

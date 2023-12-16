@@ -95,7 +95,8 @@ struct JitContext {
     ///
     /// IR for machine code generator.
     ///
-    bridges: Vec<(AsmIr, BranchLabel, Option<DestLabel>)>,
+    bridges: Vec<(AsmIr, BranchLabel, DestLabel)>,
+    continuation_bridge: Option<(AsmIr, BranchLabel)>,
     opt_case: Vec<OptCaseAsmInfo>,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
@@ -182,6 +183,7 @@ impl JitContext {
             self_value,
             sourcemap: vec![],
             bridges: vec![],
+            continuation_bridge: None,
             opt_case: vec![],
             #[cfg(feature = "emit-asm")]
             start_codepos,
@@ -1200,7 +1202,7 @@ impl Codegen {
         let mut bbctx = if let Some(bbctx) = ctx.target_ctx.remove(&bb_begin) {
             bbctx
         } else if let Some(bbctx) = ctx.incoming_context(func, bb_begin) {
-            self.gen_bridges(store, ctx);
+            self.gen_continuation_code(store, ctx);
             bbctx
         } else {
             #[cfg(feature = "jit-debug")]
@@ -1219,10 +1221,10 @@ impl Codegen {
 
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
-            let branch_dest = ctx.branch_label();
-            ctx.new_continue(func, bb_end, next_idx, bbctx, branch_dest);
+            let label = ctx.branch_label();
+            ctx.new_continue(func, bb_end, next_idx, bbctx, label);
             if let Some(target_ctx) = ctx.incoming_context(func, next_idx) {
-                self.gen_bridges(store, ctx);
+                self.gen_continuation_code(store, ctx);
                 assert!(ctx.target_ctx.insert(next_idx, target_ctx).is_none());
             }
         }

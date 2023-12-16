@@ -18,7 +18,7 @@ impl JitContext {
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 let ir = bbctx.write_back_for_target(&target_ctx, pc);
-                self.bridges.push((ir, label, Some(target_label)));
+                self.bridges.push((ir, label, target_label));
             }
         }
     }
@@ -87,8 +87,7 @@ impl JitContext {
             target_ctx.sp, target_ctx.slot_state
         );
 
-        let v = target_ctx.write_back_branches(entries, cur_label, pc + 1, bb_pos, &unused);
-        self.bridges.extend(v);
+        self.write_back_branches(&target_ctx, entries, cur_label, pc + 1, bb_pos, &unused);
 
         self.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
 
@@ -101,17 +100,50 @@ impl JitContext {
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
-            self.bridges.push((AsmIr::new(), entry.label, None));
+            assert!(self.continuation_bridge.is_none());
+            self.continuation_bridge = Some((AsmIr::new(), entry.label));
             return Some(entry.bbctx);
         }
 
         let target_ctx = BBContext::merge_entries(&entries);
         let cur_label = self.inst_labels[&bb_pos];
 
-        let v = target_ctx.write_back_branches(entries, cur_label, pc, bb_pos, &[]);
-        self.bridges.extend(v);
+        self.write_back_branches(&target_ctx, entries, cur_label, pc, bb_pos, &[]);
 
         Some(target_ctx)
+    }
+
+    fn write_back_branches(
+        &mut self,
+        target_ctx: &BBContext,
+        entries: Vec<BranchEntry>,
+        cur_label: DestLabel,
+        pc: BcPc,
+        _bb_pos: BcIndex,
+        unused: &[SlotId],
+    ) {
+        let mut target_ctx = target_ctx.clone();
+        target_ctx.remove_unused(unused);
+        for BranchEntry {
+            src_idx: _src_idx,
+            mut bbctx,
+            label,
+            cont,
+        } in entries
+        {
+            bbctx.remove_unused(unused);
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
+            let ir = bbctx.write_back_for_target(&target_ctx, pc);
+            if cont {
+                assert!(self.continuation_bridge.is_none());
+                self.continuation_bridge = Some((ir, label));
+            } else {
+                self.bridges.push((ir, label, cur_label));
+            }
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  ***write_back end");
+        }
     }
 }
 
@@ -225,34 +257,5 @@ impl BBContext {
         }
 
         ir
-    }
-
-    fn write_back_branches(
-        &self,
-        entries: Vec<BranchEntry>,
-        cur_label: DestLabel,
-        pc: BcPc,
-        _bb_pos: BcIndex,
-        unused: &[SlotId],
-    ) -> Vec<(AsmIr, BranchLabel, Option<DestLabel>)> {
-        let mut target_ctx = self.clone();
-        target_ctx.remove_unused(unused);
-        let mut v = vec![];
-        for BranchEntry {
-            src_idx: _src_idx,
-            mut bbctx,
-            label,
-            cont,
-        } in entries
-        {
-            bbctx.remove_unused(unused);
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
-            let ir = bbctx.write_back_for_target(&target_ctx, pc);
-            v.push((ir, label, if cont { None } else { Some(cur_label) }));
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back end");
-        }
-        v
     }
 }
