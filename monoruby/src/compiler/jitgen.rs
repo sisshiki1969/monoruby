@@ -93,10 +93,16 @@ struct JitContext {
     ///
     sourcemap: Vec<(BcIndex, usize)>,
     ///
-    /// IR for machine code generator.
+    /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, BranchLabel, DestLabel)>,
-    continuation_bridge: Option<(AsmIr, BranchLabel)>,
+    bridges: Vec<(AsmIr, AsmLabel, DestLabel)>,
+    ///
+    /// Information for continuation bridge.
+    ///
+    continuation_bridge: Option<(Option<(BBContext, BBContext, BcPc)>, AsmLabel)>,
+    ///
+    /// Information for opt_case table.
+    ///
     opt_case: Vec<OptCaseAsmInfo>,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
@@ -105,9 +111,9 @@ struct JitContext {
     start_codepos: usize,
 }
 
-impl std::ops::Index<BranchLabel> for JitContext {
+impl std::ops::Index<AsmLabel> for JitContext {
     type Output = DestLabel;
-    fn index(&self, index: BranchLabel) -> &Self::Output {
+    fn index(&self, index: AsmLabel) -> &Self::Output {
         self.branch_labels[index.0].as_ref().unwrap()
     }
 }
@@ -133,13 +139,13 @@ impl std::ops::Index<BcIndex> for Incoming {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct BranchLabel(usize);
+struct AsmLabel(usize);
 
 #[derive(Debug, Clone)]
 struct OptCaseAsmInfo {
     id: OptCaseId,
     bb_pos: BcIndex,
-    label_map: HashMap<BcIndex, BranchLabel>,
+    label_map: HashMap<BcIndex, AsmLabel>,
 }
 
 impl JitContext {
@@ -190,8 +196,8 @@ impl JitContext {
         }
     }
 
-    fn branch_label(&mut self) -> BranchLabel {
-        let label = BranchLabel(self.branch_labels.len());
+    fn branch_label(&mut self) -> AsmLabel {
+        let label = AsmLabel(self.branch_labels.len());
         self.branch_labels.push(None);
         label
     }
@@ -205,7 +211,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BcIndex,
         mut bbctx: BBContext,
-        label: BranchLabel,
+        label: AsmLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -227,7 +233,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BcIndex,
         mut bbctx: BBContext,
-        label: BranchLabel,
+        label: AsmLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -256,6 +262,43 @@ impl JitContext {
         eprintln!("   new_backedge:[{:?}] {bb_pos}", bbctx.sp);
         self.backedge_map
             .insert(bb_pos, (dest_label, bbctx.clone(), unused));
+    }
+
+    fn compile_bb(
+        &mut self,
+        store: &Store,
+        func: &ISeqInfo,
+        ir: &mut AsmIr,
+        position: Option<BcPc>,
+        bb_begin: BcIndex,
+        bb_end: BcIndex,
+    ) {
+        ir.inst
+            .push(AsmInst::DestLabel(self.inst_labels[&bb_begin]));
+        let mut bbctx = if let Some(bbctx) = self.target_ctx.remove(&bb_begin) {
+            bbctx
+        } else if let Some(bbctx) = self.incoming_context(func, bb_begin) {
+            self.gen_continuation(ir);
+            bbctx
+        } else {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("=== no entry");
+            return;
+        };
+
+        let res = self.compile_bb_inner(ir, store, func, &mut bbctx, position, bb_begin, bb_end);
+
+        if !res {
+            let next_idx = bb_end + 1;
+            if func.bb_info.is_bb_head(next_idx) {
+                let label = self.branch_label();
+                self.new_continue(func, bb_end, next_idx, bbctx, label);
+                if let Some(target_ctx) = self.incoming_context(func, next_idx) {
+                    self.gen_continuation(ir);
+                    assert!(self.target_ctx.insert(next_idx, target_ctx).is_none());
+                }
+            }
+        }
     }
 
     fn compile_bb_inner(
@@ -805,7 +848,7 @@ struct BranchEntry {
     /// context of the source basic block.
     bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
-    label: BranchLabel,
+    label: AsmLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
@@ -1055,12 +1098,13 @@ impl Codegen {
             None => BasicBlockId(func.bb_info.len() - 1),
         };
 
+        let mut ir = AsmIr::new();
         for BasciBlockInfoEntry { begin, end, .. } in &func.bb_info[bb_begin..=bb_end] {
-            self.compile_bb(store, func, &mut ctx, position, *begin, *end);
+            ctx.compile_bb(store, func, &mut ir, position, *begin, *end);
         }
-
         ctx.backedge_branches(func);
-        self.gen_bridges(store, &mut ctx);
+        self.gen_code(store, &mut ctx, ir);
+
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
         self.jit.finalize();
@@ -1187,47 +1231,6 @@ impl Codegen {
         monoasm!( &mut self.jit,
             addq rsp, (sp_offset);
         );
-    }
-
-    fn compile_bb(
-        &mut self,
-        store: &Store,
-        func: &ISeqInfo,
-        ctx: &mut JitContext,
-        position: Option<BcPc>,
-        bb_begin: BcIndex,
-        bb_end: BcIndex,
-    ) {
-        self.jit.bind_label(ctx.inst_labels[&bb_begin]);
-        let mut bbctx = if let Some(bbctx) = ctx.target_ctx.remove(&bb_begin) {
-            bbctx
-        } else if let Some(bbctx) = ctx.incoming_context(func, bb_begin) {
-            self.gen_continuation_code(store, ctx);
-            bbctx
-        } else {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("=== no entry");
-            return;
-        };
-
-        let mut ir = AsmIr::new();
-        let res =
-            ctx.compile_bb_inner(&mut ir, store, func, &mut bbctx, position, bb_begin, bb_end);
-        self.gen_code(store, ctx, ir);
-
-        if res {
-            return;
-        }
-
-        let next_idx = bb_end + 1;
-        if func.bb_info.is_bb_head(next_idx) {
-            let label = ctx.branch_label();
-            ctx.new_continue(func, bb_end, next_idx, bbctx, label);
-            if let Some(target_ctx) = ctx.incoming_context(func, next_idx) {
-                self.gen_continuation_code(store, ctx);
-                assert!(ctx.target_ctx.insert(next_idx, target_ctx).is_none());
-            }
-        }
     }
 
     fn recompile_and_deopt(&mut self, position: Option<BcPc>, deopt: DestLabel) {

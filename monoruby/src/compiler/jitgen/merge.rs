@@ -17,7 +17,8 @@ impl JitContext {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
-                let ir = bbctx.write_back_for_target(&target_ctx, pc);
+                let mut ir = AsmIr::new();
+                bbctx.write_back_for_target(&target_ctx, &mut ir, pc);
                 self.bridges.push((ir, label, target_label));
             }
         }
@@ -101,7 +102,7 @@ impl JitContext {
         if entries.len() == 1 {
             let entry = entries.remove(0);
             assert!(self.continuation_bridge.is_none());
-            self.continuation_bridge = Some((AsmIr::new(), entry.label));
+            self.continuation_bridge = Some((None, entry.label));
             return Some(entry.bbctx);
         }
 
@@ -134,11 +135,12 @@ impl JitContext {
             bbctx.remove_unused(unused);
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
-            let ir = bbctx.write_back_for_target(&target_ctx, pc);
             if cont {
                 assert!(self.continuation_bridge.is_none());
-                self.continuation_bridge = Some((ir, label));
+                self.continuation_bridge = Some((Some((bbctx, target_ctx.clone(), pc)), label));
             } else {
+                let mut ir = AsmIr::new();
+                bbctx.write_back_for_target(&target_ctx, &mut ir, pc);
                 self.bridges.push((ir, label, cur_label));
             }
             #[cfg(feature = "jit-debug")]
@@ -148,13 +150,12 @@ impl JitContext {
 }
 
 impl BBContext {
-    fn write_back_for_target(mut self, target: &BBContext, pc: BcPc) -> AsmIr {
+    pub(super) fn write_back_for_target(mut self, target: &BBContext, ir: &mut AsmIr, pc: BcPc) {
         #[cfg(feature = "jit-debug")]
         {
             eprintln!("    src:    {:?}", self.slot_state);
             eprintln!("    target: {:?}", target.slot_state);
         }
-        let mut ir = AsmIr::new();
         let len = self.reg_num();
 
         ir.writeback_acc(&mut self);
@@ -255,7 +256,5 @@ impl BBContext {
             ir.stack2reg(r, GP::Rax);
             ir.guard_float(GP::Rax, deopt);
         }
-
-        ir
     }
 }

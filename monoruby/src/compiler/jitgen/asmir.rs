@@ -194,13 +194,7 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
 
-    pub(super) fn opt_case(
-        &mut self,
-        max: u16,
-        min: u16,
-        opt_case_id: usize,
-        else_dest: BranchLabel,
-    ) {
+    pub(super) fn opt_case(&mut self, max: u16, min: u16, opt_case_id: usize, else_dest: AsmLabel) {
         self.inst.push(AsmInst::OptCase {
             max,
             min,
@@ -324,7 +318,7 @@ impl AsmIr {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: BranchLabel,
+        branch_dest: AsmLabel,
     ) {
         self.inst.push(AsmInst::IntegerCmpBr {
             mode,
@@ -339,7 +333,7 @@ impl AsmIr {
         mode: FMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: BranchLabel,
+        branch_dest: AsmLabel,
     ) {
         self.inst.push(AsmInst::FloatCmpBr {
             mode,
@@ -626,9 +620,9 @@ pub(super) enum AsmInst {
     Raise,
     MethodRet(BcPc),
     EnsureEnd,
-    Br(BranchLabel),
-    CondBr(BrKind, BranchLabel),
-    CheckLocal(BranchLabel),
+    Br(AsmLabel),
+    CondBr(BrKind, AsmLabel),
+    CheckLocal(AsmLabel),
     ///
     /// Conditional branch
     ///
@@ -639,13 +633,13 @@ pub(super) enum AsmInst {
     ///
     GenericCondBr {
         brkind: BrKind,
-        branch_dest: BranchLabel,
+        branch_dest: AsmLabel,
     },
     OptCase {
         max: u16,
         min: u16,
         opt_case_id: usize,
-        else_dest: BranchLabel,
+        else_dest: AsmLabel,
     },
 
     /// deoptimize
@@ -747,7 +741,7 @@ pub(super) enum AsmInst {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: BranchLabel,
+        branch_dest: AsmLabel,
     },
     FloatCmp {
         kind: CmpKind,
@@ -757,7 +751,7 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         mode: FMode,
         brkind: BrKind,
-        branch_dest: BranchLabel,
+        branch_dest: AsmLabel,
     },
 
     GuardBaseClass {
@@ -954,6 +948,8 @@ pub(super) enum AsmInst {
     },
 
     BcIndex(BcIndex),
+    Label(AsmLabel),
+    DestLabel(DestLabel),
 }
 
 #[derive(Clone, Debug)]
@@ -976,42 +972,35 @@ pub(super) enum SideExit {
     Error(BcPc, WriteBack),
 }
 
+impl JitContext {
+    pub(super) fn gen_continuation(&mut self, ir: &mut AsmIr) {
+        if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
+            ir.inst.push(AsmInst::Label(entry));
+            if let Some((from, to, pc)) = data {
+                from.write_back_for_target(&to, ir, pc);
+            }
+        }
+    }
+}
+
 impl Codegen {
-    pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
+    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext, ir: AsmIr) {
+        self.gen_asm(store, ctx, ir, None, None);
+
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            self.gen_bridge_code(store, ctx, ir, Some(entry), Some(exit));
+            self.gen_asm(store, ctx, ir, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
-        if let Some((ir, entry)) = std::mem::take(&mut ctx.continuation_bridge) {
-            self.gen_bridge_code(store, ctx, ir, Some(entry), None);
-        }
     }
 
-    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext, ir: AsmIr) {
-        let _map = self.gen_bridge_code(store, ctx, ir, None, None);
-        #[cfg(feature = "emit-asm")]
-        {
-            let map = _map
-                .into_iter()
-                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
-            ctx.sourcemap.extend(map);
-        }
-    }
-
-    pub(super) fn gen_continuation_code(&mut self, store: &Store, ctx: &mut JitContext) {
-        if let Some((ir, entry)) = std::mem::take(&mut ctx.continuation_bridge) {
-            self.gen_bridge_code(store, ctx, ir, Some(entry), None);
-        }
-    }
-
-    fn gen_bridge_code(
+    fn gen_asm(
         &mut self,
         store: &Store,
         ctx: &mut JitContext,
         ir: AsmIr,
-        entry: Option<BranchLabel>,
+        entry: Option<AsmLabel>,
         exit: Option<DestLabel>,
-    ) -> Vec<(BcIndex, usize)> {
+    ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();
@@ -1033,7 +1022,9 @@ impl Codegen {
             self.jit.bind_label(ctx[entry]);
         }
 
+        #[cfg(feature = "emit-asm")]
         let mut _sourcemap = vec![];
+
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
@@ -1049,7 +1040,13 @@ impl Codegen {
             self.jit.select_page(0);
         }
 
-        _sourcemap
+        #[cfg(feature = "emit-asm")]
+        if entry.is_none() {
+            let map = _sourcemap
+                .into_iter()
+                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
+            ctx.sourcemap.extend(map);
+        }
     }
 
     fn gen_asmir(
@@ -1061,6 +1058,12 @@ impl Codegen {
     ) {
         match inst {
             AsmInst::BcIndex(_) => {}
+            AsmInst::Label(label) => {
+                self.jit.bind_label(ctx[label]);
+            }
+            AsmInst::DestLabel(label) => {
+                self.jit.bind_label(label);
+            }
             AsmInst::AccToStack(r) => {
                 self.store_r15(r);
             }
