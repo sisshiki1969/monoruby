@@ -979,14 +979,15 @@ pub(super) enum SideExit {
 impl Codegen {
     pub(super) fn gen_bridges(&mut self, store: &Store, ctx: &mut JitContext) {
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            self.gen_bridge_code(store, ctx, ir, Some(entry.0), exit);
+            let entry = ctx.branch_labels[entry.0].unwrap();
+            self.gen_bridge_code(store, ctx, ir, Some(entry), exit);
         }
     }
 
     pub(super) fn gen_code(
         &mut self,
         store: &Store,
-        ctx: &JitContext,
+        ctx: &mut JitContext,
         ir: AsmIr,
     ) -> Vec<(BcIndex, usize)> {
         self.gen_bridge_code(store, ctx, ir, None, None)
@@ -995,7 +996,7 @@ impl Codegen {
     fn gen_bridge_code(
         &mut self,
         store: &Store,
-        ctx: &JitContext,
+        ctx: &mut JitContext,
         ir: AsmIr,
         entry: Option<DestLabel>,
         exit: Option<DestLabel>,
@@ -1009,6 +1010,13 @@ impl Codegen {
                 SideExit::Error(pc, wb) => self.gen_handle_error(pc, wb, label),
             }
         }
+
+        for label in ctx.branch_labels.iter_mut() {
+            if label.is_none() {
+                *label = Some(self.jit.label());
+            }
+        }
+
         if exit.is_some() {
             self.jit.select_page(1);
         }
@@ -1187,13 +1195,13 @@ impl Codegen {
                 };
             }
             AsmInst::Br(branch_dest) => {
-                let branch_dest = branch_dest.0;
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
                 monoasm!( &mut self.jit,
                     jmp branch_dest;
                 );
             }
             AsmInst::CondBr(brkind, branch_dest) => {
-                let branch_dest = branch_dest.0;
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
                 monoasm!( &mut self.jit,
                     orq rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -1204,7 +1212,7 @@ impl Codegen {
                 }
             }
             AsmInst::CheckLocal(branch_dest) => {
-                let branch_dest = branch_dest.0;
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
                 monoasm!( &mut self.jit,
                     testq rax, rax;
                     jnz  branch_dest;
@@ -1221,14 +1229,17 @@ impl Codegen {
                     bb_pos,
                     label_map,
                 } = &ctx.opt_case[opt_case_id];
+
+                // generate a jump table.
                 let jump_table = self.jit.const_align8();
                 for ofs in store[*id].branch_table.iter() {
                     let idx = *bb_pos + 1 + (*ofs as i32);
-                    let dest_label = label_map.get(&idx).cloned().unwrap().0;
+                    let dest_label =
+                        ctx.branch_labels[label_map.get(&idx).cloned().unwrap().0].unwrap();
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = else_dest.0;
+                let else_dest = ctx.branch_labels[else_dest.0].unwrap();
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);
@@ -1366,8 +1377,9 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
                 self.cmp_integer(&mode);
-                self.condbr_int(kind, branch_dest.0, brkind);
+                self.condbr_int(kind, branch_dest, brkind);
             }
             AsmInst::FloatCmp { kind, mode } => {
                 monoasm! { &mut self.jit,
@@ -1382,8 +1394,9 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
                 self.cmp_float(&mode);
-                self.condbr_float(kind, branch_dest.0, brkind);
+                self.condbr_float(kind, branch_dest, brkind);
             }
 
             AsmInst::GuardBaseClass { base_class, deopt } => {
@@ -1805,7 +1818,8 @@ impl Codegen {
                 brkind: kind,
                 branch_dest,
             } => {
-                self.cond_br(branch_dest.0, kind);
+                let branch_dest = ctx.branch_labels[branch_dest.0].unwrap();
+                self.cond_br(branch_dest, kind);
             }
 
             AsmInst::Inline { proc } => {

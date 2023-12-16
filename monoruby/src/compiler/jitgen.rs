@@ -37,6 +37,7 @@ struct JitContext {
     /// Destination labels for jump instructions.
     ///
     labels: HashMap<BcIndex, DestLabel>,
+    branch_labels: Vec<Option<DestLabel>>,
     ///
     /// Basic block information.
     ///
@@ -124,7 +125,7 @@ impl std::ops::Index<BcIndex> for Incoming {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct BranchLabel(DestLabel);
+struct BranchLabel(usize);
 
 #[derive(Debug, Clone)]
 struct OptCaseAsmInfo {
@@ -160,6 +161,7 @@ impl JitContext {
         let local_num = func.local_num();
         Self {
             labels,
+            branch_labels: vec![],
             bb_scan,
             loop_backedges: HashMap::default(),
             loop_exit: HashMap::default(),
@@ -177,6 +179,12 @@ impl JitContext {
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
+    }
+
+    fn branch_label(&mut self) -> BranchLabel {
+        let label = BranchLabel(self.branch_labels.len());
+        self.branch_labels.push(None);
+        label
     }
 
     ///
@@ -482,12 +490,13 @@ impl Codegen {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
+        let label = ctx.branch_label();
         ctx.branch_map.insert(
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
                 bbctx,
-                label: BranchLabel(self.jit.label()),
+                label,
                 cont: true,
             }],
         );
@@ -676,7 +685,7 @@ impl Codegen {
 
         let next_idx = bb_end + 1;
         if func.bb_info.is_bb_head(next_idx) {
-            let branch_dest = BranchLabel(self.jit.label());
+            let branch_dest = ctx.branch_label();
             ctx.new_continue(func, bb_end, next_idx, bbctx, branch_dest);
             if let Some(target_ctx) = ctx.incoming_context(func, next_idx) {
                 self.gen_bridges(store, ctx);
@@ -978,7 +987,7 @@ impl Codegen {
                 match (pc + 1).trace_ir() {
                     TraceIr::CondBr(_, disp, true, brkind) => {
                         let dest_idx = index + disp + 1;
-                        let branch_dest = BranchLabel(self.jit.label());
+                        let branch_dest = ctx.branch_label();
                         if mode.is_float_op(&pc) {
                             let deopt = ir.new_deopt(pc, bbctx.get_write_back());
                             let mode = ir.fmode(&mode, bbctx, pc, deopt);
@@ -1171,14 +1180,14 @@ impl Codegen {
             TraceIr::Br(disp) => {
                 let next_idx = bb_pos + 1;
                 let dest_idx = next_idx + disp;
-                let branch_dest = BranchLabel(self.jit.label());
+                let branch_dest = ctx.branch_label();
                 ir.inst.push(AsmInst::Br(branch_dest));
                 ctx.new_branch(func, bb_pos, dest_idx, bbctx.clone(), branch_dest);
                 return CompileResult::Exit;
             }
             TraceIr::CondBr(cond_, disp, false, brkind) => {
                 let dest_idx = bb_pos + 1 + disp;
-                let branch_dest = BranchLabel(self.jit.label());
+                let branch_dest = ctx.branch_label();
                 ir.fetch_to_reg(bbctx, cond_, GP::Rax);
                 ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                 ctx.new_branch(func, bb_pos, dest_idx, bbctx.clone(), branch_dest);
@@ -1186,7 +1195,7 @@ impl Codegen {
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, disp) => {
                 let dest_idx = bb_pos + 1 + disp;
-                let branch_dest = BranchLabel(self.jit.label());
+                let branch_dest = ctx.branch_label();
                 ir.fetch_to_reg(bbctx, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
                 ctx.new_branch(func, bb_pos, dest_idx, bbctx.clone(), branch_dest);
@@ -1198,7 +1207,7 @@ impl Codegen {
                 let mut label_map = HashMap::default();
                 for ofs in offsets {
                     let dest_idx = bb_pos + 1 + (*ofs as i32);
-                    let branch_dest = BranchLabel(self.jit.label());
+                    let branch_dest = ctx.branch_label();
                     label_map.insert(dest_idx, branch_dest);
                     ctx.new_branch(func, bb_pos, dest_idx, bbctx.clone(), branch_dest);
                 }
