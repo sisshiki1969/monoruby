@@ -71,7 +71,7 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 fn inline_class_new(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
@@ -82,11 +82,11 @@ fn inline_class_new(
         dst: ret,
         ..
     } = *callsite;
-    ir.fetch_callargs(ctx, callsite);
-    ctx.release(ret);
+    ir.fetch_callargs(bb, callsite);
+    bb.release(ret);
     ir.stack2reg(recv, GP::Rdi);
-    let using = ctx.get_using_xmm();
-    let wb = ctx.get_write_back();
+    let using = bb.get_using_xmm();
+    let wb = bb.get_write_back();
     let error = ir.new_error(pc, wb);
     ir.inline(move |gen, labels| {
         let cached_version = gen.jit.const_i32(-1);

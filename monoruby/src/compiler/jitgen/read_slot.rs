@@ -4,22 +4,22 @@ impl Codegen {
     ///
     /// Fetch *reg*s and store in corresponding stack slots.
     ///
-    pub(crate) fn fetch_slots(&mut self, store: &Store, ctx: &mut BBContext, reg: &[SlotId]) {
+    pub(crate) fn fetch_slots(&mut self, store: &Store, bb: &mut BBContext, reg: &[SlotId]) {
         let mut ir = AsmIr::new();
-        ir.fetch_slots(&mut ctx, reg);
+        ir.fetch_slots(bb, reg);
         self.gen_code(store, ir);
     }
 
     pub(crate) fn fetch_float_assume_float(
         &mut self,
         store: &Store,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         reg: SlotId,
         pc: BcPc,
     ) -> Xmm {
         let mut ir = AsmIr::new();
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
-        let x = ctx.fetch_float_assume_float(&mut ir, reg, deopt);
+        let deopt = ir.new_deopt(pc, bb.get_write_back());
+        let x = bb.fetch_float_assume_float(&mut ir, reg, deopt);
         self.gen_code(store, ir);
         x
     }

@@ -31,3 +31,9 @@ target/release/monoruby --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.
 diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
+
+cargo install --path monoruby
+monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
+ruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
+diff -s monoruby.log ruby.log
+rm *.log

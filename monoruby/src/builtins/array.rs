@@ -344,7 +344,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 fn array_shl(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
@@ -354,10 +354,10 @@ fn array_shl(
         args,
         ..
     } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    ir.fetch_to_reg(ctx, args, GP::Rsi);
-    let deopt_ = ir.new_deopt(pc, ctx.get_write_back());
-    ctx.release(ret);
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    ir.fetch_to_reg(bb, args, GP::Rsi);
+    let deopt_ = ir.new_deopt(pc, bb.get_write_back());
+    bb.release(ret);
     ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt_);
     ir.inline(|gen, _| {
         monoasm!( &mut gen.jit,
@@ -365,7 +365,7 @@ fn array_shl(
             call rax;
         );
     });
-    ir.rax2acc(ctx, ret);
+    ir.rax2acc(bb, ret);
 }
 
 /*fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {

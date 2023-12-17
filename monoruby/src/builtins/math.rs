@@ -75,7 +75,7 @@ fn cos(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result
 fn math_sqrt(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
@@ -85,14 +85,14 @@ fn math_sqrt(
         dst: ret,
         ..
     } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    let deopt = ir.new_deopt(pc, bb.get_write_back());
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = ir.fetch_float_assume_float(ctx, args, deopt).enc();
+    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = ctx.xmm_write_enc(ret);
+        let fret = bb.xmm_write_enc(ret);
         ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
@@ -101,28 +101,22 @@ fn math_sqrt(
     }
 }
 
-fn math_cos(
-    ir: &mut AsmIr,
-    _store: &Store,
-    ctx: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
+fn math_cos(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
     let CallSiteInfo {
         recv,
         args,
         dst: ret,
         ..
     } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    let deopt = ir.new_deopt(pc, bb.get_write_back());
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = ir.fetch_float_assume_float(ctx, args, deopt).enc();
+    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = ctx.xmm_write_enc(ret);
-        let using_xmm = ctx.get_using_xmm();
+        let fret = bb.xmm_write_enc(ret);
+        let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
             monoasm!( &mut gen.jit,
@@ -138,28 +132,22 @@ fn math_cos(
     }
 }
 
-fn math_sin(
-    ir: &mut AsmIr,
-    _store: &Store,
-    ctx: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
+fn math_sin(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc) {
     let CallSiteInfo {
         recv,
         args,
         dst: ret,
         ..
     } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    let deopt = ir.new_deopt(pc, bb.get_write_back());
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
-    let fsrc = ir.fetch_float_assume_float(ctx, args, deopt).enc();
+    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = ctx.xmm_write_enc(ret);
-        let using_xmm = ctx.get_using_xmm();
+        let fret = bb.xmm_write_enc(ret);
+        let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
             monoasm! { &mut gen.jit,

@@ -89,20 +89,20 @@ impl AsmIr {
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
-    pub(crate) fn rax2acc(&mut self, ctx: &mut BBContext, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc(ctx, GP::Rax, dst);
+    pub(crate) fn rax2acc(&mut self, bb: &mut BBContext, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc(bb, GP::Rax, dst);
     }
 
-    pub(crate) fn reg2acc(&mut self, ctx: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
+    pub(crate) fn reg2acc(&mut self, bb: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
-            ctx.clear();
-            if let Some(acc) = ctx.clear_r15()
-                && acc < ctx.sp
+            bb.clear();
+            if let Some(acc) = bb.clear_r15()
+                && acc < bb.sp
                 && acc != dst
             {
                 self.inst.push(AsmInst::AccToStack(acc));
             }
-            ctx.link_r15(dst);
+            bb.link_r15(dst);
             self.inst.push(AsmInst::RegToAcc(src));
         }
     }
@@ -479,32 +479,32 @@ impl AsmIr {
         self.inst.push(AsmInst::BcIndex(index));
     }
 
-    pub(super) fn jit_load_gvar(&mut self, ctx: &mut BBContext, name: IdentId, dst: SlotId) {
-        ctx.release(dst);
-        self.load_gvar(ctx, name);
-        self.rax2acc(ctx, dst);
+    pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
+        bb.release(dst);
+        self.load_gvar(bb, name);
+        self.rax2acc(bb, dst);
     }
 
-    pub(super) fn jit_store_gvar(&mut self, ctx: &mut BBContext, name: IdentId, src: SlotId) {
-        self.fetch_slots(ctx, &[src]);
-        self.store_gvar(ctx, name, src);
+    pub(super) fn jit_store_gvar(&mut self, bb: &mut BBContext, name: IdentId, src: SlotId) {
+        self.fetch_slots(bb, &[src]);
+        self.store_gvar(bb, name, src);
     }
 }
 
 impl AsmIr {
-    pub(super) fn fetch_binary(&mut self, ctx: &mut BBContext, mode: OpMode) {
+    pub(super) fn fetch_binary(&mut self, bb: &mut BBContext, mode: OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.fetch_to_reg(ctx, lhs, GP::Rdi);
-                self.fetch_to_reg(ctx, rhs, GP::Rsi);
+                self.fetch_to_reg(bb, lhs, GP::Rdi);
+                self.fetch_to_reg(bb, rhs, GP::Rsi);
             }
             OpMode::RI(lhs, rhs) => {
-                self.fetch_to_reg(ctx, lhs, GP::Rdi);
+                self.fetch_to_reg(bb, lhs, GP::Rdi);
                 self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
                 self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
-                self.fetch_to_reg(ctx, rhs, GP::Rsi);
+                self.fetch_to_reg(bb, rhs, GP::Rsi);
             }
         }
     }
@@ -512,30 +512,30 @@ impl AsmIr {
     pub(super) fn fmode(
         &mut self,
         mode: &OpMode,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         pc: BcPc,
         deopt: AsmDeopt,
     ) -> FMode {
         match mode {
             OpMode::RR(l, r) => {
-                let (flhs, frhs) = self.fetch_float_binary(ctx, *l, *r, pc, deopt);
+                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, pc, deopt);
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
-                let l = self.fetch_float_assume_float(ctx, *l, deopt);
+                let l = self.fetch_float_assume_float(bb, *l, deopt);
                 FMode::RI(l, *r)
             }
             OpMode::IR(l, r) => {
-                let r = self.fetch_float_assume_float(ctx, *r, deopt);
+                let r = self.fetch_float_assume_float(bb, *r, deopt);
                 FMode::IR(*l, r)
             }
         }
     }
 
-    pub(super) fn write_back_locals(&mut self, ctx: &mut BBContext) {
-        let wb = ctx.get_locals_write_back();
+    pub(super) fn write_back_locals(&mut self, bb: &mut BBContext) {
+        let wb = bb.get_locals_write_back();
         self.inst.push(AsmInst::WriteBack(wb));
-        ctx.release_locals();
+        bb.release_locals();
     }
 }
 

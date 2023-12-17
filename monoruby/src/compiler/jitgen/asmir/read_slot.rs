@@ -28,72 +28,72 @@ impl AsmIr {
     ///
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
-    fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, ctx.sp);
+    fn fetch_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
+        if reg >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
             panic!();
         };
-        match ctx[reg] {
+        match bb[reg] {
             LinkMode::Xmm(freg) => {
-                ctx[reg] = LinkMode::Both(freg);
+                bb[reg] = LinkMode::Both(freg);
                 self.xmm2both(freg, vec![reg]);
             }
             LinkMode::Literal(v) => {
-                ctx[reg] = LinkMode::Stack;
+                bb[reg] = LinkMode::Stack;
                 self.lit2stack(v, reg);
             }
             LinkMode::R15 => {
-                ctx.release(reg);
+                bb.release(reg);
                 self.acc2stack(reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
     }
 
-    pub(crate) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
-        reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
+    pub(crate) fn fetch_slots(&mut self, bb: &mut BBContext, reg: &[SlotId]) {
+        reg.iter().for_each(|r| self.fetch_slot(bb, *r));
     }
 
     ///
     /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
     ///
-    pub(crate) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
+    pub(crate) fn fetch_range(&mut self, bb: &mut BBContext, args: SlotId, len: u16) {
         for reg in args.0..args.0 + len {
-            self.fetch_slot(ctx, SlotId::new(reg))
+            self.fetch_slot(bb, SlotId::new(reg))
         }
     }
 
-    pub(crate) fn fetch_callargs(&mut self, ctx: &mut BBContext, callsite: &CallSiteInfo) {
+    pub(crate) fn fetch_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
         let CallSiteInfo {
             recv, args, len, ..
         } = callsite;
-        self.fetch_slot(ctx, *recv);
-        self.fetch_range(ctx, *args, *len as u16);
+        self.fetch_slot(bb, *recv);
+        self.fetch_range(bb, *args, *len as u16);
     }
 
-    pub(crate) fn fetch_to_reg(&mut self, ctx: &mut BBContext, reg: SlotId, dst: GP) {
-        if reg >= ctx.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, ctx.sp);
+    pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, reg: SlotId, dst: GP) {
+        if reg >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
             panic!();
         };
-        match ctx[reg] {
+        match bb[reg] {
             LinkMode::Xmm(x) => {
                 if dst == GP::R15 {
-                    self.writeback_acc(ctx);
+                    self.writeback_acc(bb);
                 }
                 self.xmm2both(x, vec![reg]);
                 self.reg_move(GP::Rax, dst);
-                ctx[reg] = LinkMode::Both(x);
+                bb[reg] = LinkMode::Both(x);
             }
             LinkMode::Literal(v) => {
                 if dst == GP::R15 {
-                    self.writeback_acc(ctx);
+                    self.writeback_acc(bb);
                 }
                 self.inst.push(AsmInst::LitToReg(v, dst));
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 if dst == GP::R15 {
-                    self.writeback_acc(ctx);
+                    self.writeback_acc(bb);
                 }
                 self.stack2reg(reg, dst);
             }
@@ -103,9 +103,9 @@ impl AsmIr {
         }
     }
 
-    pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, ctx: &mut BBContext) {
-        if let Some(slot) = ctx.clear_r15()
-            && slot < ctx.sp
+    pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
+        if let Some(slot) = bb.clear_r15()
+            && slot < bb.sp
         {
             self.acc2stack(slot);
         }
@@ -119,33 +119,33 @@ impl AsmIr {
     ///
     fn fetch_float_assume_integer(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         reg: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match ctx[reg] {
+        match bb[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 self.stack2reg(reg, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
-                ctx.link_both(reg, x);
+                bb.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 self.int2xmm(GP::R15, x, deopt);
-                ctx.link_both(reg, x);
+                bb.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 if let Some(f) = v.try_float() {
                     self.f64toxmm(f, x);
-                    ctx.link_xmm(reg, x);
+                    bb.link_xmm(reg, x);
                 } else if let Some(i) = v.try_fixnum() {
                     self.i64toboth(i, reg, x);
-                    ctx.link_both(reg, x);
+                    bb.link_both(reg, x);
                 } else {
                     unreachable!()
                 }
@@ -163,33 +163,33 @@ impl AsmIr {
     ///
     pub(crate) fn fetch_float_assume_float(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         reg: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match ctx[reg] {
+        match bb[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 self.stack2reg(reg, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
-                ctx.link_both(reg, x);
+                bb.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 self.float2xmm(GP::R15, x, deopt);
-                ctx.link_both(reg, x);
+                bb.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
-                let x = ctx.alloc_xmm();
+                let x = bb.alloc_xmm();
                 if let Some(f) = v.try_float() {
                     self.f64toxmm(f, x);
-                    ctx.link_xmm(reg, x);
+                    bb.link_xmm(reg, x);
                 } else if let Some(i) = v.try_fixnum() {
                     self.i64toboth(i, reg, x);
-                    ctx.link_both(reg, x);
+                    bb.link_both(reg, x);
                 } else {
                     unreachable!()
                 }
@@ -206,21 +206,21 @@ impl AsmIr {
     ///
     fn fetch_float_assume(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         rhs: SlotId,
         class: ClassId,
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(ctx, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_assume_float(ctx, rhs, deopt),
+            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }
 
     pub(super) fn fetch_float_binary(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
@@ -228,11 +228,11 @@ impl AsmIr {
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.fetch_float_assume(ctx, lhs, pc.classid1(), deopt),
-                self.fetch_float_assume(ctx, rhs, pc.classid2(), deopt),
+                self.fetch_float_assume(bb, lhs, pc.classid1(), deopt),
+                self.fetch_float_assume(bb, rhs, pc.classid2(), deopt),
             )
         } else {
-            let lhs = self.fetch_float_assume(ctx, lhs, pc.classid1(), deopt);
+            let lhs = self.fetch_float_assume(bb, lhs, pc.classid1(), deopt);
             (lhs, lhs)
         }
     }

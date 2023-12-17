@@ -130,7 +130,7 @@ impl Codegen {
 impl JitContext {
     pub(in crate::compiler::jitgen) fn class_def(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         dst: Option<SlotId>,
         superclass: SlotId,
         name: IdentId,
@@ -138,10 +138,10 @@ impl JitContext {
         is_module: bool,
         pc: BcPc,
     ) {
-        self.ir.fetch_slots(ctx, &[superclass]);
-        ctx.release(dst);
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.ir.new_error(pc, ctx.get_write_back());
+        self.ir.fetch_slots(bb, &[superclass]);
+        bb.release(dst);
+        let using_xmm = bb.get_using_xmm();
+        let error = self.ir.new_error(pc, bb.get_write_back());
         self.ir.inst.push(AsmInst::ClassDef {
             superclass,
             dst,
@@ -155,16 +155,16 @@ impl JitContext {
 
     pub(in crate::compiler::jitgen) fn singleton_class_def(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
         pc: BcPc,
     ) {
-        self.ir.fetch_slots(ctx, &[base]);
-        ctx.release(dst);
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.ir.new_error(pc, ctx.get_write_back());
+        self.ir.fetch_slots(bb, &[base]);
+        bb.release(dst);
+        let using_xmm = bb.get_using_xmm();
+        let error = self.ir.new_error(pc, bb.get_write_back());
         self.ir.inst.push(AsmInst::SingletonClassDef {
             base,
             dst,

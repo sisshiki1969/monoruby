@@ -53,14 +53,14 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<V
 fn object_object_id(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    ctx.release(ret);
-    let using = ctx.get_using_xmm();
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    bb.release(ret);
+    let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
@@ -69,7 +69,7 @@ fn object_object_id(
         }
         gen.xmm_restore(using);
     });
-    ir.rax2acc(ctx, ret);
+    ir.rax2acc(bb, ret);
 }
 
 ///
@@ -388,7 +388,7 @@ const CACHE_SIZE: usize = 8;
 fn object_send(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     _pc: BcPc,
 ) {
@@ -400,9 +400,9 @@ fn object_send(
         block_fid: block_func_id,
         ..
     } = *callsite;
-    ir.fetch_callargs(ctx, callsite);
-    ctx.release(dst);
-    let using = ctx.get_using_xmm();
+    ir.fetch_callargs(bb, callsite);
+    bb.release(dst);
+    let using = bb.get_using_xmm();
     let bh = match block_func_id {
         None => 0,
         Some(func_id) => BlockHandler::from(func_id).0.id(),

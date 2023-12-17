@@ -375,7 +375,7 @@ impl Codegen {
 impl AsmIr {
     pub(in crate::compiler::jitgen) fn gen_binop_integer(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         pc: BcPc,
         kind: BinOpK,
         dst: Option<SlotId>,
@@ -385,39 +385,39 @@ impl AsmIr {
             BinOpK::Add | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        self.fetch_fixnum_rr(ctx, lhs, rhs, pc);
+                        self.fetch_fixnum_rr(bb, lhs, rhs, pc);
                     }
                     OpMode::RI(slot, _) | OpMode::IR(_, slot) => {
-                        self.fetch_fixnum_rdi(ctx, slot, pc);
+                        self.fetch_fixnum_rdi(bb, slot, pc);
                     }
                 }
-                ctx.release(dst);
-                self.integer_binop(ctx, pc, kind, mode);
+                bb.release(dst);
+                self.integer_binop(bb, pc, kind, mode);
                 self.reg2stack(GP::Rdi, dst);
             }
             BinOpK::Sub => {
-                self.fetch_fixnum_binary(ctx, pc, &mode);
-                ctx.release(dst);
-                self.integer_binop(ctx, pc, kind, mode);
+                self.fetch_fixnum_binary(bb, pc, &mode);
+                bb.release(dst);
+                self.integer_binop(bb, pc, kind, mode);
                 self.reg2stack(GP::Rdi, dst);
             }
             BinOpK::Exp | BinOpK::Mul | BinOpK::Div => {
-                self.fetch_fixnum_mode(ctx, &mode, pc);
-                ctx.release(dst);
-                self.integer_binop(ctx, pc, kind, mode);
+                self.fetch_fixnum_mode(bb, &mode, pc);
+                bb.release(dst);
+                self.integer_binop(bb, pc, kind, mode);
                 self.reg2stack(GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    self.fetch_fixnum_rdi(ctx, lhs, pc);
-                    ctx.release(dst);
-                    self.integer_binop(ctx, pc, kind, mode);
+                    self.fetch_fixnum_rdi(bb, lhs, pc);
+                    bb.release(dst);
+                    self.integer_binop(bb, pc, kind, mode);
                     self.reg2stack(GP::Rdi, dst);
                 }
                 _ => {
-                    self.fetch_fixnum_mode(ctx, &mode, pc);
-                    ctx.release(dst);
-                    self.integer_binop(ctx, pc, kind, mode);
+                    self.fetch_fixnum_mode(bb, &mode, pc);
+                    bb.release(dst);
+                    self.integer_binop(bb, pc, kind, mode);
                     self.reg2stack(GP::Rax, dst);
                 }
             },
@@ -426,35 +426,35 @@ impl AsmIr {
 
     pub(in crate::compiler::jitgen) fn fetch_fixnum_binary(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         pc: BcPc,
         mode: &OpMode,
     ) {
         match mode {
             OpMode::RR(l, r) => {
-                self.fetch_fixnum_rr(ctx, *l, *r, pc);
+                self.fetch_fixnum_rr(bb, *l, *r, pc);
             }
             OpMode::RI(l, _) => {
-                self.fetch_fixnum_rdi(ctx, *l, pc);
+                self.fetch_fixnum_rdi(bb, *l, pc);
             }
             OpMode::IR(_, r) => {
-                self.fetch_fixnum_rsi(ctx, *r, pc);
+                self.fetch_fixnum_rsi(bb, *r, pc);
             }
         }
     }
 
     fn fetch_fixnum_rr(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
     ) -> AsmDeopt {
-        let is_lhs_smi = ctx.is_i16_literal(lhs).is_some();
-        let is_rhs_smi = ctx.is_i16_literal(rhs).is_some();
-        self.fetch_to_reg(ctx, lhs, GP::Rdi);
-        self.fetch_to_reg(ctx, rhs, GP::Rsi);
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        let is_lhs_smi = bb.is_i16_literal(lhs).is_some();
+        let is_rhs_smi = bb.is_i16_literal(rhs).is_some();
+        self.fetch_to_reg(bb, lhs, GP::Rdi);
+        self.fetch_to_reg(bb, rhs, GP::Rsi);
+        let deopt = self.new_deopt(pc, bb.get_write_back());
 
         if !is_lhs_smi {
             self.guard_fixnum(GP::Rdi, deopt);
@@ -465,18 +465,18 @@ impl AsmIr {
         deopt
     }
 
-    fn fetch_fixnum_rdi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
-        self.fetch_fixnum(ctx, slot, GP::Rdi, pc)
+    fn fetch_fixnum_rdi(&mut self, bb: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
+        self.fetch_fixnum(bb, slot, GP::Rdi, pc)
     }
 
-    fn fetch_fixnum_rsi(&mut self, ctx: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
-        self.fetch_fixnum(ctx, slot, GP::Rsi, pc)
+    fn fetch_fixnum_rsi(&mut self, bb: &mut BBContext, slot: SlotId, pc: BcPc) -> AsmDeopt {
+        self.fetch_fixnum(bb, slot, GP::Rsi, pc)
     }
 
-    fn fetch_fixnum(&mut self, ctx: &mut BBContext, slot: SlotId, reg: GP, pc: BcPc) -> AsmDeopt {
-        let is_smi = ctx.is_i16_literal(slot).is_some();
-        self.fetch_to_reg(ctx, slot, reg);
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
+    fn fetch_fixnum(&mut self, bb: &mut BBContext, slot: SlotId, reg: GP, pc: BcPc) -> AsmDeopt {
+        let is_smi = bb.is_i16_literal(slot).is_some();
+        self.fetch_to_reg(bb, slot, reg);
+        let deopt = self.new_deopt(pc, bb.get_write_back());
 
         if !is_smi {
             self.guard_fixnum(reg, deopt);
@@ -484,19 +484,19 @@ impl AsmIr {
         deopt
     }
 
-    fn fetch_fixnum_mode(&mut self, ctx: &mut BBContext, mode: &OpMode, pc: BcPc) -> AsmDeopt {
+    fn fetch_fixnum_mode(&mut self, bb: &mut BBContext, mode: &OpMode, pc: BcPc) -> AsmDeopt {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                let deopt = self.fetch_fixnum_rr(ctx, *lhs, *rhs, pc);
+                let deopt = self.fetch_fixnum_rr(bb, *lhs, *rhs, pc);
                 deopt
             }
             OpMode::RI(lhs, rhs) => {
-                let deopt = self.fetch_fixnum_rdi(ctx, *lhs, pc);
+                let deopt = self.fetch_fixnum_rdi(bb, *lhs, pc);
                 self.lit2reg(Value::i32(*rhs as i32), GP::Rsi);
                 deopt
             }
             OpMode::IR(lhs, rhs) => {
-                let deopt = self.fetch_fixnum_rsi(ctx, *rhs, pc);
+                let deopt = self.fetch_fixnum_rsi(bb, *rhs, pc);
                 self.lit2reg(Value::i32(*lhs as i32), GP::Rdi);
                 deopt
             }

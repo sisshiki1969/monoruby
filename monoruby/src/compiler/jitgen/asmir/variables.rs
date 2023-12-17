@@ -226,18 +226,18 @@ impl Codegen {
 impl JitContext {
     pub(in crate::compiler::jitgen) fn load_ivar(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         name: IdentId,
         dst: SlotId,
         cached_class: ClassId,
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        ctx.release(dst);
+        bb.release(dst);
         self.ir.stack2reg(SlotId(0), GP::Rdi);
-        let using_xmm = ctx.get_using_xmm();
-        let is_object_ty = ctx.self_value.ty() == Some(ObjKind::OBJECT);
-        let is_self_cached = ctx.self_value.class() == cached_class;
+        let using_xmm = bb.get_using_xmm();
+        let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);
+        let is_self_cached = bb.self_value.class() == cached_class;
         self.ir.inst.push(AsmInst::LoadIVar {
             name,
             cached_ivarid,
@@ -245,12 +245,12 @@ impl JitContext {
             is_self_cached,
             using_xmm,
         });
-        self.ir.rax2acc(ctx, dst);
+        self.ir.rax2acc(bb, dst);
     }
 
     pub(in crate::compiler::jitgen) fn store_ivar(
         &mut self,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         name: IdentId,
         src: SlotId,
         pc: BcPc,
@@ -258,10 +258,10 @@ impl JitContext {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.ir.fetch_to_reg(ctx, src, GP::Rax);
+        self.ir.fetch_to_reg(bb, src, GP::Rax);
         self.ir.stack2reg(SlotId(0), GP::Rdi);
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.ir.new_error(pc, ctx.get_write_back());
+        let using_xmm = bb.get_using_xmm();
+        let error = self.ir.new_error(pc, bb.get_write_back());
         let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
         let is_self_cached = self.self_value.class() == cached_class;
         self.ir.inst.push(AsmInst::StoreIVar {

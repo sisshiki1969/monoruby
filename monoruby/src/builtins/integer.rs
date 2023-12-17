@@ -152,18 +152,18 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 fn integer_tof(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    ir.fetch_to_reg(ctx, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    let deopt = ir.new_deopt(pc, bb.get_write_back());
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
     if let Some(ret) = ret {
-        let fret = ctx.xmm_write_enc(ret);
+        let fret = bb.xmm_write_enc(ret);
         ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;
@@ -290,7 +290,7 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 fn integer_shr(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
@@ -300,22 +300,22 @@ fn integer_shr(
         args,
         ..
     } = *callsite;
-    if let Some(rhs) = ctx.is_u8_literal(args) {
-        ir.fetch_to_reg(ctx, recv, GP::Rdi);
-        ctx.release(ret);
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    if let Some(rhs) = bb.is_u8_literal(args) {
+        ir.fetch_to_reg(bb, recv, GP::Rdi);
+        bb.release(ret);
+        let deopt = ir.new_deopt(pc, bb.get_write_back());
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
-        ir.fetch_to_reg(ctx, recv, GP::Rdi);
-        ir.fetch_to_reg(ctx, args, GP::Rsi);
-        ctx.release(ret);
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+        ir.fetch_to_reg(bb, recv, GP::Rdi);
+        ir.fetch_to_reg(bb, args, GP::Rsi);
+        bb.release(ret);
+        let deopt = ir.new_deopt(pc, bb.get_write_back());
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
-    ir.reg2acc(ctx, GP::Rdi, ret);
+    ir.reg2acc(bb, GP::Rdi, ret);
 }
 
 ///
@@ -340,7 +340,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 fn integer_shl(
     ir: &mut AsmIr,
     _store: &Store,
-    ctx: &mut BBContext,
+    bb: &mut BBContext,
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
@@ -350,22 +350,22 @@ fn integer_shl(
         args,
         ..
     } = *callsite;
-    if let Some(rhs) = ctx.is_u8_literal(args) {
-        ir.fetch_to_reg(ctx, recv, GP::Rdi);
-        ctx.release(ret);
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+    if let Some(rhs) = bb.is_u8_literal(args) {
+        ir.fetch_to_reg(bb, recv, GP::Rdi);
+        bb.release(ret);
+        let deopt = ir.new_deopt(pc, bb.get_write_back());
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
     } else {
-        ir.fetch_to_reg(ctx, recv, GP::Rdi);
-        ir.fetch_to_reg(ctx, args, GP::Rsi);
-        ctx.release(ret);
-        let deopt = ir.new_deopt(pc, ctx.get_write_back());
+        ir.fetch_to_reg(bb, recv, GP::Rdi);
+        ir.fetch_to_reg(bb, args, GP::Rsi);
+        bb.release(ret);
+        let deopt = ir.new_deopt(pc, bb.get_write_back());
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
-    ir.reg2acc(ctx, GP::Rdi, ret);
+    ir.reg2acc(bb, GP::Rdi, ret);
 }
 
 ///

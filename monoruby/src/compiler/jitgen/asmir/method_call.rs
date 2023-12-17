@@ -720,22 +720,22 @@ impl AsmIr {
     pub(in crate::compiler::jitgen) fn gen_call(
         &mut self,
         store: &Store,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
     ) -> Option<()> {
         let CallSiteInfo { dst, .. } = store[callid];
-        self.fetch_callargs(ctx, &store[callid]);
-        ctx.release(dst);
-        if store[callid].recv.is_zero() && Some(ctx.self_value.class()) != pc.cached_class1() {
+        self.fetch_callargs(bb, &store[callid]);
+        bb.release(dst);
+        if store[callid].recv.is_zero() && Some(bb.self_value.class()) != pc.cached_class1() {
             // the cache is invalid because the receiver class is not matched.
-            self.writeback_acc(ctx);
-            self.send_not_cached(ctx, pc, callid);
+            self.writeback_acc(bb);
+            self.send_not_cached(bb, pc, callid);
         } else {
-            self.gen_call_cached(store, ctx, callid, fid, pc)?;
+            self.gen_call_cached(store, bb, callid, fid, pc)?;
         }
-        self.rax2acc(ctx, dst);
+        self.rax2acc(bb, dst);
         Some(())
     }
 
@@ -745,7 +745,7 @@ impl AsmIr {
     fn gen_call_cached(
         &mut self,
         store: &Store,
-        ctx: &mut BBContext,
+        bb: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
@@ -758,7 +758,7 @@ impl AsmIr {
             ..
         } = store[callid];
         let cached_class = pc.cached_class1().unwrap();
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
+        let deopt = self.new_deopt(pc, bb.get_write_back());
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_zero() {
@@ -779,7 +779,7 @@ impl AsmIr {
                 } else {
                     let ivar_id = store[cached_class].get_ivarid(ivar_name);
                     self.stack2reg(recv, GP::Rdi);
-                    self.attr_reader(ctx, ivar_name, ivar_id);
+                    self.attr_reader(bb, ivar_name, ivar_id);
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -789,15 +789,15 @@ impl AsmIr {
                 assert!(store[callid].block_arg.is_none());
                 let ivar_id = store[cached_class].get_ivarid(ivar_name);
                 self.stack2reg(recv, GP::Rdi);
-                self.attr_writer(ctx, pc, ivar_name, ivar_id, args);
+                self.attr_writer(bb, pc, ivar_name, ivar_id, args);
             }
             FuncKind::Builtin { .. } => {
-                self.writeback_acc(ctx);
-                self.send_cached(ctx, pc, callid, fid, cached_class, true);
+                self.writeback_acc(bb);
+                self.send_cached(bb, pc, callid, fid, cached_class, true);
             }
             FuncKind::ISeq(_) => {
-                self.writeback_acc(ctx);
-                self.send_cached(ctx, pc, callid, fid, cached_class, false);
+                self.writeback_acc(bb);
+                self.send_cached(bb, pc, callid, fid, cached_class, false);
             }
         };
         Some(())

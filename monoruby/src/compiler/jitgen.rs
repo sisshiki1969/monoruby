@@ -253,16 +253,16 @@ impl JitContext {
     fn new_backedge(
         &mut self,
         func: &ISeqInfo,
-        bbctx: &mut BBContext,
+        bb: &mut BBContext,
         bb_pos: BcIndex,
         dest_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
-        bbctx.sp = func.get_sp(bb_pos);
+        bb.sp = func.get_sp(bb_pos);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:[{:?}] {bb_pos}", bbctx.sp);
+        eprintln!("   new_backedge:[{:?}] {bb_pos}", bb.sp);
         self.backedge_map
-            .insert(bb_pos, (dest_label, bbctx.clone(), unused));
+            .insert(bb_pos, (dest_label, bb.clone(), unused));
     }
 
     fn compile_bb(
@@ -315,30 +315,30 @@ impl JitContext {
         &mut self,
         store: &Store,
         func: &ISeqInfo,
-        bbctx: &mut BBContext,
+        bb: &mut BBContext,
         position: Option<BcPc>,
         bb_begin: BcIndex,
         bb_end: BcIndex,
     ) -> bool {
         for bb_pos in bb_begin..=bb_end {
             self.ir.bc_index(bb_pos);
-            bbctx.next_sp = func.get_sp(bb_pos);
+            bb.next_sp = func.get_sp(bb_pos);
 
-            match self.compile_inst(bbctx, store, func, bb_pos) {
+            match self.compile_inst(bb, store, func, bb_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Exit => {
                     return true;
                 }
                 CompileResult::Recompile => {
                     let pc = func.get_pc(bb_pos);
-                    self.ir.recompile_and_deopt(&bbctx, pc, position);
+                    self.ir.recompile_and_deopt(&bb, pc, position);
                     return true;
                 }
                 CompileResult::Break => break,
             }
 
-            bbctx.clear();
-            bbctx.sp = bbctx.next_sp;
+            bb.clear();
+            bb.sp = bb.next_sp;
         }
 
         false
