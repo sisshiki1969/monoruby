@@ -4,10 +4,12 @@ use super::*;
 
 mod binary_op;
 mod constants;
+mod defined;
+mod definition;
 mod index;
-mod ivar;
 mod method_call;
 mod read_slot;
+mod variables;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmDeopt(usize);
@@ -341,18 +343,6 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_index(&mut self, ctx: &BBContext, pc: BcPc, base: SlotId, idx: SlotId) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
-        self.inst.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
-    }
-
     pub(super) fn array_u16_index_assign(&mut self, ctx: &BBContext, pc: BcPc, idx: u16) {
         let using_xmm = ctx.get_using_xmm();
         let deopt = self.new_deopt(pc, ctx.get_write_back());
@@ -372,26 +362,6 @@ impl AsmIr {
         self.inst.push(AsmInst::ArrayIndexAssign {
             using_xmm,
             deopt,
-            error,
-        });
-    }
-
-    pub(super) fn generic_index_assign(
-        &mut self,
-        ctx: &BBContext,
-        pc: BcPc,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-    ) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
-        self.inst.push(AsmInst::GenericIndexAssign {
-            src,
-            base,
-            idx,
-            pc,
-            using_xmm,
             error,
         });
     }
@@ -1199,21 +1169,21 @@ impl Codegen {
                     jne  raise;
                 };
             }
-            AsmInst::Br(branch_dest) => {
-                let branch_dest = ctx[branch_dest];
+            AsmInst::Br(dest) => {
+                let dest = ctx[dest];
                 monoasm!( &mut self.jit,
-                    jmp branch_dest;
+                    jmp dest;
                 );
             }
-            AsmInst::CondBr(brkind, branch_dest) => {
-                let branch_dest = ctx[branch_dest];
+            AsmInst::CondBr(brkind, dest) => {
+                let dest = ctx[dest];
                 monoasm!( &mut self.jit,
                     orq rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
                 );
                 match brkind {
-                    BrKind::BrIf => monoasm!( &mut self.jit, jne branch_dest;),
-                    BrKind::BrIfNot => monoasm!( &mut self.jit, jeq branch_dest;),
+                    BrKind::BrIf => monoasm!( &mut self.jit, jne dest;),
+                    BrKind::BrIfNot => monoasm!( &mut self.jit, jeq dest;),
                 }
             }
             AsmInst::CheckLocal(branch_dest) => {
@@ -1351,30 +1321,7 @@ impl Codegen {
                 self.generic_cmp(&kind, using_xmm);
                 self.handle_error(labels[error]);
             }
-            AsmInst::IntegerCmp { kind, mode } => {
-                if matches!(kind, CmpKind::Cmp) {
-                    match mode {
-                        OpMode::RR(..) => {}
-                        OpMode::RI(_, r) => {
-                            monoasm!( &mut self.jit,
-                                movq rsi, (Value::i32(r as i32).id());
-                            );
-                        }
-                        OpMode::IR(l, _) => {
-                            monoasm!( &mut self.jit,
-                                movq rdi, (Value::i32(l as i32).id());
-                            );
-                        }
-                    }
-                    self.icmp_cmp();
-                } else {
-                    monoasm! { &mut self.jit,
-                        xorq rax, rax;
-                    };
-                    self.cmp_integer(&mode);
-                    self.flag_to_bool(kind);
-                }
-            }
+            AsmInst::IntegerCmp { kind, mode } => self.integer_cmp(kind, mode),
             AsmInst::IntegerCmpBr {
                 mode,
                 kind,
@@ -1516,13 +1463,9 @@ impl Codegen {
                 self.handle_error(labels[error]);
                 self.store_rax(ret);
             }
-            AsmInst::LoadDynVar { src } => {
-                self.get_outer(src.outer);
-                let offset = conv(src.reg) - LBP_OUTER;
-                monoasm!( &mut self.jit,
-                    movq rax, [rax - (offset)];
-                );
-            }
+
+            AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
+            AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
 
             AsmInst::LoadIVar {
                 name,
@@ -1530,33 +1473,7 @@ impl Codegen {
                 is_object_ty,
                 is_self_cached,
                 using_xmm,
-            } => {
-                if is_object_ty && is_self_cached {
-                    if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                        monoasm!( &mut self.jit,
-                            movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
-                        );
-                        // We must check whether the ivar slot is None.
-                        monoasm!( &mut self.jit,
-                            movq rdi, (NIL_VALUE);
-                            testq rax, rax;
-                            cmoveqq rax, rdi;
-                        );
-                    } else {
-                        self.load_ivar_heap(cached_ivarid, is_object_ty);
-                    }
-                } else {
-                    // ctx.self_class != cached_class merely happens, but possible.
-                    self.xmm_save(using_xmm);
-                    monoasm!( &mut self.jit,
-                        movq rsi, (name.get());  // id: IdentId
-                        movq rdx, r12; // &mut Globals
-                        movq rax, (ivar::get_instance_var);
-                        call rax;
-                    );
-                    self.xmm_restore(using_xmm);
-                }
-            }
+            } => self.load_ivar(name, cached_ivarid, is_object_ty, is_self_cached, using_xmm),
             AsmInst::StoreIVar {
                 name,
                 cached_ivarid,
@@ -1564,76 +1481,22 @@ impl Codegen {
                 is_self_cached,
                 using_xmm,
                 error,
-            } => {
-                let exit = self.jit.label();
-                if is_self_cached {
-                    if is_object_ty && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                        monoasm!( &mut self.jit,
-                            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
-                        );
-                    } else {
-                        self.store_ivar_heap(cached_ivarid, is_object_ty, using_xmm);
-                    }
-                } else {
-                    self.xmm_save(using_xmm);
-                    monoasm!( &mut self.jit,
-                        movq rdx, rdi;  // base: Value
-                        movq rcx, (name.get());  // id: IdentId
-                        movq r8, rax;   // val: Value
-                        movq rdi, rbx; //&mut Executor
-                        movq rsi, r12; //&mut Globals
-                        movq rax, (ivar::set_instance_var);
-                        call rax;
-                    );
-                    self.xmm_restore(using_xmm);
-                    self.handle_error(labels[error]);
-                }
-                self.jit.bind_label(exit);
-            }
+            } => self.store_ivar(
+                name,
+                cached_ivarid,
+                is_object_ty,
+                is_self_cached,
+                using_xmm,
+                labels[error],
+            ),
 
-            AsmInst::StoreDynVar { dst, src } => {
-                self.get_outer(dst.outer);
-                let offset = conv(dst.reg) - LBP_OUTER;
-                monoasm!( &mut self.jit,
-                    movq [rax - (offset)], R(src as _);
-                );
-            }
-            AsmInst::LoadGVar { name, using_xmm } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, r12;
-                    movl rsi, (name.get());
-                    movq rax, (runtime::get_global_var);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            AsmInst::LoadGVar { name, using_xmm } => self.load_gvar(name, using_xmm),
             AsmInst::StoreGVar {
                 name,
                 src,
                 using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, r12;
-                    movl rsi, (name.get());
-                    movq rdx, [r14 - (conv(src))];
-                    movq rax, (runtime::set_global_var);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::LoadSVar { id, using_xmm } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movl rsi, r12;
-                    movl rdx, (id);
-                    movq rax, (runtime::get_special_var);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            } => self.store_gvar(name, src, using_xmm),
+            AsmInst::LoadSVar { id, using_xmm } => self.load_svar(id, using_xmm),
 
             AsmInst::ClassDef {
                 superclass,
@@ -1644,12 +1507,15 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.xmm_save(using_xmm);
-                self.class_def(superclass, name, is_module);
-                self.handle_error(labels[error]);
-                self.jit_class_def_sub(func_id, dst);
-                self.handle_error(labels[error]);
-                self.xmm_restore(using_xmm);
+                self.class_def(
+                    superclass,
+                    dst,
+                    name,
+                    func_id,
+                    is_module,
+                    using_xmm,
+                    labels[error],
+                );
             }
             AsmInst::SingletonClassDef {
                 base,
@@ -1658,12 +1524,7 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.xmm_save(using_xmm);
-                self.singleton_class_def(base);
-                self.handle_error(labels[error]);
-                self.jit_class_def_sub(func_id, dst);
-                self.handle_error(labels[error]);
-                self.xmm_restore(using_xmm);
+                self.singleton_class_def(base, dst, func_id, using_xmm, labels[error]);
             }
             AsmInst::MethodDef {
                 name,
@@ -1699,9 +1560,7 @@ impl Codegen {
                 arg,
                 len,
                 using_xmm,
-            } => {
-                self.concat_string(arg, len, using_xmm);
-            }
+            } => self.concat_string(arg, len, using_xmm),
             AsmInst::ConcatRegexp {
                 arg,
                 len,
@@ -1740,95 +1599,39 @@ impl Codegen {
                 self.xmm_restore(using_xmm);
                 self.handle_error(labels[error]);
             }
-            AsmInst::DefinedYield { dst, using_xmm } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    lea  rdx, [r14 - (conv(dst))];
-                    movq rax, (runtime::defined_yield);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
             AsmInst::DefinedConst {
                 dst,
                 siteid,
                 using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    lea  rdx, [r14 - (conv(dst))];
-                    movl rcx, (siteid.0);
-                    movq rax, (runtime::defined_const);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            } => self.defined_const(dst, siteid, using_xmm),
             AsmInst::DefinedMethod {
                 dst,
                 recv,
                 name,
                 using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    lea  rdx, [r14 - (conv(dst))];
-                    movq rcx, [r14 - (conv(recv))];
-                    movl r8, (name.get());
-                    movq rax, (runtime::defined_method);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            } => self.defined_method(dst, recv, name, using_xmm),
             AsmInst::DefinedGvar {
                 dst,
                 name,
                 using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    lea  rdx, [r14 - (conv(dst))];
-                    movl rcx, (name.get());
-                    movq rax, (runtime::defined_gvar);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            } => self.defined_gvar(dst, name, using_xmm),
+
             AsmInst::DefinedIvar {
                 dst,
                 name,
                 using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;  // &mut Interp
-                    movq rsi, r12;  // &mut Globals
-                    lea  rdx, [r14 - (conv(dst))];
-                    movl rcx, (name.get());
-                    movq rax, (runtime::defined_ivar);
-                    call rax;
-                };
-                self.xmm_restore(using_xmm);
-            }
+            } => self.defined_ivar(dst, name, using_xmm),
 
             AsmInst::GenericCondBr {
-                brkind: kind,
+                brkind,
                 branch_dest,
             } => {
                 let branch_dest = ctx[branch_dest];
-                self.cond_br(branch_dest, kind);
+                self.cond_br(branch_dest, brkind);
             }
 
-            AsmInst::Inline { proc } => {
-                proc(self, labels);
-            }
+            AsmInst::Inline { proc } => proc(self, labels),
         }
     }
 
@@ -1962,120 +1765,5 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(using_xmm);
-    }
-
-    fn class_def(&mut self, superclass: SlotId, name: IdentId, is_module: bool) {
-        // rcx <- superclass: Option<Value>
-        if superclass.is_zero() {
-            monoasm! { &mut self.jit,
-                xorq rcx, rcx;
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                movq rcx, [r14 - (conv(superclass))];
-            }
-        }
-        // r8 <- is_module
-        if is_module {
-            monoasm! { &mut self.jit,
-                movl r8, 1;
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                xorq r8, r8;
-            }
-        }
-        monoasm! { &mut self.jit,
-            movl rdx, (name.get());  // rdx <- name
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_class);
-            call rax;  // rax <- self: Value
-        };
-    }
-
-    fn singleton_class_def(&mut self, base: SlotId) {
-        monoasm! { &mut self.jit,
-            movq rdx, [r14 - (conv(base))];  // rdx <- name
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_singleton_class);
-            call rax;  // rax <- self: Value
-        };
-    }
-
-    fn method_def(&mut self, name: IdentId, func_id: FuncId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm!( &mut self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &Globals
-            movq rdx, (u32::from(name)); // IdentId
-            movq rcx, (u32::from(func_id)); // FuncId
-            movq rax, (runtime::define_method);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-    }
-
-    fn singleton_method_def(
-        &mut self,
-        obj: SlotId,
-        name: IdentId,
-        func_id: FuncId,
-        using_xmm: UsingXmm,
-    ) {
-        self.xmm_save(using_xmm);
-        monoasm!( &mut self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &Globals
-            movq rdx, (u32::from(name)); // IdentId
-            movq rcx, (u32::from(func_id)); // FuncId
-            movq r8, [r14 - (conv(obj))];
-            movq rax, (runtime::singleton_define_method);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-    }
-}
-
-impl AsmIr {
-    pub(super) fn gen_array_index(
-        &mut self,
-        ctx: &mut BBContext,
-        dst: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.fetch_to_reg(ctx, base, GP::Rdi);
-
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
-        if let Some(idx) = ctx.is_u16_literal(idx) {
-            self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
-        } else {
-            self.fetch_to_reg(ctx, idx, GP::Rsi);
-            self.inst.push(AsmInst::ArrayIndex { deopt });
-        }
-        ctx.release(dst);
-    }
-
-    pub(super) fn gen_array_index_assign(
-        &mut self,
-        ctx: &mut BBContext,
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(ctx);
-        self.fetch_to_reg(ctx, base, GP::Rdi);
-        self.fetch_to_reg(ctx, src, GP::R15);
-
-        if let Some(idx) = ctx.is_u16_literal(idx) {
-            self.array_u16_index_assign(ctx, pc, idx);
-        } else {
-            self.fetch_to_reg(ctx, idx, GP::Rsi);
-            self.array_index_assign(ctx, pc);
-        }
     }
 }

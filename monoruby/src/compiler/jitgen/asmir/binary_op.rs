@@ -114,6 +114,31 @@ impl Codegen {
 
     cmp_main!(eq, ne, lt, le, gt, ge);
 
+    pub(super) fn integer_cmp(&mut self, kind: CmpKind, mode: OpMode) {
+        if matches!(kind, CmpKind::Cmp) {
+            match mode {
+                OpMode::RR(..) => {}
+                OpMode::RI(_, r) => {
+                    monoasm!( &mut self.jit,
+                        movq rsi, (Value::i32(r as i32).id());
+                    );
+                }
+                OpMode::IR(l, _) => {
+                    monoasm!( &mut self.jit,
+                        movq rdi, (Value::i32(l as i32).id());
+                    );
+                }
+            }
+            self.icmp_cmp();
+        } else {
+            monoasm! { &mut self.jit,
+                xorq rax, rax;
+            };
+            self.cmp_integer(&mode);
+            self.flag_to_bool(kind);
+        }
+    }
+
     pub(super) fn flag_to_bool(&mut self, kind: CmpKind) {
         match kind {
             CmpKind::Eq => self.set_eq(),

@@ -1,5 +1,113 @@
 use super::*;
 
+impl AsmIr {
+    pub(in crate::compiler::jitgen) fn index(
+        &mut self,
+        bb: &mut BBContext,
+        dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            self.gen_array_index(bb, dst, base, idx, pc);
+        } else {
+            self.fetch_slots(bb, &[base, idx]);
+            bb.release(dst);
+            self.generic_index(bb, base, idx, pc);
+        }
+        self.rax2acc(bb, dst);
+    }
+
+    pub(in crate::compiler::jitgen) fn index_assign(
+        &mut self,
+        bb: &mut BBContext,
+        src: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            self.gen_array_index_assign(bb, src, base, idx, pc);
+        } else {
+            self.fetch_slots(bb, &[base, idx, src]);
+            self.generic_index_assign(bb, pc, base, idx, src);
+        }
+    }
+
+    fn gen_array_index(
+        &mut self,
+        bb: &mut BBContext,
+        dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        self.fetch_to_reg(bb, base, GP::Rdi);
+
+        let deopt = self.new_deopt(pc, bb.get_write_back());
+        if let Some(idx) = bb.is_u16_literal(idx) {
+            self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+        } else {
+            self.fetch_to_reg(bb, idx, GP::Rsi);
+            self.inst.push(AsmInst::ArrayIndex { deopt });
+        }
+        bb.release(dst);
+    }
+
+    fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
+        self.inst.push(AsmInst::GenericIndex {
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
+    fn gen_array_index_assign(
+        &mut self,
+        bb: &mut BBContext,
+        src: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        self.writeback_acc(bb);
+        self.fetch_to_reg(bb, base, GP::Rdi);
+        self.fetch_to_reg(bb, src, GP::R15);
+
+        if let Some(idx) = bb.is_u16_literal(idx) {
+            self.array_u16_index_assign(bb, pc, idx);
+        } else {
+            self.fetch_to_reg(bb, idx, GP::Rsi);
+            self.array_index_assign(bb, pc);
+        }
+    }
+
+    fn generic_index_assign(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+    ) {
+        let using_xmm = ctx.get_using_xmm();
+        let error = self.new_error(pc, ctx.get_write_back());
+        self.inst.push(AsmInst::GenericIndexAssign {
+            src,
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+}
+
 impl Codegen {
     pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
         self.xmm_save(using);
