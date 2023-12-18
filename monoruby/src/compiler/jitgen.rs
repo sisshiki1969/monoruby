@@ -211,15 +211,15 @@ impl JitContext {
         func: &ISeqInfo,
         src_idx: BcIndex,
         dest: BcIndex,
-        mut bbctx: BBContext,
+        mut bb: BBContext,
         label: AsmLabel,
     ) {
-        bbctx.sp = func.get_sp(src_idx);
+        bb.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{dest}", bbctx.sp);
+        eprintln!("   new_branch: [{:?}]{src_idx}->{dest}", bb.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
-            bbctx,
+            bb,
             label,
             cont: false,
         });
@@ -233,15 +233,15 @@ impl JitContext {
         func: &ISeqInfo,
         src_idx: BcIndex,
         dest: BcIndex,
-        mut bbctx: BBContext,
+        mut bb: BBContext,
         label: AsmLabel,
     ) {
-        bbctx.sp = func.get_sp(src_idx);
+        bb.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{dest}", bbctx.sp);
+        eprintln!("   new_continue:[{:?}] {src_idx}->{dest}", bb.sp);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
-            bbctx,
+            bb,
             label,
             cont: true,
         })
@@ -844,7 +844,7 @@ struct BranchEntry {
     /// source instruction index of the branch.
     src_idx: BcIndex,
     /// context of the source basic block.
-    bbctx: BBContext,
+    bb: BBContext,
     /// `DestLabel` for the destination basic block.
     label: AsmLabel,
     /// true if the branch is a continuation branch.
@@ -928,17 +928,17 @@ impl BBContext {
     }
 
     fn merge_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_ctx = entries.last().unwrap().bbctx.clone();
+        let mut merge_ctx = entries.last().unwrap().bb.clone();
         for BranchEntry {
             src_idx: _src_idx,
-            bbctx,
+            bb,
             label: _,
             ..
         } in entries.iter()
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
-            merge_ctx.merge(bbctx);
+            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bb.sp, bb.slot_state);
+            merge_ctx.merge(bb);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
@@ -1058,12 +1058,12 @@ impl Codegen {
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
 
-        let bbctx = BBContext::new(&ctx);
+        let bb = BBContext::new(&ctx);
 
         if let Some(pc) = position {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let side_exit = self.gen_deopt(pc + 1, &bbctx);
+            let side_exit = self.gen_deopt(pc + 1, &bb);
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
             );
@@ -1081,7 +1081,7 @@ impl Codegen {
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bbctx,
+                bb,
                 label,
                 cont: true,
             }],

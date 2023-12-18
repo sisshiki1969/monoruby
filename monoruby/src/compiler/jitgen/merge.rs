@@ -9,16 +9,16 @@ impl JitContext {
             target_ctx.remove_unused(&unused);
             for BranchEntry {
                 src_idx: _src_idx,
-                mut bbctx,
+                mut bb,
                 label,
                 ..
             } in entries
             {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
-                bbctx.remove_unused(&unused);
+                bb.remove_unused(&unused);
                 let mut ir = AsmIr::new();
-                bbctx.write_back_for_target(&target_ctx, &mut ir, pc);
+                bb.write_back_for_target(&target_ctx, &mut ir, pc);
                 self.bridges.push((ir, label, target_label));
             }
         }
@@ -103,7 +103,7 @@ impl JitContext {
             let entry = entries.remove(0);
             assert!(self.continuation_bridge.is_none());
             self.continuation_bridge = Some((None, entry.label));
-            return Some(entry.bbctx);
+            return Some(entry.bb);
         }
 
         let target_ctx = BBContext::merge_entries(&entries);
@@ -127,20 +127,20 @@ impl JitContext {
         target_ctx.remove_unused(unused);
         for BranchEntry {
             src_idx: _src_idx,
-            mut bbctx,
+            mut bb,
             label,
             cont,
         } in entries
         {
-            bbctx.remove_unused(unused);
+            bb.remove_unused(unused);
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             if cont {
                 assert!(self.continuation_bridge.is_none());
-                self.continuation_bridge = Some((Some((bbctx, target_ctx.clone(), pc)), label));
+                self.continuation_bridge = Some((Some((bb, target_ctx.clone(), pc)), label));
             } else {
                 let mut ir = AsmIr::new();
-                bbctx.write_back_for_target(&target_ctx, &mut ir, pc);
+                bb.write_back_for_target(&target_ctx, &mut ir, pc);
                 self.bridges.push((ir, label, cur_label));
             }
             #[cfg(feature = "jit-debug")]
