@@ -80,7 +80,7 @@ impl SlotState {
     /// Link the slot *reg* to the given xmm register *freg*.
     ///
     pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.release(reg);
+        self.link_stack(reg);
         self[reg] = LinkMode::Xmm(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -98,7 +98,7 @@ impl SlotState {
     /// Link the slot *reg* to both of the stack and the given xmm register *freg*.
     ///
     pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.release(reg);
+        self.link_stack(reg);
         self[reg] = LinkMode::Both(freg);
         self.xmm[freg.0 as usize].push(reg);
     }
@@ -116,13 +116,13 @@ impl SlotState {
     /// Link the slot *reg* to a literal value *v*.
     ///
     pub(super) fn link_literal(&mut self, reg: SlotId, v: Value) {
-        self.release(reg);
+        self.link_stack(reg);
         self[reg] = LinkMode::Literal(v);
     }
 
     pub(super) fn link_r15(&mut self, reg: SlotId) {
         assert!(self.r15.is_none());
-        self.release(reg);
+        self.link_stack(reg);
         self[reg] = LinkMode::R15;
         self.r15 = Some(reg);
     }
@@ -145,14 +145,14 @@ impl SlotState {
     ///
     pub(super) fn clear(&mut self, sp: SlotId) {
         for i in sp..SlotId(self.slots.len() as u16) {
-            self.release(i)
+            self.link_stack(i)
         }
     }
 
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
         let res = self.r15;
         if let Some(r) = res {
-            self.release(r);
+            self.link_stack(r);
         }
         assert!(!self.slots.iter().any(|f| matches!(f, LinkMode::R15)));
         res
@@ -167,7 +167,7 @@ impl SlotState {
     ///
     /// xmm registers corresponding to *reg* are deallocated.
     ///
-    pub(crate) fn release(&mut self, reg: impl Into<Option<SlotId>>) {
+    pub(crate) fn link_stack(&mut self, reg: impl Into<Option<SlotId>>) {
         match reg.into() {
             Some(reg) => match self[reg] {
                 LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
@@ -190,7 +190,7 @@ impl SlotState {
 
     pub(super) fn release_locals(&mut self) {
         for reg in 1..1 + self.local_num as u16 {
-            self.release(SlotId(reg));
+            self.link_stack(SlotId(reg));
         }
     }
 
@@ -249,7 +249,7 @@ impl SlotState {
                     self.link_new_xmm(i);
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),
-                _ => self.release(i),
+                _ => self.link_stack(i),
             };
         }
     }

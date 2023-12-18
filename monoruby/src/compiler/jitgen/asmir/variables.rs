@@ -233,7 +233,7 @@ impl JitContext {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        bb.release(dst);
+        bb.link_stack(dst);
         self.ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);

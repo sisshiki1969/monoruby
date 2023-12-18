@@ -59,7 +59,7 @@ fn object_object_id(
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    bb.release(ret);
+    bb.link_stack(ret);
     let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
@@ -401,7 +401,7 @@ fn object_send(
         ..
     } = *callsite;
     ir.fetch_callargs(bb, callsite);
-    bb.release(dst);
+    bb.link_stack(dst);
     let using = bb.get_using_xmm();
     let bh = match block_func_id {
         None => 0,

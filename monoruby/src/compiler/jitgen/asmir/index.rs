@@ -13,7 +13,7 @@ impl AsmIr {
             self.gen_array_index(bb, dst, base, idx, pc);
         } else {
             self.fetch_slots(bb, &[base, idx]);
-            bb.release(dst);
+            bb.link_stack(dst);
             self.generic_index(bb, base, idx, pc);
         }
         self.rax2acc(bb, dst);
@@ -28,7 +28,10 @@ impl AsmIr {
         pc: BcPc,
     ) {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            self.gen_array_index_assign(bb, src, base, idx, pc);
+            self.writeback_acc(bb);
+            self.fetch_to_reg(bb, base, GP::Rdi);
+            self.fetch_to_reg(bb, src, GP::R15);
+            self.gen_array_index_assign(bb, idx, pc);
         } else {
             self.fetch_slots(bb, &[base, idx, src]);
             self.generic_index_assign(bb, pc, base, idx, src);
@@ -52,7 +55,7 @@ impl AsmIr {
             self.fetch_to_reg(bb, idx, GP::Rsi);
             self.inst.push(AsmInst::ArrayIndex { deopt });
         }
-        bb.release(dst);
+        bb.link_stack(dst);
     }
 
     fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
@@ -67,18 +70,7 @@ impl AsmIr {
         });
     }
 
-    fn gen_array_index_assign(
-        &mut self,
-        bb: &mut BBContext,
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.writeback_acc(bb);
-        self.fetch_to_reg(bb, base, GP::Rdi);
-        self.fetch_to_reg(bb, src, GP::R15);
-
+    fn gen_array_index_assign(&mut self, bb: &mut BBContext, idx: SlotId, pc: BcPc) {
         if let Some(idx) = bb.is_u16_literal(idx) {
             self.array_u16_index_assign(bb, pc, idx);
         } else {
@@ -89,14 +81,14 @@ impl AsmIr {
 
     fn generic_index_assign(
         &mut self,
-        ctx: &BBContext,
+        bb: &BBContext,
         pc: BcPc,
         base: SlotId,
         idx: SlotId,
         src: SlotId,
     ) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::GenericIndexAssign {
             src,
             base,

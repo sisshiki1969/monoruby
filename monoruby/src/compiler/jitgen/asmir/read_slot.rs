@@ -43,7 +43,7 @@ impl AsmIr {
                 self.lit2stack(v, reg);
             }
             LinkMode::R15 => {
-                bb.release(reg);
+                bb.link_stack(reg);
                 self.acc2stack(reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}

@@ -74,18 +74,13 @@ impl AsmIr {
         label
     }
 
-    pub(super) fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
-        let exit = self.new_deopt(pc, ctx.get_write_back());
+    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BcPc) {
+        let exit = self.new_deopt(pc, bb.get_write_back());
         self.inst.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn recompile_and_deopt(
-        &mut self,
-        ctx: &BBContext,
-        pc: BcPc,
-        position: Option<BcPc>,
-    ) {
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
+    pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, pc: BcPc, position: Option<BcPc>) {
+        let deopt = self.new_deopt(pc, bb.get_write_back());
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
@@ -173,8 +168,8 @@ impl AsmIr {
     }
 
     /// rax = val
-    pub(super) fn deep_copy_lit(&mut self, ctx: &BBContext, val: Value) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn deep_copy_lit(&mut self, bb: &BBContext, val: Value) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
@@ -205,14 +200,14 @@ impl AsmIr {
 
     pub(super) fn attr_writer(
         &mut self,
-        ctx: &BBContext,
+        bb: &BBContext,
         pc: BcPc,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
         args: SlotId,
     ) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
@@ -224,11 +219,11 @@ impl AsmIr {
 
     pub(super) fn attr_reader(
         &mut self,
-        ctx: &BBContext,
+        bb: &BBContext,
         ivar_name: IdentId,
         ivar_id: Option<IvarId>,
     ) {
-        let using_xmm = ctx.get_using_xmm();
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::AttrReader {
             ivar_name,
             ivar_id,
@@ -238,15 +233,15 @@ impl AsmIr {
 
     pub(super) fn send_cached(
         &mut self,
-        ctx: &BBContext,
+        bb: &BBContext,
         pc: BcPc,
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_classid: ClassId,
         native: bool,
     ) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
@@ -257,10 +252,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn send_not_cached(&mut self, ctx: &BBContext, pc: BcPc, callsite: CallSiteId) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
-        let self_class = ctx.self_value.class();
+    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callsite: CallSiteId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
+        let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
             callsite,
@@ -270,9 +265,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_unop(&mut self, ctx: &BBContext, pc: BcPc, func: UnaryOpFn) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BcPc, func: UnaryOpFn) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::GenericUnOp {
             func,
             using_xmm,
@@ -280,9 +275,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_binop(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn generic_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::GenericBinOp {
             kind,
             using_xmm,
@@ -290,10 +285,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn integer_binop(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
-        let using_xmm = ctx.get_using_xmm();
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
+        let using_xmm = bb.get_using_xmm();
+        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::IntegerBinOp {
             kind,
             mode,
@@ -303,9 +298,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_cmp(&mut self, ctx: &BBContext, pc: BcPc, kind: CmpKind) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn generic_cmp(&mut self, bb: &BBContext, pc: BcPc, kind: CmpKind) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::GenericCmp {
             kind,
             using_xmm,
@@ -343,10 +338,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_u16_index_assign(&mut self, ctx: &BBContext, pc: BcPc, idx: u16) {
-        let using_xmm = ctx.get_using_xmm();
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
+        let using_xmm = bb.get_using_xmm();
+        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -355,10 +350,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_index_assign(&mut self, ctx: &BBContext, pc: BcPc) {
-        let using_xmm = ctx.get_using_xmm();
-        let deopt = self.new_deopt(pc, ctx.get_write_back());
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::ArrayIndexAssign {
             using_xmm,
             deopt,
@@ -366,26 +361,26 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn new_array(&mut self, ctx: &BBContext, callid: CallSiteId) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn new_array(&mut self, bb: &BBContext, callid: CallSiteId) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::NewArray(callid, using_xmm));
     }
 
-    pub(super) fn new_hash(&mut self, ctx: &BBContext, args: SlotId, len: usize) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn new_hash(&mut self, bb: &BBContext, args: SlotId, len: usize) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::NewHash(args, len, using_xmm));
     }
 
     pub(super) fn new_range(
         &mut self,
-        ctx: &BBContext,
+        bb: &BBContext,
         pc: BcPc,
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
     ) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::NewRange {
             start,
             end,
@@ -399,9 +394,9 @@ impl AsmIr {
         self.inst.push(AsmInst::BlockArgProxy { ret, outer });
     }
 
-    pub(super) fn block_arg(&mut self, ctx: &BBContext, pc: BcPc, ret: SlotId, outer: usize) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn block_arg(&mut self, bb: &BBContext, pc: BcPc, ret: SlotId, outer: usize) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -410,13 +405,13 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn load_gvar(&mut self, ctx: &BBContext, name: IdentId) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn load_gvar(&mut self, bb: &BBContext, name: IdentId) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::LoadGVar { name, using_xmm });
     }
 
-    pub(super) fn store_gvar(&mut self, ctx: &BBContext, name: IdentId, src: SlotId) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn store_gvar(&mut self, bb: &BBContext, name: IdentId, src: SlotId) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::StoreGVar {
             name,
             src,
@@ -424,13 +419,13 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn load_svar(&mut self, ctx: &BBContext, id: u32) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::LoadSVar { id, using_xmm });
     }
 
-    pub(super) fn concat_str(&mut self, ctx: &BBContext, arg: SlotId, len: u16) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn concat_str(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::ConcatStr {
             arg,
             len,
@@ -438,9 +433,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn concat_regexp(&mut self, ctx: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn concat_regexp(&mut self, bb: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         let len = len as _;
         self.inst.push(AsmInst::ConcatRegexp {
             arg,
@@ -450,8 +445,8 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn expand_array(&mut self, ctx: &BBContext, dst: SlotId, len: u16) {
-        let using_xmm = ctx.get_using_xmm();
+    pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
         let len = len as _;
         self.inst.push(AsmInst::ExpandArray {
             dst,
@@ -460,9 +455,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn alias_method(&mut self, ctx: &BBContext, pc: BcPc, new: SlotId, old: SlotId) {
-        let using_xmm = ctx.get_using_xmm();
-        let error = self.new_error(pc, ctx.get_write_back());
+    pub(super) fn alias_method(&mut self, bb: &BBContext, pc: BcPc, new: SlotId, old: SlotId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(pc, bb.get_write_back());
         self.inst.push(AsmInst::AliasMethod {
             new,
             old,
@@ -480,7 +475,7 @@ impl AsmIr {
     }
 
     pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        bb.release(dst);
+        bb.link_stack(dst);
         self.load_gvar(bb, name);
         self.rax2acc(bb, dst);
     }

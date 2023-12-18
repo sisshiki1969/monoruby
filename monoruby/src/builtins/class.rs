@@ -83,7 +83,7 @@ fn inline_class_new(
         ..
     } = *callsite;
     ir.fetch_callargs(bb, callsite);
-    bb.release(ret);
+    bb.link_stack(ret);
     ir.stack2reg(recv, GP::Rdi);
     let using = bb.get_using_xmm();
     let wb = bb.get_write_back();

@@ -65,7 +65,7 @@ fn object_nil(
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    bb.release(ret);
+    bb.link_stack(ret);
     ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,
             movq rax, (FALSE_VALUE);

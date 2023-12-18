@@ -116,14 +116,14 @@ impl JitContext {
 
     fn write_back_branches(
         &mut self,
-        target_ctx: &BBContext,
+        target_bb: &BBContext,
         entries: Vec<BranchEntry>,
         cur_label: DestLabel,
         pc: BcPc,
         _bb_pos: BcIndex,
         unused: &[SlotId],
     ) {
-        let mut target_ctx = target_ctx.clone();
+        let mut target_ctx = target_bb.clone();
         target_ctx.remove_unused(unused);
         for BranchEntry {
             src_idx: _src_idx,
@@ -174,7 +174,7 @@ impl BBContext {
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
                 }
-                self.release(reg);
+                self.link_stack(reg);
             };
         }
 
