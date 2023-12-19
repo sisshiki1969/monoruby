@@ -117,8 +117,8 @@ impl Executor {
         self.cfp.unwrap()
     }
 
-    pub unsafe fn register(&self, index: usize) -> Option<Value> {
-        self.cfp().lfp().register(index)
+    pub(crate) unsafe fn register(&self, index: SlotId) -> Option<Value> {
+        self.cfp().lfp().register(index.0 as usize)
     }
 
     pub(crate) fn method_func_id(&self) -> FuncId {
@@ -358,7 +358,7 @@ impl Executor {
     ) -> Result<(Value, Option<Value>)> {
         let base = globals.store[site_id]
             .base
-            .map(|base| unsafe { self.register(base.0 as usize) }.unwrap());
+            .map(|base| unsafe { self.register(base) }.unwrap());
         let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func, base)
     }
@@ -1514,7 +1514,7 @@ impl SlotId {
         Self(0)
     }
 
-    pub fn is_zero(&self) -> bool {
+    pub fn is_self(&self) -> bool {
         self.0 == 0
     }
 }

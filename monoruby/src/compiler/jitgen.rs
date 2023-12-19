@@ -497,7 +497,7 @@ impl JitContext {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 bb.link_stack(dst);
-                if !dst.is_zero() {
+                if !dst.is_self() {
                     self.ir.inst.push(AsmInst::LoadDynVar { src });
                     self.ir.rax2acc(bb, dst);
                 }

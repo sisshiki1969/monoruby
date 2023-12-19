@@ -39,7 +39,7 @@ impl Codegen {
 
         self.xmm_save(using_xmm);
         // r15 <- recv's class
-        if recv.is_zero() {
+        if recv.is_self() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             monoasm!( &mut self.jit,
                 movl r15, (self_class.0);
@@ -706,7 +706,7 @@ extern "C" fn jit_handle_hash_splat(
     for (id, param_name) in info.args.kw_names.iter().enumerate() {
         for hash in hash_splat_pos {
             unsafe {
-                let h = vm.register(hash.0 as usize).unwrap();
+                let h = vm.register(*hash).unwrap();
                 // We must check whether h is a hash.
                 if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
                     *callee_reg.sub(callee_kw_pos + id) = Some(v);
@@ -728,7 +728,7 @@ impl AsmIr {
         let CallSiteInfo { dst, .. } = store[callid];
         self.fetch_callargs(bb, &store[callid]);
         bb.link_stack(dst);
-        if store[callid].recv.is_zero() && Some(bb.self_value.class()) != pc.cached_class1() {
+        if store[callid].recv.is_self() && Some(bb.self_value.class()) != pc.cached_class1() {
             // the cache is invalid because the receiver class is not matched.
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
@@ -761,7 +761,7 @@ impl AsmIr {
         let deopt = self.new_deopt(bb, pc);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
-        if !recv.is_zero() {
+        if !recv.is_self() {
             self.stack2reg(recv, GP::Rdi);
             self.guard_class(GP::Rdi, cached_class, deopt);
         }

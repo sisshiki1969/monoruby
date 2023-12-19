@@ -612,7 +612,7 @@ impl SlotInfo {
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {
-        if slot.is_zero() {
+        if slot.is_self() {
             return;
         }
         self[slot].ty = if is_float { Ty::Float } else { Ty::Val };

@@ -42,7 +42,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
         let exit = self.jit.label();
-        let slow_path = self.jit.label();
+        let slow_path1 = self.jit.label();
+        let slow_path2 = self.jit.label();
         let class_version = self.class_version;
         let get_class = self.get_class;
         self.execute_gc();
@@ -60,10 +61,10 @@ impl Codegen {
             movl r15, rax;
             // r15: class of receiver: ClassId
             cmpl r15, [r13 + (CACHED_CLASS)];
-            jne  slow_path;
+            jne  slow_path1;
             movl rdi, [r13 + (CACHED_VERSION)];
             cmpl rdi, [rip + class_version];
-            jne  slow_path;
+            jne  slow_path2;
         exec:
             movl rdx, [r13 + (CACHED_FUNCID)];
         };
@@ -82,7 +83,7 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
 
-        self.slow_path(exec, slow_path);
+        self.slow_path(exec, slow_path1, slow_path2);
 
         label
     }
@@ -169,11 +170,31 @@ impl Codegen {
         self.pop_frame();
     }
 
-    fn slow_path(&mut self, exec: DestLabel, slow_path: DestLabel) {
+    ///
+    /// Generate slow path.
+    ///
+    /// When the receiver class is cached **and** the receiver class is different from the cached class,
+    /// opcode_sub is set to 1.
+    ///
+    /// ### in
+    /// - r15: ClassId of receiver
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn slow_path(&mut self, exec: DestLabel, slow_path1: DestLabel, slow_path2: DestLabel) {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
-        slow_path:
+            // receiver mismatch
+        slow_path1:
+            movl rax, [r13 + (CACHED_FUNCID)];
+            testq rax, rax;
+            // if receiver class was not cached, go to slow_path2.
+            je   slow_path2;
+            // if the receiver class was different from cached class
             movb [r13 + (OPCODE_SUB)], 1;
+            // version mismatch
+        slow_path2:
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId

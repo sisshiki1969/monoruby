@@ -16,8 +16,8 @@ pub(super) extern "C" fn find_method(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
-        let receiver = unsafe { vm.register(recv_reg.0 as usize).unwrap() };
-        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
+        let receiver = unsafe { vm.register(recv_reg).unwrap() };
+        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_self()) {
             Ok(id) => Some(id),
             Err(err) => {
                 vm.set_error(err);
@@ -233,7 +233,7 @@ pub(super) extern "C" fn vm_handle_arguments(
                 // handle excessive keyword arguments
                 let mut h = IndexMap::default();
                 for (k, id) in caller.kw_args.iter() {
-                    let v = unsafe { vm.register(caller.kw_pos.0 as usize + *id).unwrap() };
+                    let v = unsafe { vm.register(caller.kw_pos + *id as u16).unwrap() };
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
@@ -268,7 +268,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         let bh = BlockHandler::from(*block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.register(block_arg.0 as usize).unwrap())) }
+        unsafe { Some(BlockHandler(vm.register(*block_arg).unwrap())) }
     } else {
         None
     };

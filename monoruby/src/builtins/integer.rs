@@ -159,7 +159,7 @@ fn integer_tof(
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
     let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_zero() {
+    if !recv.is_self() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
     if let Some(ret) = ret {
