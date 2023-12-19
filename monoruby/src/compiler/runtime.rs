@@ -16,8 +16,9 @@ pub(super) extern "C" fn find_method(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
-        let receiver = unsafe { vm.register(recv_reg).unwrap() };
-        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_self()) {
+        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => Some(id),
             Err(err) => {
                 vm.set_error(err);
@@ -36,6 +37,56 @@ pub(super) extern "C" fn find_method(
             }
         }
     }
+}
+
+pub(super) extern "C" fn vm_find_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    pc: BcPc,
+) -> Option<FuncId> {
+    let (func_id, recv_class) = if let Some(func_name) = globals.store[callid].name {
+        let recv_reg = globals.store[callid].recv;
+        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
+            Ok(id) => (id, recv.class()),
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        }
+    } else {
+        let self_val = vm.cfp().lfp().self_val();
+        let func_id = vm.method_func_id();
+        let func_name = globals.store[func_id].name().unwrap();
+        match globals.check_super(self_val, func_name) {
+            Some(entry) => (entry.func_id(), self_val.class()),
+            None => {
+                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                return None;
+            }
+        }
+    };
+    if let Some(cached_class) = pc.cached_class0() {
+        if recv_class != cached_class {
+            let version = globals.class_version();
+            let callsite = &mut globals.store[callid];
+            let func_name = callsite.name;
+            if version != callsite.cache_version {
+                callsite.cache.clear();
+                callsite.cache_version = version;
+            }
+            let cached_version = pc.cached_version();
+            if cached_version == version {
+                let cached_fid = (pc - 1).cached_fid().unwrap();
+                callsite.cache.insert(cached_class, cached_fid);
+            }
+            callsite.cache.insert(recv_class, func_id);
+            //eprintln!("polymorphic: {:?} {:?}", func_name, callsite.cache);
+        }
+    }
+    Some(func_id)
 }
 
 pub(super) extern "C" fn enter_classdef<'a>(

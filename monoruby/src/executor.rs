@@ -943,11 +943,11 @@ impl Bc {
     }
 
     fn class(&self) -> Option<ClassId> {
-        let op = self.op2.0;
+        let op = self.op2.0 as u32;
         if op == 0 {
             None
         } else {
-            Some(ClassId::new(op as u32))
+            Some(ClassId::new(op))
         }
     }
 
@@ -1100,6 +1100,10 @@ impl BcPc {
 
     pub(crate) fn opcode(&self) -> u8 {
         (self.op1 >> 48) as u8
+    }
+
+    pub(crate) fn opcode_sub(&self) -> u8 {
+        (self.op1 >> 56) as u8
     }
 
     pub(crate) fn is_loop_start(&self) -> bool {

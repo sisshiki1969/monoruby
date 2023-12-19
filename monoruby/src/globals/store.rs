@@ -62,6 +62,12 @@ impl std::ops::Index<CallSiteId> for Store {
     }
 }
 
+impl std::ops::IndexMut<CallSiteId> for Store {
+    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
+}
+
 //impl std::ops::IndexMut<CallSiteId> for Store {
 //    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
 //        &mut self.callsite_info[index.0 as usize]
@@ -263,6 +269,8 @@ impl Store {
             len,
             recv,
             dst: ret,
+            cache_version: 0,
+            cache: HashMap::default(),
         });
         id
     }
@@ -376,6 +384,8 @@ pub(crate) struct CallSiteInfo {
     pub hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub dst: Option<SlotId>,
+    pub cache_version: u32,
+    pub cache: HashMap<ClassId, FuncId>,
 }
 
 impl CallSiteInfo {

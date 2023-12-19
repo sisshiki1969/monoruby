@@ -728,8 +728,10 @@ impl AsmIr {
         let CallSiteInfo { dst, .. } = store[callid];
         self.fetch_callargs(bb, &store[callid]);
         bb.link_stack(dst);
-        if store[callid].recv.is_self() && Some(bb.self_value.class()) != pc.cached_class1() {
-            // the cache is invalid because the receiver class is not matched.
+        if pc.opcode_sub() == 1 /* this callsite is polymorphic */
+            || store[callid].recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
+        /* the cache is invalid because the receiver class is not matched.*/
+        {
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {
