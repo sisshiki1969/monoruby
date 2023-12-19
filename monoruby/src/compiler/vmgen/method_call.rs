@@ -5,6 +5,7 @@ const CACHED_CLASS: i64 = 24 - 16;
 const CACHED_VERSION: i64 = 28 - 16;
 const CACHED_FUNCID: i64 = 16 - 16;
 const RET_REG: i64 = 4 - 16;
+const OPCODE_SUB: i64 = 7 - 16;
 const POS_NUM: i64 = 8 - 16;
 const ARG_REG: i64 = 10 - 16;
 const RECV_REG: i64 = 12 - 16;
@@ -51,14 +52,13 @@ impl Codegen {
             // set self (= receiver)
             movzxw rdi, [r13 + (RECV_REG)];
         };
+        // rdi: receiver: Value
         self.vm_get_rdi();
         monoasm! { &mut self.jit,
             movq [rsp - (16 + LBP_SELF)], rdi;
-        }
-        // rdi: receiver: Value
-        monoasm! { &mut self.jit,
             call get_class;
             movl r15, rax;
+            // r15: class of receiver: ClassId
             cmpl r15, [r13 + (CACHED_CLASS)];
             jne  slow_path;
             movl rdi, [r13 + (CACHED_VERSION)];
@@ -173,6 +173,7 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         slow_path:
+            movb [r13 + (OPCODE_SUB)], 1;
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId

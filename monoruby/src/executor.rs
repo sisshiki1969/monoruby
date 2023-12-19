@@ -1098,8 +1098,8 @@ impl BcPc {
         self.0.as_ptr()
     }
 
-    pub(crate) fn opcode(&self) -> u16 {
-        (self.op1 >> 48) as u16
+    pub(crate) fn opcode(&self) -> u8 {
+        (self.op1 >> 48) as u8
     }
 
     pub(crate) fn is_loop_start(&self) -> bool {
@@ -1135,7 +1135,7 @@ impl BcPc {
     pub(crate) fn trace_ir(&self) -> TraceIr {
         let op = self.op1;
         let opcode = self.opcode();
-        if opcode & 0xffc0 == 0 {
+        if opcode & 0xc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
                 1 => TraceIr::SingletonMethodDef {

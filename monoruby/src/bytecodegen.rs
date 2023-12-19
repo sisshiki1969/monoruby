@@ -1253,7 +1253,7 @@ impl std::fmt::Display for BinOpK {
 }
 
 impl BinOpK {
-    pub fn from(i: u16) -> Self {
+    pub fn from(i: u8) -> Self {
         match i {
             0 => BinOpK::Add,
             1 => BinOpK::Sub,
