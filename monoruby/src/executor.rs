@@ -1556,30 +1556,28 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     entry: monoasm::DestLabel,
 ) {
     let patch_point = globals.codegen.jit.label();
-    let entry_label = globals.codegen.jit.label();
+    let jit_entry = globals.codegen.jit.label();
     let guard = globals.codegen.jit.label();
     globals
         .codegen
-        .class_guard_stub(self_value.class(), patch_point, entry_label, guard);
+        .class_guard_stub(self_value.class(), patch_point, jit_entry, guard);
 
     assert!(globals[func_id]
         .add_jit_code(self_value.class(), patch_point)
         .is_none());
-    globals.exec_jit_compile_method(func_id, self_value, entry_label);
+    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
 
     globals.codegen.jit.apply_jmp_patch(entry, guard);
 }
 
 pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &mut Globals) {
-    let self_value = vm.cfp().lfp().self_val();
-    let func_id = vm.cfp().lfp().meta().func_id();
-    let entry_label = globals.codegen.jit.label();
-    globals.exec_jit_compile_method(func_id, self_value, entry_label);
+    let lfp = vm.cfp().lfp();
+    let self_value = lfp.self_val();
+    let func_id = lfp.meta().func_id();
+    let jit_entry = globals.codegen.jit.label();
+    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
-    globals
-        .codegen
-        .jit
-        .apply_jmp_patch(patch_point, entry_label);
+    globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
 }
 
 ///

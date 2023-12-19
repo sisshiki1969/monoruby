@@ -511,11 +511,24 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Generate class guard stub for JIT code.
+    ///
+    /// ~~~text
+    ///
+    /// guard:
+    ///     movq rdi, [r14 - (LBP_SELF)];
+    ///     guard_class_rdi(self_class, vm_entry);
+    /// patch_point:
+    ///     jmp jit_entry;
+    ///
+    /// ~~~
+    ///
     pub(super) fn class_guard_stub(
         &mut self,
         self_class: ClassId,
         patch_point: DestLabel,
-        entry: DestLabel,
+        jit_entry: DestLabel,
         guard: DestLabel,
     ) {
         let old = self.jit.get_page();
@@ -529,7 +542,7 @@ impl Codegen {
         self.guard_class_rdi(self_class, vm_entry);
         monoasm! { &mut self.jit,
         patch_point:
-            jmp entry;
+            jmp jit_entry;
         }
         self.jit.select_page(old);
     }
@@ -995,8 +1008,8 @@ impl Globals {
         &mut self,
         func_id: FuncId,
         self_value: Value,
-        entry_label: DestLabel,
+        jit_entry: DestLabel,
     ) {
-        self.exec_jit_compile(func_id, self_value, None, entry_label)
+        self.exec_jit_compile(func_id, self_value, None, jit_entry)
     }
 }
