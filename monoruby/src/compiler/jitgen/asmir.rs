@@ -7,6 +7,7 @@ mod constants;
 mod defined;
 mod definition;
 mod index;
+mod merge;
 mod method_call;
 mod read_slot;
 mod variables;

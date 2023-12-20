@@ -1,7 +1,7 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn backedge_branches(&mut self, func: &ISeqInfo) {
+    pub(in crate::compiler::jitgen) fn backedge_branches(&mut self, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
             let (target_label, mut target_ctx, unused) = self.backedge_map.remove(&bb_pos).unwrap();
@@ -18,13 +18,13 @@ impl JitContext {
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bb.remove_unused(&unused);
                 let mut ir = AsmIr::new();
-                bb.write_back_for_target(&target_ctx, &mut ir, pc);
+                ir.write_back_for_target(bb, &target_ctx, pc);
                 self.bridges.push((ir, label, target_label));
             }
         }
     }
 
-    pub(super) fn incoming_context(
+    pub(in crate::compiler::jitgen) fn incoming_context(
         &mut self,
         func: &ISeqInfo,
         bb_pos: BcIndex,
@@ -140,7 +140,7 @@ impl JitContext {
                 self.continuation_bridge = Some((Some((bb, target_ctx.clone(), pc)), label));
             } else {
                 let mut ir = AsmIr::new();
-                bb.write_back_for_target(&target_ctx, &mut ir, pc);
+                ir.write_back_for_target(bb, &target_ctx, pc);
                 self.bridges.push((ir, label, cur_label));
             }
             #[cfg(feature = "jit-debug")]
@@ -149,32 +149,37 @@ impl JitContext {
     }
 }
 
-impl BBContext {
-    pub(super) fn write_back_for_target(mut self, target: &BBContext, ir: &mut AsmIr, pc: BcPc) {
+impl AsmIr {
+    pub(in crate::compiler::jitgen) fn write_back_for_target(
+        &mut self,
+        mut bb: BBContext,
+        target: &BBContext,
+        pc: BcPc,
+    ) {
         #[cfg(feature = "jit-debug")]
         {
-            eprintln!("    src:    {:?}", self.slot_state);
+            eprintln!("    src:    {:?}", bb.slot_state);
             eprintln!("    target: {:?}", target.slot_state);
         }
-        let len = self.reg_num();
+        let len = bb.reg_num();
 
-        ir.writeback_acc(&mut self);
+        self.writeback_acc(&mut bb);
 
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target[reg] == LinkMode::Stack {
-                match self[reg] {
+                match bb[reg] {
                     LinkMode::Xmm(freg) => {
-                        self.xmm_to_both(freg);
-                        ir.xmm2both(freg, self.xmm_slots(freg).to_vec());
+                        bb.xmm_to_both(freg);
+                        self.xmm2both(freg, bb.xmm_slots(freg).to_vec());
                     }
                     LinkMode::Literal(v) => {
-                        ir.lit2stack(v, reg);
+                        self.lit2stack(v, reg);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
                 }
-                self.link_stack(reg);
+                bb.link_stack(reg);
             };
         }
 
@@ -182,61 +187,61 @@ impl BBContext {
         let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
-            match (self[reg], target[reg]) {
+            match (bb[reg], target[reg]) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                    } else if self.is_xmm_vacant(r) {
-                        self.link_xmm(reg, r);
-                        ir.xmm_move(l, r);
+                    } else if bb.is_xmm_vacant(r) {
+                        bb.link_xmm(reg, r);
+                        self.xmm_move(l, r);
                     } else {
+                        bb.xmm_swap(l, r);
                         self.xmm_swap(l, r);
-                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        self[reg] = LinkMode::Xmm(l);
-                    } else if self.is_xmm_vacant(r) {
-                        self.link_xmm(reg, r);
-                        ir.xmm_move(l, r);
+                        bb[reg] = LinkMode::Xmm(l);
+                    } else if bb.is_xmm_vacant(r) {
+                        bb.link_xmm(reg, r);
+                        self.xmm_move(l, r);
                     } else {
+                        bb.xmm_swap(l, r);
                         self.xmm_swap(l, r);
-                        ir.xmm_swap(l, r);
                     }
                     guard_list.push(reg);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    ir.xmm2both(l, vec![reg]);
+                    self.xmm2both(l, vec![reg]);
                     if l == r {
-                        self[reg] = LinkMode::Both(l);
-                    } else if self.is_xmm_vacant(r) {
-                        self.link_both(reg, r);
-                        ir.xmm_move(l, r);
+                        bb[reg] = LinkMode::Both(l);
+                    } else if bb.is_xmm_vacant(r) {
+                        bb.link_both(reg, r);
+                        self.xmm_move(l, r);
                     } else {
+                        bb.xmm_swap(l, r);
                         self.xmm_swap(l, r);
-                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
-                    } else if self.is_xmm_vacant(r) {
-                        self.link_both(reg, r);
-                        ir.xmm_move(l, r);
+                    } else if bb.is_xmm_vacant(r) {
+                        bb.link_both(reg, r);
+                        self.xmm_move(l, r);
                     } else {
+                        bb.xmm_swap(l, r);
                         self.xmm_swap(l, r);
-                        ir.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    self.link_both(reg, r);
+                    bb.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        self.link_xmm(reg, r);
-                        ir.f64toxmm(f, r);
+                        bb.link_xmm(reg, r);
+                        self.f64toxmm(f, r);
                     } else {
                         unreachable!()
                     }
@@ -245,16 +250,16 @@ impl BBContext {
             }
         }
 
-        let deopt = ir.new_deopt(&self, pc + 1);
+        let deopt = self.new_deopt(&bb, pc + 1);
 
         for (r, x) in conv_list {
-            ir.stack2reg(r, GP::Rax);
-            ir.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
+            self.stack2reg(r, GP::Rax);
+            self.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
         }
 
         for r in guard_list {
-            ir.stack2reg(r, GP::Rax);
-            ir.guard_float(GP::Rax, deopt);
+            self.stack2reg(r, GP::Rax);
+            self.guard_float(GP::Rax, deopt);
         }
     }
 }

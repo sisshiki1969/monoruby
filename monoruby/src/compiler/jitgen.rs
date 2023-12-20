@@ -18,7 +18,6 @@ pub mod asmir;
 mod basic_block;
 mod guard;
 mod init_method;
-mod merge;
 mod slot;
 pub mod trace_ir;
 
@@ -306,7 +305,7 @@ impl JitContext {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
             self.ir.inst.push(AsmInst::Label(entry));
             if let Some((from, to, pc)) = data {
-                from.write_back_for_target(&to, &mut self.ir, pc);
+                self.ir.write_back_for_target(from, &to, pc);
             }
         }
     }
