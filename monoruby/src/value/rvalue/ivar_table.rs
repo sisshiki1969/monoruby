@@ -4,7 +4,7 @@ extern crate alloc;
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
-use std::ptr::{self, Unique};
+use std::ptr::{self};
 use std::slice;
 
 type T = Option<Value>;
@@ -111,7 +111,7 @@ impl Drop for IvarTableIntoIter {
 
 #[repr(C)]
 struct RawTable {
-    ptr: Unique<T>,
+    ptr: std::ptr::NonNull<T>,
     cap: usize,
 }
 
@@ -152,7 +152,7 @@ impl RawTable {
     ///
     fn with_capacity(capacity: usize) -> Self {
         let (ptr, cap) = if capacity == 0 {
-            (Unique::dangling(), 0)
+            (std::ptr::NonNull::dangling(), 0)
         } else {
             let cap = capacity.next_power_of_two();
             let ptr = alloc(cap).into();

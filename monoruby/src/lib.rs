@@ -9,7 +9,7 @@
 #![feature(step_trait)]
 #![feature(naked_functions)]
 #![feature(offset_of)]
-#![feature(ptr_internals)]
+//#![feature(ptr_internals)]
 mod alloc;
 mod builtins;
 mod bytecodegen;

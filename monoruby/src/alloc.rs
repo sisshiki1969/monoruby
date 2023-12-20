@@ -91,7 +91,7 @@ impl<T: GCBox> Allocator<T> {
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
         let layout = Layout::from_size_align(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE).unwrap();
         let ptr = unsafe { System.alloc(layout) };
-        let ptr = std::ptr::Unique::new(ptr as _).unwrap();
+        let ptr = std::ptr::NonNull::new(ptr as _).unwrap();
         Allocator {
             current_page: ptr,
             head_page: ptr,
@@ -111,7 +111,7 @@ impl<T: GCBox> Allocator<T> {
 
     fn new_page(&mut self) -> PageRef<T> {
         let ptr = unsafe { (self.head_page.as_ptr() as *mut u8).add(ALLOC_SIZE) } as _;
-        let ptr = std::ptr::Unique::new(ptr).unwrap();
+        let ptr = std::ptr::NonNull::new(ptr).unwrap();
         self.head_page = ptr;
         ptr
     }
@@ -470,7 +470,7 @@ impl<T: GCBox> std::fmt::Debug for Page<T> {
     }
 }
 
-type PageRef<T> = std::ptr::Unique<Page<T>>;
+type PageRef<T> = std::ptr::NonNull<Page<T>>;
 
 impl<T: GCBox> Page<T> {
     ///
