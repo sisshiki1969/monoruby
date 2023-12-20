@@ -245,7 +245,7 @@ impl BBContext {
             }
         }
 
-        let deopt = ir.new_deopt(pc + 1, self.get_write_back());
+        let deopt = ir.new_deopt(&self, pc + 1);
 
         for (r, x) in conv_list {
             ir.stack2reg(r, GP::Rax);

@@ -758,7 +758,7 @@ impl AsmIr {
             ..
         } = store[callid];
         let cached_class = pc.cached_class1().unwrap();
-        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_zero() {

@@ -427,7 +427,7 @@ impl JitContext {
                     if let Some(slot) = base_slot {
                         if let Some(base_class) = cached_baseclass {
                             self.ir.fetch_to_reg(bb, slot, GP::Rax);
-                            let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                            let deopt = self.ir.new_deopt(bb, pc);
                             self.ir
                                 .inst
                                 .push(AsmInst::GuardBaseClass { base_class, deopt });
@@ -435,7 +435,7 @@ impl JitContext {
                             return CompileResult::Recompile;
                         }
                     }
-                    let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                    let deopt = self.ir.new_deopt(bb, pc);
                     if let Some(f) = cached_val.try_float() {
                         let fdst = bb.link_new_both(dst);
                         self.ir.inst.push(AsmInst::LoadFloatConstant {
@@ -529,7 +529,7 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 if pc.is_float1() {
-                    let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                    let deopt = self.ir.new_deopt(bb, pc);
                     let fsrc = self.ir.fetch_float_assume_float(bb, src, deopt);
                     let dst = bb.xmm_write(dst);
                     self.ir.xmm_move(fsrc, dst);
@@ -545,7 +545,7 @@ impl JitContext {
                 self.ir.gen_binop_integer(bb, pc, kind, dst, mode);
             }
             TraceIr::FBinOp { kind, dst, mode } => {
-                let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                let deopt = self.ir.new_deopt(bb, pc);
                 let fmode = self.ir.fmode(&mode, bb, pc, deopt);
                 if let Some(ret) = dst {
                     let dst = bb.xmm_write(ret);
@@ -569,7 +569,7 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
-                    let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                    let deopt = self.ir.new_deopt(bb, pc);
                     let mode = self.ir.fmode(&mode, bb, pc, deopt);
                     bb.link_stack(ret);
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
@@ -592,7 +592,7 @@ impl JitContext {
                         let dest_idx = index + disp + 1;
                         let branch_dest = self.asm_label();
                         if mode.is_float_op(&pc) {
-                            let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                            let deopt = self.ir.new_deopt(bb, pc);
                             let mode = self.ir.fmode(&mode, bb, pc, deopt);
                             bb.link_stack(ret);
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
@@ -660,7 +660,7 @@ impl JitContext {
             } => {
                 let inline_gen = store.get_inline_info(inline_id).0;
                 self.ir.writeback_acc(bb);
-                let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                let deopt = self.ir.new_deopt(bb, pc);
                 self.ir.guard_class_version(pc, deopt);
                 inline_gen(&mut self.ir, store, bb, &store[callid], pc);
             }
@@ -669,7 +669,7 @@ impl JitContext {
                 bb.link_stack(store[callid].dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
-                let error = self.ir.new_error(pc, bb.get_write_back());
+                let error = self.ir.new_error(bb, pc);
                 self.ir.inst.push(AsmInst::Yield {
                     callid,
                     using_xmm,
@@ -825,7 +825,7 @@ impl JitContext {
                 let opt_case_id = self.opt_case.len();
                 self.opt_case.push(opt_case_info);
 
-                let deopt = self.ir.new_deopt(pc, bb.get_write_back());
+                let deopt = self.ir.new_deopt(bb, pc);
                 self.ir.fetch_to_reg(bb, cond, GP::Rdi);
                 self.ir.guard_fixnum(GP::Rdi, deopt);
                 self.ir.opt_case(*max, *min, opt_case_id, else_dest);

@@ -58,13 +58,13 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn new_deopt(&mut self, pc: BcPc, wb: WriteBack) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(pc, wb));
+    pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BcPc) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, pc: BcPc, wb: WriteBack) -> AsmError {
-        let i = self.new_label(SideExit::Error(pc, wb));
+    pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BcPc) -> AsmError {
+        let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
         AsmError(i)
     }
 
@@ -75,12 +75,12 @@ impl AsmIr {
     }
 
     pub(super) fn deopt(&mut self, bb: &BBContext, pc: BcPc) {
-        let exit = self.new_deopt(pc, bb.get_write_back());
+        let exit = self.new_deopt(bb, pc);
         self.inst.push(AsmInst::Deopt(exit));
     }
 
     pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, pc: BcPc, position: Option<BcPc>) {
-        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
@@ -207,7 +207,7 @@ impl AsmIr {
         args: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
@@ -241,7 +241,7 @@ impl AsmIr {
         native: bool,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
@@ -254,7 +254,7 @@ impl AsmIr {
 
     pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callsite: CallSiteId) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
@@ -267,7 +267,7 @@ impl AsmIr {
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::GenericUnOp {
             func,
             using_xmm,
@@ -277,7 +277,7 @@ impl AsmIr {
 
     pub(super) fn generic_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::GenericBinOp {
             kind,
             using_xmm,
@@ -287,8 +287,8 @@ impl AsmIr {
 
     pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(pc, bb.get_write_back());
-        let error = self.new_error(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::IntegerBinOp {
             kind,
             mode,
@@ -300,7 +300,7 @@ impl AsmIr {
 
     pub(super) fn generic_cmp(&mut self, bb: &BBContext, pc: BcPc, kind: CmpKind) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::GenericCmp {
             kind,
             using_xmm,
@@ -340,8 +340,8 @@ impl AsmIr {
 
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(pc, bb.get_write_back());
-        let error = self.new_error(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -352,8 +352,8 @@ impl AsmIr {
 
     pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(pc, bb.get_write_back());
-        let error = self.new_error(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::ArrayIndexAssign {
             using_xmm,
             deopt,
@@ -380,7 +380,7 @@ impl AsmIr {
         exclude_end: bool,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::NewRange {
             start,
             end,
@@ -396,7 +396,7 @@ impl AsmIr {
 
     pub(super) fn block_arg(&mut self, bb: &BBContext, pc: BcPc, ret: SlotId, outer: usize) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -435,7 +435,7 @@ impl AsmIr {
 
     pub(super) fn concat_regexp(&mut self, bb: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         let len = len as _;
         self.inst.push(AsmInst::ConcatRegexp {
             arg,
@@ -457,7 +457,7 @@ impl AsmIr {
 
     pub(super) fn alias_method(&mut self, bb: &BBContext, pc: BcPc, new: SlotId, old: SlotId) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AliasMethod {
             new,
             old,

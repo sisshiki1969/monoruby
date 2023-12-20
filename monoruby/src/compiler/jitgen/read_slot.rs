@@ -18,7 +18,7 @@ impl Codegen {
         pc: BcPc,
     ) -> Xmm {
         let mut ir = AsmIr::new();
-        let deopt = ir.new_deopt(pc, bb.get_write_back());
+        let deopt = ir.new_deopt(bb, pc);
         let x = bb.fetch_float_assume_float(&mut ir, reg, deopt);
         self.gen_code(store, ir);
         x

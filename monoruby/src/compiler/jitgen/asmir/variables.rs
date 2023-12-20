@@ -261,7 +261,7 @@ impl JitContext {
         self.ir.fetch_to_reg(bb, src, GP::Rax);
         self.ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
-        let error = self.ir.new_error(pc, bb.get_write_back());
+        let error = self.ir.new_error(bb, pc);
         let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
         let is_self_cached = self.self_value.class() == cached_class;
         self.ir.inst.push(AsmInst::StoreIVar {

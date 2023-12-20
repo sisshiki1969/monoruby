@@ -86,7 +86,7 @@ fn math_sqrt(
         ..
     } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, bb.get_write_back());
+    let deopt = ir.new_deopt(bb, pc);
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
@@ -109,7 +109,7 @@ fn math_cos(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallS
         ..
     } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, bb.get_write_back());
+    let deopt = ir.new_deopt(bb, pc);
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
@@ -140,7 +140,7 @@ fn math_sin(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallS
         ..
     } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    let deopt = ir.new_deopt(pc, bb.get_write_back());
+    let deopt = ir.new_deopt(bb, pc);
     if !recv.is_zero() {
         ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }

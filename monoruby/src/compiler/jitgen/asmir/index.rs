@@ -48,7 +48,7 @@ impl AsmIr {
     ) {
         self.fetch_to_reg(bb, base, GP::Rdi);
 
-        let deopt = self.new_deopt(pc, bb.get_write_back());
+        let deopt = self.new_deopt(bb, pc);
         if let Some(idx) = bb.is_u16_literal(idx) {
             self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
         } else {
@@ -60,7 +60,7 @@ impl AsmIr {
 
     fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::GenericIndex {
             base,
             idx,
@@ -88,7 +88,7 @@ impl AsmIr {
         src: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(pc, bb.get_write_back());
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::GenericIndexAssign {
             src,
             base,

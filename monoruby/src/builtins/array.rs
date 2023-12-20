@@ -356,7 +356,7 @@ fn array_shl(
     } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    let deopt_ = ir.new_deopt(pc, bb.get_write_back());
+    let deopt_ = ir.new_deopt(bb, pc);
     bb.link_stack(ret);
     ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt_);
     ir.inline(|gen, _| {

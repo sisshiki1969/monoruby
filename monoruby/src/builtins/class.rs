@@ -86,8 +86,7 @@ fn inline_class_new(
     bb.link_stack(ret);
     ir.stack2reg(recv, GP::Rdi);
     let using = bb.get_using_xmm();
-    let wb = bb.get_write_back();
-    let error = ir.new_error(pc, wb);
+    let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {
         let cached_version = gen.jit.const_i32(-1);
         let cached_funcid = gen.jit.const_i32(-1);
