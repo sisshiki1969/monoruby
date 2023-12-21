@@ -394,32 +394,32 @@ impl AsmIr {
                 }
                 bb.link_stack(dst);
                 self.integer_binop(bb, pc, kind, mode);
-                self.reg2stack(GP::Rdi, dst);
+                self.reg2acc(bb, GP::Rdi, dst);
             }
             BinOpK::Sub => {
                 self.fetch_fixnum_binary(bb, pc, &mode);
                 bb.link_stack(dst);
                 self.integer_binop(bb, pc, kind, mode);
-                self.reg2stack(GP::Rdi, dst);
+                self.reg2acc(bb, GP::Rdi, dst);
             }
             BinOpK::Exp | BinOpK::Mul | BinOpK::Div => {
                 self.fetch_fixnum_mode(bb, &mode, pc);
                 bb.link_stack(dst);
                 self.integer_binop(bb, pc, kind, mode);
-                self.reg2stack(GP::Rax, dst);
+                self.reg2acc(bb, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     self.fetch_fixnum_rdi(bb, lhs, pc);
                     bb.link_stack(dst);
                     self.integer_binop(bb, pc, kind, mode);
-                    self.reg2stack(GP::Rdi, dst);
+                    self.reg2acc(bb, GP::Rdi, dst);
                 }
                 _ => {
                     self.fetch_fixnum_mode(bb, &mode, pc);
                     bb.link_stack(dst);
                     self.integer_binop(bb, pc, kind, mode);
-                    self.reg2stack(GP::Rax, dst);
+                    self.reg2acc(bb, GP::Rax, dst);
                 }
             },
         }

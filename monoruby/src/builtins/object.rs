@@ -426,7 +426,7 @@ fn object_send(
         }
         gen.xmm_restore(using);
     });
-    ir.reg2stack(GP::Rax, dst);
+    ir.reg2acc(bb, GP::Rax, dst);
 }
 
 #[repr(C)]
