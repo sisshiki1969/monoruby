@@ -99,17 +99,16 @@ impl Codegen {
 
     pub(super) fn generic_cmp(&mut self, kind: &CmpKind, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
-        let func = match kind {
-            CmpKind::Eq => cmp_eq_values,
-            CmpKind::Ne => cmp_ne_values,
-            CmpKind::Ge => cmp_ge_values,
-            CmpKind::Gt => cmp_gt_values,
-            CmpKind::Le => cmp_le_values,
-            CmpKind::Lt => cmp_lt_values,
-            CmpKind::TEq => cmp_teq_values,
-            CmpKind::Cmp => cmp_cmp_values,
-        };
-        self.call_binop(func);
+        match kind {
+            CmpKind::Eq => self.call_binop(cmp_eq_values),
+            CmpKind::Ne => self.call_binop(cmp_ne_values),
+            CmpKind::Ge => self.call_binop(cmp_ge_values),
+            CmpKind::Gt => self.call_binop(cmp_gt_values),
+            CmpKind::Le => self.call_binop(cmp_le_values),
+            CmpKind::Lt => self.call_binop(cmp_lt_values),
+            CmpKind::TEq => self.call_binop(cmp_teq_values),
+            CmpKind::Cmp => self.call_binop(cmp_cmp_values),
+        }
         self.xmm_restore(using_xmm);
     }
 
