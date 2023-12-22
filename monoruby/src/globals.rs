@@ -35,17 +35,16 @@ impl MethodTableEntry {
     }
 }
 
-pub const GLOBALS_FUNCINFO: usize =
-    std::mem::offset_of!(Globals, store) + STORE_FUNCTION + FUNCS_INFO;
+pub const GLOBALS_FUNCINFO: usize = std::mem::offset_of!(Globals, store.functions.info) + 8/* offset_of!(Vec, ptr) */;
 
 ///
 /// Global state.
 ///
 pub struct Globals {
-    /// code generator.
-    pub codegen: Codegen,
     /// function and class info.
     pub(crate) store: Store,
+    /// code generator.
+    pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
@@ -61,7 +60,7 @@ pub struct Globals {
     /// library directries.
     lib_directories: Vec<String>,
     /// standard PRNG
-    random: Prng,
+    random: Box<Prng>,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
     /// stats for deoptimization
@@ -115,15 +114,15 @@ impl Globals {
             lib_directories: vec![
                 "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/gems/json-2.6.3/lib".to_string(),
                 "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/extensions/x86_64-linux/3.3.0+0-static/json-2.6.3".to_string()
-            ],
-            random: Prng::new(),
-            loaded_canonicalized_files: IndexSet::default(),
-            #[cfg(feature = "profile")]
-            deopt_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            global_method_cache_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            method_exploration_stats: HashMap::default(),
+                ],
+                random: Box::new(Prng::new()),
+                loaded_canonicalized_files: IndexSet::default(),
+                #[cfg(feature = "profile")]
+                deopt_stats: HashMap::default(),
+                #[cfg(feature = "profile")]
+                global_method_cache_stats: HashMap::default(),
+                #[cfg(feature = "profile")]
+                method_exploration_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
             #[cfg(feature = "emit-bc")]
@@ -142,6 +141,11 @@ impl Globals {
         globals
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
+        /*dbg!(globals.store.functions.info.as_ptr());
+        let p = &globals.store.functions.info as *const Vec<_> as *const usize;
+        eprintln!("{:016x}", unsafe { *p });
+        eprintln!("{:016x}", unsafe { *(p.add(1)) });
+        eprintln!("{:016x}", unsafe { *(p.add(2)) });*/
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
         let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())

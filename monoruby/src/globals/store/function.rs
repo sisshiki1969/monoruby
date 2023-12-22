@@ -208,10 +208,8 @@ mod test {
     }
 }
 
-pub const FUNCS_INFO: usize = std::mem::offset_of!(Funcs, info);
-
-pub(super) struct Funcs {
-    info: Vec<FuncInfo>,
+pub(crate) struct Funcs {
+    pub info: Vec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }
 
