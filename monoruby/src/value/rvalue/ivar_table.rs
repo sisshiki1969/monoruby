@@ -7,11 +7,11 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::{self};
 use std::slice;
 
-type T = Option<Value>;
+//type T = Option<Value>;
 
-pub const IVAR_TABLE_PTR: usize = std::mem::offset_of!(IvarTable, buf.ptr);
-pub const IVAR_TABLE_CAPA: usize = std::mem::offset_of!(IvarTable, buf.cap);
-pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable, len);
+pub const IVAR_TABLE_PTR: usize = std::mem::offset_of!(IvarTable<Option<Value>>, buf.ptr);
+pub const IVAR_TABLE_CAPA: usize = std::mem::offset_of!(IvarTable<Option<Value>>, buf.cap);
+pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable<Option<Value>>, len);
 
 ///
 /// A table of instant variables in the field `ivar_table` of RValue.
@@ -20,25 +20,25 @@ pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable, len);
 ///
 #[derive(Clone)]
 #[repr(C)]
-pub struct IvarTable {
-    buf: RawTable,
+pub struct IvarTable<T> {
+    buf: RawTable<T>,
     len: usize,
 }
 
-impl Deref for IvarTable {
+impl<T> Deref for IvarTable<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.ptr(), self.len) }
     }
 }
 
-impl DerefMut for IvarTable {
+impl<T> DerefMut for IvarTable<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.ptr(), self.len) }
     }
 }
 
-impl IvarTable {
+impl<T> IvarTable<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             buf: RawTable::with_capacity(capacity),
@@ -86,12 +86,12 @@ impl IvarTable {
     }*/
 }
 
-pub struct IvarTableIntoIter {
-    _buf: RawTable, // we don't actually care about this. Just need it to live.
-    iter: RawIter,
+pub struct IvarTableIntoIter<T> {
+    _buf: RawTable<T>, // we don't actually care about this. Just need it to live.
+    iter: RawIter<T>,
 }
 
-impl Iterator for IvarTableIntoIter {
+impl<T> Iterator for IvarTableIntoIter<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
@@ -103,19 +103,19 @@ impl Iterator for IvarTableIntoIter {
     }
 }
 
-impl Drop for IvarTableIntoIter {
+impl<T> Drop for IvarTableIntoIter<T> {
     fn drop(&mut self) {
         for _ in &mut *self {}
     }
 }
 
 #[repr(C)]
-struct RawTable {
+struct RawTable<T> {
     ptr: std::ptr::NonNull<T>,
     cap: usize,
 }
 
-impl Clone for RawTable {
+impl<T> Clone for RawTable<T> {
     fn clone(&self) -> Self {
         unsafe {
             let ptr = alloc(self.cap);
@@ -128,7 +128,7 @@ impl Clone for RawTable {
     }
 }
 
-impl Drop for RawTable {
+impl<T> Drop for RawTable<T> {
     fn drop(&mut self) {
         let elem_size = mem::size_of::<T>();
         if self.cap != 0 {
@@ -142,7 +142,7 @@ impl Drop for RawTable {
     }
 }
 
-impl RawTable {
+impl<T> RawTable<T> {
     /*fn new() -> Self {
         Self::with_capacity(0)
     }*/
@@ -202,7 +202,7 @@ impl RawTable {
 ///
 /// Allocate buffer.
 ///
-fn alloc(capacity: usize) -> ptr::NonNull<T> {
+fn alloc<T>(capacity: usize) -> ptr::NonNull<T> {
     assert_ne!(0, capacity);
     let elem_size = mem::size_of::<T>();
     let align = mem::align_of::<T>();
@@ -217,13 +217,13 @@ fn alloc(capacity: usize) -> ptr::NonNull<T> {
     }
 }
 
-struct RawIter {
+struct RawIter<T> {
     start: *const T,
     end: *const T,
 }
 
-impl RawIter {
-    /*unsafe fn new(slice: &[T]) -> Self {
+/*impl RawIter {
+    unsafe fn new(slice: &[T]) -> Self {
         RawIter {
             start: slice.as_ptr(),
             end: if slice.len() == 0 {
@@ -232,10 +232,10 @@ impl RawIter {
                 slice.as_ptr().offset(slice.len() as isize)
             },
         }
-    }*/
-}
+    }
+}*/
 
-impl Iterator for RawIter {
+impl<T> Iterator for RawIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
         if self.start == self.end {

@@ -45,7 +45,7 @@ pub struct RValue {
     header: Header,
     /// instance variable table. 8 bytes
     #[allow(clippy::box_collection)]
-    var_table: Option<Box<IvarTable>>,
+    var_table: Option<Box<IvarTable<Option<Value>>>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
 }
