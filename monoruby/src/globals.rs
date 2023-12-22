@@ -35,7 +35,8 @@ impl MethodTableEntry {
     }
 }
 
-pub const GLOBALS_FUNCINFO: usize = std::mem::offset_of!(Globals, store.functions.info) + 8/* offset_of!(Vec, ptr) */;
+pub const GLOBALS_FUNCINFO: usize =
+    std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
 ///
 /// Global state.

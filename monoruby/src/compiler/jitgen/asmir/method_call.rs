@@ -224,12 +224,12 @@ impl Codegen {
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
             testq rdx, rdx;
             jz   exit;
-            movq rdi, [rdx + (IVAR_TABLE_CAPA)]; // capa
+            movq rdi, [rdx + (MONOVEC_CAPA)]; // capa
             testq rdi, rdi;
             jz   exit;
-            movq rdi, [rdx + (IVAR_TABLE_LEN)]; // len
+            movq rdi, [rdx + (MONOVEC_LEN)]; // len
             cmpq rdi, rsi;
-            movq rdi, [rdx + (IVAR_TABLE_PTR)]; // ptr
+            movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
             cmovgtq rax, [rdi + rsi * 8];
         exit:
         );

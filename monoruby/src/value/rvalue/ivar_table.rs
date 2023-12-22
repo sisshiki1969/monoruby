@@ -9,9 +9,9 @@ use std::slice;
 
 //type T = Option<Value>;
 
-pub const IVAR_TABLE_PTR: usize = std::mem::offset_of!(IvarTable<Option<Value>>, buf.ptr);
-pub const IVAR_TABLE_CAPA: usize = std::mem::offset_of!(IvarTable<Option<Value>>, buf.cap);
-pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable<Option<Value>>, len);
+pub const MONOVEC_PTR: usize = std::mem::offset_of!(MonoVec<Option<Value>>, buf.ptr);
+pub const MONOVEC_CAPA: usize = std::mem::offset_of!(MonoVec<Option<Value>>, buf.cap);
+pub const MONOVEC_LEN: usize = std::mem::offset_of!(MonoVec<Option<Value>>, len);
 
 ///
 /// A table of instant variables in the field `ivar_table` of RValue.
@@ -20,34 +20,47 @@ pub const IVAR_TABLE_LEN: usize = std::mem::offset_of!(IvarTable<Option<Value>>,
 ///
 #[derive(Clone)]
 #[repr(C)]
-pub struct IvarTable<T> {
-    buf: RawTable<T>,
+pub struct MonoVec<T> {
+    buf: RawVec<T>,
     len: usize,
 }
 
-impl<T> Deref for IvarTable<T> {
+impl<T> Deref for MonoVec<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.ptr(), self.len) }
     }
 }
 
-impl<T> DerefMut for IvarTable<T> {
+impl<T> DerefMut for MonoVec<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.ptr(), self.len) }
     }
 }
 
-impl<T> IvarTable<T> {
+impl<T> MonoVec<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            buf: RawTable::with_capacity(capacity),
+            buf: RawVec::with_capacity(capacity),
             len: 0,
         }
     }
 
     fn ptr(&self) -> *mut T {
         self.buf.ptr.as_ptr()
+    }
+
+    pub fn push(&mut self, value: T) {
+        // This will panic or abort if we would allocate > isize::MAX bytes
+        // or if the length increment would overflow for zero-sized types.
+        if self.len == self.buf.capacity() {
+            self.buf.grow(self.len + 1);
+        }
+        unsafe {
+            let end = self.as_mut_ptr().add(self.len);
+            ptr::write(end, value);
+            self.len += 1;
+        }
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -87,7 +100,7 @@ impl<T> IvarTable<T> {
 }
 
 pub struct IvarTableIntoIter<T> {
-    _buf: RawTable<T>, // we don't actually care about this. Just need it to live.
+    _buf: RawVec<T>, // we don't actually care about this. Just need it to live.
     iter: RawIter<T>,
 }
 
@@ -110,12 +123,12 @@ impl<T> Drop for IvarTableIntoIter<T> {
 }
 
 #[repr(C)]
-struct RawTable<T> {
+struct RawVec<T> {
     ptr: std::ptr::NonNull<T>,
     cap: usize,
 }
 
-impl<T> Clone for RawTable<T> {
+impl<T> Clone for RawVec<T> {
     fn clone(&self) -> Self {
         unsafe {
             let ptr = alloc(self.cap);
@@ -128,7 +141,7 @@ impl<T> Clone for RawTable<T> {
     }
 }
 
-impl<T> Drop for RawTable<T> {
+impl<T> Drop for RawVec<T> {
     fn drop(&mut self) {
         let elem_size = mem::size_of::<T>();
         if self.cap != 0 {
@@ -142,7 +155,7 @@ impl<T> Drop for RawTable<T> {
     }
 }
 
-impl<T> RawTable<T> {
+impl<T> RawVec<T> {
     /*fn new() -> Self {
         Self::with_capacity(0)
     }*/
@@ -158,7 +171,11 @@ impl<T> RawTable<T> {
             let ptr = alloc(cap).into();
             (ptr, cap)
         };
-        RawTable { ptr, cap }
+        RawVec { ptr, cap }
+    }
+
+    fn capacity(&self) -> usize {
+        self.cap
     }
 
     fn reserve(&mut self, len: usize, additional: usize) {

@@ -45,7 +45,7 @@ pub struct RValue {
     header: Header,
     /// instance variable table. 8 bytes
     #[allow(clippy::box_collection)]
-    var_table: Option<Box<IvarTable<Option<Value>>>>,
+    var_table: Option<Box<MonoVec<Option<Value>>>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
 }
@@ -320,7 +320,7 @@ impl RValue {
                 v[i] = Some(val);
             }
             None => {
-                let mut v = IvarTable::with_capacity(i + 1);
+                let mut v = MonoVec::with_capacity(i + 1);
                 v.resize(i + 1);
                 v[i] = Some(val);
                 self.var_table = Some(Box::new(v));

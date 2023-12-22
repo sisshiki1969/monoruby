@@ -209,7 +209,7 @@ mod test {
 }
 
 pub(crate) struct Funcs {
-    pub info: Vec<FuncInfo>,
+    pub info: MonoVec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }
 
@@ -228,7 +228,8 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl std::default::Default for Funcs {
     fn default() -> Self {
-        let info = vec![FuncInfo::default()];
+        let mut info = MonoVec::with_capacity(256);
+        info.push(FuncInfo::default());
         Self {
             info,
             compile_info: vec![],
