@@ -8,7 +8,7 @@ pub(crate) enum BrKind {
 }
 
 impl BrKind {
-    pub fn from(i: u16) -> Self {
+    pub fn from(i: u8) -> Self {
         match i {
             0 => Self::BrIf,
             1 => Self::BrIfNot,
