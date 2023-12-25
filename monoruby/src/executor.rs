@@ -1102,9 +1102,9 @@ impl BcPc {
         (self.op1 >> 48) as u8
     }
 
-    pub(crate) fn opcode_sub(&self) -> u8 {
+    /*pub(crate) fn opcode_sub(&self) -> u8 {
         (self.op1 >> 56) as u8
-    }
+    }*/
 
     pub(crate) fn is_loop_start(&self) -> bool {
         self.opcode() == 14 // TraceIr::LoopStart(_))

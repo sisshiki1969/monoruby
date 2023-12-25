@@ -198,7 +198,7 @@ impl Codegen {
     ///
     /// Class guard for RValue.
     ///
-    /// If the class of *reg* was not matched to *class_id*, go to *deopt*.
+    /// If the class of *reg* was not matched *class_id*, go to *deopt*.
     ///
     /// ### in
     /// - R(*reg*): Value

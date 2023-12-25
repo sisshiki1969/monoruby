@@ -325,7 +325,7 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-        recv_classid: ClassId,
+        recv_class: ClassId,
         native: bool,
         using_xmm: UsingXmm,
         error: DestLabel,
@@ -408,7 +408,7 @@ impl Codegen {
             let codeptr = func_data.codeptr().unwrap();
             self.call_codeptr(codeptr);
         } else {
-            match store[callee_fid].get_jit_code(recv_classid) {
+            match store[callee_fid].get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;
@@ -724,21 +724,20 @@ impl AsmIr {
         fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
-    ) -> Option<()> {
+    ) {
         let CallSiteInfo { dst, .. } = store[callid];
         self.fetch_callargs(bb, &store[callid]);
         bb.link_stack(dst);
-        if pc.opcode_sub() == 1 /* this callsite is polymorphic */
+        if store[callid].cache.len() >= 2 /* this callsite is polymorphic */
             || store[callid].recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
         /* the cache is invalid because the receiver class is not matched.*/
         {
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {
-            self.gen_call_cached(store, bb, callid, fid, pc)?;
+            self.gen_call_cached(store, bb, callid, fid, pc);
         }
         self.rax2acc(bb, dst);
-        Some(())
     }
 
     ///
@@ -751,7 +750,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) -> Option<()> {
+    ) {
         let CallSiteInfo {
             recv,
             args,
@@ -802,7 +801,6 @@ impl AsmIr {
                 self.send_cached(bb, pc, callid, fid, cached_class, false);
             }
         };
-        Some(())
     }
 }
 

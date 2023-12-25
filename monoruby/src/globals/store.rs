@@ -270,7 +270,7 @@ impl Store {
             recv,
             dst: ret,
             cache_version: 0,
-            cache: HashMap::default(),
+            cache: vec![],
         });
         id
     }
@@ -385,7 +385,7 @@ pub(crate) struct CallSiteInfo {
     /// Position where the result is to be stored to.
     pub dst: Option<SlotId>,
     pub cache_version: u32,
-    pub cache: HashMap<ClassId, FuncId>,
+    pub cache: Vec<(ClassId, FuncId)>,
 }
 
 impl CallSiteInfo {

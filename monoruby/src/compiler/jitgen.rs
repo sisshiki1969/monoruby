@@ -36,6 +36,9 @@ struct JitContext {
     /// Destination labels for each TraceIr.
     ///
     inst_labels: HashMap<BcIndex, DestLabel>,
+    ///
+    /// Destination labels for AsmLabels.
+    ///
     asm_labels: Vec<Option<DestLabel>>,
     ///
     /// Basic block information.
@@ -103,6 +106,7 @@ struct JitContext {
     /// Information for opt_case table.
     ///
     opt_case: Vec<OptCaseAsmInfo>,
+    class_version: u32,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
@@ -191,6 +195,7 @@ impl JitContext {
             bridges: vec![],
             continuation_bridge: None,
             opt_case: vec![],
+            class_version: codegen.class_version(),
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
@@ -646,10 +651,10 @@ impl JitContext {
                 if store[callid].block_fid.is_some() {
                     self.ir.write_back_locals(bb);
                 }
-                if let Some(fid) = pc.cached_fid() {
-                    if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
-                        return CompileResult::Recompile;
-                    }
+                if let Some(fid) = pc.cached_fid()
+                    && self.class_version == (pc + 1).cached_version()
+                {
+                    self.ir.gen_call(store, bb, fid, callid, pc);
                 } else {
                     return CompileResult::Recompile;
                 }

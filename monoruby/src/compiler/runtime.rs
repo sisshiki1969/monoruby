@@ -72,18 +72,19 @@ pub(super) extern "C" fn vm_find_method(
         if recv_class != cached_class {
             let version = globals.class_version();
             let callsite = &mut globals.store[callid];
-            let func_name = callsite.name;
+            //let func_name = callsite.name;
             if version != callsite.cache_version {
                 callsite.cache.clear();
                 callsite.cache_version = version;
+                if pc.cached_version() == version {
+                    let cached_fid = (pc - 1).cached_fid().unwrap();
+                    callsite.cache.push((cached_class, cached_fid));
+                }
             }
-            let cached_version = pc.cached_version();
-            if cached_version == version {
-                let cached_fid = (pc - 1).cached_fid().unwrap();
-                callsite.cache.insert(cached_class, cached_fid);
+            if callsite.cache.iter().all(|(class, _)| class != &recv_class) {
+                callsite.cache.push((recv_class, func_id));
+                //eprintln!("polymorphic: {:?} {:?}", func_name, callsite.cache);
             }
-            callsite.cache.insert(recv_class, func_id);
-            //eprintln!("polymorphic: {:?} {:?}", func_name, callsite.cache);
         }
     }
     Some(func_id)

@@ -238,7 +238,7 @@ impl AsmIr {
         pc: BcPc,
         callid: CallSiteId,
         callee_fid: FuncId,
-        recv_classid: ClassId,
+        recv_class: ClassId,
         native: bool,
     ) {
         let using_xmm = bb.get_using_xmm();
@@ -246,7 +246,7 @@ impl AsmIr {
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
-            recv_classid,
+            recv_class,
             native,
             using_xmm,
             error,
@@ -259,7 +259,7 @@ impl AsmIr {
         let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
-            callsite,
+            callid: callsite,
             pc,
             using_xmm,
             error,
@@ -629,15 +629,15 @@ pub(super) enum AsmInst {
     },
     SendCached {
         callid: CallSiteId,
+        recv_class: ClassId,
         callee_fid: FuncId,
-        recv_classid: ClassId,
         native: bool,
         using_xmm: UsingXmm,
         error: AsmError,
     },
     SendNotCached {
+        callid: CallSiteId,
         self_class: ClassId,
-        callsite: CallSiteId,
         pc: BcPc,
         using_xmm: UsingXmm,
         error: AsmError,
@@ -1240,25 +1240,19 @@ impl Codegen {
             AsmInst::SendCached {
                 callid,
                 callee_fid,
-                recv_classid,
+                recv_class,
                 native,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
                 self.send_cached(
-                    store,
-                    callid,
-                    callee_fid,
-                    recv_classid,
-                    native,
-                    using_xmm,
-                    error,
+                    store, callid, callee_fid, recv_class, native, using_xmm, error,
                 );
             }
             AsmInst::SendNotCached {
                 self_class,
-                callsite,
+                callid: callsite,
                 pc,
                 using_xmm,
                 error,
