@@ -72,7 +72,7 @@ pub(super) extern "C" fn vm_find_method(
         if recv_class != cached_class {
             let version = globals.class_version();
             let callsite = &mut globals.store[callid];
-            let func_name = callsite.name;
+            //let func_name = callsite.name;
             if version != callsite.cache_version {
                 callsite.cache.clear();
                 callsite.cache_version = version;

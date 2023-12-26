@@ -750,6 +750,9 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ArrayIndex {
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: AsmError,
         deopt: AsmDeopt,
     },
     GenericIndexAssign {
@@ -1389,9 +1392,15 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.gen_array_u16_index(idx, deopt);
             }
-            AsmInst::ArrayIndex { deopt } => {
+            AsmInst::ArrayIndex {
+                pc,
+                using_xmm,
+                error,
+                deopt,
+            } => {
                 let deopt = labels[deopt];
-                self.gen_array_index(deopt);
+                let error = labels[error];
+                self.gen_array_index(pc, using_xmm, error, deopt);
             }
             AsmInst::GenericIndexAssign {
                 src,
