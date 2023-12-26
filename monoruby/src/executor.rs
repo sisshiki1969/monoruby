@@ -1135,7 +1135,7 @@ impl BcPc {
     pub(crate) fn trace_ir(&self) -> TraceIr {
         let op = self.op1;
         let opcode = self.opcode() as u8;
-        if opcode & 0xffc0 == 0 {
+        if opcode & 0xc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
                 1 => TraceIr::SingletonMethodDef {
