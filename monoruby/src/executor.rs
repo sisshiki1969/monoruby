@@ -1018,7 +1018,11 @@ impl Bc {
         }
     }
 
-    pub(super) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
+    pub(super) fn from_with_class_and_version(
+        op1: u64,
+        class_id: Option<ClassId>,
+        version: u32,
+    ) -> Self {
         Self {
             op1,
             op2: Bc2::class_and_version(class_id, version),
@@ -1028,7 +1032,7 @@ impl Bc {
     pub(super) fn from_with_class2(op1: u64) -> Self {
         Self {
             op1,
-            op2: Bc2::class2(ClassId::default(), ClassId::default()),
+            op2: Bc2::class2(None, None),
         }
     }
 

@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use super::*;
 
 mod constants;
@@ -28,13 +30,13 @@ pub const FIBER_CLASS: ClassId = ClassId::new(21);
 pub const ENUMERATOR_CLASS: ClassId = ClassId::new(22);
 pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ClassId(pub u32);
+pub struct ClassId(NonZeroU32);
 
 impl std::fmt::Debug for ClassId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
+        match self.u32() {
             1 => write!(f, "OBJECT"),
             2 => write!(f, "CLASS"),
             3 => write!(f, "NIL"),
@@ -65,21 +67,25 @@ impl std::fmt::Debug for ClassId {
 
 impl From<ClassId> for u32 {
     fn from(val: ClassId) -> Self {
-        val.0
+        val.0.get()
     }
 }
 
 impl ClassId {
     pub const fn new(id: u32) -> Self {
-        Self(id)
+        Self(NonZeroU32::new(id).unwrap())
     }
 
     pub const fn from(id: u32) -> Option<Self> {
         if id == 0 {
             None
         } else {
-            Some(Self(id))
+            Some(Self::new(id))
         }
+    }
+
+    pub fn u32(&self) -> u32 {
+        self.0.get()
     }
 
     pub(crate) fn is_always_frozen(&self) -> bool {
@@ -120,9 +126,6 @@ impl ClassId {
 
     /// Get class name(IdentId) of *ClassId*.
     pub(crate) fn get_name_id(self, globals: &Globals) -> Option<IdentId> {
-        if self.0 == 0 {
-            return None;
-        }
         let class = self.get_module(globals);
         match globals.store[self].name {
             Some(id) => Some(id),
