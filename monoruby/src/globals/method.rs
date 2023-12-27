@@ -60,7 +60,7 @@ impl Globals {
         let inline_id = self.store.add_inline_info(
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", class_id.get_name(self)),
+            format!("{}#{name}", self.get_class_name(class_id)),
         );
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id
@@ -98,7 +98,7 @@ impl Globals {
         let inline_id = self.store.add_inline_info(
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", class_id.get_name(self)),
+            format!("{}#{name}", self.get_class_name(class_id)),
         );
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id

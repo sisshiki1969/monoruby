@@ -437,6 +437,18 @@ pub(super) struct ClassIdSlot {
     idx: ClassId,
 }
 
+///
+/// Generic index operation.
+///
+/// # Arguments
+/// base: Value
+/// index: Value
+/// class_slot: &mut ClassIdSlot
+///
+/// # Returns
+/// Some(Value) if succeeded.
+/// None if failed.
+///
 pub(super) extern "C" fn get_index(
     vm: &mut Executor,
     globals: &mut Globals,

@@ -368,6 +368,30 @@ impl Globals {
 }
 
 impl Globals {
+    /// Get class name of *ClassId*.
+    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
+        if let Some(class) = class.into() {
+            let class_obj = class.get_module(self);
+            match self.store[class].get_name_id() {
+                Some(_) => {
+                    let v: Vec<_> = class
+                        .get_parents(self)
+                        .into_iter()
+                        .rev()
+                        .map(|name| name.to_string())
+                        .collect();
+                    v.join("::")
+                }
+                None => match class_obj.is_singleton() {
+                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                    Some(base) => format!("#<Class:{}>", self.to_s(base)),
+                },
+            }
+        } else {
+            return "<INVALID>".to_string();
+        }
+    }
+
     pub(crate) fn to_s(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
@@ -382,7 +406,7 @@ impl Globals {
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
+                ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => rvalue.as_array().to_s(self),
                 ObjKind::OBJECT => self.object_tos(val),
@@ -422,7 +446,7 @@ impl Globals {
             RV::Object(rvalue) => match rvalue.ty() {
                 ObjKind::OBJECT => return self.object_inspect(val),
                 ObjKind::EXCEPTION => {
-                    let class_name = val.class().get_name(self);
+                    let class_name = self.get_class_name(val.class());
                     let msg = rvalue.as_exception().msg();
                     return format!("#<{class_name}: {msg}>");
                 }
@@ -455,7 +479,7 @@ impl Globals {
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                val.real_class(self).id().get_name(self),
+                self.get_class_name(val.real_class(self).id()),
                 val.rvalue().id()
             )
         }
@@ -471,7 +495,7 @@ impl Globals {
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
-                val.class().get_name(self),
+                self.get_class_name(val.class()),
                 val.rvalue().id()
             )
         }

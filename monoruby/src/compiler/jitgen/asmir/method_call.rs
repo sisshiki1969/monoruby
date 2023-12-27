@@ -42,7 +42,7 @@ impl Codegen {
         if recv.is_self() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             monoasm!( &mut self.jit,
-                movl r15, (self_class.0);
+                movl r15, (self_class.u32());
             );
         } else {
             self.load_rdi(recv);

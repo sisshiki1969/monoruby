@@ -1,5 +1,5 @@
 cargo install --path monoruby
-rbenv local 3.3.0-preview3
+rbenv local 3.3.0
 #ruby -v
 #ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 #ruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes

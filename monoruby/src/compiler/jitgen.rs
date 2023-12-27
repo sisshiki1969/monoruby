@@ -412,13 +412,13 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Index { dst, base, idx } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.index(bb, dst, base, idx, pc);
             }
             TraceIr::IndexAssign { src, base, idx } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.index_assign(bb, src, base, idx, pc);
@@ -514,7 +514,7 @@ impl JitContext {
                     .push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
             }
             TraceIr::BitNot { dst, src } => {
-                if pc.classid1().0 == 0 {
+                if pc.classid1().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
@@ -529,7 +529,7 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::UnOp { kind, dst, src } => {
-                if pc.classid1().0 == 0 {
+                if pc.classid1().is_none() {
                     return CompileResult::Recompile;
                 }
                 if pc.is_float1() {
@@ -560,7 +560,7 @@ impl JitContext {
             TraceIr::BinOp {
                 kind, dst, mode, ..
             } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_binary(bb, mode);
@@ -569,7 +569,7 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Cmp(kind, ret, mode, false) => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {

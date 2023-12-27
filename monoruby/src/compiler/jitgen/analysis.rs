@@ -292,7 +292,7 @@ impl JitContext {
                 }
                 TraceIr::UnOp { kind: _, dst, src } => {
                     let is_float = pc.is_float1();
-                    info.use_as(src, is_float, pc.classid1() == FLOAT_CLASS);
+                    info.use_as(src, is_float, pc.is_float1());
                     info.def_as(dst, is_float);
                 }
                 TraceIr::Not { dst, src } => {
@@ -302,11 +302,14 @@ impl JitContext {
                 TraceIr::FBinOp { dst, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as_float(lhs, pc.classid1() == FLOAT_CLASS);
-                            info.use_as_float(rhs, pc.classid2() == FLOAT_CLASS);
+                            info.use_as_float(lhs, pc.is_float1());
+                            info.use_as_float(rhs, pc.is_float2());
                         }
-                        OpMode::IR(_, reg) | OpMode::RI(reg, _) => {
-                            info.use_as_float(reg, pc.classid2() == FLOAT_CLASS);
+                        OpMode::RI(lhs, _) => {
+                            info.use_as_float(lhs, pc.is_float1());
+                        }
+                        OpMode::IR(_, rhs) => {
+                            info.use_as_float(rhs, pc.is_float2());
                         }
                     }
                     if let Some(ret) = dst {
@@ -358,11 +361,11 @@ impl JitContext {
                     let is_float = mode.is_float_op(&pc);
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as(lhs, is_float, pc.classid1() == FLOAT_CLASS);
-                            info.use_as(rhs, is_float, pc.classid2() == FLOAT_CLASS);
+                            info.use_as(lhs, is_float, pc.is_float1());
+                            info.use_as(rhs, is_float, pc.is_float2());
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as(lhs, is_float, pc.classid1() == FLOAT_CLASS);
+                            info.use_as(lhs, is_float, pc.is_float1());
                         }
                         _ => unreachable!(),
                     }

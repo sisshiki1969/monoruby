@@ -121,7 +121,7 @@ impl Value {
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        self.real_class(globals).id().get_name(globals)
+        globals.get_class_name(self.real_class(globals).id())
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {

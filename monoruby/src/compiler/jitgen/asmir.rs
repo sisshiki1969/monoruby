@@ -339,6 +339,18 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndex {
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
         let using_xmm = bb.get_using_xmm();
         let deopt = self.new_deopt(bb, pc);
@@ -347,6 +359,26 @@ impl AsmIr {
             idx,
             using_xmm,
             deopt,
+            error,
+        });
+    }
+
+    pub(super) fn generic_index_assign(
+        &mut self,
+        bb: &BBContext,
+        pc: BcPc,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+    ) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndexAssign {
+            src,
+            base,
+            idx,
+            pc,
+            using_xmm,
             error,
         });
     }
@@ -750,6 +782,9 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ArrayIndex {
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: AsmError,
         deopt: AsmDeopt,
     },
     GenericIndexAssign {
@@ -1383,9 +1418,15 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.gen_array_u16_index(idx, deopt);
             }
-            AsmInst::ArrayIndex { deopt } => {
+            AsmInst::ArrayIndex {
+                pc,
+                using_xmm,
+                error,
+                deopt,
+            } => {
                 let deopt = labels[deopt];
-                self.gen_array_index(deopt);
+                let error = labels[error];
+                self.gen_array_index(pc, using_xmm, error, deopt);
             }
             AsmInst::GenericIndexAssign {
                 src,
