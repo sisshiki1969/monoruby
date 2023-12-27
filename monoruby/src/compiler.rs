@@ -979,7 +979,7 @@ impl Globals {
                 },
                 name,
                 func.id(),
-                self_value.class().get_name(self),
+                self.get_class_name(self_value.class()),
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
@@ -993,7 +993,7 @@ impl Globals {
                 .compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
-            let class_name = self_value.class().get_name(self);
+            let class_name = self.get_class_name(self_value.class());
             let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
             self.codegen.perf_info(codeptr, &desc);
         }

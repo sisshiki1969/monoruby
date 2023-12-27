@@ -23,7 +23,7 @@ impl MethodInner {
     pub fn to_s(&self, globals: &Globals) -> String {
         format!(
             "#<Method: {}#{}()>",
-            self.receiver.class().get_name(globals),
+            globals.get_class_name(self.receiver.class()),
             globals[self.func_id()].name().unwrap()
         )
     }

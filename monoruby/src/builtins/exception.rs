@@ -51,7 +51,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) 
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let class_id = lfp.self_val().expect_class(globals)?;
     let msg = if len == 0 {
-        class_id.get_name(globals)
+        globals.get_class_name(class_id)
     } else {
         arg[0].expect_string(globals)?
     };

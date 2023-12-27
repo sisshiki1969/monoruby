@@ -152,7 +152,7 @@ impl Globals {
             eprintln!(
                 "{:30} {:30} {:10}",
                 name.to_string(),
-                class_id.get_name(self),
+                self.get_class_name(*class_id),
                 count
             );
         }
@@ -166,7 +166,7 @@ impl Globals {
             eprintln!(
                 "{:30} {:30} {:10}",
                 name.to_string(),
-                class_id.get_name(self),
+                self.get_class_name(*class_id),
                 count
             );
         }
@@ -242,8 +242,8 @@ impl Globals {
                 format!(
                     "{:36} [{}][{}]",
                     op1,
-                    pc.classid1().get_name(self),
-                    pc.classid2().get_name(self)
+                    self.get_class_name(pc.classid1()),
+                    self.get_class_name(pc.classid2())
                 )
             }
             TraceIr::IndexAssign { src, base, idx } => {
@@ -302,7 +302,7 @@ impl Globals {
                     "{:?} = {id}: {}",
                     reg,
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", id.get_name(self), ivar_id)
+                        format!("{}[{:?}]", self.get_class_name(id), ivar_id)
                     } else {
                         format!("-")
                     }
@@ -312,7 +312,7 @@ impl Globals {
                 format!(
                     "{id}: {} = {:?}",
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", id.get_name(self), ivar_id)
+                        format!("{}[{:?}]", self.get_class_name(id), ivar_id)
                     } else {
                         format!("-")
                     },
@@ -342,15 +342,15 @@ impl Globals {
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::BitNot { dst, src } => {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
-                format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
+                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
             }
             TraceIr::UnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
+                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
-                format!("{:36} [{}]", op1, pc.classid1().get_name(self),)
+                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
             }
             TraceIr::BinOp {
                 kind,
@@ -371,8 +371,8 @@ impl Globals {
                 format!(
                     "{:36} [{}][{}]",
                     op1,
-                    pc.classid1().get_name(self),
-                    pc.classid2().get_name(self)
+                    self.get_class_name(pc.classid1()),
+                    self.get_class_name(pc.classid2())
                 )
             }
             TraceIr::BinOp {
@@ -394,8 +394,8 @@ impl Globals {
                 format!(
                     "{:36} [{}][{}]",
                     op1,
-                    pc.classid1().get_name(self),
-                    pc.classid2().get_name(self)
+                    self.get_class_name(pc.classid1()),
+                    self.get_class_name(pc.classid2())
                 )
             }
             TraceIr::BinOp {
@@ -417,8 +417,8 @@ impl Globals {
                 format!(
                     "{:36} [{}][{}]",
                     op1,
-                    pc.classid1().get_name(self),
-                    pc.classid2().get_name(self)
+                    self.get_class_name(pc.classid1()),
+                    self.get_class_name(pc.classid2())
                 )
             }
             TraceIr::Cmp(kind, dst, mode, opt) => {
@@ -446,8 +446,8 @@ impl Globals {
                 format!(
                     "{:36} [{}][{}]",
                     op1,
-                    pc.classid1().get_name(self),
-                    pc.classid2().get_name(self)
+                    self.get_class_name(pc.classid1()),
+                    self.get_class_name(pc.classid2())
                 )
             }
 
@@ -505,7 +505,7 @@ impl Globals {
                     "{:36} [{}]",
                     op1,
                     match class {
-                        Some(class) => class.get_name(self),
+                        Some(class) => self.get_class_name(class),
                         None => "-".to_string(),
                     }
                 )
@@ -533,7 +533,7 @@ impl Globals {
                         pos_num,
                     )
                 };
-                format!("{:36} [{}]", op1, class.get_name(self))
+                format!("{:36} [{}]", op1, self.get_class_name(class))
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {

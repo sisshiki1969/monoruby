@@ -74,6 +74,14 @@ impl ClassId {
         Self(id)
     }
 
+    pub const fn from(id: u32) -> Option<Self> {
+        if id == 0 {
+            None
+        } else {
+            Some(Self(id))
+        }
+    }
+
     pub(crate) fn is_always_frozen(&self) -> bool {
         matches!(
             *self,
@@ -97,30 +105,7 @@ impl ClassId {
         self.get_module(globals).as_val()
     }
 
-    /// Get class name of *ClassId*.
-    pub(crate) fn get_name(self, globals: &Globals) -> String {
-        if self.0 == 0 {
-            return "<INVALID>".to_string();
-        }
-        let class = self.get_module(globals);
-        match globals.store[self].name {
-            Some(_) => {
-                let v: Vec<_> = self
-                    .get_parents(globals)
-                    .into_iter()
-                    .rev()
-                    .map(|name| name.to_string())
-                    .collect();
-                v.join("::")
-            }
-            None => match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().id()),
-                Some(base) => format!("#<Class:{}>", globals.to_s(base)),
-            },
-        }
-    }
-
-    fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
+    pub(crate) fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
         let mut class = self;
         let mut parents = vec![globals.store[self].name.unwrap()];
         while let Some(parent) = globals.store[class].parent {

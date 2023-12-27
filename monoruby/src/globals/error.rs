@@ -244,7 +244,10 @@ impl MonorubyErr {
     ) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod,
-            format!("undefined method `{name}' for {}", class.get_name(globals)),
+            format!(
+                "undefined method `{name}' for {}",
+                globals.get_class_name(class)
+            ),
         )
     }
 
@@ -339,7 +342,7 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
             val.get_real_class_name(globals),
-            target_class.get_name(globals),
+            globals.get_class_name(target_class),
         ))
     }
 

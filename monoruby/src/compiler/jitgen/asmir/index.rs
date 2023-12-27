@@ -9,7 +9,7 @@ impl AsmIr {
         idx: SlotId,
         pc: BcPc,
     ) {
-        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
             self.gen_array_index(bb, dst, base, idx, pc);
         } else {
             self.fetch_slots(bb, &[base, idx]);
@@ -27,7 +27,7 @@ impl AsmIr {
         idx: SlotId,
         pc: BcPc,
     ) {
-        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
             self.writeback_acc(bb);
             self.fetch_to_reg(bb, base, GP::Rdi);
             self.fetch_to_reg(bb, src, GP::R15);
@@ -65,18 +65,6 @@ impl AsmIr {
         bb.link_stack(dst);
     }
 
-    fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
-    }
-
     fn gen_array_index_assign(&mut self, bb: &mut BBContext, idx: SlotId, pc: BcPc) {
         if let Some(idx) = bb.is_u16_literal(idx) {
             self.array_u16_index_assign(bb, pc, idx);
@@ -84,26 +72,6 @@ impl AsmIr {
             self.fetch_to_reg(bb, idx, GP::Rsi);
             self.array_index_assign(bb, pc);
         }
-    }
-
-    fn generic_index_assign(
-        &mut self,
-        bb: &BBContext,
-        pc: BcPc,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-    ) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericIndexAssign {
-            src,
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
     }
 }
 

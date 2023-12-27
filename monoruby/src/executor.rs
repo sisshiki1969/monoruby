@@ -898,38 +898,41 @@ pub(crate) struct Bc {
 
 impl Bc {
     pub fn is_integer1(&self) -> bool {
-        self.classid1() == INTEGER_CLASS
+        self.classid1() == Some(INTEGER_CLASS)
     }
 
     pub fn is_integer2(&self) -> bool {
-        self.classid2() == INTEGER_CLASS
+        self.classid2() == Some(INTEGER_CLASS)
     }
 
     pub fn is_float1(&self) -> bool {
-        self.classid1() == FLOAT_CLASS
+        self.classid1() == Some(FLOAT_CLASS)
     }
 
     pub fn is_float2(&self) -> bool {
-        self.classid2() == FLOAT_CLASS
+        self.classid2() == Some(FLOAT_CLASS)
     }
 
     pub fn is_integer_binop(&self) -> bool {
-        self.classid1() == INTEGER_CLASS && self.classid2() == INTEGER_CLASS
+        self.classid1() == Some(INTEGER_CLASS) && self.classid2() == Some(INTEGER_CLASS)
     }
 
     pub fn is_float_binop(&self) -> bool {
         match (self.classid1(), self.classid2()) {
-            (INTEGER_CLASS, INTEGER_CLASS) => false,
-            (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
+            (Some(class1), Some(class2)) => match (class1, class2) {
+                (INTEGER_CLASS, INTEGER_CLASS) => false,
+                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
+                _ => false,
+            },
             _ => false,
         }
     }
-    pub fn classid1(&self) -> ClassId {
-        ClassId::new(self.op2.0 as u32)
+    pub fn classid1(&self) -> Option<ClassId> {
+        ClassId::from(self.op2.0 as u32)
     }
 
-    pub fn classid2(&self) -> ClassId {
-        ClassId::new((self.op2.0 >> 32) as u32)
+    pub fn classid2(&self) -> Option<ClassId> {
+        ClassId::from((self.op2.0 >> 32) as u32)
     }
 
     pub fn cached_version(&self) -> u32 {
@@ -940,15 +943,6 @@ impl Bc {
     pub fn cached_ivarid(&self) -> IvarId {
         let op = self.op2.0;
         IvarId::new((op >> 32) as u32)
-    }
-
-    fn class(&self) -> Option<ClassId> {
-        let op = self.op2.0 as u32;
-        if op == 0 {
-            None
-        } else {
-            Some(ClassId::new(op))
-        }
     }
 
     fn fid(&self) -> Option<FuncId> {
@@ -1127,11 +1121,11 @@ impl BcPc {
     }
 
     pub(crate) fn cached_class1(self) -> Option<ClassId> {
-        (*(self + 1)).class()
+        (*(self + 1)).classid1()
     }
 
     pub(crate) fn cached_class0(self) -> Option<ClassId> {
-        self.class()
+        self.classid1()
     }
 }
 

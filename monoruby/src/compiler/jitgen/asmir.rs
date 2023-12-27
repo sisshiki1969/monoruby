@@ -339,6 +339,18 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndex {
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
         let using_xmm = bb.get_using_xmm();
         let deopt = self.new_deopt(bb, pc);
@@ -347,6 +359,26 @@ impl AsmIr {
             idx,
             using_xmm,
             deopt,
+            error,
+        });
+    }
+
+    pub(super) fn generic_index_assign(
+        &mut self,
+        bb: &BBContext,
+        pc: BcPc,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+    ) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndexAssign {
+            src,
+            base,
+            idx,
+            pc,
+            using_xmm,
             error,
         });
     }
