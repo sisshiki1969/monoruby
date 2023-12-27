@@ -654,7 +654,9 @@ impl JitContext {
                 if let Some(fid) = pc.cached_fid()
                     && self.class_version == (pc + 1).cached_version()
                 {
-                    self.ir.gen_call(store, bb, fid, callid, pc);
+                    if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
+                        return CompileResult::Recompile;
+                    }
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -1257,7 +1259,7 @@ impl Codegen {
         );
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
-                movq rdx, (pc.get_u64());
+                movq rdx, (pc.u64());
                 movq rax, (exec_jit_partial_compile);
                 call rax;
             );
@@ -1286,7 +1288,7 @@ impl Codegen {
         );
         self.gen_write_back(&wb);
         monoasm!( &mut self.jit,
-            movq r13, ((pc + 1).get_u64());
+            movq r13, ((pc + 1).u64());
             jmp  raise;
         );
         self.jit.select_page(0);
@@ -1364,7 +1366,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         self.gen_write_back(wb);
         monoasm!( &mut self.jit,
-            movq r13, (pc.get_u64());
+            movq r13, (pc.u64());
         );
         #[cfg(any(feature = "log-jit", feature = "profile"))]
         monoasm!( &mut self.jit,

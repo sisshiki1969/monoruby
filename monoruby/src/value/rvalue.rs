@@ -298,9 +298,9 @@ impl RValue {
         None
     }
 
-    pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
+    /*pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
         base.get_var(id).unwrap_or_default()
-    }
+    }*/
 
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
         let mut i = id.into_usize();

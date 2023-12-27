@@ -53,7 +53,7 @@ impl Codegen {
             );
         }
         monoasm! { &mut self.jit,
-            movq r13, (pc.get_u64());
+            movq r13, (pc.u64());
             // check inline cache
             cmpl [r13 + (CACHED_FUNCID)], 0;
             jeq  slow_path;
@@ -133,48 +133,46 @@ impl Codegen {
 
     pub(super) fn attr_reader(
         &mut self,
-        using_xmm: UsingXmm,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        /*using_xmm: UsingXmm, ivar_name: IdentId,*/ ivar_id: IvarId,
     ) {
         let exit = self.jit.label();
         // rdi: base: Value
-        if let Some(ivar_id) = ivar_id {
-            if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
-                let not_object = self.jit.label();
-                monoasm!( &mut self.jit,
-                    movl rsi, (ivar_id.get());
-                    // we don't know ty of the receiver in a compile time.
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                    jne  not_object;
-                    movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)];
-                    movq rdi, (NIL_VALUE);
-                    testq rax,rax;
-                    cmoveqq rax, rdi;
-                exit:
-                );
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                    not_object:
-                );
-                self.load_ivar_heap_index();
-                monoasm!( &mut self.jit,
-                    jmp  exit;
-                );
-                self.jit.select_page(0);
-            } else {
-                monoasm!( &mut self.jit,
-                    movl rsi, (ivar_id.get());
-                    xorq rax, rax;
-                    movl rdx, (OBJECT_INLINE_IVAR);
-                    // we don't know ty of the receiver in a compile time.
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                    cmoveqq rax, rdx;
-                    subl rsi, rax;
-                );
-                self.load_ivar_heap_index();
-            }
+        //if let Some(ivar_id) = ivar_id {
+        if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
+            let not_object = self.jit.label();
+            monoasm!( &mut self.jit,
+                movl rsi, (ivar_id.get());
+                // we don't know ty of the receiver in a compile time.
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                jne  not_object;
+                movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)];
+                movq rdi, (NIL_VALUE);
+                testq rax,rax;
+                cmoveqq rax, rdi;
+            exit:
+            );
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+                not_object:
+            );
+            self.load_ivar_heap_index();
+            monoasm!( &mut self.jit,
+                jmp  exit;
+            );
+            self.jit.select_page(0);
         } else {
+            monoasm!( &mut self.jit,
+                movl rsi, (ivar_id.get());
+                xorq rax, rax;
+                movl rdx, (OBJECT_INLINE_IVAR);
+                // we don't know ty of the receiver in a compile time.
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                cmoveqq rax, rdx;
+                subl rsi, rax;
+            );
+            self.load_ivar_heap_index();
+        }
+        /* } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -201,7 +199,7 @@ impl Codegen {
                 jmp exit;
             );
             self.jit.select_page(0);
-        }
+        }*/
     }
 
     ///
@@ -239,39 +237,39 @@ impl Codegen {
         &mut self,
         using_xmm: UsingXmm,
         error: DestLabel,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        //ivar_name: IdentId,
+        ivar_id: IvarId,
         args: SlotId,
     ) {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
         // rdi: base: Value
-        if let Some(ivar_id) = ivar_id {
+        //if let Some(ivar_id) = ivar_id {
+        monoasm!( &mut self.jit,
+            movl rsi, (ivar_id.get());
+            movq rdx, [r14 - (conv(args))];
+        );
+        if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
             monoasm!( &mut self.jit,
-                movl rsi, (ivar_id.get());
-                movq rdx, [r14 - (conv(args))];
+                // we don't know ty of the receiver in a compile time.
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                jne  no_inline;
+                movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rdx;
+            exit:
             );
-            if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!( &mut self.jit,
-                    // we don't know ty of the receiver in a compile time.
-                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                    jne  no_inline;
-                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_KIND)], rdx;
-                exit:
-                );
-                self.jit.select_page(1);
-                self.jit.bind_label(no_inline);
-                self.set_ivar(using_xmm);
-                self.handle_error(error);
-                monoasm!( &mut self.jit,
-                    jmp exit;
-                );
-                self.jit.select_page(0);
-            } else {
-                self.set_ivar(using_xmm);
-                self.handle_error(error);
-            }
+            self.jit.select_page(1);
+            self.jit.bind_label(no_inline);
+            self.set_ivar(using_xmm);
+            self.handle_error(error);
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
         } else {
+            self.set_ivar(using_xmm);
+            self.handle_error(error);
+        }
+        /* } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!( &mut self.jit,
@@ -317,7 +315,7 @@ impl Codegen {
                 jmp exit;
             );
             self.jit.select_page(0);
-        }
+        }*/
     }
 
     pub(super) fn send_cached(
@@ -391,7 +389,7 @@ impl Codegen {
         } else {
             monoasm! { &mut self.jit,
                 // set pc.
-                movq r13, (func_data.pc().get_u64());
+                movq r13, (func_data.pc().u64());
             }
         }
 
@@ -486,6 +484,12 @@ impl Codegen {
         self.handle_error(error);
     }
 
+    ///
+    /// Push block.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     fn push_block(&mut self, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_fid {
             let bh = BlockHandler::from(func_id);
@@ -724,20 +728,20 @@ impl AsmIr {
         fid: FuncId,
         callid: CallSiteId,
         pc: BcPc,
-    ) {
+    ) -> Option<()> {
         let CallSiteInfo { dst, .. } = store[callid];
         self.fetch_callargs(bb, &store[callid]);
         bb.link_stack(dst);
-        if store[callid].cache.len() >= 2 /* this callsite is polymorphic */
-            || store[callid].recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
+        if store[callid].recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
         /* the cache is invalid because the receiver class is not matched.*/
         {
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {
-            self.gen_call_cached(store, bb, callid, fid, pc);
+            self.gen_call_cached(store, bb, callid, fid, pc)?;
         }
         self.rax2acc(bb, dst);
+        Some(())
     }
 
     ///
@@ -750,7 +754,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) {
+    ) -> Option<()> {
         let CallSiteInfo {
             recv,
             args,
@@ -778,9 +782,9 @@ impl AsmIr {
                         self.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
-                    let ivar_id = store[cached_class].get_ivarid(ivar_name);
+                    let ivar_id = store[cached_class].get_ivarid(ivar_name)?;
                     self.stack2reg(recv, GP::Rdi);
-                    self.attr_reader(bb, ivar_name, ivar_id);
+                    self.attr_reader(/*bb, ivar_name,*/ ivar_id);
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -788,9 +792,9 @@ impl AsmIr {
                 assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                let ivar_id = store[cached_class].get_ivarid(ivar_name);
+                let ivar_id = store[cached_class].get_ivarid(ivar_name)?;
                 self.stack2reg(recv, GP::Rdi);
-                self.attr_writer(bb, pc, ivar_name, ivar_id, args);
+                self.attr_writer(bb, pc, /*ivar_name,*/ ivar_id, args);
             }
             FuncKind::Builtin { .. } => {
                 self.writeback_acc(bb);
@@ -801,6 +805,7 @@ impl AsmIr {
                 self.send_cached(bb, pc, callid, fid, cached_class, false);
             }
         };
+        Some(())
     }
 }
 

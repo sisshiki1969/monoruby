@@ -203,8 +203,8 @@ impl AsmIr {
         &mut self,
         bb: &BBContext,
         pc: BcPc,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        //ivar_name: IdentId,
+        ivar_id: IvarId,
         args: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
@@ -212,7 +212,7 @@ impl AsmIr {
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
-            ivar_name,
+            //ivar_name,
             ivar_id,
             args,
         });
@@ -220,15 +220,13 @@ impl AsmIr {
 
     pub(super) fn attr_reader(
         &mut self,
-        bb: &BBContext,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        /*bb: &BBContext, ivar_name: IdentId,*/ ivar_id: IvarId,
     ) {
-        let using_xmm = bb.get_using_xmm();
+        //let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::AttrReader {
-            ivar_name,
+            //ivar_name,
             ivar_id,
-            using_xmm,
+            //using_xmm,
         });
     }
 
@@ -649,15 +647,15 @@ pub(super) enum AsmInst {
 
     AttrWriter {
         args: SlotId,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        //ivar_name: IdentId,
+        ivar_id: IvarId,
         using_xmm: UsingXmm,
         error: AsmError,
     },
     AttrReader {
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
-        using_xmm: UsingXmm,
+        //ivar_name: IdentId,
+        ivar_id: IvarId,
+        //using_xmm: UsingXmm,
     },
     SendCached {
         callid: CallSiteId,
@@ -1172,7 +1170,7 @@ impl Codegen {
             }
             AsmInst::MethodRet(pc) => {
                 monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).get_u64());
+                    movq r13, ((pc + 1).u64());
                 };
                 self.method_return();
             }
@@ -1258,19 +1256,19 @@ impl Codegen {
 
             AsmInst::AttrWriter {
                 args,
-                ivar_name,
+                //ivar_name,
                 ivar_id,
                 using_xmm,
                 error,
             } => {
-                self.attr_writer(using_xmm, labels[error], ivar_name, ivar_id, args);
+                self.attr_writer(using_xmm, labels[error], /*ivar_name*/ ivar_id, args);
             }
             AsmInst::AttrReader {
-                ivar_name,
+                //ivar_name,
                 ivar_id,
-                using_xmm,
+                //using_xmm,
             } => {
-                self.attr_reader(using_xmm, ivar_name, ivar_id);
+                self.attr_reader(/*using_xmm, ivar_name,*/ ivar_id);
             }
             AsmInst::SendCached {
                 callid,

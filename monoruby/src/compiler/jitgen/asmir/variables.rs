@@ -289,14 +289,14 @@ impl Codegen {
     ///
     /// - rax: Value
     ///
-    pub(in crate::compiler::jitgen) fn get_ivar(&mut self, using: UsingXmm) {
+    /*pub(in crate::compiler::jitgen) fn get_ivar(&mut self, using: UsingXmm) {
         self.xmm_save(using);
         monoasm!( &mut self.jit,
             movq rax, (RValue::get_ivar);
             call rax;
         );
         self.xmm_restore(using);
-    }
+    }*/
 
     ///
     /// Set an instance variable.

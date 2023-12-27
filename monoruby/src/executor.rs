@@ -1112,7 +1112,7 @@ impl BcPc {
         Self(std::ptr::NonNull::from(bc))
     }
 
-    pub fn get_u64(self) -> u64 {
+    pub fn u64(self) -> u64 {
         self.0.as_ptr() as _
     }
 

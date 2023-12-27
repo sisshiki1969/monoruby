@@ -83,7 +83,7 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq rdx, [r14 - (conv(base))]; // base: Value
             movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, (pc.get_u64() + 8);
+            movq r8, (pc.u64() + 8);
             movq rax, (runtime::get_index);
             call rax;
         }
@@ -133,7 +133,7 @@ impl Codegen {
             movq rcx, rsi; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq r8, (pc.get_u64() + 8);
+            movq r8, (pc.u64() + 8);
             movq rax, (runtime::get_index);
             call rax;
         }
@@ -160,7 +160,7 @@ impl Codegen {
             movq r8, [r14 - (conv(src))];  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq r9, (pc.get_u64() + 8);
+            movq r9, (pc.u64() + 8);
             movq rax, (runtime::set_index);
             call rax;
         };
