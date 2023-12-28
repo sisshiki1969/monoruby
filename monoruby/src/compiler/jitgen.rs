@@ -665,9 +665,12 @@ impl JitContext {
                 inline_id, callid, ..
             } => {
                 let inline_gen = store.get_inline_info(inline_id).0;
-                self.ir.writeback_acc(bb);
-                let deopt = self.ir.new_deopt(bb, pc);
-                self.ir.guard_class_version(pc, deopt);
+                //self.ir.writeback_acc(bb);
+                let recv = store[callid].recv;
+                self.ir.fetch_to_reg(bb, recv, GP::Rdi);
+                let (deopt, error) = self.ir.new_deopt_error(bb, pc);
+                let using_xmm = bb.get_using_xmm();
+                self.ir.guard_class_version(pc, using_xmm, deopt, error);
                 inline_gen(&mut self.ir, store, bb, &store[callid], pc);
             }
             TraceIr::Yield { callid } => {

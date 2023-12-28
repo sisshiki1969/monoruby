@@ -39,6 +39,35 @@ pub(super) extern "C" fn find_method(
     }
 }
 
+pub(super) extern "C" fn find_method2(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    recv: Value,
+) -> Option<FuncId> {
+    if let Some(func_name) = globals.store[callid].name {
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
+            Ok(id) => Some(id),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        }
+    } else {
+        let self_val = vm.cfp().lfp().self_val();
+        let func_id = vm.method_func_id();
+        let func_name = globals.store[func_id].name().unwrap();
+        match globals.check_super(self_val, func_name) {
+            Some(entry) => Some(entry.func_id()),
+            None => {
+                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                None
+            }
+        }
+    }
+}
+
 pub(super) extern "C" fn vm_find_method(
     vm: &mut Executor,
     globals: &mut Globals,

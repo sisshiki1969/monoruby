@@ -189,8 +189,32 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
-    pub(super) fn guard_class_version(&mut self, pc: BcPc, deopt: AsmDeopt) {
-        self.inst.push(AsmInst::GuardClassVersion(pc, deopt));
+    ///
+    /// Class version guard fro JIT.
+    ///
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    pub(super) fn guard_class_version(
+        &mut self,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        deopt: AsmDeopt,
+        error: AsmError,
+    ) {
+        self.inst
+            .push(AsmInst::GuardClassVersion(pc, using_xmm, deopt, error));
     }
 
     pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: AsmDeopt) {
@@ -206,37 +230,29 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn attr_writer(
-        &mut self,
-        bb: &BBContext,
-        pc: BcPc,
-        //ivar_name: IdentId,
-        ivar_id: IvarId,
-        args: SlotId,
-    ) {
+    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BcPc, ivar_id: IvarId, args: SlotId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
-            //ivar_name,
             ivar_id,
             args,
         });
     }
 
-    pub(super) fn attr_reader(
-        &mut self,
-        /*bb: &BBContext, ivar_name: IdentId,*/ ivar_id: IvarId,
-    ) {
-        //let using_xmm = bb.get_using_xmm();
-        self.inst.push(AsmInst::AttrReader {
-            //ivar_name,
-            ivar_id,
-            //using_xmm,
-        });
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
+        self.inst.push(AsmInst::AttrReader { ivar_id });
     }
 
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     pub(super) fn send_cached(
         &mut self,
         bb: &BBContext,
@@ -258,13 +274,13 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callsite: CallSiteId) {
+    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
-            callid: callsite,
+            callid,
             pc,
             using_xmm,
             error,
@@ -626,7 +642,24 @@ pub(super) enum AsmInst {
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
     GuardFloat(GP, AsmDeopt),
     GuardFixnum(GP, AsmDeopt),
-    GuardClassVersion(BcPc, AsmDeopt),
+    ///
+    /// Class version guard fro JIT.
+    ///
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
+    ///    
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    GuardClassVersion(BcPc, UsingXmm, AsmDeopt, AsmError),
     GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,
@@ -667,16 +700,21 @@ pub(super) enum AsmInst {
 
     AttrWriter {
         args: SlotId,
-        //ivar_name: IdentId,
         ivar_id: IvarId,
         using_xmm: UsingXmm,
         error: AsmError,
     },
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     AttrReader {
-        //ivar_name: IdentId,
         ivar_id: IvarId,
-        //using_xmm: UsingXmm,
     },
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     SendCached {
         callid: CallSiteId,
         recv_class: ClassId,
@@ -1165,9 +1203,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_fixnum(r, deopt)
             }
-            AsmInst::GuardClassVersion(pc, deopt) => {
+            AsmInst::GuardClassVersion(pc, using_xmm, deopt, error) => {
                 let deopt = labels[deopt];
-                self.guard_class_version(pc, deopt);
+                let error = labels[error];
+                self.guard_class_version(pc, using_xmm, deopt, error);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -1276,19 +1315,14 @@ impl Codegen {
 
             AsmInst::AttrWriter {
                 args,
-                //ivar_name,
                 ivar_id,
                 using_xmm,
                 error,
             } => {
-                self.attr_writer(using_xmm, labels[error], /*ivar_name*/ ivar_id, args);
+                self.attr_writer(using_xmm, labels[error], ivar_id, args);
             }
-            AsmInst::AttrReader {
-                //ivar_name,
-                ivar_id,
-                //using_xmm,
-            } => {
-                self.attr_reader(/*using_xmm, ivar_name,*/ ivar_id);
+            AsmInst::AttrReader { ivar_id } => {
+                self.attr_reader(ivar_id);
             }
             AsmInst::SendCached {
                 callid,
