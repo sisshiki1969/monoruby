@@ -211,19 +211,11 @@ impl Codegen {
     ///
     /// ### in
     /// rdi: receiver: Value
+    /// rdx: value: Value
     ///
-    pub(super) fn attr_writer(
-        &mut self,
-        using_xmm: UsingXmm,
-        error: DestLabel,
-        ivar_id: IvarId,
-        args: SlotId,
-    ) {
+    pub(super) fn attr_writer(&mut self, using_xmm: UsingXmm, error: DestLabel, ivar_id: IvarId) {
         let exit = self.jit.label();
         let no_inline = self.jit.label();
-        monoasm!( &mut self.jit,
-            movq rdx, [r14 - (conv(args))];
-        );
         if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
             monoasm!( &mut self.jit,
                 // we don't know ty of the receiver in a compile time.
@@ -698,10 +690,6 @@ impl AsmIr {
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
             self.guard_class_version(pc, using_xmm, deopt, error);
-            self.fetch_callargs(bb, &store[callid]);
-            //let CallSiteInfo { args, len, .. } = store[callid];
-            //self.fetch_range(bb, args, len as u16);
-            bb.link_stack(dst);
             self.gen_call_cached(store, bb, callid, fid, pc)?;
         }
         self.rax2acc(bb, dst);
@@ -757,14 +745,17 @@ impl AsmIr {
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 let ivar_id = store[cached_class].get_ivarid(ivar_name)?;
-                self.attr_writer(bb, pc, ivar_id, args);
+                self.fetch_to_reg(bb, args, GP::Rdx);
+                self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
                 self.writeback_acc(bb);
+                self.fetch_callargs(bb, &store[callid]);
                 self.send_cached(bb, pc, callid, fid, cached_class, true);
             }
             FuncKind::ISeq(_) => {
                 self.writeback_acc(bb);
+                self.fetch_callargs(bb, &store[callid]);
                 self.send_cached(bb, pc, callid, fid, cached_class, false);
             }
         };

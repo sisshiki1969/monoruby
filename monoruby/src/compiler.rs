@@ -314,7 +314,7 @@ impl Codegen {
     /// Execute garbage collection.
     ///
     /// ### destroy
-    /// - caller save registers except rdi
+    /// - caller save registers except rdi, r10, r11
     ///
     fn execute_gc(&mut self) {
         let alloc_flag = self.alloc_flag;
@@ -330,12 +330,16 @@ impl Codegen {
         monoasm! { &mut self.jit,
         gc:
             pushq rdi;
+            pushq r10;
+            pushq r11;
             subq rsp, 8;
             movq rdi, r12;
             movq rsi, rbx;
             movq rax, (execute_gc);
             call rax;
             addq rsp, 8;
+            popq r11;
+            popq r10;
             popq rdi;
             jmp exit;
         };

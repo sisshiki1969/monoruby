@@ -249,20 +249,26 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BcPc, ivar_id: IvarId, args: SlotId) {
+    ///
+    /// Attribute writer
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    /// - rdx: value: Value
+    ///
+    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BcPc, ivar_id: IvarId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
             ivar_id,
-            args,
         });
     }
 
     ///
     /// ### in
-    /// rdi: receiver: Value
+    /// - rdi: receiver: Value
     ///
     pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
         self.inst.push(AsmInst::AttrReader { ivar_id });
@@ -730,22 +736,30 @@ pub(super) enum AsmInst {
     },
     WriteBack(WriteBack),
 
+    ///
+    /// Attribute writer
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    /// - rdx: value: Value
+    ///
     AttrWriter {
-        args: SlotId,
         ivar_id: IvarId,
         using_xmm: UsingXmm,
         error: AsmError,
     },
     ///
+    /// Attribute reader
+    ///
     /// ### in
-    /// rdi: receiver: Value
+    /// - rdi: receiver: Value
     ///
     AttrReader {
         ivar_id: IvarId,
     },
     ///
     /// ### in
-    /// rdi: receiver: Value
+    /// - rdi: receiver: Value
     ///
     SendCached {
         callid: CallSiteId,
@@ -1046,6 +1060,7 @@ pub(super) enum FMode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
+    Rdx = 2,
     Rsi = 6,
     Rdi = 7,
     R15 = 15,
@@ -1343,12 +1358,11 @@ impl Codegen {
             }
 
             AsmInst::AttrWriter {
-                args,
                 ivar_id,
                 using_xmm,
                 error,
             } => {
-                self.attr_writer(using_xmm, labels[error], ivar_id, args);
+                self.attr_writer(using_xmm, labels[error], ivar_id);
             }
             AsmInst::AttrReader { ivar_id } => {
                 self.attr_reader(ivar_id);
