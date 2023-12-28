@@ -485,7 +485,7 @@ mod test {
     #[test]
     fn test_shift() {
         for lhs in ["157"] {
-            for rhs in ["1", "54", "64"] {
+            for rhs in ["0", "1", "54", "70"] {
                 for op in ["<<", ">>"] {
                     run_test(&format!("{} {} {}", lhs, op, rhs));
                     run_test(&format!("{} {} (-{})", lhs, op, rhs));

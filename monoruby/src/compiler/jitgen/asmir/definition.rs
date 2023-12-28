@@ -13,7 +13,7 @@ impl Codegen {
     ) {
         self.xmm_save(using_xmm);
         // rcx <- superclass: Option<Value>
-        if superclass.is_zero() {
+        if superclass.is_self() {
             monoasm! { &mut self.jit, xorq rcx, rcx; }
         } else {
             monoasm! { &mut self.jit, movq rcx, [r14 - (conv(superclass))]; }

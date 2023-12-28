@@ -308,14 +308,26 @@ impl Bc2 {
         Self(op)
     }
 
-    pub(crate) fn class_and_version(class_id: ClassId, version: u32) -> Self {
-        let id: u32 = class_id.into();
+    pub(crate) fn class_and_version(class_id: Option<ClassId>, version: u32) -> Self {
+        let id: u32 = if let Some(class) = class_id {
+            class.into()
+        } else {
+            0
+        };
         Self(((version as u64) << 32) + (id as u64))
     }
 
-    pub(crate) fn class2(class_id1: ClassId, class_id2: ClassId) -> Self {
-        let id1: u32 = class_id1.into();
-        let id2: u32 = class_id2.into();
+    pub(crate) fn class2(class_id1: Option<ClassId>, class_id2: Option<ClassId>) -> Self {
+        let id1: u32 = if let Some(class) = class_id1 {
+            class.into()
+        } else {
+            0
+        };
+        let id2: u32 = if let Some(class) = class_id2 {
+            class.into()
+        } else {
+            0
+        };
         Self(((id2 as u64) << 32) + (id1 as u64))
     }
 

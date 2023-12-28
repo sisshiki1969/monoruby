@@ -54,7 +54,7 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let class_name = lfp.self_val().as_class_id().get_name(globals);
+    let class_name = globals.get_class_name(lfp.self_val().as_class_id());
     let res = Value::string(class_name);
     Ok(res)
 }

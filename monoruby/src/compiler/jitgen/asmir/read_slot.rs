@@ -28,6 +28,8 @@ impl AsmIr {
     ///
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
+    /// ### destroy
+    /// - rax, rcx
     fn fetch_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
         if reg >= bb.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
@@ -208,12 +210,12 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         rhs: SlotId,
-        class: ClassId,
+        class: Option<ClassId>,
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
+            Some(INTEGER_CLASS) => self.fetch_float_assume_integer(bb, rhs, deopt),
+            Some(FLOAT_CLASS) => self.fetch_float_assume_float(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }

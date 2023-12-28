@@ -78,61 +78,6 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(super) fn load_dyn_var(&mut self, src: DynVar) {
-        self.get_outer(src.outer);
-        let offset = conv(src.reg) - LBP_OUTER;
-        monoasm!( &mut self.jit,
-            movq rax, [rax - (offset)];
-        );
-    }
-
-    pub(super) fn store_dyn_var(&mut self, dst: DynVar, src: GP) {
-        self.get_outer(dst.outer);
-        let offset = conv(dst.reg) - LBP_OUTER;
-        monoasm!( &mut self.jit,
-            movq [rax - (offset)], R(src as _);
-        );
-    }
-}
-
-impl Codegen {
-    pub(super) fn load_gvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
-            movq rax, (runtime::get_global_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-    }
-
-    pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movl rsi, (name.get());
-            movq rdx, [r14 - (conv(src))];
-            movq rax, (runtime::set_global_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-    }
-
-    pub(super) fn load_svar(&mut self, id: u32, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movl rsi, r12;
-            movl rdx, (id);
-            movq rax, (runtime::get_special_var);
-            call rax;
-        };
-        self.xmm_restore(using_xmm);
-    }
-}
-
-impl Codegen {
     pub(super) fn store_ivar(
         &mut self,
         name: IdentId,
@@ -223,6 +168,61 @@ impl Codegen {
     }
 }
 
+impl Codegen {
+    pub(super) fn load_dyn_var(&mut self, src: DynVar) {
+        self.get_outer(src.outer);
+        let offset = conv(src.reg) - LBP_OUTER;
+        monoasm!( &mut self.jit,
+            movq rax, [rax - (offset)];
+        );
+    }
+
+    pub(super) fn store_dyn_var(&mut self, dst: DynVar, src: GP) {
+        self.get_outer(dst.outer);
+        let offset = conv(dst.reg) - LBP_OUTER;
+        monoasm!( &mut self.jit,
+            movq [rax - (offset)], R(src as _);
+        );
+    }
+}
+
+impl Codegen {
+    pub(super) fn load_gvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movl rsi, (name.get());
+            movq rax, (runtime::get_global_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
+    pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movl rsi, (name.get());
+            movq rdx, [r14 - (conv(src))];
+            movq rax, (runtime::set_global_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
+    pub(super) fn load_svar(&mut self, id: u32, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movl rsi, r12;
+            movl rdx, (id);
+            movq rax, (runtime::get_special_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+}
+
 impl JitContext {
     pub(in crate::compiler::jitgen) fn load_ivar(
         &mut self,
@@ -276,28 +276,6 @@ impl JitContext {
 }
 
 impl Codegen {
-    ///
-    /// Get an instance variable.
-    ///
-    /// #### in
-    ///
-    /// - rdi: &RValue
-    ///
-    /// - rsi: IvarId
-    ///
-    /// #### out
-    ///
-    /// - rax: Value
-    ///
-    pub(in crate::compiler::jitgen) fn get_ivar(&mut self, using: UsingXmm) {
-        self.xmm_save(using);
-        monoasm!( &mut self.jit,
-            movq rax, (RValue::get_ivar);
-            call rax;
-        );
-        self.xmm_restore(using);
-    }
-
     ///
     /// Set an instance variable.
     ///

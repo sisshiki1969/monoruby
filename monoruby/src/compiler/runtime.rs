@@ -16,8 +16,9 @@ pub(super) extern "C" fn find_method(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
-        let receiver = unsafe { vm.register(recv_reg.0 as usize).unwrap() };
-        match globals.find_method(receiver, func_name, globals.store[callid].recv.is_zero()) {
+        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => Some(id),
             Err(err) => {
                 vm.set_error(err);
@@ -36,6 +37,86 @@ pub(super) extern "C" fn find_method(
             }
         }
     }
+}
+
+pub(super) extern "C" fn find_method2(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    recv: Value,
+) -> Option<FuncId> {
+    if let Some(func_name) = globals.store[callid].name {
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
+            Ok(id) => Some(id),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        }
+    } else {
+        let self_val = vm.cfp().lfp().self_val();
+        let func_id = vm.method_func_id();
+        let func_name = globals.store[func_id].name().unwrap();
+        match globals.check_super(self_val, func_name) {
+            Some(entry) => Some(entry.func_id()),
+            None => {
+                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                None
+            }
+        }
+    }
+}
+
+pub(super) extern "C" fn vm_find_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    pc: BcPc,
+) -> Option<FuncId> {
+    let (func_id, recv_class) = if let Some(func_name) = globals.store[callid].name {
+        let recv_reg = globals.store[callid].recv;
+        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let is_func_call = globals.store[callid].recv.is_self();
+        match globals.find_method(recv, func_name, is_func_call) {
+            Ok(id) => (id, recv.class()),
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        }
+    } else {
+        let self_val = vm.cfp().lfp().self_val();
+        let func_id = vm.method_func_id();
+        let func_name = globals.store[func_id].name().unwrap();
+        match globals.check_super(self_val, func_name) {
+            Some(entry) => (entry.func_id(), self_val.class()),
+            None => {
+                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                return None;
+            }
+        }
+    };
+    if let Some(cached_class) = pc.cached_class0() {
+        if recv_class != cached_class {
+            let version = globals.class_version();
+            let callsite = &mut globals.store[callid];
+            //let func_name = callsite.name;
+            if version != callsite.cache_version {
+                callsite.cache.clear();
+                callsite.cache_version = version;
+                if pc.cached_version() == version {
+                    let cached_fid = (pc - 1).cached_fid().unwrap();
+                    callsite.cache.push((cached_class, cached_fid));
+                }
+            }
+            if callsite.cache.iter().all(|(class, _)| class != &recv_class) {
+                callsite.cache.push((recv_class, func_id));
+                //eprintln!("polymorphic: {:?} {:?}", func_name, callsite.cache);
+            }
+        }
+    }
+    Some(func_id)
 }
 
 pub(super) extern "C" fn enter_classdef<'a>(
@@ -233,7 +314,7 @@ pub(super) extern "C" fn vm_handle_arguments(
                 // handle excessive keyword arguments
                 let mut h = IndexMap::default();
                 for (k, id) in caller.kw_args.iter() {
-                    let v = unsafe { vm.register(caller.kw_pos.0 as usize + *id).unwrap() };
+                    let v = unsafe { vm.register(caller.kw_pos + *id as u16).unwrap() };
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
@@ -268,7 +349,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         let bh = BlockHandler::from(*block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.register(block_arg.0 as usize).unwrap())) }
+        unsafe { Some(BlockHandler(vm.register(*block_arg).unwrap())) }
     } else {
         None
     };
@@ -385,6 +466,18 @@ pub(super) struct ClassIdSlot {
     idx: ClassId,
 }
 
+///
+/// Generic index operation.
+///
+/// # Arguments
+/// base: Value
+/// index: Value
+/// class_slot: &mut ClassIdSlot
+///
+/// # Returns
+/// Some(Value) if succeeded.
+/// None if failed.
+///
 pub(super) extern "C" fn get_index(
     vm: &mut Executor,
     globals: &mut Globals,

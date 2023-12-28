@@ -9,8 +9,17 @@ impl AsmIr {
         idx: SlotId,
         pc: BcPc,
     ) {
-        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            self.gen_array_index(bb, dst, base, idx, pc);
+        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
+            if let Some(idx) = bb.is_u16_literal(idx) {
+                self.fetch_to_reg(bb, base, GP::Rdi);
+                bb.link_stack(dst);
+                self.array_u16_index(bb, idx, pc);
+            } else {
+                self.fetch_to_reg(bb, base, GP::Rdi);
+                self.fetch_to_reg(bb, idx, GP::Rsi);
+                bb.link_stack(dst);
+                self.array_index(bb, pc);
+            }
         } else {
             self.fetch_slots(bb, &[base, idx]);
             bb.link_stack(dst);
@@ -27,76 +36,21 @@ impl AsmIr {
         idx: SlotId,
         pc: BcPc,
     ) {
-        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
-            self.writeback_acc(bb);
-            self.fetch_to_reg(bb, base, GP::Rdi);
-            self.fetch_to_reg(bb, src, GP::R15);
-            self.gen_array_index_assign(bb, idx, pc);
+        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
+            if let Some(idx) = bb.is_u16_literal(idx) {
+                self.fetch_to_reg(bb, base, GP::Rdi);
+                self.fetch_to_reg(bb, src, GP::R15);
+                self.array_u16_index_assign(bb, idx, pc);
+            } else {
+                self.fetch_to_reg(bb, base, GP::Rdi);
+                self.fetch_to_reg(bb, idx, GP::Rsi);
+                self.fetch_to_reg(bb, src, GP::R15);
+                self.array_index_assign(bb, pc);
+            }
         } else {
             self.fetch_slots(bb, &[base, idx, src]);
             self.generic_index_assign(bb, pc, base, idx, src);
         }
-    }
-
-    fn gen_array_index(
-        &mut self,
-        bb: &mut BBContext,
-        dst: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-    ) {
-        self.fetch_to_reg(bb, base, GP::Rdi);
-
-        let deopt = self.new_deopt(bb, pc);
-        if let Some(idx) = bb.is_u16_literal(idx) {
-            self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
-        } else {
-            self.fetch_to_reg(bb, idx, GP::Rsi);
-            self.inst.push(AsmInst::ArrayIndex { deopt });
-        }
-        bb.link_stack(dst);
-    }
-
-    fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
-    }
-
-    fn gen_array_index_assign(&mut self, bb: &mut BBContext, idx: SlotId, pc: BcPc) {
-        if let Some(idx) = bb.is_u16_literal(idx) {
-            self.array_u16_index_assign(bb, pc, idx);
-        } else {
-            self.fetch_to_reg(bb, idx, GP::Rsi);
-            self.array_index_assign(bb, pc);
-        }
-    }
-
-    fn generic_index_assign(
-        &mut self,
-        bb: &BBContext,
-        pc: BcPc,
-        base: SlotId,
-        idx: SlotId,
-        src: SlotId,
-    ) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericIndexAssign {
-            src,
-            base,
-            idx,
-            pc,
-            using_xmm,
-            error,
-        });
     }
 }
 
@@ -108,7 +62,7 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq rdx, [r14 - (conv(base))]; // base: Value
             movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, (pc.get_u64() + 8);
+            movq r8, (pc.u64() + 8);
             movq rax, (runtime::get_index);
             call rax;
         }
@@ -124,21 +78,51 @@ impl Codegen {
         self.array_index(out_range);
     }
 
-    pub(super) fn gen_array_index(&mut self, deopt: DestLabel) {
+    pub(super) fn gen_array_index(
+        &mut self,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+        deopt: DestLabel,
+    ) {
         let out_range = self.jit.label();
+        let checked = self.jit.label();
         let exit = self.jit.label();
-        self.array_bound_check(deopt);
+        let generic = self.jit.label();
+        // in this point, *base* is loaded to rdi and *idx* is loaded to rsi.
+        self.guard_rdi_array(generic);
+        self.guard_rsi_index(deopt);
         monoasm! { &mut self.jit,
-            jge  exit;
+            testq rsi, rsi;
+            jns  checked;
         }
         self.get_array_length();
         monoasm! { &mut self.jit,
             addq rsi, rax;
             js   out_range;
-        exit:
+        checked:
         }
-        self.guard_rdi_array(deopt);
         self.array_index(out_range);
+        self.jit.bind_label(exit);
+
+        self.jit.select_page(1);
+        self.jit.bind_label(generic);
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi; // base: Value
+            movq rcx, rsi; // idx: Value
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq r8, (pc.u64() + 8);
+            movq rax, (runtime::get_index);
+            call rax;
+        }
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            jmp  exit;
+        }
+        self.jit.select_page(0);
     }
 
     pub(super) fn generic_index_assign(
@@ -156,7 +140,7 @@ impl Codegen {
             movq r8, [r14 - (conv(src))];  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq r9, (pc.get_u64() + 8);
+            movq r9, (pc.u64() + 8);
             movq rax, (runtime::set_index);
             call rax;
         };
@@ -179,9 +163,10 @@ impl Codegen {
 
     pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, deopt: DestLabel) {
         let generic = self.jit.label();
-        self.array_bound_check(deopt);
+        self.guard_rsi_index(deopt);
         monoasm! { &mut self.jit,
-            jlt generic;
+            testq rsi, rsi;
+            js   generic;
         };
         self.guard_rdi_array(deopt);
         self.array_index_assign(using_xmm, generic);
@@ -190,9 +175,14 @@ impl Codegen {
 
 impl Codegen {
     ///
+    /// Array index operation.
+    ///
     /// ### in
     /// - rdi: base Value
     /// - rsi: index non-negative i64
+    ///
+    /// ### out
+    /// - rax: result Value
     ///
     fn array_index(&mut self, out_range: DestLabel) {
         let exit = self.jit.label();
@@ -229,6 +219,17 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
+    ///
+    /// Array index assign operation.
+    ///
+    /// ### in
+    /// - rdi: base: Array
+    /// - rsi: index: non-negative i64
+    /// - r15: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
@@ -294,7 +295,7 @@ impl Codegen {
     }
 
     ///
-    /// Load *base* to `rdi` as Array. If not, go *side_exit*.
+    /// Check whether `rdi` is Array. If not, go *side_exit*.
     ///
     /// #### out
     /// - rdi: ptr to Array.
@@ -307,16 +308,32 @@ impl Codegen {
         }
     }
 
-    fn array_bound_check(&mut self, deopt: DestLabel) {
+    ///
+    /// Check whether `rsi` is Fixnum. If not, go *side_exit*.
+    ///
+    /// #### in
+    /// - rdi: base: Array
+    /// - rsi: index: Fixnum
+    ///
+    /// #### out
+    /// - rdi: base: Array
+    /// - rsi: index: i64
+    ///
+    fn guard_rsi_index(&mut self, deopt: DestLabel) {
+        let label = self.jit.label();
+        assert_eq!(0, self.jit.get_page());
         monoasm! { &mut self.jit,
-            xchgq rdi, rsi;
-            testq rdi, 0b01;
-            jeq deopt;
-            xchgq rdi, rsi;
-            sarq rsi, 1;
-            // lower bound check
-            cmpq rsi, 0;
+            testq rsi, 0b01;
+            jeq   label;
+            sarq  rsi, 1;
         }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        label:
+            xchgq rdi, rsi;
+            jmp  deopt;
+        }
+        self.jit.select_page(0);
     }
 }
 

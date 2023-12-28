@@ -9,6 +9,8 @@ mod init_method;
 mod method_call;
 mod variables;
 
+const OPECODE: i64 = 6;
+
 macro_rules! cmp_ops {
   ($op:ident) => {
       paste! {
@@ -723,8 +725,8 @@ impl Codegen {
     fn fetch_and_dispatch(&mut self) {
         monoasm! { &mut self.jit,
             movq r15, (self.dispatch.as_ptr());
+            movzxb rax, [r13 + (OPECODE)]; // rax <- :0
             addq r13, 16;
-            movzxw rax, [r13 - 10]; // rax <- :0
             jmp [r15 + rax * 8];
         };
     }

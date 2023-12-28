@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use super::*;
 
 mod constants;
@@ -28,13 +30,13 @@ pub const FIBER_CLASS: ClassId = ClassId::new(21);
 pub const ENUMERATOR_CLASS: ClassId = ClassId::new(22);
 pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ClassId(pub u32);
+pub struct ClassId(NonZeroU32);
 
 impl std::fmt::Debug for ClassId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
+        match self.u32() {
             1 => write!(f, "OBJECT"),
             2 => write!(f, "CLASS"),
             3 => write!(f, "NIL"),
@@ -65,13 +67,25 @@ impl std::fmt::Debug for ClassId {
 
 impl From<ClassId> for u32 {
     fn from(val: ClassId) -> Self {
-        val.0
+        val.0.get()
     }
 }
 
 impl ClassId {
     pub const fn new(id: u32) -> Self {
-        Self(id)
+        Self(NonZeroU32::new(id).unwrap())
+    }
+
+    pub const fn from(id: u32) -> Option<Self> {
+        if id == 0 {
+            None
+        } else {
+            Some(Self::new(id))
+        }
+    }
+
+    pub fn u32(&self) -> u32 {
+        self.0.get()
     }
 
     pub(crate) fn is_always_frozen(&self) -> bool {
@@ -97,30 +111,7 @@ impl ClassId {
         self.get_module(globals).as_val()
     }
 
-    /// Get class name of *ClassId*.
-    pub(crate) fn get_name(self, globals: &Globals) -> String {
-        if self.0 == 0 {
-            return "<INVALID>".to_string();
-        }
-        let class = self.get_module(globals);
-        match globals.store[self].name {
-            Some(_) => {
-                let v: Vec<_> = self
-                    .get_parents(globals)
-                    .into_iter()
-                    .rev()
-                    .map(|name| name.to_string())
-                    .collect();
-                v.join("::")
-            }
-            None => match class.is_singleton() {
-                None => format!("#<Class:{:016x}>", class.as_val().id()),
-                Some(base) => format!("#<Class:{}>", globals.to_s(base)),
-            },
-        }
-    }
-
-    fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
+    pub(crate) fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
         let mut class = self;
         let mut parents = vec![globals.store[self].name.unwrap()];
         while let Some(parent) = globals.store[class].parent {
@@ -135,9 +126,6 @@ impl ClassId {
 
     /// Get class name(IdentId) of *ClassId*.
     pub(crate) fn get_name_id(self, globals: &Globals) -> Option<IdentId> {
-        if self.0 == 0 {
-            return None;
-        }
         let class = self.get_module(globals);
         match globals.store[self].name {
             Some(id) => Some(id),

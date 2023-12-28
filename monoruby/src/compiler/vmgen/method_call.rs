@@ -5,6 +5,7 @@ const CACHED_CLASS: i64 = 24 - 16;
 const CACHED_VERSION: i64 = 28 - 16;
 const CACHED_FUNCID: i64 = 16 - 16;
 const RET_REG: i64 = 4 - 16;
+const OPCODE_SUB: i64 = 7 - 16;
 const POS_NUM: i64 = 8 - 16;
 const ARG_REG: i64 = 10 - 16;
 const RECV_REG: i64 = 12 - 16;
@@ -41,7 +42,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
         let exit = self.jit.label();
-        let slow_path = self.jit.label();
+        let slow_path1 = self.jit.label();
+        let slow_path2 = self.jit.label();
         let class_version = self.class_version;
         let get_class = self.get_class;
         self.execute_gc();
@@ -51,19 +53,18 @@ impl Codegen {
             // set self (= receiver)
             movzxw rdi, [r13 + (RECV_REG)];
         };
+        // rdi: receiver: Value
         self.vm_get_rdi();
         monoasm! { &mut self.jit,
             movq [rsp - (16 + LBP_SELF)], rdi;
-        }
-        // rdi: receiver: Value
-        monoasm! { &mut self.jit,
             call get_class;
             movl r15, rax;
+            // r15: class of receiver: ClassId
             cmpl r15, [r13 + (CACHED_CLASS)];
-            jne  slow_path;
+            jne  slow_path1;
             movl rdi, [r13 + (CACHED_VERSION)];
             cmpl rdi, [rip + class_version];
-            jne  slow_path;
+            jne  slow_path2;
         exec:
             movl rdx, [r13 + (CACHED_FUNCID)];
         };
@@ -82,7 +83,7 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
 
-        self.slow_path(exec, slow_path);
+        self.slow_path(exec, slow_path1, slow_path2);
 
         label
     }
@@ -169,14 +170,36 @@ impl Codegen {
         self.pop_frame();
     }
 
-    fn slow_path(&mut self, exec: DestLabel, slow_path: DestLabel) {
+    ///
+    /// Generate slow path.
+    ///
+    /// When the receiver class is cached **and** the receiver class is different from the cached class,
+    /// opcode_sub is set to 1.
+    ///
+    /// ### in
+    /// - r15: ClassId of receiver
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn slow_path(&mut self, exec: DestLabel, slow_path1: DestLabel, slow_path2: DestLabel) {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
-        slow_path:
+            // receiver mismatch
+        slow_path1:
+            movl rax, [r13 + (CACHED_FUNCID)];
+            testq rax, rax;
+            // if receiver class was not cached, go to slow_path2.
+            je   slow_path2;
+            // if the receiver class was different from cached class
+            movb [r13 + (OPCODE_SUB)], 1;
+            // version mismatch
+        slow_path2:
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
-            movq rax, (runtime::find_method);
+            movq rcx, r13;
+            movq rax, (runtime::vm_find_method);
             call rax;   // rax <- Option<FuncId>
         );
         self.vm_handle_error();

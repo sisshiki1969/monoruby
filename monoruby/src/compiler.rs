@@ -314,7 +314,7 @@ impl Codegen {
     /// Execute garbage collection.
     ///
     /// ### destroy
-    /// - caller save registers
+    /// - caller save registers except rdi
     ///
     fn execute_gc(&mut self) {
         let alloc_flag = self.alloc_flag;
@@ -329,10 +329,14 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         gc:
+            pushq rdi;
+            subq rsp, 8;
             movq rdi, r12;
             movq rsi, rbx;
             movq rax, (execute_gc);
             call rax;
+            addq rsp, 8;
+            popq rdi;
             jmp exit;
         };
         self.jit.select_page(0);
@@ -673,7 +677,7 @@ impl Codegen {
             movq rax, [rsp - (16 + LBP_ARG0)];
             testq rax, 0b111;
             jnz  l1;
-            cmpl [rax + 4], (ARRAY_CLASS.0);
+            cmpl [rax + 4], (ARRAY_CLASS.u32());
             jne  l1;
             movq rdi, rax;
             movzxw rdx, [rsi + 8];  // rdx <- req
@@ -703,10 +707,10 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
     let err = jit.label();
     monoasm!(jit,
     label:
-        movl  rax, (INTEGER_CLASS.0);
+        movl  rax, (INTEGER_CLASS.u32());
         testq rdi, 0b001;
         jnz   exit;
-        movl  rax, (FLOAT_CLASS.0);
+        movl  rax, (FLOAT_CLASS.u32());
         testq rdi, 0b010;
         jnz   exit;
         testq rdi, 0b111;
@@ -716,16 +720,16 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
         movl  rax, [rdi + 4];
         jmp   exit;
     l1:
-        movl  rax, (SYMBOL_CLASS.0);
+        movl  rax, (SYMBOL_CLASS.u32());
         cmpb  rdi, (TAG_SYMBOL);
         je    exit;
-        movl  rax, (NIL_CLASS.0);
+        movl  rax, (NIL_CLASS.u32());
         cmpq  rdi, (NIL_VALUE);
         je    exit;
-        movl  rax, (TRUE_CLASS.0);
+        movl  rax, (TRUE_CLASS.u32());
         cmpq  rdi, (TRUE_VALUE);
         je    exit;
-        movl  rax, (FALSE_CLASS.0);
+        movl  rax, (FALSE_CLASS.u32());
         cmpq  rdi, (FALSE_VALUE);
         je    exit;
     err:
@@ -979,7 +983,7 @@ impl Globals {
                 },
                 name,
                 func.id(),
-                self_value.class().get_name(self),
+                self.get_class_name(self_value.class()),
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
@@ -993,7 +997,7 @@ impl Globals {
                 .compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
-            let class_name = self_value.class().get_name(self);
+            let class_name = self.get_class_name(self_value.class());
             let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
             self.codegen.perf_info(codeptr, &desc);
         }

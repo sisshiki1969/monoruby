@@ -291,17 +291,24 @@ impl Codegen {
     }
 
     pub(crate) fn gen_shr_imm(&mut self, imm: u8) {
-        let after = self.jit.label();
-        let under = self.jit.label();
-        monoasm!( &mut self.jit,
-            movq rcx, (imm);
-            cmpq rcx, 64;
-            jge under;
-            sarq rdi, rcx;
-        after:
-            orq rdi, 1;
-        );
-        self.shift_under(under, after);
+        if imm >= 64 {
+            let exit = self.jit.label();
+            let zero = self.jit.label();
+            monoasm! { &mut self.jit,
+                testq rdi, rdi;
+                jns zero;
+                movq rdi, (Value::i32(-1).id());
+                jmp exit;
+            zero:
+                movq rdi, (Value::i32(0).id());
+            exit:
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                sarq rdi, (imm);
+                orq rdi, 1;
+            }
+        }
     }
 
     ///
@@ -361,13 +368,14 @@ impl Codegen {
     /// - rcx
     ///
     pub(crate) fn gen_shl_imm(&mut self, imm: u8, deopt: DestLabel) {
+        let imm1 = imm;
+        let imm2 = imm;
         monoasm!( &mut self.jit,
-            movl rcx, (imm);
             lzcntq rax, rdi;
-            cmpq rax, rcx;
+            cmpq rax, (imm1);
             jle deopt;
             subq rdi, 1;
-            shlq rdi, rcx;
+            shlq rdi, (imm2);
             orq rdi, 1;
         );
     }

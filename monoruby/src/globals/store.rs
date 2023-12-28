@@ -62,6 +62,12 @@ impl std::ops::Index<CallSiteId> for Store {
     }
 }
 
+impl std::ops::IndexMut<CallSiteId> for Store {
+    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
+}
+
 //impl std::ops::IndexMut<CallSiteId> for Store {
 //    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
 //        &mut self.callsite_info[index.0 as usize]
@@ -78,13 +84,13 @@ impl std::ops::Index<OptCaseId> for Store {
 impl std::ops::Index<ClassId> for Store {
     type Output = ClassInfo;
     fn index(&self, index: ClassId) -> &Self::Output {
-        &self.classes[index.0 as usize]
+        &self.classes[index.u32() as usize]
     }
 }
 
 impl std::ops::IndexMut<ClassId> for Store {
     fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.classes[index.0 as usize]
+        &mut self.classes[index.u32() as usize]
     }
 }
 
@@ -115,14 +121,14 @@ impl Store {
     pub(super) fn add_class(&mut self) -> ClassId {
         let id = self.classes.len();
         self.classes.push(ClassInfo::new());
-        ClassId(id as u32)
+        ClassId::new(id as u32)
     }
 
     pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
         let id = self.classes.len();
         let info = self[original_class].copy();
         self.classes.push(info);
-        ClassId(id as u32)
+        ClassId::new(id as u32)
     }
 
     pub(super) fn def_builtin_class(&mut self, class: ClassId) {
@@ -263,6 +269,8 @@ impl Store {
             len,
             recv,
             dst: ret,
+            cache_version: 0,
+            cache: vec![],
         });
         id
     }
@@ -376,6 +384,8 @@ pub(crate) struct CallSiteInfo {
     pub hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub dst: Option<SlotId>,
+    pub cache_version: u32,
+    pub cache: Vec<(ClassId, FuncId)>,
 }
 
 impl CallSiteInfo {

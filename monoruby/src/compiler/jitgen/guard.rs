@@ -198,7 +198,7 @@ impl Codegen {
     ///
     /// Class guard for RValue.
     ///
-    /// If the class of *reg* was not matched to *class_id*, go to *deopt*.
+    /// If the class of *reg* was not matched *class_id*, go to *deopt*.
     ///
     /// ### in
     /// - R(*reg*): Value
@@ -207,7 +207,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b111;
             jnz deopt;
-            cmpl [R(reg as _) + 4], (class_id.0);
+            cmpl [R(reg as _) + 4], (class_id.u32());
             jne deopt;
         )
     }

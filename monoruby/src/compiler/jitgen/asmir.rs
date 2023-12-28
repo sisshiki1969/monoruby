@@ -69,6 +69,13 @@ impl AsmIr {
         AsmError(i)
     }
 
+    pub(crate) fn new_deopt_error(&mut self, bb: &BBContext, pc: BcPc) -> (AsmDeopt, AsmError) {
+        let wb = bb.get_write_back();
+        let deopt = self.new_label(SideExit::Deoptimize(pc, wb.clone()));
+        let error = self.new_label(SideExit::Error(pc, wb));
+        (AsmDeopt(deopt), AsmError(error))
+    }
+
     fn new_label(&mut self, side_exit: SideExit) -> usize {
         let label = self.side_exit.len();
         self.side_exit.push(side_exit);
@@ -136,10 +143,20 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
         self.inst.push(AsmInst::XmmToBoth(freg, reg));
     }
 
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     pub(super) fn lit2stack(&mut self, v: Value, reg: SlotId) {
         self.inst.push(AsmInst::LitToStack(v, reg));
     }
@@ -182,10 +199,43 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
-    pub(super) fn guard_class_version(&mut self, pc: BcPc, deopt: AsmDeopt) {
-        self.inst.push(AsmInst::GuardClassVersion(pc, deopt));
+    ///
+    /// Class version guard fro JIT.
+    ///
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    pub(super) fn guard_class_version(
+        &mut self,
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        deopt: AsmDeopt,
+        error: AsmError,
+    ) {
+        self.inst
+            .push(AsmInst::GuardClassVersion(pc, using_xmm, deopt, error));
     }
 
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
     pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
@@ -199,46 +249,36 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn attr_writer(
-        &mut self,
-        bb: &BBContext,
-        pc: BcPc,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
-        args: SlotId,
-    ) {
+    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BcPc, ivar_id: IvarId, args: SlotId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AttrWriter {
             using_xmm,
             error,
-            ivar_name,
             ivar_id,
             args,
         });
     }
 
-    pub(super) fn attr_reader(
-        &mut self,
-        bb: &BBContext,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
-    ) {
-        let using_xmm = bb.get_using_xmm();
-        self.inst.push(AsmInst::AttrReader {
-            ivar_name,
-            ivar_id,
-            using_xmm,
-        });
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
+        self.inst.push(AsmInst::AttrReader { ivar_id });
     }
 
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     pub(super) fn send_cached(
         &mut self,
         bb: &BBContext,
         pc: BcPc,
         callid: CallSiteId,
         callee_fid: FuncId,
-        recv_classid: ClassId,
+        recv_class: ClassId,
         native: bool,
     ) {
         let using_xmm = bb.get_using_xmm();
@@ -246,20 +286,20 @@ impl AsmIr {
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
-            recv_classid,
+            recv_class,
             native,
             using_xmm,
             error,
         });
     }
 
-    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callsite: CallSiteId) {
+    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
-            callsite,
+            callid,
             pc,
             using_xmm,
             error,
@@ -288,8 +328,7 @@ impl AsmIr {
 
     pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(bb, pc);
-        let error = self.new_error(bb, pc);
+        let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::IntegerBinOp {
             kind,
             mode,
@@ -339,10 +378,57 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
+    pub(super) fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(bb, pc);
         let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndex {
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn array_u16_index(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
+        let deopt = self.new_deopt(bb, pc);
+        self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+    }
+
+    pub(super) fn array_index(&mut self, bb: &BBContext, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let (deopt, error) = self.new_deopt_error(bb, pc);
+        self.inst.push(AsmInst::ArrayIndex {
+            pc,
+            using_xmm,
+            error,
+            deopt,
+        });
+    }
+
+    pub(super) fn generic_index_assign(
+        &mut self,
+        bb: &BBContext,
+        pc: BcPc,
+        base: SlotId,
+        idx: SlotId,
+        src: SlotId,
+    ) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::GenericIndexAssign {
+            src,
+            base,
+            idx,
+            pc,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -353,8 +439,7 @@ impl AsmIr {
 
     pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(bb, pc);
-        let error = self.new_error(bb, pc);
+        let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::ArrayIndexAssign {
             using_xmm,
             deopt,
@@ -565,7 +650,17 @@ pub(super) enum AsmInst {
     F64ToXmm(f64, Xmm),
     /// move i64 to both of xmm and a stack slot
     I64ToBoth(i64, SlotId, Xmm),
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     XmmToBoth(Xmm, Vec<SlotId>),
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     LitToStack(Value, SlotId),
     DeepCopyLit(Value, UsingXmm),
     NumToXmm(GP, Xmm, AsmDeopt),
@@ -576,7 +671,33 @@ pub(super) enum AsmInst {
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
     GuardFloat(GP, AsmDeopt),
     GuardFixnum(GP, AsmDeopt),
-    GuardClassVersion(BcPc, AsmDeopt),
+    ///
+    /// Class version guard fro JIT.
+    ///
+    /// Check the cached class version, and if the version is changed, call `find_method` and
+    /// compare obtained FuncId and cached FuncId.
+    /// If different, jump to `deopt`.
+    /// If identical, update the cached version and go on.
+    ///    
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    GuardClassVersion(BcPc, UsingXmm, AsmDeopt, AsmError),
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
     GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,
@@ -617,27 +738,32 @@ pub(super) enum AsmInst {
 
     AttrWriter {
         args: SlotId,
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
+        ivar_id: IvarId,
         using_xmm: UsingXmm,
         error: AsmError,
     },
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     AttrReader {
-        ivar_name: IdentId,
-        ivar_id: Option<IvarId>,
-        using_xmm: UsingXmm,
+        ivar_id: IvarId,
     },
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
     SendCached {
         callid: CallSiteId,
+        recv_class: ClassId,
         callee_fid: FuncId,
-        recv_classid: ClassId,
         native: bool,
         using_xmm: UsingXmm,
         error: AsmError,
     },
     SendNotCached {
+        callid: CallSiteId,
         self_class: ClassId,
-        callsite: CallSiteId,
         pc: BcPc,
         using_xmm: UsingXmm,
         error: AsmError,
@@ -750,6 +876,9 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ArrayIndex {
+        pc: BcPc,
+        using_xmm: UsingXmm,
+        error: AsmError,
         deopt: AsmDeopt,
     },
     GenericIndexAssign {
@@ -1112,9 +1241,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_fixnum(r, deopt)
             }
-            AsmInst::GuardClassVersion(pc, deopt) => {
+            AsmInst::GuardClassVersion(pc, using_xmm, deopt, error) => {
                 let deopt = labels[deopt];
-                self.guard_class_version(pc, deopt);
+                let error = labels[error];
+                self.guard_class_version(pc, using_xmm, deopt, error);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -1137,7 +1267,7 @@ impl Codegen {
             }
             AsmInst::MethodRet(pc) => {
                 monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).get_u64());
+                    movq r13, ((pc + 1).u64());
                 };
                 self.method_return();
             }
@@ -1223,42 +1353,31 @@ impl Codegen {
 
             AsmInst::AttrWriter {
                 args,
-                ivar_name,
                 ivar_id,
                 using_xmm,
                 error,
             } => {
-                self.attr_writer(using_xmm, labels[error], ivar_name, ivar_id, args);
+                self.attr_writer(using_xmm, labels[error], ivar_id, args);
             }
-            AsmInst::AttrReader {
-                ivar_name,
-                ivar_id,
-                using_xmm,
-            } => {
-                self.attr_reader(using_xmm, ivar_name, ivar_id);
+            AsmInst::AttrReader { ivar_id } => {
+                self.attr_reader(ivar_id);
             }
             AsmInst::SendCached {
                 callid,
                 callee_fid,
-                recv_classid,
+                recv_class,
                 native,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
                 self.send_cached(
-                    store,
-                    callid,
-                    callee_fid,
-                    recv_classid,
-                    native,
-                    using_xmm,
-                    error,
+                    store, callid, callee_fid, recv_class, native, using_xmm, error,
                 );
             }
             AsmInst::SendNotCached {
                 self_class,
-                callsite,
+                callid: callsite,
                 pc,
                 using_xmm,
                 error,
@@ -1389,9 +1508,15 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.gen_array_u16_index(idx, deopt);
             }
-            AsmInst::ArrayIndex { deopt } => {
+            AsmInst::ArrayIndex {
+                pc,
+                using_xmm,
+                error,
+                deopt,
+            } => {
                 let deopt = labels[deopt];
-                self.gen_array_index(deopt);
+                let error = labels[error];
+                self.gen_array_index(pc, using_xmm, error, deopt);
             }
             AsmInst::GenericIndexAssign {
                 src,

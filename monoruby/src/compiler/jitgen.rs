@@ -36,6 +36,9 @@ struct JitContext {
     /// Destination labels for each TraceIr.
     ///
     inst_labels: HashMap<BcIndex, DestLabel>,
+    ///
+    /// Destination labels for AsmLabels.
+    ///
     asm_labels: Vec<Option<DestLabel>>,
     ///
     /// Basic block information.
@@ -103,6 +106,7 @@ struct JitContext {
     /// Information for opt_case table.
     ///
     opt_case: Vec<OptCaseAsmInfo>,
+    class_version: u32,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
@@ -191,6 +195,7 @@ impl JitContext {
             bridges: vec![],
             continuation_bridge: None,
             opt_case: vec![],
+            class_version: codegen.class_version(),
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
@@ -407,13 +412,13 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Index { dst, base, idx } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.index(bb, dst, base, idx, pc);
             }
             TraceIr::IndexAssign { src, base, idx } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.index_assign(bb, src, base, idx, pc);
@@ -497,7 +502,7 @@ impl JitContext {
             }
             TraceIr::LoadDynVar(dst, src) => {
                 bb.link_stack(dst);
-                if !dst.is_zero() {
+                if !dst.is_self() {
                     self.ir.inst.push(AsmInst::LoadDynVar { src });
                     self.ir.rax2acc(bb, dst);
                 }
@@ -509,7 +514,7 @@ impl JitContext {
                     .push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
             }
             TraceIr::BitNot { dst, src } => {
-                if pc.classid1().0 == 0 {
+                if pc.classid1().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
@@ -524,7 +529,7 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::UnOp { kind, dst, src } => {
-                if pc.classid1().0 == 0 {
+                if pc.classid1().is_none() {
                     return CompileResult::Recompile;
                 }
                 if pc.is_float1() {
@@ -555,7 +560,7 @@ impl JitContext {
             TraceIr::BinOp {
                 kind, dst, mode, ..
             } => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_binary(bb, mode);
@@ -564,7 +569,7 @@ impl JitContext {
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Cmp(kind, ret, mode, false) => {
-                if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                if pc.classid1().is_none() || pc.classid2().is_none() {
                     return CompileResult::Recompile;
                 }
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
@@ -646,7 +651,9 @@ impl JitContext {
                 if store[callid].block_fid.is_some() {
                     self.ir.write_back_locals(bb);
                 }
-                if let Some(fid) = pc.cached_fid() {
+                if let Some(fid) = pc.cached_fid()
+                    && self.class_version == (pc + 1).cached_version()
+                {
                     if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
                         return CompileResult::Recompile;
                     }
@@ -658,9 +665,12 @@ impl JitContext {
                 inline_id, callid, ..
             } => {
                 let inline_gen = store.get_inline_info(inline_id).0;
-                self.ir.writeback_acc(bb);
-                let deopt = self.ir.new_deopt(bb, pc);
-                self.ir.guard_class_version(pc, deopt);
+                //self.ir.writeback_acc(bb);
+                let recv = store[callid].recv;
+                self.ir.fetch_to_reg(bb, recv, GP::Rdi);
+                let (deopt, error) = self.ir.new_deopt_error(bb, pc);
+                let using_xmm = bb.get_using_xmm();
+                self.ir.guard_class_version(pc, using_xmm, deopt, error);
                 inline_gen(&mut self.ir, store, bb, &store[callid], pc);
             }
             TraceIr::Yield { callid } => {
@@ -1252,7 +1262,7 @@ impl Codegen {
         );
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
-                movq rdx, (pc.get_u64());
+                movq rdx, (pc.u64());
                 movq rax, (exec_jit_partial_compile);
                 call rax;
             );
@@ -1281,7 +1291,7 @@ impl Codegen {
         );
         self.gen_write_back(&wb);
         monoasm!( &mut self.jit,
-            movq r13, ((pc + 1).get_u64());
+            movq r13, ((pc + 1).u64());
             jmp  raise;
         );
         self.jit.select_page(0);
@@ -1304,6 +1314,12 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
@@ -1320,6 +1336,10 @@ impl Codegen {
         }
     }
 
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
@@ -1359,7 +1379,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         self.gen_write_back(wb);
         monoasm!( &mut self.jit,
-            movq r13, (pc.get_u64());
+            movq r13, (pc.u64());
         );
         #[cfg(any(feature = "log-jit", feature = "profile"))]
         monoasm!( &mut self.jit,

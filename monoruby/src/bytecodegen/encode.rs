@@ -364,7 +364,7 @@ impl BytecodeGen {
             BcIr::InlineCache => {
                 Bc::from_with_class_and_version(
                     enc_wl(130, 0 /* dummy */, 0 /* FuncId */),
-                    ClassId(0),
+                    None,
                     -1i32 as u32,
                 )
             }
@@ -416,11 +416,7 @@ impl BytecodeGen {
             BcIr::Pos { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
-                Bc::from_with_class_and_version(
-                    enc_ww(126, op1.0, op2.0),
-                    ClassId::default(),
-                    -1i32 as u32,
-                )
+                Bc::from_with_class_and_version(enc_ww(126, op1.0, op2.0), None, -1i32 as u32)
             }
             BcIr::BitNot { ret, src } => {
                 let op1 = self.slot_id(&ret);
@@ -435,11 +431,7 @@ impl BytecodeGen {
             BcIr::Neg { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
-                Bc::from_with_class_and_version(
-                    enc_ww(129, op1.0, op2.0),
-                    ClassId::default(),
-                    -1i32 as u32,
-                )
+                Bc::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
             }
             BcIr::Index(ret, base, idx) => {
                 let op1 = self.slot_id(&ret);

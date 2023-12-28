@@ -157,10 +157,9 @@ fn integer_tof(
     pc: BcPc,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    ir.fetch_to_reg(bb, recv, GP::Rdi);
     let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_zero() {
-        ir.guard_class(GP::Rdi, pc.cached_class1().unwrap(), deopt);
+    if !recv.is_self() {
+        ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
     }
     if let Some(ret) = ret {
         let fret = bb.xmm_write_enc(ret);
@@ -294,20 +293,13 @@ fn integer_shr(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo {
-        recv,
-        dst: ret,
-        args,
-        ..
-    } = *callsite;
+    let CallSiteInfo { dst: ret, args, .. } = *callsite;
     if let Some(rhs) = bb.is_u8_literal(args) {
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
         bb.link_stack(ret);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
         ir.fetch_to_reg(bb, args, GP::Rsi);
         bb.link_stack(ret);
         let deopt = ir.new_deopt(bb, pc);
@@ -344,28 +336,23 @@ fn integer_shl(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo {
-        recv,
-        dst: ret,
-        args,
-        ..
-    } = *callsite;
-    if let Some(rhs) = bb.is_u8_literal(args) {
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
-        bb.link_stack(ret);
+    let CallSiteInfo { dst, args, .. } = *callsite;
+    if let Some(rhs) = bb.is_u8_literal(args)
+        && rhs < 64
+    {
+        bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
     } else {
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
         ir.fetch_to_reg(bb, args, GP::Rsi);
-        bb.link_stack(ret);
+        bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
-    ir.reg2acc(bb, GP::Rdi, ret);
+    ir.reg2acc(bb, GP::Rdi, dst);
 }
 
 ///

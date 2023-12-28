@@ -117,8 +117,8 @@ impl Executor {
         self.cfp.unwrap()
     }
 
-    pub unsafe fn register(&self, index: usize) -> Option<Value> {
-        self.cfp().lfp().register(index)
+    pub(crate) unsafe fn register(&self, index: SlotId) -> Option<Value> {
+        self.cfp().lfp().register(index.0 as usize)
     }
 
     pub(crate) fn method_func_id(&self) -> FuncId {
@@ -358,7 +358,7 @@ impl Executor {
     ) -> Result<(Value, Option<Value>)> {
         let base = globals.store[site_id]
             .base
-            .map(|base| unsafe { self.register(base.0 as usize) }.unwrap());
+            .map(|base| unsafe { self.register(base) }.unwrap());
         let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func, base)
     }
@@ -898,38 +898,41 @@ pub(crate) struct Bc {
 
 impl Bc {
     pub fn is_integer1(&self) -> bool {
-        self.classid1() == INTEGER_CLASS
+        self.classid1() == Some(INTEGER_CLASS)
     }
 
     pub fn is_integer2(&self) -> bool {
-        self.classid2() == INTEGER_CLASS
+        self.classid2() == Some(INTEGER_CLASS)
     }
 
     pub fn is_float1(&self) -> bool {
-        self.classid1() == FLOAT_CLASS
+        self.classid1() == Some(FLOAT_CLASS)
     }
 
     pub fn is_float2(&self) -> bool {
-        self.classid2() == FLOAT_CLASS
+        self.classid2() == Some(FLOAT_CLASS)
     }
 
     pub fn is_integer_binop(&self) -> bool {
-        self.classid1() == INTEGER_CLASS && self.classid2() == INTEGER_CLASS
+        self.classid1() == Some(INTEGER_CLASS) && self.classid2() == Some(INTEGER_CLASS)
     }
 
     pub fn is_float_binop(&self) -> bool {
         match (self.classid1(), self.classid2()) {
-            (INTEGER_CLASS, INTEGER_CLASS) => false,
-            (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
+            (Some(class1), Some(class2)) => match (class1, class2) {
+                (INTEGER_CLASS, INTEGER_CLASS) => false,
+                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
+                _ => false,
+            },
             _ => false,
         }
     }
-    pub fn classid1(&self) -> ClassId {
-        ClassId::new(self.op2.0 as u32)
+    pub fn classid1(&self) -> Option<ClassId> {
+        ClassId::from(self.op2.0 as u32)
     }
 
-    pub fn classid2(&self) -> ClassId {
-        ClassId::new((self.op2.0 >> 32) as u32)
+    pub fn classid2(&self) -> Option<ClassId> {
+        ClassId::from((self.op2.0 >> 32) as u32)
     }
 
     pub fn cached_version(&self) -> u32 {
@@ -940,15 +943,6 @@ impl Bc {
     pub fn cached_ivarid(&self) -> IvarId {
         let op = self.op2.0;
         IvarId::new((op >> 32) as u32)
-    }
-
-    fn class(&self) -> Option<ClassId> {
-        let op = self.op2.0;
-        if op == 0 {
-            None
-        } else {
-            Some(ClassId::new(op as u32))
-        }
     }
 
     fn fid(&self) -> Option<FuncId> {
@@ -1024,7 +1018,11 @@ impl Bc {
         }
     }
 
-    pub(super) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
+    pub(super) fn from_with_class_and_version(
+        op1: u64,
+        class_id: Option<ClassId>,
+        version: u32,
+    ) -> Self {
         Self {
             op1,
             op2: Bc2::class_and_version(class_id, version),
@@ -1034,7 +1032,7 @@ impl Bc {
     pub(super) fn from_with_class2(op1: u64) -> Self {
         Self {
             op1,
-            op2: Bc2::class2(ClassId::default(), ClassId::default()),
+            op2: Bc2::class2(None, None),
         }
     }
 
@@ -1098,9 +1096,13 @@ impl BcPc {
         self.0.as_ptr()
     }
 
-    pub(crate) fn opcode(&self) -> u16 {
-        (self.op1 >> 48) as u16
+    pub(crate) fn opcode(&self) -> u8 {
+        (self.op1 >> 48) as u8
     }
+
+    /*pub(crate) fn opcode_sub(&self) -> u8 {
+        (self.op1 >> 56) as u8
+    }*/
 
     pub(crate) fn is_loop_start(&self) -> bool {
         self.opcode() == 14 // TraceIr::LoopStart(_))
@@ -1110,7 +1112,7 @@ impl BcPc {
         Self(std::ptr::NonNull::from(bc))
     }
 
-    pub fn get_u64(self) -> u64 {
+    pub fn u64(self) -> u64 {
         self.0.as_ptr() as _
     }
 
@@ -1123,11 +1125,11 @@ impl BcPc {
     }
 
     pub(crate) fn cached_class1(self) -> Option<ClassId> {
-        (*(self + 1)).class()
+        (*(self + 1)).classid1()
     }
 
     pub(crate) fn cached_class0(self) -> Option<ClassId> {
-        self.class()
+        self.classid1()
     }
 }
 
@@ -1514,7 +1516,7 @@ impl SlotId {
         Self(0)
     }
 
-    pub fn is_zero(&self) -> bool {
+    pub fn is_self(&self) -> bool {
         self.0 == 0
     }
 }
