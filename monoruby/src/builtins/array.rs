@@ -356,9 +356,9 @@ fn array_shl(
     } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    let deopt_ = ir.new_deopt(bb, pc);
     bb.link_stack(ret);
-    ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt_);
+    let deopt = ir.new_deopt(bb, pc);
+    ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt);
     ir.inline(|gen, _| {
         monoasm!( &mut gen.jit,
             movq rax, (ary_shl);

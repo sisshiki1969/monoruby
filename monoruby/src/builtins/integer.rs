@@ -350,7 +350,9 @@ fn integer_shl(
         args,
         ..
     } = *callsite;
-    if let Some(rhs) = bb.is_u8_literal(args) {
+    if let Some(rhs) = bb.is_u8_literal(args)
+        && rhs < 64
+    {
         ir.fetch_to_reg(bb, recv, GP::Rdi);
         bb.link_stack(ret);
         let deopt = ir.new_deopt(bb, pc);

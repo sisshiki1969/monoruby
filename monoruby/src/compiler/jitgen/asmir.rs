@@ -69,6 +69,13 @@ impl AsmIr {
         AsmError(i)
     }
 
+    pub(crate) fn new_deopt_error(&mut self, bb: &BBContext, pc: BcPc) -> (AsmDeopt, AsmError) {
+        let wb = bb.get_write_back();
+        let deopt = self.new_label(SideExit::Deoptimize(pc, wb.clone()));
+        let error = self.new_label(SideExit::Error(pc, wb));
+        (AsmDeopt(deopt), AsmError(error))
+    }
+
     fn new_label(&mut self, side_exit: SideExit) -> usize {
         let label = self.side_exit.len();
         self.side_exit.push(side_exit);
@@ -286,8 +293,7 @@ impl AsmIr {
 
     pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(bb, pc);
-        let error = self.new_error(bb, pc);
+        let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::IntegerBinOp {
             kind,
             mode,
@@ -349,15 +355,19 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, pc: BcPc, idx: u16) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn array_u16_index(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
         let deopt = self.new_deopt(bb, pc);
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::ArrayU16IndexAssign {
-            idx,
+        self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+    }
+
+    pub(super) fn array_index(&mut self, bb: &BBContext, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let (deopt, error) = self.new_deopt_error(bb, pc);
+        self.inst.push(AsmInst::ArrayIndex {
+            pc,
             using_xmm,
-            deopt,
             error,
+            deopt,
         });
     }
 
@@ -381,10 +391,20 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
+        let using_xmm = bb.get_using_xmm();
+        let (deopt, error) = self.new_deopt_error(bb, pc);
+        self.inst.push(AsmInst::ArrayU16IndexAssign {
+            idx,
+            using_xmm,
+            deopt,
+            error,
+        });
+    }
+
     pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let deopt = self.new_deopt(bb, pc);
-        let error = self.new_error(bb, pc);
+        let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::ArrayIndexAssign {
             using_xmm,
             deopt,
