@@ -348,33 +348,22 @@ fn array_shl(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo {
-        recv,
-        dst: ret,
-        args,
-        ..
-    } = *callsite;
-    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    let CallSiteInfo { dst, args, .. } = *callsite;
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    bb.link_stack(ret);
+    bb.link_stack(dst);
     let deopt = ir.new_deopt(bb, pc);
+    let using_xmm = bb.get_using_xmm();
     ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt);
-    ir.inline(|gen, _| {
+    ir.inline(move |gen, _| {
+        gen.xmm_save(using_xmm);
         monoasm!( &mut gen.jit,
             movq rax, (ary_shl);
             call rax;
         );
+        gen.xmm_restore(using_xmm);
     });
-    ir.rax2acc(bb, ret);
+    ir.rax2acc(bb, dst);
 }
-
-/*fn analysis_array_shl(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    info.r#use(callsite.recv);
-    info.r#use(callsite.args);
-    if let Some(ret) = callsite.ret {
-        info.def(ret);
-    }
-}*/
 
 ///
 /// ### Array#==

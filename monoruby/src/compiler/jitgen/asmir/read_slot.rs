@@ -28,6 +28,8 @@ impl AsmIr {
     ///
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
+    /// ### destroy
+    /// - rax, rcx
     fn fetch_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
         if reg >= bb.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);

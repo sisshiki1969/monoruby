@@ -686,7 +686,7 @@ impl AsmIr {
         pc: BcPc,
     ) -> Option<()> {
         let CallSiteInfo { dst, recv, .. } = store[callid];
-        if store[callid].recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
+        if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
         /* the cache is invalid because the receiver class is not matched.*/
         {
             self.fetch_callargs(bb, &store[callid]);

@@ -1314,6 +1314,12 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
@@ -1330,6 +1336,10 @@ impl Codegen {
         }
     }
 
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     fn literal_to_stack(&mut self, reg: SlotId, v: Value) {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {

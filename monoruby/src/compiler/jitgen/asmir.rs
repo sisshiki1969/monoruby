@@ -143,10 +143,20 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
         self.inst.push(AsmInst::XmmToBoth(freg, reg));
     }
 
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     pub(super) fn lit2stack(&mut self, v: Value, reg: SlotId) {
         self.inst.push(AsmInst::LitToStack(v, reg));
     }
@@ -217,6 +227,15 @@ impl AsmIr {
             .push(AsmInst::GuardClassVersion(pc, using_xmm, deopt, error));
     }
 
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
     pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
@@ -631,7 +650,17 @@ pub(super) enum AsmInst {
     F64ToXmm(f64, Xmm),
     /// move i64 to both of xmm and a stack slot
     I64ToBoth(i64, SlotId, Xmm),
+    ///
+    /// Generate convert code from Xmm to Both.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     XmmToBoth(Xmm, Vec<SlotId>),
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     LitToStack(Value, SlotId),
     DeepCopyLit(Value, UsingXmm),
     NumToXmm(GP, Xmm, AsmDeopt),
@@ -660,6 +689,15 @@ pub(super) enum AsmInst {
     /// - caller save registers
     ///
     GuardClassVersion(BcPc, UsingXmm, AsmDeopt, AsmError),
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
     GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,

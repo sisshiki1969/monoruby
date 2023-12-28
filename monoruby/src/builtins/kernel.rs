@@ -63,9 +63,8 @@ fn object_nil(
     callsite: &CallSiteInfo,
     _pc: BcPc,
 ) {
-    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    ir.fetch_to_reg(bb, recv, GP::Rdi);
-    bb.link_stack(ret);
+    let CallSiteInfo { dst, .. } = *callsite;
+    bb.link_stack(dst);
     ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,
             movq rax, (FALSE_VALUE);
@@ -74,7 +73,7 @@ fn object_nil(
             cmoveqq rax, rsi;
         }
     });
-    ir.rax2acc(bb, ret);
+    ir.rax2acc(bb, dst);
 }
 
 ///
