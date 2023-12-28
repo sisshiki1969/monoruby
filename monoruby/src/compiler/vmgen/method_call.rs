@@ -198,7 +198,6 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
-            movq rcx, r13;
             movq rax, (runtime::vm_find_method);
             call rax;   // rax <- Option<FuncId>
         );

@@ -396,14 +396,8 @@ impl AsmIr {
     }
 
     pub(super) fn array_index(&mut self, bb: &BBContext, pc: BcPc) {
-        let using_xmm = bb.get_using_xmm();
-        let (deopt, error) = self.new_deopt_error(bb, pc);
-        self.inst.push(AsmInst::ArrayIndex {
-            pc,
-            using_xmm,
-            error,
-            deopt,
-        });
+        let deopt = self.new_deopt(bb, pc);
+        self.inst.push(AsmInst::ArrayIndex { deopt });
     }
 
     pub(super) fn generic_index_assign(
@@ -876,9 +870,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ArrayIndex {
-        pc: BcPc,
-        using_xmm: UsingXmm,
-        error: AsmError,
         deopt: AsmDeopt,
     },
     GenericIndexAssign {
@@ -1508,15 +1499,9 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.gen_array_u16_index(idx, deopt);
             }
-            AsmInst::ArrayIndex {
-                pc,
-                using_xmm,
-                error,
-                deopt,
-            } => {
+            AsmInst::ArrayIndex { deopt } => {
                 let deopt = labels[deopt];
-                let error = labels[error];
-                self.gen_array_index(pc, using_xmm, error, deopt);
+                self.gen_array_index(deopt);
             }
             AsmInst::GenericIndexAssign {
                 src,

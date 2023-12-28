@@ -243,7 +243,7 @@ impl Store {
         args: SlotId,
         len: usize,
         recv: SlotId,
-        ret: Option<SlotId>,
+        dst: Option<SlotId>,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         if !kw_args.is_empty() || !hash_splat_pos.is_empty() {
@@ -268,9 +268,7 @@ impl Store {
             args,
             len,
             recv,
-            dst: ret,
-            cache_version: 0,
-            cache: vec![],
+            dst,
         });
         id
     }
@@ -384,8 +382,6 @@ pub(crate) struct CallSiteInfo {
     pub hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub dst: Option<SlotId>,
-    pub cache_version: u32,
-    pub cache: Vec<(ClassId, FuncId)>,
 }
 
 impl CallSiteInfo {

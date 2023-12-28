@@ -17,7 +17,7 @@ impl AsmIr {
             } else {
                 self.fetch_to_reg(bb, base, GP::Rdi);
                 self.fetch_to_reg(bb, idx, GP::Rsi);
-                bb.link_stack(dst);
+                //bb.link_stack(dst);
                 self.array_index(bb, pc);
             }
         } else {
@@ -78,19 +78,11 @@ impl Codegen {
         self.array_index(out_range);
     }
 
-    pub(super) fn gen_array_index(
-        &mut self,
-        pc: BcPc,
-        using_xmm: UsingXmm,
-        error: DestLabel,
-        deopt: DestLabel,
-    ) {
+    pub(super) fn gen_array_index(&mut self, deopt: DestLabel) {
         let out_range = self.jit.label();
         let checked = self.jit.label();
-        let exit = self.jit.label();
-        let generic = self.jit.label();
         // in this point, *base* is loaded to rdi and *idx* is loaded to rsi.
-        self.guard_rdi_array(generic);
+        self.guard_rdi_array(deopt);
         self.guard_rsi_index(deopt);
         monoasm! { &mut self.jit,
             testq rsi, rsi;
@@ -103,26 +95,6 @@ impl Codegen {
         checked:
         }
         self.array_index(out_range);
-        self.jit.bind_label(exit);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(generic);
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdx, rdi; // base: Value
-            movq rcx, rsi; // idx: Value
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq r8, (pc.u64() + 8);
-            movq rax, (runtime::get_index);
-            call rax;
-        }
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        monoasm! { &mut self.jit,
-            jmp  exit;
-        }
-        self.jit.select_page(0);
     }
 
     pub(super) fn generic_index_assign(
