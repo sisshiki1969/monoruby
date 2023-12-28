@@ -293,21 +293,21 @@ fn integer_shr(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo { dst: ret, args, .. } = *callsite;
+    let CallSiteInfo { dst, args, .. } = *callsite;
     if let Some(rhs) = bb.is_u8_literal(args) {
-        bb.link_stack(ret);
+        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
         ir.fetch_to_reg(bb, args, GP::Rsi);
-        bb.link_stack(ret);
+        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
-    ir.reg2acc(bb, GP::Rdi, ret);
+    ir.reg2acc(bb, GP::Rdi, dst);
 }
 
 ///
@@ -340,13 +340,13 @@ fn integer_shl(
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
-        bb.link_stack(dst);
+        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
     } else {
         ir.fetch_to_reg(bb, args, GP::Rsi);
-        bb.link_stack(dst);
+        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);

@@ -518,13 +518,11 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                bb.link_stack(dst);
                 self.ir.generic_unop(&bb, pc, bitnot_value);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Not { dst, src } => {
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                bb.link_stack(dst);
                 self.ir.inst.push(AsmInst::Not);
                 self.ir.rax2acc(bb, dst);
             }
@@ -540,7 +538,6 @@ impl JitContext {
                     self.ir.inst.push(AsmInst::XmmUnOp { kind, dst });
                 } else {
                     self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                    bb.link_stack(dst);
                     self.ir.generic_unop(&bb, pc, kind.generic_func());
                     self.ir.rax2acc(bb, dst);
                 }
@@ -564,7 +561,6 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_binary(bb, mode);
-                bb.link_stack(dst);
                 self.ir.generic_binop(&bb, pc, kind);
                 self.ir.rax2acc(bb, dst);
             }
@@ -579,11 +575,9 @@ impl JitContext {
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else if mode.is_integer_op(&pc) {
                     self.ir.fetch_fixnum_binary(bb, pc, &mode);
-                    bb.link_stack(ret);
                     self.ir.inst.push(AsmInst::IntegerCmp { kind, mode });
                 } else {
                     self.ir.fetch_binary(bb, mode);
-                    bb.link_stack(ret);
                     self.ir.generic_cmp(&bb, pc, kind);
                 }
                 self.ir.rax2acc(bb, ret);

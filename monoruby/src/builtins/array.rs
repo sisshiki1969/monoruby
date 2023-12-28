@@ -350,7 +350,7 @@ fn array_shl(
 ) {
     let CallSiteInfo { dst, args, .. } = *callsite;
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    bb.link_stack(dst);
+    //bb.link_stack(dst);
     let deopt = ir.new_deopt(bb, pc);
     let using_xmm = bb.get_using_xmm();
     ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt);

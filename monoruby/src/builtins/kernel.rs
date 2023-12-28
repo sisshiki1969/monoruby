@@ -64,7 +64,7 @@ fn object_nil(
     _pc: BcPc,
 ) {
     let CallSiteInfo { dst, .. } = *callsite;
-    bb.link_stack(dst);
+    //bb.link_stack(dst);
     ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,
             movq rax, (FALSE_VALUE);

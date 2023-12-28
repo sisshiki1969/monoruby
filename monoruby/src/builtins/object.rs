@@ -59,7 +59,7 @@ fn object_object_id(
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     ir.fetch_to_reg(bb, recv, GP::Rdi);
-    bb.link_stack(ret);
+    //bb.link_stack(ret);
     let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
