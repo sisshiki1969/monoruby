@@ -1,3 +1,5 @@
+use indexmap::IndexMap;
+
 use super::*;
 
 //
@@ -290,7 +292,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             let caller = &globals.store[callid];
-            if info.key_num() == 0 && info.kw_rest().is_none() && caller.kw_num() != 0 {
+            if info.no_keyword() && caller.kw_num() != 0 {
                 // handle excessive keyword arguments
                 let mut h = IndexMap::default();
                 for (k, id) in caller.kw_args.iter() {
@@ -298,12 +300,9 @@ pub(super) extern "C" fn vm_handle_arguments(
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
-                // positional arguments
                 handle_positional(vm, &info, arg_num, callee_lfp, Some(ex))?;
             } else {
-                // positional argumrnts
                 handle_positional(vm, &info, arg_num, callee_lfp, None)?;
-                // keyword arguments
                 handle_keyword(vm, &info, caller, callee_lfp);
             }
         }
@@ -418,9 +417,9 @@ fn handle_keyword(
     {
         for (id, param_name) in info.args.kw_names.iter().enumerate() {
             unsafe {
-                let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                 let sym = Value::symbol(*param_name);
                 if let Some(v) = h.as_hash().get(sym) {
+                    let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                     if (*ptr).is_some() {
                         eprintln!(
                             " warning: key :{} is duplicated and overwritten",
@@ -431,6 +430,33 @@ fn handle_keyword(
                 }
             }
         }
+    }
+
+    if let Some(rest) = info.kw_rest() {
+        let mut kw_args = kw_args.clone();
+        for param_name in info.args.kw_names.iter() {
+            kw_args.remove(param_name);
+        }
+        let mut kw_rest = IndexMap::default();
+        for (name, i) in kw_args.iter() {
+            let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
+            kw_rest.insert(HashKey(Value::symbol(*name)), v);
+        }
+        for h in hash_splat_pos
+            .iter()
+            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+        {
+            let mut h = h.as_hash().clone();
+            for name in info.args.kw_names.iter() {
+                let sym = Value::symbol(*name);
+                h.remove(sym);
+            }
+            for (k, v) in h {
+                kw_rest.insert(HashKey(k), v);
+            }
+        }
+
+        unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
     }
 }
 

@@ -174,11 +174,8 @@ impl ISeqInfo {
         self.non_temp_num as usize
     }
 
-    ///
-    /// Get a number of keyword arguments.
-    ///
-    pub(crate) fn key_num(&self) -> usize {
-        self.args.kw_names.len()
+    pub(crate) fn no_keyword(&self) -> bool {
+        self.args.kw_names.is_empty() && self.kw_rest().is_none()
     }
 
     pub(crate) fn kw_rest(&self) -> Option<SlotId> {
@@ -197,8 +194,8 @@ impl ISeqInfo {
     /// Get a position of keyword arguments.
     ///
     pub(crate) fn block_pos(&self) -> usize {
-        if self.args.block_param.is_some() {
-            self.args.pos_num + self.key_num() + 1
+        if let Some((idx, _)) = self.args.block_param {
+            idx + 1
         } else {
             0
         }
@@ -398,5 +395,9 @@ impl ParamsInfo {
 
     pub fn pos_num(&self) -> usize {
         self.pos_num
+    }
+
+    pub fn block_param(&self) -> Option<(usize, IdentId)> {
+        self.block_param
     }
 }

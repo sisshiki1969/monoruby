@@ -293,12 +293,12 @@ impl Codegen {
                     self.single_arg_expand();
                 }
                 if info.optional_num() == 0
-                    && !(info.key_num() == 0 && info.kw_rest().is_none() && callsite.kw_num() != 0)
+                    && info.kw_rest().is_none()
+                    && !(info.no_keyword() && callsite.kw_num() != 0)
                 {
-                    // no optional param, no rest param.
-                    if info.key_num() != 0 {
+                    // no optional param, no rest param, no kw_rest param.
+                    if !info.no_keyword() {
                         self.handle_keyword_args(callsite, info)
-                        // TODO: We must care about a rest keyword paramter.
                     }
                     if !callsite.hash_splat_pos.is_empty() {
                         self.handle_hash_splat(callid, callee_fid)

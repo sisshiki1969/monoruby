@@ -503,6 +503,9 @@ impl BytecodeGen {
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(*name);
         });
+        if let Some(_) = info.args.block_param() {
+            ir.add_local(None);
+        }
         ir.gen_dummy_init(info.is_block_style());
 
         ir

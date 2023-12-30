@@ -33,7 +33,7 @@ impl Codegen {
         if fn_info.has_block_param() {
             monoasm! { &mut self.jit,
                 movq rax, [r14 - (LBP_BLOCK)];
-                movq [r14 - (block_pos as i32 * 8 + LBP_ARG0)], rax;
+                movq [r14 - (block_pos as i32 * 8 + LBP_SELF)], rax;
             }
         }
 

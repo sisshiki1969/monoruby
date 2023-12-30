@@ -243,6 +243,7 @@ pub(crate) struct FnInitInfo {
     pub arg_num: usize,
     pub req_num: usize,
     pub reqopt_num: usize,
+    /// Position of block argument. 0 if not exists.
     pub block_pos: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
     pub info: usize,

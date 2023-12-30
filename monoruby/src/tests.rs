@@ -11,7 +11,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..7 do
+      for __i in 0..15 do
           __res2 = ({0})
           __assert(__res, __res2)
       end
@@ -64,7 +64,7 @@ pub fn run_tests(code: &[String]) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..7 do
+      for __i in 0..15 do
           __res2 = ({0})
           __assert(__res, __res2)
       end
@@ -111,7 +111,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
         r##"
       {prelude}
       res = ({code})
-      for __i in 0..7 do
+      for __i in 0..15 do
           res2 = ({code})
           __assert(res, res2)
       end
@@ -1589,20 +1589,20 @@ mod test {
         );
     }
 
-    /*#[test]
+    #[test]
     fn keyword_rest() {
         run_test_with_prelude(
             r#"
-        [f(c:7), f(b:8, a:10), f]
+        [f{1}, f(a:1, c:4, z:6){2}, f(b:2, **{:z=>7, 5=>2}){3}]
         "#,
             r#"
-        def f(a:1,b:2,**c)
-          [a, b, c]
+        def f(a:1,b:2,**c,&block)
+          [a, b, c, block.call]
         end
         "#,
         );
         run_test_error("def f(**a, **b); end");
-    }*/
+    }
 
     #[test]
     fn keyword_to_hash() {
