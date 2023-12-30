@@ -9,7 +9,7 @@ extern "C" fn vm_get_constant(
     let (cached_version, cached_base_class, cache_val) = &globals.store[site_id].cache;
     let base_class = globals.store[site_id]
         .base
-        .map(|base| unsafe { vm.register(base) }.unwrap());
+        .map(|base| unsafe { vm.get_slot(base) }.unwrap());
     if *cached_version == const_version && *cached_base_class == base_class {
         return *cache_val;
     };

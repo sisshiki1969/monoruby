@@ -117,7 +117,7 @@ impl Executor {
         self.cfp.unwrap()
     }
 
-    pub(crate) unsafe fn register(&self, index: SlotId) -> Option<Value> {
+    pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
         self.cfp().lfp().register(index.0 as usize)
     }
 
@@ -358,7 +358,7 @@ impl Executor {
     ) -> Result<(Value, Option<Value>)> {
         let base = globals.store[site_id]
             .base
-            .map(|base| unsafe { self.register(base) }.unwrap());
+            .map(|base| unsafe { self.get_slot(base) }.unwrap());
         let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func, base)
     }
@@ -1531,6 +1531,13 @@ impl std::ops::Add<u16> for SlotId {
     type Output = Self;
     fn add(self, rhs: u16) -> Self {
         Self(self.0 + rhs)
+    }
+}
+
+impl std::ops::Add<usize> for SlotId {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs as u16)
     }
 }
 

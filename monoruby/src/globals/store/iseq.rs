@@ -181,6 +181,10 @@ impl ISeqInfo {
         self.args.kw_names.len()
     }
 
+    pub(crate) fn kw_rest(&self) -> Option<SlotId> {
+        self.args.kw_rest
+    }
+
     pub(crate) fn required_num(&self) -> usize {
         self.args.required_num
     }
@@ -237,7 +241,7 @@ impl ISeqInfo {
     /// Get a block argument name.
     ///
     pub(crate) fn block_param_name(&self) -> Option<IdentId> {
-        self.args.block_param
+        self.args.block_param.map(|(_, name)| name)
     }
 
     ///
@@ -364,10 +368,11 @@ pub(crate) struct ParamsInfo {
     reqopt_num: usize,
     // required + optional + rest
     pos_num: usize,
-    // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
+    // for param, req(incl. destruct slot), opt, rest, keyword, kw_rest, destructed local, block
     pub args_names: Vec<Option<IdentId>>,
     pub kw_names: Vec<IdentId>,
-    block_param: Option<IdentId>,
+    pub kw_rest: Option<SlotId>,
+    block_param: Option<(usize, IdentId)>,
 }
 
 impl ParamsInfo {
@@ -377,7 +382,8 @@ impl ParamsInfo {
         pos_num: usize,
         args_names: Vec<Option<IdentId>>,
         keyword_names: Vec<IdentId>,
-        block_param: Option<IdentId>,
+        kw_rest: Option<SlotId>,
+        block_param: Option<(usize, IdentId)>,
     ) -> Self {
         ParamsInfo {
             required_num,
@@ -385,6 +391,7 @@ impl ParamsInfo {
             pos_num,
             args_names,
             kw_names: keyword_names,
+            kw_rest,
             block_param,
         }
     }

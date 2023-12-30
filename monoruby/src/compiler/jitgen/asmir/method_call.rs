@@ -292,7 +292,9 @@ impl Codegen {
                 if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.optional_num() == 0 && !(info.key_num() == 0 && callsite.kw_num() != 0) {
+                if info.optional_num() == 0
+                    && !(info.key_num() == 0 && info.kw_rest().is_none() && callsite.kw_num() != 0)
+                {
                     // no optional param, no rest param.
                     if info.key_num() != 0 {
                         self.handle_keyword_args(callsite, info)
@@ -658,7 +660,7 @@ extern "C" fn jit_handle_hash_splat(
     for (id, param_name) in info.args.kw_names.iter().enumerate() {
         for hash in hash_splat_pos {
             unsafe {
-                let h = vm.register(*hash).unwrap();
+                let h = vm.get_slot(*hash).unwrap();
                 // We must check whether h is a hash.
                 if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
                     *callee_reg.sub(callee_kw_pos + id) = Some(v);

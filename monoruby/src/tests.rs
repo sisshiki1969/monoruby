@@ -1589,6 +1589,21 @@ mod test {
         );
     }
 
+    /*#[test]
+    fn keyword_rest() {
+        run_test_with_prelude(
+            r#"
+        [f(c:7), f(b:8, a:10), f]
+        "#,
+            r#"
+        def f(a:1,b:2,**c)
+          [a, b, c]
+        end
+        "#,
+        );
+        run_test_error("def f(**a, **b); end");
+    }*/
+
     #[test]
     fn keyword_to_hash() {
         run_test_with_prelude(

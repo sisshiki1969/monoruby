@@ -142,11 +142,6 @@ impl Globals {
         globals
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
-        /*dbg!(globals.store.functions.info.as_ptr());
-        let p = &globals.store.functions.info as *const Vec<_> as *const usize;
-        eprintln!("{:016x}", unsafe { *p });
-        eprintln!("{:016x}", unsafe { *(p.add(1)) });
-        eprintln!("{:016x}", unsafe { *(p.add(2)) });*/
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
         let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())

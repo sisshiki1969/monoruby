@@ -1,16 +1,7 @@
-fib = Enumerator.new do |y|
-    a = b = 1
-    loop do
-        y.<< a
-        a, b = a + b, a
-        if a > 100 then break -1 end
-    end
+def f(a:0, b:1, **c)
+  puts "#{a} #{b} #{c}"
 end
-puts(fib.with_index do |x,i|
-  puts "#{i} #{x}"
-  x
-end.inspect)
-puts([5,4,3,2,1].map.with_index do |x,i|
-  puts "#{i} #{x}"
-  x
-end.inspect)
+
+f()
+f(b:100)
+f(b:100, **{:a=>1, 5=>7})

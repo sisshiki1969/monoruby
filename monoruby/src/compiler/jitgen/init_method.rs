@@ -51,7 +51,7 @@ impl Codegen {
         } else {
             for i in 0..clear_len {
                 monoasm!( &mut self.jit,
-                    movq [r14 - ((arg_num + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
+                    movq [r14 - ((arg_num + i) as i32 * 8 + LBP_ARG0)], (NIL_VALUE);
                 );
             }
         }

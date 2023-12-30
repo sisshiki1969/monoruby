@@ -302,6 +302,12 @@ impl LFP {
         std::ptr::read(self.register_ptr(index))
     }
 
+    /// Get a value of a register slot *index*.
+    ///
+    pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
+        self.register(index.0 as usize)
+    }
+
     ///
     /// Set a value to a register *index*.
     ///

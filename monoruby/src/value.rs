@@ -584,17 +584,17 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInner {
-        assert_eq!(ObjKind::HASH, self.rvalue().ty());
-        self.rvalue().as_hash()
-    }
-
     pub(crate) fn is_hash(&self) -> Option<&HashInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
             ObjKind::HASH => Some(rv.as_hash()),
             _ => None,
         }
+    }
+
+    pub(crate) fn as_hash(&self) -> &HashInner {
+        assert_eq!(ObjKind::HASH, self.rvalue().ty());
+        self.rvalue().as_hash()
     }
 
     pub(crate) fn as_hash_mut(&mut self) -> &mut HashInner {

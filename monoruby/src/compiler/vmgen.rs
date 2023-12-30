@@ -631,10 +631,11 @@ impl Codegen {
     ///
     fn invoker_call(&mut self) {
         monoasm! { &mut self.jit,
-            lea  rsi, [rsp - 16];
+            lea  rdx, [rsp - 16];
             subq rsp, 4096;
-            movq rdx, rdi; // arg_num
-            movq rdi, r12; // &Globals
+            movq rcx, rdi; // arg_num
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
             movq rax, (handle_invoker_arguments);
             call rax;
             // set arg len
@@ -1759,7 +1760,12 @@ impl Codegen {
     }
 }
 
-fn handle_invoker_arguments(globals: &Globals, callee_lfp: LFP, mut arg_num: usize) -> usize {
+extern "C" fn handle_invoker_arguments(
+    vm: &mut Executor,
+    globals: &Globals,
+    callee_lfp: LFP,
+    mut arg_num: usize,
+) -> usize {
     let callee_func_id = callee_lfp.meta().func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => unsafe {
@@ -1767,7 +1773,7 @@ fn handle_invoker_arguments(globals: &Globals, callee_lfp: LFP, mut arg_num: usi
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            runtime::handle_positional(info, arg_num, callee_lfp, None);
+            runtime::handle_positional(vm, info, arg_num, callee_lfp, None);
             // keyword
             let params = &info.args.kw_names;
             let callee_kw_pos = info.pos_num() + 1;

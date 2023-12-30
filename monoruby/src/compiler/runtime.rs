@@ -16,7 +16,7 @@ pub(super) extern "C" fn find_method(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
-        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
         let is_func_call = globals.store[callid].recv.is_self();
         match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => Some(id),
@@ -75,7 +75,7 @@ pub(super) extern "C" fn vm_find_method(
 ) -> Option<FuncId> {
     let func_id = if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
-        let recv = unsafe { vm.register(recv_reg).unwrap() };
+        let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
         let is_func_call = globals.store[callid].recv.is_self();
         match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => id,
@@ -290,30 +290,21 @@ pub(super) extern "C" fn vm_handle_arguments(
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             let caller = &globals.store[callid];
-            if info.key_num() == 0 && caller.kw_num() != 0 {
+            if info.key_num() == 0 && info.kw_rest().is_none() && caller.kw_num() != 0 {
                 // handle excessive keyword arguments
                 let mut h = IndexMap::default();
                 for (k, id) in caller.kw_args.iter() {
-                    let v = unsafe { vm.register(caller.kw_pos + *id as u16).unwrap() };
+                    let v = unsafe { vm.get_slot(caller.kw_pos + *id as u16).unwrap() };
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
                 // positional arguments
-                if let Some((arg_num, range)) =
-                    handle_positional(&info, arg_num, callee_lfp, Some(ex))
-                {
-                    vm.err_wrong_number_of_arg_range(arg_num, range);
-                    return None;
-                };
+                handle_positional(vm, &info, arg_num, callee_lfp, Some(ex))?;
             } else {
                 // positional argumrnts
-                if let Some((arg_num, range)) = handle_positional(&info, arg_num, callee_lfp, None)
-                {
-                    vm.err_wrong_number_of_arg_range(arg_num, range);
-                    return None;
-                };
+                handle_positional(vm, &info, arg_num, callee_lfp, None)?;
                 // keyword arguments
-                handle_keyword(&info, &globals.store[callid], vm.cfp().lfp(), callee_lfp);
+                handle_keyword(vm, &info, caller, callee_lfp);
             }
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
@@ -329,7 +320,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         let bh = BlockHandler::from(*block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.register(*block_arg).unwrap())) }
+        unsafe { Some(BlockHandler(vm.get_slot(*block_arg).unwrap())) }
     } else {
         None
     };
@@ -338,14 +329,15 @@ pub(super) extern "C" fn vm_handle_arguments(
 }
 
 ///
-/// if argument mismatch occurs, return Some((usize, usize..=usize)).
+/// if argument mismatch occurs, return None.
 ///
 pub(super) fn handle_positional(
+    vm: &mut Executor,
     info: &ISeqInfo,
     arg_num: usize,
     mut callee_lfp: LFP,
     ex: Option<Value>,
-) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
+) -> Option<Value> {
     let req_num = info.required_num();
     let reqopt_num = info.reqopt_num();
     let pos_num = info.pos_num();
@@ -362,9 +354,10 @@ pub(super) fn handle_positional(
                 }
                 callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
             } else if !is_block_style {
-                return Some(((arg_num + ex_num), req_num..=reqopt_num));
+                vm.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
+                return None;
             }
-            return None;
+            return Some(Value::nil());
         }
 
         if (arg_num + ex_num) >= req_num {
@@ -372,7 +365,8 @@ pub(super) fn handle_positional(
             fill(callee_lfp, reqopt_num, len, None);
         } else {
             if !is_block_style {
-                return Some(((arg_num + ex_num), req_num..=reqopt_num));
+                vm.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
+                return None;
             }
             let len = req_num - (arg_num + ex_num);
             fill(callee_lfp, req_num, len, Some(Value::nil()));
@@ -387,13 +381,18 @@ pub(super) fn handle_positional(
             callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
         }
     }
-    None
+    Some(Value::nil())
 }
 
 ///
 /// Handle keyword arguments.
 ///
-fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut callee_lfp: LFP) {
+fn handle_keyword(
+    vm: &mut Executor,
+    info: &ISeqInfo,
+    callsite: &CallSiteInfo,
+    mut callee_lfp: LFP,
+) {
     let CallSiteInfo {
         kw_pos,
         kw_args,
@@ -401,12 +400,12 @@ fn handle_keyword(info: &ISeqInfo, callsite: &CallSiteInfo, caller_lfp: LFP, mut
         ..
     } = callsite;
 
+    let caller_lfp = vm.cfp().lfp();
     let callee_kw_pos = info.pos_num() + 1;
-
     for (id, param_name) in info.args.kw_names.iter().enumerate() {
         unsafe {
             let v = match kw_args.get(param_name) {
-                Some(id) => Some(caller_lfp.register(kw_pos.0 as usize + id).unwrap()),
+                Some(id) => Some(caller_lfp.get_slot(*kw_pos + *id).unwrap()),
                 None => None,
             };
             callee_lfp.set_register(callee_kw_pos + id, v);

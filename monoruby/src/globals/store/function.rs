@@ -381,6 +381,7 @@ impl Funcs {
         let mut required_num = 0;
         let mut optional_num = 0;
         let mut rest = 0;
+        let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
         for (dst_outer, dst_reg, _name) in for_params {
@@ -419,9 +420,15 @@ impl Funcs {
                     keyword_names.push(name);
                     keyword_initializers.push(init);
                 }
+                ParamKind::KWRest(name) => {
+                    let name = IdentId::get_id_from_string(name);
+                    assert!(kw_rest_param.is_none());
+                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
+                    args_names.push(Some(name));
+                }
                 ParamKind::Block(name) => {
                     let name = IdentId::get_id_from_string(name.clone());
-                    block_param = Some(name);
+                    block_param = Some((args_names.len(), name));
                 }
                 _ => {
                     return Err(MonorubyErr::unsupported_parameter_kind(
@@ -453,6 +460,7 @@ impl Funcs {
             reqopt_num + rest,
             args_names,
             keyword_names,
+            kw_rest_param,
             block_param,
         );
         Ok((params_info, compile_info))
