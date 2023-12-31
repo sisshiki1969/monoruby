@@ -92,6 +92,13 @@ impl AsmIr {
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
+    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.inst.push(AsmInst::XmmSave(using_xmm));
+    }
+    pub(super) fn exec_gc(&mut self, wb: WriteBack) {
+        self.inst.push(AsmInst::ExecGc(wb));
+    }
+
     pub(crate) fn rax2acc(&mut self, bb: &mut BBContext, dst: impl Into<Option<SlotId>>) {
         self.reg2acc(bb, GP::Rax, dst);
     }
@@ -114,6 +121,18 @@ impl AsmIr {
         if src != dst {
             self.inst.push(AsmInst::RegMove(src, dst));
         }
+    }
+
+    pub(super) fn reg_add(&mut self, r: GP, i: i32) {
+        self.inst.push(AsmInst::RegAdd(r, i));
+    }
+
+    pub(super) fn reg_sub(&mut self, r: GP, i: i32) {
+        self.inst.push(AsmInst::RegSub(r, i));
+    }
+
+    pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
+        self.inst.push(AsmInst::RegToRSPOffset(r, i));
     }
 
     pub(crate) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
@@ -284,15 +303,22 @@ impl AsmIr {
     ///
     pub(super) fn send_cached(
         &mut self,
-        bb: &BBContext,
+        store: &Store,
+        bb: &mut BBContext,
         pc: BcPc,
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
         native: bool,
     ) {
+        self.reg_move(GP::Rdi, GP::R13);
+        self.exec_gc(bb.get_register());
         let using_xmm = bb.get_using_xmm();
+        self.xmm_save(using_xmm);
+        let callsite = &store[callid];
+        self.set_arguments(bb, callsite);
         let error = self.new_error(bb, pc);
+        self.writeback_acc(bb);
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
@@ -301,6 +327,33 @@ impl AsmIr {
             using_xmm,
             error,
         });
+    }
+
+    fn set_arguments(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
+        let args = callsite.args;
+        let pos_num = callsite.pos_num as u16;
+        if callsite.has_splat() {
+            self.write_back_args(bb, callsite);
+            let splat_pos = callsite.splat_pos.clone();
+            self.inst.push(AsmInst::SetArgumentsWithSplat {
+                splat_pos,
+                args,
+                pos_num,
+            });
+        } else {
+            for i in pos_num..callsite.len as u16 {
+                self.write_back_slot(bb, args + i);
+            }
+            let ofs = (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16;
+            self.reg_sub(GP::Rsp, ofs);
+            for i in 0..pos_num {
+                let reg = args + i;
+                self.fetch_to_reg(bb, reg, GP::Rax);
+                self.reg2rsp_offset(GP::Rax, ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32));
+            }
+            self.reg_add(GP::Rsp, ofs);
+            self.inst.push(AsmInst::I32ToReg(pos_num as _, GP::Rdi));
+        }
     }
 
     pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
@@ -565,7 +618,7 @@ impl AsmIr {
     }
 
     pub(super) fn jit_store_gvar(&mut self, bb: &mut BBContext, name: IdentId, src: SlotId) {
-        self.fetch_slots(bb, &[src]);
+        self.write_back_slots(bb, &[src]);
         self.store_gvar(bb, name, src);
     }
 }
@@ -628,8 +681,12 @@ pub(super) enum AsmInst {
     /// move reg to stack
     StackToReg(SlotId, GP),
     LitToReg(Value, GP),
+    I32ToReg(i32, GP),
     /// move reg to reg
     RegMove(GP, GP),
+    RegAdd(GP, i32),
+    RegSub(GP, i32),
+    RegToRSPOffset(GP, i32),
 
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),
@@ -734,6 +791,22 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     WriteBack(WriteBack),
+    XmmSave(UsingXmm),
+    ExecGc(WriteBack),
+    ///
+    /// Set arguments.
+    ///
+    /// ### out
+    /// - rdi: the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    SetArgumentsWithSplat {
+        splat_pos: Vec<usize>,
+        args: SlotId,
+        pos_num: u16,
+    },
 
     ///
     /// Attribute writer
@@ -1055,8 +1128,10 @@ pub(super) enum FMode {
 pub(crate) enum GP {
     Rax = 0,
     Rdx = 2,
+    Rsp = 4,
     Rsi = 6,
     Rdi = 7,
+    R13 = 13,
     R15 = 15,
 }
 
@@ -1173,11 +1248,35 @@ impl Codegen {
                     movq R(r), (v.id());
                 );
             }
+            AsmInst::I32ToReg(i, r) => {
+                let r = r as u64;
+                monoasm!( &mut self.jit,
+                    movl R(r), (i);
+                );
+            }
             AsmInst::RegMove(src, dst) => {
                 let src = src as u64;
                 let dst = dst as u64;
                 monoasm!( &mut self.jit,
                     movq R(dst), R(src);
+                );
+            }
+            AsmInst::RegAdd(r, i) => {
+                let r = r as u64;
+                monoasm! { &mut self.jit,
+                    addq R(r), (i);
+                }
+            }
+            AsmInst::RegSub(r, i) => {
+                let r = r as u64;
+                monoasm! { &mut self.jit,
+                    subq R(r), (i);
+                }
+            }
+            AsmInst::RegToRSPOffset(r, ofs) => {
+                let r = r as u64;
+                monoasm!( &mut self.jit,
+                    movq [rsp + (ofs)], R(r);
                 );
             }
 
@@ -1265,6 +1364,15 @@ impl Codegen {
                 self.recompile_and_deopt(position, deopt)
             }
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
+            AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
+            AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
+            AsmInst::SetArgumentsWithSplat {
+                splat_pos,
+                args,
+                pos_num,
+            } => {
+                self.jit_set_arguments_splat(&splat_pos, args, pos_num);
+            }
 
             AsmInst::Ret => {
                 self.epilogue();

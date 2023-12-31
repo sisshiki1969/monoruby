@@ -20,7 +20,7 @@ impl AsmIr {
                 self.array_index();
             }
         } else {
-            self.fetch_slots(bb, &[base, idx]);
+            self.write_back_slots(bb, &[base, idx]);
             bb.link_stack(dst);
             self.generic_index(bb, base, idx, pc);
         }
@@ -47,7 +47,7 @@ impl AsmIr {
                 self.array_index_assign(bb, pc);
             }
         } else {
-            self.fetch_slots(bb, &[base, idx, src]);
+            self.write_back_slots(bb, &[base, idx, src]);
             self.generic_index_assign(bb, pc, base, idx, src);
         }
     }

@@ -289,6 +289,11 @@ impl SlotState {
         WriteBack::new(xmm, literal, r15)
     }
 
+    pub(super) fn get_register(&self) -> WriteBack {
+        let r15 = self.get_r15();
+        WriteBack::new(vec![], vec![], r15)
+    }
+
     pub(super) fn get_locals_write_back(&self) -> WriteBack {
         let local_num = self.local_num;
         let xmm = self

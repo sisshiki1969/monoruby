@@ -46,7 +46,7 @@ impl Codegen {
         let slow_path2 = self.jit.label();
         let class_version = self.class_version;
         let get_class = self.get_class;
-        self.execute_gc();
+        self.execute_gc(None);
         monoasm! { &mut self.jit,
             pushq r13;
             subq  rsp, 8;

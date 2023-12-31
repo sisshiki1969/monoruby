@@ -258,21 +258,13 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
-        self.xmm_save(using_xmm);
-        self.execute_gc();
-        monoasm! { &mut self.jit,
-            movq r15, rdi;
-        }
         let callsite = &store[callid];
-        self.jit_set_arguments(callsite);
-
         let func_data = &store[callee_fid].data;
         let meta = func_data.meta();
         self.setup_frame(meta, callsite);
         //   rdi: args len
         match &store[callee_fid].kind {
             FuncKind::ISeq(info) => {
-                let callsite = &store[callid];
                 if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
@@ -297,11 +289,6 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rdx, rdi;
             }
-        } else {
-            monoasm! { &mut self.jit,
-                // set pc.
-                movq r13, (func_data.pc().u64());
-            }
         }
 
         monoasm!( &mut self.jit,
@@ -324,6 +311,10 @@ impl Codegen {
                     }
                 }
                 None => {
+                    // set pc.
+                    monoasm! { &mut self.jit,
+                        movq r13, (func_data.pc().u64());
+                    }
                     let codeptr = func_data.codeptr().unwrap();
                     self.call_codeptr(codeptr);
                 }
@@ -356,7 +347,7 @@ impl Codegen {
     /// Set up a callee frame
     ///
     /// ### in
-    /// - r15: receiver
+    /// - r13: receiver
     ///
     /// ### destroy
     /// - rax
@@ -380,7 +371,7 @@ impl Codegen {
         self.push_block(callsite);
         // set self
         monoasm! { &mut self.jit,
-            pushq r15;
+            pushq r13;
             addq  rsp, 64;
         }
     }
@@ -636,54 +627,72 @@ impl Codegen {
         let pos_num = pos_num as u16;
         // set arguments
         if callsite.has_splat() {
-            monoasm!( &mut self.jit,
-                lea r8, [rsp - (16 + LBP_ARG0)];
-                subq rsp, 4088;
-                pushq r15;
-                movq r15, r8;
-                movq r8, (pos_num);
-            );
-            for i in 0..pos_num {
-                let reg = args + i;
-                if callsite.splat_pos.contains(&(i as usize)) {
-                    self.load_rdi(reg);
-                    monoasm! { &mut self.jit,
-                        movq rsi, r15;
-                        movq rax, (expand_splat);
-                        subq rsp, 8;
-                        pushq r8;
-                        call rax;
-                        popq r8;
-                        addq rsp, 8;
-                        lea  r8, [r8 + rax * 1 - 1];
-                        shlq rax, 3;
-                        subq r15, rax;
-                    }
-                } else {
-                    self.load_rax(reg);
-                    monoasm! { &mut self.jit,
-                        movq [r15], rax;
-                        subq r15, 8;
-                    }
-                }
-            }
-            monoasm!( &mut self.jit,
-                popq r15;
-                addq rsp, 4088;
-                movq rdi, r8;
-            );
+            self.jit_set_arguments_splat(&callsite.splat_pos, args, pos_num);
         } else {
-            for i in 0..pos_num {
-                let reg = args + i;
+            self.jit_set_arguments_nosplat(args, pos_num);
+        }
+    }
+
+    pub(super) fn jit_set_arguments_nosplat(&mut self, args: SlotId, pos_num: u16) {
+        for i in 0..pos_num {
+            let reg = args + i;
+            self.load_rax(reg);
+            monoasm! { &mut self.jit,
+                movq [rsp - ((16 + LBP_ARG0 + 8 * (i as i64)) as i32)], rax;
+            }
+        }
+        monoasm!( &mut self.jit,
+            movq rdi, (pos_num);
+        );
+    }
+
+    ///
+    /// Set arguments.
+    ///
+    /// ### out
+    /// - rdi: the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    pub(super) fn jit_set_arguments_splat(
+        &mut self,
+        splat_pos: &[usize],
+        args: SlotId,
+        pos_num: u16,
+    ) {
+        monoasm!( &mut self.jit,
+            lea rsi, [rsp - (16 + LBP_ARG0)];
+            subq rsp, 4096;
+            movq rdx, (pos_num);
+        );
+        for i in 0..pos_num {
+            let reg = args + i;
+            if splat_pos.contains(&(i as usize)) {
+                self.load_rdi(reg);
+                monoasm! { &mut self.jit,
+                    pushq rsi;
+                    pushq rdx;
+                    movq rax, (expand_splat);
+                    call rax;
+                    popq rdx;
+                    popq rsi;
+                    lea  rdx, [rdx + rax * 1 - 1];
+                    shlq rax, 3;
+                    subq rsi, rax;
+                }
+            } else {
                 self.load_rax(reg);
                 monoasm! { &mut self.jit,
-                    movq [rsp - ((16 + LBP_ARG0 + 8 * (i as i64)) as i32)], rax;
+                    movq [rsi], rax;
+                    subq rsi, 8;
                 }
             }
-            monoasm!( &mut self.jit,
-                movq rdi, (pos_num);
-            );
         }
+        monoasm!( &mut self.jit,
+            addq rsp, 4096;
+            movq rdi, rdx;
+        );
     }
 }
 
@@ -724,7 +733,7 @@ impl AsmIr {
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
         /* the cache is invalid because the receiver class is not matched.*/
         {
-            self.fetch_callargs(bb, &store[callid]);
+            self.write_back_callargs(bb, &store[callid]);
             bb.link_stack(dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
@@ -792,14 +801,10 @@ impl AsmIr {
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
-                self.writeback_acc(bb);
-                self.fetch_callargs(bb, &store[callid]);
-                self.send_cached(bb, pc, callid, fid, cached_class, true);
+                self.send_cached(store, bb, pc, callid, fid, cached_class, true);
             }
             FuncKind::ISeq(_) => {
-                self.writeback_acc(bb);
-                self.fetch_callargs(bb, &store[callid]);
-                self.send_cached(bb, pc, callid, fid, cached_class, false);
+                self.send_cached(store, bb, pc, callid, fid, cached_class, false);
             }
         };
         Some(())

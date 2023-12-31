@@ -389,13 +389,13 @@ impl JitContext {
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
-                self.ir.fetch_range(bb, args, pos_num as u16);
+                self.ir.write_back_range(bb, args, pos_num as u16);
                 bb.link_stack(dst);
                 self.ir.new_array(&bb, callid);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Hash { dst, args, len } => {
-                self.ir.fetch_range(bb, args, len * 2);
+                self.ir.write_back_range(bb, args, len * 2);
                 bb.link_stack(dst);
                 self.ir.new_hash(&bb, args, len as _);
                 self.ir.rax2acc(bb, dst);
@@ -406,7 +406,7 @@ impl JitContext {
                 end,
                 exclude_end,
             } => {
-                self.ir.fetch_slots(bb, &[start, end]);
+                self.ir.write_back_slots(bb, &[start, end]);
                 bb.link_stack(dst);
                 self.ir.new_range(bb, pc, start, end, exclude_end);
                 self.ir.rax2acc(bb, dst);
@@ -618,13 +618,13 @@ impl JitContext {
                 bb.copy_slot(&mut self.ir, src, dst);
             }
             TraceIr::ConcatStr(dst, arg, len) => {
-                self.ir.fetch_range(bb, arg, len);
+                self.ir.write_back_range(bb, arg, len);
                 bb.link_stack(dst);
                 self.ir.concat_str(&bb, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
-                self.ir.fetch_range(bb, arg, len);
+                self.ir.write_back_range(bb, arg, len);
                 bb.link_stack(dst);
                 self.ir.concat_regexp(&bb, pc, arg, len);
                 self.ir.rax2acc(bb, dst);
@@ -637,7 +637,7 @@ impl JitContext {
                 self.ir.expand_array(&bb, dst, len);
             }
             TraceIr::AliasMethod { new, old } => {
-                self.ir.fetch_slots(bb, &[new, old]);
+                self.ir.write_back_slots(bb, &[new, old]);
                 self.ir.alias_method(&bb, pc, new, old);
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
@@ -668,7 +668,7 @@ impl JitContext {
                 inline_gen(&mut self.ir, store, bb, &store[callid], pc);
             }
             TraceIr::Yield { callid } => {
-                self.ir.fetch_callargs(bb, &store[callid]);
+                self.ir.write_back_callargs(bb, &store[callid]);
                 bb.link_stack(store[callid].dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
@@ -690,7 +690,7 @@ impl JitContext {
                 });
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
-                self.ir.fetch_slots(bb, &[obj]);
+                self.ir.write_back_slots(bb, &[obj]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::SingletonMethodDef {
                     obj,
@@ -714,12 +714,12 @@ impl JitContext {
                 self.singleton_class_def(bb, dst, base, func_id, pc);
             }
             TraceIr::DefinedYield { dst } => {
-                self.ir.fetch_slots(bb, &[dst]);
+                self.ir.write_back_slots(bb, &[dst]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::DefinedYield { dst, using_xmm });
             }
             TraceIr::DefinedConst { dst, siteid } => {
-                self.ir.fetch_slots(bb, &[dst]);
+                self.ir.write_back_slots(bb, &[dst]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::DefinedConst {
                     dst,
@@ -728,7 +728,7 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
-                self.ir.fetch_slots(bb, &[dst, recv]);
+                self.ir.write_back_slots(bb, &[dst, recv]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::DefinedMethod {
                     dst,
@@ -738,7 +738,7 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedGvar { dst, name } => {
-                self.ir.fetch_slots(bb, &[dst]);
+                self.ir.write_back_slots(bb, &[dst]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::DefinedGvar {
                     dst,
@@ -747,7 +747,7 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
-                self.ir.fetch_slots(bb, &[dst]);
+                self.ir.write_back_slots(bb, &[dst]);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.inst.push(AsmInst::DefinedIvar {
                     dst,
@@ -990,6 +990,10 @@ impl BBContext {
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         self.slot_state.get_write_back(self.sp)
+    }
+
+    pub(crate) fn get_register(&self) -> WriteBack {
+        self.slot_state.get_register()
     }
 
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
@@ -1305,7 +1309,7 @@ impl Codegen {
     ///
     /// xmms are not deallocated.
     ///
-    fn gen_write_back(&mut self, wb: &WriteBack) {
+    pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
         for (freg, v) in &wb.xmm {
             self.xmm_to_both(*freg, v);
         }

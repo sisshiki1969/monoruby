@@ -400,7 +400,7 @@ fn object_send(
         block_fid: block_func_id,
         ..
     } = *callsite;
-    ir.fetch_callargs(bb, callsite);
+    ir.write_back_callargs(bb, callsite);
     bb.link_stack(dst);
     let using = bb.get_using_xmm();
     let bh = match block_func_id {

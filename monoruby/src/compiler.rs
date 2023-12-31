@@ -317,7 +317,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers except rdi, r10, r11
     ///
-    fn execute_gc(&mut self) {
+    fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
         let alloc_flag = self.alloc_flag;
         let gc = self.jit.label();
         let exit = self.jit.label();
@@ -328,22 +328,21 @@ impl Codegen {
         exit:
         };
         self.jit.select_page(1);
+        self.jit.bind_label(gc);
+        if let Some(wb) = wb {
+            self.gen_write_back(wb);
+        }
+        self.save_registers();
         monoasm! { &mut self.jit,
-        gc:
-            pushq rdi;
-            pushq r10;
-            pushq r11;
-            subq rsp, 8;
             movq rdi, r12;
             movq rsi, rbx;
             movq rax, (execute_gc);
             call rax;
-            addq rsp, 8;
-            popq r11;
-            popq r10;
-            popq rdi;
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
             jmp exit;
-        };
+        }
         self.jit.select_page(0);
     }
 
@@ -518,6 +517,62 @@ impl Codegen {
             leave;
             ret;
         );
+    }
+
+    fn save_registers(&mut self) {
+        monoasm! { &mut self.jit,
+            subq rsp, 176;
+            movq [rsp + 168], r11;
+            movq [rsp + 160], r10;
+            movq [rsp + 152], r9;
+            movq [rsp + 144], r8;
+            movq [rsp + 136], rcx;
+            movq [rsp + 128], rdx;
+            movq [rsp + 120], rsi;
+            movq [rsp + 112], rdi;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+        }
+    }
+
+    fn restore_registers(&mut self) {
+        monoasm! { &mut self.jit,
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
+            movq rsi, [rsp + 120];
+            movq rdx, [rsp + 128];
+            movq rcx, [rsp + 136];
+            movq r8, [rsp + 144];
+            movq r9, [rsp + 152];
+            movq r10, [rsp + 160];
+            movq r11, [rsp + 168];
+            addq rsp, 176;
+        }
     }
 
     ///

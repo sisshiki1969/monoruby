@@ -30,7 +30,7 @@ impl AsmIr {
     ///
     /// ### destroy
     /// - rax, rcx
-    fn fetch_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
+    pub(crate) fn write_back_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
         if reg >= bb.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
             panic!();
@@ -52,27 +52,38 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn fetch_slots(&mut self, bb: &mut BBContext, reg: &[SlotId]) {
-        reg.iter().for_each(|r| self.fetch_slot(bb, *r));
+    pub(crate) fn write_back_slots(&mut self, bb: &mut BBContext, reg: &[SlotId]) {
+        reg.iter().for_each(|r| self.write_back_slot(bb, *r));
     }
 
     ///
     /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
     ///
-    pub(crate) fn fetch_range(&mut self, bb: &mut BBContext, args: SlotId, len: u16) {
+    pub(crate) fn write_back_range(&mut self, bb: &mut BBContext, args: SlotId, len: u16) {
         for reg in args.0..args.0 + len {
-            self.fetch_slot(bb, SlotId::new(reg))
+            self.write_back_slot(bb, SlotId::new(reg))
         }
     }
 
-    pub(crate) fn fetch_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
+    pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
         let CallSiteInfo {
             recv, args, len, ..
         } = callsite;
-        self.fetch_slot(bb, *recv);
-        self.fetch_range(bb, *args, *len as u16);
+        self.write_back_slot(bb, *recv);
+        self.write_back_range(bb, *args, *len as u16);
     }
 
+    pub(crate) fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
+        let CallSiteInfo { args, len, .. } = callsite;
+        self.write_back_range(bb, *args, *len as u16);
+    }
+
+    ///
+    /// fetch *reg* and store in *dst*.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
     pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, reg: SlotId, dst: GP) {
         if reg >= bb.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
