@@ -313,13 +313,13 @@ pub(super) extern "C" fn vm_handle_arguments(
         block_fid,
         block_arg,
         ..
-    } = &globals.store[callid];
+    } = globals.store[callid];
 
     let bh = if let Some(block_fid) = block_fid {
-        let bh = BlockHandler::from(*block_fid);
+        let bh = BlockHandler::from(block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.get_slot(*block_arg).unwrap())) }
+        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
     } else {
         None
     };
@@ -403,10 +403,9 @@ fn handle_keyword(
     let callee_kw_pos = info.pos_num() + 1;
     for (id, param_name) in info.args.kw_names.iter().enumerate() {
         unsafe {
-            let v = match kw_args.get(param_name) {
-                Some(id) => Some(caller_lfp.get_slot(*kw_pos + *id).unwrap()),
-                None => None,
-            };
+            let v = kw_args
+                .get(param_name)
+                .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
             callee_lfp.set_register(callee_kw_pos + id, v);
         }
     }
@@ -438,9 +437,9 @@ fn handle_keyword(
             kw_args.remove(param_name);
         }
         let mut kw_rest = IndexMap::default();
-        for (name, i) in kw_args.iter() {
-            let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
-            kw_rest.insert(HashKey(Value::symbol(*name)), v);
+        for (name, i) in kw_args.into_iter() {
+            let v = unsafe { caller_lfp.get_slot(*kw_pos + i).unwrap() };
+            kw_rest.insert(HashKey(Value::symbol(name)), v);
         }
         for h in hash_splat_pos
             .iter()

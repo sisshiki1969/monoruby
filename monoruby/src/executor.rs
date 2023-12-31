@@ -983,18 +983,11 @@ impl Bc {
     pub(super) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
         let FnInitInfo {
             arg_num,
-            block_pos,
             req_num,
             info,
             ..
         } = fn_info;
-        Bc::from_with_num(
-            op1,
-            *req_num as u16,
-            *block_pos as u16,
-            *info as u16,
-            *arg_num as u16,
-        )
+        Bc::from_with_num(op1, *req_num as u16, 0, *info as u16, *arg_num as u16)
     }
 
     pub(super) fn from_with_value(op1: u64, val: Value) -> Self {
@@ -1336,7 +1329,6 @@ impl BcPc {
                 170 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
                     arg_num: self.u16(3) as usize,
-                    block_pos: self.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: self.u16(0) as usize,
                     info: self.u16(2) as usize,
@@ -1346,7 +1338,6 @@ impl BcPc {
                 172 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
                     arg_num: self.u16(3) as usize,
-                    block_pos: self.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: self.u16(0) as usize,
                     info: self.u16(2) as usize,

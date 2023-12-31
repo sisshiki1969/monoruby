@@ -243,8 +243,6 @@ pub(crate) struct FnInitInfo {
     pub arg_num: usize,
     pub req_num: usize,
     pub reqopt_num: usize,
-    /// Position of block argument. 0 if not exists.
-    pub block_pos: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
     pub info: usize,
     pub stack_offset: usize,
@@ -257,20 +255,14 @@ impl std::fmt::Debug for FnInitInfo {
             arg_num,
             req_num,
             reqopt_num,
-            block_pos,
             stack_offset,
             ..
         } = *self;
         write!(
             f,
-            "reg:{reg_num} arg:{arg_num} req:{req_num} opt:{} rest:{} block:{:?} stack_offset:{stack_offset}",
+            "reg:{reg_num} arg:{arg_num} req:{req_num} opt:{} rest:{} stack_offset:{stack_offset}",
             reqopt_num - req_num,
             self.has_rest_param(),
-            if block_pos == 0 {
-                None
-            } else {
-                Some(block_pos)
-            }
         )
     }
 }
@@ -285,7 +277,6 @@ impl FnInitInfo {
             arg_num,
             req_num: info.req_num(),
             reqopt_num: info.reqopt_num(),
-            block_pos: info.block_pos(),
             info: info.info(),
             stack_offset,
         }
@@ -293,10 +284,6 @@ impl FnInitInfo {
 
     pub(super) fn has_rest_param(&self) -> bool {
         (self.info & 0b1) != 0
-    }
-
-    pub(crate) fn has_block_param(&self) -> bool {
-        (self.info & 0b10) != 0
     }
 }
 

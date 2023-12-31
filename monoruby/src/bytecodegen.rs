@@ -492,7 +492,7 @@ impl BytecodeGen {
             locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
-            block_param: info.block_param_name(),
+            block_param: info.block_param(),
             temp: 0,
             temp_num: 0,
             non_temp_num: 0,
@@ -503,9 +503,6 @@ impl BytecodeGen {
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(*name);
         });
-        if let Some(_) = info.args.block_param() {
-            ir.add_local(None);
-        }
         ir.gen_dummy_init(info.is_block_style());
 
         ir

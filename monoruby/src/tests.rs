@@ -1813,6 +1813,20 @@ mod test {
     }
 
     #[test]
+    fn test_block_param2() {
+        run_test_with_prelude(
+            r#"
+        f{}
+        "#,
+            r#"
+        def f(&p)
+            p.call
+        end
+        "#,
+        );
+    }
+
+    #[test]
     fn test_global_var() {
         run_test(
             r#"

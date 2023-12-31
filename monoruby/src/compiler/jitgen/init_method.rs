@@ -24,18 +24,8 @@ impl Codegen {
     fn init_func(&mut self, fn_info: &FnInitInfo) {
         // fill block parameter.
         let FnInitInfo {
-            reg_num,
-            arg_num,
-            block_pos,
-            ..
+            reg_num, arg_num, ..
         } = *fn_info;
-
-        if fn_info.has_block_param() {
-            monoasm! { &mut self.jit,
-                movq rax, [r14 - (LBP_BLOCK)];
-                movq [r14 - (block_pos as i32 * 8 + LBP_SELF)], rax;
-            }
-        }
 
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num;

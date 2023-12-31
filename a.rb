@@ -1,7 +1,7 @@
 def f(a,b,&block)
-  block.call(a,b)
+  block.call
 end
 
-10.times {
-  f(1,2) do |a,b| puts(a + b) end
+15.times {
+  puts f(1,2){3}
 }

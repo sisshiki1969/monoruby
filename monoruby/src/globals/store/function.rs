@@ -428,7 +428,7 @@ impl Funcs {
                 }
                 ParamKind::Block(name) => {
                     let name = IdentId::get_id_from_string(name.clone());
-                    block_param = Some((args_names.len(), name));
+                    block_param = Some(name);
                 }
                 _ => {
                     return Err(MonorubyErr::unsupported_parameter_kind(

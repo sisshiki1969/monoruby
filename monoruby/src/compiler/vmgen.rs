@@ -1299,6 +1299,9 @@ impl Codegen {
         loop_exit:
             lea  rax, [rax + (LBP_OUTER)];
             movq rax, [rax - (LBP_BLOCK)];
+            movq rdi, (Value::nil().id());
+            testq rax, rax;
+            cmoveqq rax, rdi;
             testq rax, 0b1;
             jeq exit;
             addq rax, 0b10;
