@@ -199,6 +199,10 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
+    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
+        self.inst.push(AsmInst::GuardArrayTy(r, deopt));
+    }
+
     ///
     /// Class version guard fro JIT.
     ///
@@ -396,14 +400,12 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_u16_index(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
-        let deopt = self.new_deopt(bb, pc);
-        self.inst.push(AsmInst::ArrayU16Index { idx, deopt });
+    pub(super) fn array_u16_index(&mut self, idx: u16) {
+        self.inst.push(AsmInst::ArrayU16Index { idx });
     }
 
-    pub(super) fn array_index(&mut self, bb: &BBContext, pc: BcPc) {
-        let deopt = self.new_deopt(bb, pc);
-        self.inst.push(AsmInst::ArrayIndex { deopt });
+    pub(super) fn array_index(&mut self) {
+        self.inst.push(AsmInst::ArrayIndex);
     }
 
     pub(super) fn generic_index_assign(
@@ -428,23 +430,19 @@ impl AsmIr {
 
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let (deopt, error) = self.new_deopt_error(bb, pc);
+        let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
-            deopt,
             error,
         });
     }
 
     pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BcPc) {
         let using_xmm = bb.get_using_xmm();
-        let (deopt, error) = self.new_deopt_error(bb, pc);
-        self.inst.push(AsmInst::ArrayIndexAssign {
-            using_xmm,
-            deopt,
-            error,
-        });
+        let error = self.new_error(bb, pc);
+        self.inst
+            .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
 
     pub(super) fn new_array(&mut self, bb: &BBContext, callid: CallSiteId) {
@@ -671,6 +669,7 @@ pub(super) enum AsmInst {
     /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
     GuardFloat(GP, AsmDeopt),
     GuardFixnum(GP, AsmDeopt),
+    GuardArrayTy(GP, AsmDeopt),
     ///
     /// Class version guard fro JIT.
     ///
@@ -881,11 +880,8 @@ pub(super) enum AsmInst {
     },
     ArrayU16Index {
         idx: u16,
-        deopt: AsmDeopt,
     },
-    ArrayIndex {
-        deopt: AsmDeopt,
-    },
+    ArrayIndex,
     GenericIndexAssign {
         src: SlotId,
         base: SlotId,
@@ -897,12 +893,10 @@ pub(super) enum AsmInst {
     ArrayU16IndexAssign {
         idx: u16,
         using_xmm: UsingXmm,
-        deopt: AsmDeopt,
         error: AsmError,
     },
     ArrayIndexAssign {
         using_xmm: UsingXmm,
-        deopt: AsmDeopt,
         error: AsmError,
     },
 
@@ -1247,6 +1241,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_fixnum(r, deopt)
             }
+            AsmInst::GuardArrayTy(r, deopt) => {
+                let deopt = labels[deopt];
+                self.guard_array_ty(r, deopt)
+            }
             AsmInst::GuardClassVersion(pc, using_xmm, deopt, error) => {
                 let deopt = labels[deopt];
                 let error = labels[error];
@@ -1509,13 +1507,11 @@ impl Codegen {
                 self.generic_index(using_xmm, base, idx, pc);
                 self.handle_error(labels[error]);
             }
-            AsmInst::ArrayU16Index { idx, deopt } => {
-                let deopt = labels[deopt];
-                self.gen_array_u16_index(idx, deopt);
+            AsmInst::ArrayU16Index { idx } => {
+                self.gen_array_u16_index(idx);
             }
-            AsmInst::ArrayIndex { deopt } => {
-                let deopt = labels[deopt];
-                self.gen_array_index(deopt);
+            AsmInst::ArrayIndex => {
+                self.gen_array_index();
             }
             AsmInst::GenericIndexAssign {
                 src,
@@ -1531,20 +1527,13 @@ impl Codegen {
             AsmInst::ArrayU16IndexAssign {
                 idx,
                 using_xmm,
-                deopt,
                 error,
             } => {
-                let deopt = labels[deopt];
-                self.gen_array_u16_index_assign(using_xmm, idx, deopt);
+                self.gen_array_u16_index_assign(using_xmm, idx);
                 self.handle_error(labels[error]);
             }
-            AsmInst::ArrayIndexAssign {
-                using_xmm,
-                deopt,
-                error,
-            } => {
-                let deopt = labels[deopt];
-                self.gen_array_index_assign(using_xmm, deopt);
+            AsmInst::ArrayIndexAssign { using_xmm, error } => {
+                self.gen_array_index_assign(using_xmm);
                 self.handle_error(labels[error]);
             }
 

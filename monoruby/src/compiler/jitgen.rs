@@ -948,15 +948,6 @@ impl BBContext {
         merge_ctx
     }
 
-    fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
-        if let LinkMode::Literal(v) = self[slot] {
-            let i = v.try_fixnum()?;
-            i16::try_from(i).ok()
-        } else {
-            None
-        }
-    }
-
     fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::Literal(v) = self[slot] {
             let i = v.try_fixnum()?;
@@ -972,6 +963,24 @@ impl BBContext {
             u8::try_from(i).ok()
         } else {
             None
+        }
+    }
+
+    fn is_array_ty(&mut self, slot: SlotId) -> bool {
+        match self[slot] {
+            LinkMode::Xmm(_) => false,
+            LinkMode::Literal(v) => v.is_array_ty(),
+            LinkMode::Both(_) | LinkMode::Stack => false,
+            LinkMode::R15 => false,
+        }
+    }
+
+    fn is_fixnum(&mut self, slot: SlotId) -> bool {
+        match self[slot] {
+            LinkMode::Xmm(_) => false,
+            LinkMode::Literal(v) => v.is_fixnum(),
+            LinkMode::Both(_) | LinkMode::Stack => false,
+            LinkMode::R15 => false,
         }
     }
 

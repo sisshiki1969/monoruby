@@ -105,6 +105,61 @@ impl AsmIr {
         }
     }
 
+    fn fetch_no_float(&mut self, bb: &mut BBContext, slot: SlotId, r: GP, deopt: AsmDeopt) {
+        if slot >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
+            panic!();
+        };
+        match bb[slot] {
+            LinkMode::Xmm(_) => {
+                self.inst.push(AsmInst::Deopt(deopt));
+            }
+            LinkMode::Literal(v) => {
+                if r == GP::R15 {
+                    self.writeback_acc(bb);
+                }
+                self.inst.push(AsmInst::LitToReg(v, r));
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                if r == GP::R15 {
+                    self.writeback_acc(bb);
+                }
+                self.stack2reg(slot, r);
+            }
+            LinkMode::R15 => {
+                self.reg_move(GP::R15, r);
+            }
+        }
+    }
+
+    pub(crate) fn fetch_guard_array(
+        &mut self,
+        bb: &mut BBContext,
+        slot: SlotId,
+        r: GP,
+        deopt: AsmDeopt,
+    ) {
+        let is_array = bb.is_array_ty(slot);
+        self.fetch_no_float(bb, slot, r, deopt);
+        if !is_array {
+            self.guard_array_ty(r, deopt)
+        }
+    }
+
+    pub(crate) fn fetch_guard_fixnum(
+        &mut self,
+        bb: &mut BBContext,
+        slot: SlotId,
+        r: GP,
+        deopt: AsmDeopt,
+    ) {
+        let is_fixnum = bb.is_fixnum(slot);
+        self.fetch_no_float(bb, slot, r, deopt);
+        if !is_fixnum {
+            self.guard_fixnum(r, deopt)
+        }
+    }
+
     pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
         if let Some(slot) = bb.clear_r15()
             && slot < bb.sp

@@ -92,8 +92,35 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    pub(super) fn guard_fixnum(&mut self, reg: GP, deopt: DestLabel) {
-        self.guard_class(reg, INTEGER_CLASS, deopt)
+    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: DestLabel) {
+        let label = self.set_rdi_for_deopt(r, deopt);
+        self.guard_class(r, INTEGER_CLASS, label)
+    }
+
+    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: DestLabel) {
+        let label = self.set_rdi_for_deopt(r, deopt);
+        monoasm! { &mut self.jit,
+            testq R(r as _), 0b111;
+            jnz  label;
+            cmpw [R(r as _) + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+            jne  label;
+        }
+    }
+
+    fn set_rdi_for_deopt(&mut self, r: GP, deopt: DestLabel) -> DestLabel {
+        if r != GP::Rdi {
+            self.jit.select_page(1);
+            let label = self.jit.label();
+            monoasm! { &mut self.jit,
+            label:
+                movq rdi, R(r as _);
+                jmp deopt;
+            }
+            self.jit.select_page(0);
+            label
+        } else {
+            deopt
+        }
     }
 
     ///

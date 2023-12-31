@@ -576,6 +576,13 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_array_ty(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.ty() == ObjKind::ARRAY,
+            None => false,
+        }
+    }
+
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
