@@ -9,6 +9,7 @@ mod wrapper;
 use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
+use vmgen::init_method::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
@@ -648,12 +649,12 @@ impl Codegen {
             testq rsi, rsi;
             je   l1;
             // rax <- op
-            movzxb rax, [rsi + 6];
+            movzxb rax, [rsi + (INIT_METHOD_OP + 16)];
             // block-style?
             cmpb rax, (172u8 as i8);
             jne  l1;
             // reqopt > 1?
-            cmpw [rsi + 2], 1;
+            cmpw [rsi + (INIT_METHOD_ROP + 16)], 1;
             jle  l1;
         }
         self.single_arg_expand();

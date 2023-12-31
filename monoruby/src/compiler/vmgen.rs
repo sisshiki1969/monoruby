@@ -5,7 +5,7 @@ use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
-mod init_method;
+pub mod init_method;
 mod method_call;
 mod variables;
 

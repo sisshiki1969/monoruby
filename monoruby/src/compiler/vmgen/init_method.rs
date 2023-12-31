@@ -1,13 +1,12 @@
 use super::*;
 
-const OFS: i32 = -16;
-//const ROP: i32 = -14;
-const REG: i32 = -12;
-//const OP: i32 = -10;
+const INIT_METHOD_OFS: i32 = -16;
+pub(in crate::compiler) const INIT_METHOD_ROP: i32 = -14;
+const INIT_METHOD_REG: i32 = -12;
+pub(in crate::compiler) const INIT_METHOD_OP: i32 = -10;
 //const REQ: i32 = -8;
-const BLK: i32 = -6;
 //const INF: i32 = -4;
-const ARG: i32 = -2;
+const INIT_METHOD_ARG: i32 = -2;
 
 impl Codegen {
     /// Initialize method frame
@@ -16,7 +15,7 @@ impl Codegen {
     /// ~~~text
     /// -16 -14 -12 -10  -8  -6  -4  -2
     /// +---+---+---+---++---+---+---+---+
-    /// |ofs|rop|reg| op||req|blk|   |arg|
+    /// |ofs|rop|reg| op||req|   |   |arg|
     /// +---+---+---+---++---+---+---+---+
     ///  rsi rdi r15
     /// ~~~
@@ -26,7 +25,6 @@ impl Codegen {
     /// - +ofs: stack pointer offset
     /// - req: a number of required arguments
     /// - rop: req + optional arguments
-    /// - +blk: a position of block argument (if not exists, 0.)
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -46,7 +44,7 @@ impl Codegen {
     fn stack_setup(&mut self) {
         monoasm! { &mut self.jit,
             // setup stack pointer
-            movsxw rax, [r13 + (OFS)];
+            movsxw rax, [r13 + (INIT_METHOD_OFS)];
             shlq rax, 4;
             subq rsp, rax;
         };
@@ -65,24 +63,10 @@ impl Codegen {
     /// - rax, rdi
     ///
     fn vm_init_func(&mut self) {
-        let set_block = self.jit.label();
-        let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            // set block parameter
-            movzxw rax, [r13 + (BLK)];  // blk
-            testq rax, rax;
-            jz exit;
-            movq rdi, [r14 - (LBP_BLOCK)];
-            testq rdi, rdi;
-            jnz set_block;
-            movq rdi, (NIL_VALUE);
-        set_block:
-            negq rax;
-            movq [r14 + rax * 8 - (LBP_SELF)], rdi;
-        exit:
-            movzxw r15, [r13 + (REG)];
+            movzxw r15, [r13 + (INIT_METHOD_REG)];
             movq rax, r15;        // r15: reg_num
-            subw rax, [r13 + (ARG)];   // rax: reg_num - arg_num
+            subw rax, [r13 + (INIT_METHOD_ARG)];   // rax: reg_num - arg_num
         };
     }
 
