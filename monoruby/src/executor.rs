@@ -757,6 +757,177 @@ impl Executor {
     }
 }
 
+impl Executor {
+    pub(crate) fn handle_arguments(
+        &mut self,
+        globals: &mut Globals,
+        callid: CallSiteId,
+        arg_num: usize,
+        callee_lfp: LFP,
+        meta: Meta,
+    ) -> Option<Value> {
+        let callee_func_id = meta.func_id();
+        match &globals[callee_func_id].kind {
+            FuncKind::ISeq(info) => {
+                let caller = &globals.store[callid];
+                if info.no_keyword() && caller.kw_num() != 0 {
+                    // handle excessive keyword arguments
+                    let mut h = IndexMap::default();
+                    for (k, id) in caller.kw_args.iter() {
+                        let v = unsafe { self.get_slot(caller.kw_pos + *id as u16).unwrap() };
+                        h.insert(HashKey(Value::symbol(*k)), v);
+                    }
+                    let ex: Value = Value::hash(h);
+                    self.handle_positional(&info, arg_num, callee_lfp, Some(ex))?;
+                } else {
+                    self.handle_positional(&info, arg_num, callee_lfp, None)?;
+                    self.handle_keyword(&info, caller, callee_lfp);
+                }
+            }
+            _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+        }
+
+        Some(Value::nil())
+    }
+
+    ///
+    /// if argument mismatch occurs, return None.
+    ///
+    pub(crate) fn handle_positional(
+        &mut self,
+        info: &ISeqInfo,
+        arg_num: usize,
+        mut callee_lfp: LFP,
+        ex: Option<Value>,
+    ) -> Option<Value> {
+        let req_num = info.required_num();
+        let reqopt_num = info.reqopt_num();
+        let pos_num = info.pos_num();
+        let is_rest = pos_num != reqopt_num;
+        let is_block_style = info.is_block_style();
+        let ex_num = ex.is_some() as usize;
+        unsafe {
+            if (arg_num + ex_num) > reqopt_num {
+                if is_rest {
+                    let len = arg_num - reqopt_num;
+                    let mut ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
+                    if let Some(ex) = ex {
+                        ary.push(ex);
+                    }
+                    callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
+                } else if !is_block_style {
+                    self.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
+                    return None;
+                }
+                return Some(Value::nil());
+            }
+
+            if (arg_num + ex_num) >= req_num {
+                let len = reqopt_num - arg_num;
+                Self::fill(callee_lfp, reqopt_num, len, None);
+            } else {
+                if !is_block_style {
+                    self.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
+                    return None;
+                }
+                let len = req_num - (arg_num + ex_num);
+                Self::fill(callee_lfp, req_num, len, Some(Value::nil()));
+                let len = reqopt_num - req_num;
+                Self::fill(callee_lfp, reqopt_num, len, None);
+            }
+            if let Some(ex) = ex {
+                callee_lfp.set_register(1 + arg_num, Some(ex));
+            }
+
+            if is_rest {
+                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
+            }
+        }
+        Some(Value::nil())
+    }
+
+    ///
+    /// Handle keyword arguments.
+    ///
+    pub(crate) fn handle_keyword(
+        &mut self,
+        info: &ISeqInfo,
+        callsite: &CallSiteInfo,
+        mut callee_lfp: LFP,
+    ) {
+        let CallSiteInfo {
+            kw_pos,
+            kw_args,
+            hash_splat_pos,
+            ..
+        } = callsite;
+
+        let caller_lfp = self.cfp().lfp();
+        let callee_kw_pos = info.pos_num() + 1;
+        for (id, param_name) in info.args.kw_names.iter().enumerate() {
+            unsafe {
+                let v = kw_args
+                    .get(param_name)
+                    .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
+                callee_lfp.set_register(callee_kw_pos + id, v);
+            }
+        }
+
+        for h in hash_splat_pos
+            .iter()
+            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+        {
+            for (id, param_name) in info.args.kw_names.iter().enumerate() {
+                unsafe {
+                    let sym = Value::symbol(*param_name);
+                    if let Some(v) = h.as_hash().get(sym) {
+                        let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
+                        if (*ptr).is_some() {
+                            eprintln!(
+                                " warning: key :{} is duplicated and overwritten",
+                                param_name
+                            );
+                        }
+                        *ptr = Some(v);
+                    }
+                }
+            }
+        }
+
+        if let Some(rest) = info.kw_rest() {
+            let mut kw_args = kw_args.clone();
+            for param_name in info.args.kw_names.iter() {
+                kw_args.remove(param_name);
+            }
+            let mut kw_rest = IndexMap::default();
+            for (name, i) in kw_args.into_iter() {
+                let v = unsafe { caller_lfp.get_slot(*kw_pos + i).unwrap() };
+                kw_rest.insert(HashKey(Value::symbol(name)), v);
+            }
+            for h in hash_splat_pos
+                .iter()
+                .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+            {
+                let mut h = h.as_hash().clone();
+                for name in info.args.kw_names.iter() {
+                    let sym = Value::symbol(*name);
+                    h.remove(sym);
+                }
+                for (k, v) in h {
+                    kw_rest.insert(HashKey(k), v);
+                }
+            }
+
+            unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
+        }
+    }
+
+    unsafe fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
+        let ptr = lfp.register_ptr(start_pos);
+        std::slice::from_raw_parts_mut(ptr, len).fill(val);
+    }
+}
+
 // Handling special variables.
 
 impl Executor {

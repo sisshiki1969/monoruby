@@ -260,31 +260,15 @@ impl Codegen {
     ) {
         self.xmm_save(using_xmm);
         self.execute_gc();
+        monoasm! { &mut self.jit,
+            movq r15, rdi;
+        }
         let callsite = &store[callid];
-        monoasm! { &mut self.jit,
-            subq  rsp, 16;
-            // set prev_cfp
-            pushq [rbx + (EXECUTOR_CFP)];
-            // set lfp
-            lea   rax, [rsp + 8];
-            pushq rax;
-            // set outer
-            xorq  rax, rax;
-            pushq rax;
-            // set meta.
-            movq rax, (store[callee_fid].data.meta().get());
-            pushq rax;
-        }
-        // set block
-        self.push_block(callsite);
-        // set self
-        monoasm! { &mut self.jit,
-            pushq rdi;
-            addq  rsp, 64;
-        }
         self.jit_set_arguments(callsite);
 
         let func_data = &store[callee_fid].data;
+        let meta = func_data.meta();
+        self.setup_frame(meta, callsite);
         //   rdi: args len
         match &store[callee_fid].kind {
             FuncKind::ISeq(info) => {
@@ -292,10 +276,8 @@ impl Codegen {
                 if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.optional_num() == 0
-                    && info.kw_rest().is_none()
-                    && !(info.no_keyword() && callsite.kw_num() != 0)
-                {
+                let kw_expansion = info.no_keyword() && callsite.kw_num() != 0;
+                if info.optional_num() == 0 && info.kw_rest().is_none() && !kw_expansion {
                     // no optional param, no rest param, no kw_rest param.
                     if !info.no_keyword() {
                         self.handle_keyword_args(callsite, info)
@@ -304,10 +286,7 @@ impl Codegen {
                         self.handle_hash_splat(callid, callee_fid)
                     }
                 } else {
-                    monoasm! { &mut self.jit,
-                        movl rdx, (callid.get());
-                    }
-                    self.handle_arguments();
+                    self.gen_handle_arguments(callid, meta, runtime::jit_handle_arguments as _);
                     self.handle_error(error);
                 }
             }
@@ -354,6 +333,56 @@ impl Codegen {
 
         self.xmm_restore(using_xmm);
         self.handle_error(error);
+    }
+
+    fn gen_handle_arguments(&mut self, callid: CallSiteId, meta: Meta, func: u64) {
+        monoasm! { &mut self.jit,
+            movl rdx, (callid.get());
+            lea  r8, [rsp - 16];   // callee_lfp
+            movq r9, (meta.get());
+            movq rcx, rdi;
+            subq rsp, 4088;
+            pushq rdi;
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq rax, (func);
+            call rax;
+            popq rdi;
+            addq rsp, 4088;
+        }
+    }
+
+    ///
+    /// Set up a callee frame
+    ///
+    /// ### in
+    /// - r15: receiver
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn setup_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
+        monoasm! { &mut self.jit,
+            subq  rsp, 16;
+            // set prev_cfp
+            pushq [rbx + (EXECUTOR_CFP)];
+            // set lfp
+            lea   rax, [rsp + 8];
+            pushq rax;
+            // set outer
+            xorq  rax, rax;
+            pushq rax;
+            // set meta.
+            movq rax, (meta.get());
+            pushq rax;
+        }
+        // set block
+        self.push_block(callsite);
+        // set self
+        monoasm! { &mut self.jit,
+            pushq r15;
+            addq  rsp, 64;
+        }
     }
 
     pub(super) fn gen_yield(
@@ -464,6 +493,12 @@ impl Codegen {
         self.pop_frame();
     }
 
+    ///
+    /// Handle keyword arguments
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     fn handle_keyword_args(&mut self, callsite: &CallSiteInfo, info: &ISeqInfo) {
         let CallSiteInfo {
             kw_pos, kw_args, ..
@@ -488,6 +523,12 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Handle Hash splat arguments.
+    ///
+    /// ### destroy
+    /// - caller save registers except rdi
+    ///
     fn handle_hash_splat(&mut self, callid: CallSiteId, callee_fid: FuncId) {
         monoasm! { &mut self.jit,
             lea  rcx, [rsp - (16 + LBP_SELF)];

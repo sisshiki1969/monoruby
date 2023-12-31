@@ -1776,7 +1776,7 @@ extern "C" fn handle_invoker_arguments(
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            runtime::handle_positional(vm, info, arg_num, callee_lfp, None);
+            vm.handle_positional(info, arg_num, callee_lfp, None);
             // keyword
             let params = &info.args.kw_names;
             let callee_kw_pos = info.pos_num() + 1;
