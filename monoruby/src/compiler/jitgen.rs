@@ -572,6 +572,7 @@ impl JitContext {
                     let deopt = self.ir.new_deopt(bb, pc);
                     let mode = self.ir.fmode(&mode, bb, pc, deopt);
                     bb.link_stack(ret);
+                    bb.clear();
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else if mode.is_integer_op(&pc) {
                     self.ir.fetch_fixnum_binary(bb, pc, &mode);
@@ -593,15 +594,18 @@ impl JitContext {
                             let deopt = self.ir.new_deopt(bb, pc);
                             let mode = self.ir.fmode(&mode, bb, pc, deopt);
                             bb.link_stack(ret);
+                            bb.clear();
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
                         } else {
                             if mode.is_integer_op(&pc) {
                                 self.ir.fetch_fixnum_binary(bb, pc, &mode);
                                 bb.link_stack(ret);
+                                bb.clear();
                                 self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                             } else {
                                 self.ir.fetch_binary(bb, mode);
                                 bb.link_stack(ret);
+                                bb.clear();
                                 self.ir.generic_cmp(&bb, pc, kind);
                                 self.ir.inst.push(AsmInst::GenericCondBr {
                                     brkind,
@@ -981,6 +985,28 @@ impl BBContext {
             LinkMode::Literal(v) => v.is_fixnum(),
             LinkMode::Both(_) | LinkMode::Stack => false,
             LinkMode::R15 => false,
+        }
+    }
+
+    fn is_float(&mut self, slot: SlotId) -> bool {
+        match self[slot] {
+            LinkMode::Xmm(_) => true,
+            LinkMode::Literal(v) => matches!(v.unpack(), RV::Float(_)),
+            LinkMode::Both(_) | LinkMode::Stack => false,
+            LinkMode::R15 => false,
+        }
+    }
+
+    fn is_class(&mut self, slot: SlotId, class: ClassId) -> bool {
+        match class {
+            INTEGER_CLASS => self.is_fixnum(slot),
+            FLOAT_CLASS => self.is_float(slot),
+            _ => match self[slot] {
+                LinkMode::Xmm(_) => false,
+                LinkMode::Literal(v) => v.class() == class,
+                LinkMode::Both(_) | LinkMode::Stack => false,
+                LinkMode::R15 => false,
+            },
         }
     }
 

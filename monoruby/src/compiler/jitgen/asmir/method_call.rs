@@ -270,7 +270,7 @@ impl Codegen {
                 }
                 let kw_expansion = info.no_keyword() && callsite.kw_num() != 0;
                 if info.optional_num() == 0 && info.kw_rest().is_none() && !kw_expansion {
-                    // no optional param, no rest param, no kw_rest param.
+                    // fast path: when no optional param, no rest param, no kw_rest param.
                     if !info.no_keyword() {
                         self.handle_keyword_args(callsite, info)
                     }
@@ -354,25 +354,38 @@ impl Codegen {
     ///
     fn setup_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
         monoasm! { &mut self.jit,
-            subq  rsp, 16;
             // set prev_cfp
-            pushq [rbx + (EXECUTOR_CFP)];
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rsp - (16 + BP_PREV_CFP)], rax;
             // set lfp
-            lea   rax, [rsp + 8];
-            pushq rax;
+            lea   rax, [rsp - 16];
+            movq [rsp - (16 + BP_LFP)], rax;
             // set outer
-            xorq  rax, rax;
-            pushq rax;
+            movq [rsp - (16 + LBP_OUTER)], 0;
             // set meta.
             movq rax, (meta.get());
-            pushq rax;
+            movq [rsp - (16 + LBP_META)], rax;
         }
         // set block
-        self.push_block(callsite);
+        if let Some(func_id) = callsite.block_fid {
+            let bh = BlockHandler::from(func_id);
+            monoasm!( &mut self.jit,
+                movq rax, (bh.0.id());
+                movq [rsp - (16 + LBP_BLOCK)], rax;
+            );
+        } else if let Some(block) = callsite.block_arg {
+            monoasm!( &mut self.jit,
+                movq rax, [r14 - (conv(block))];
+                movq [rsp - (16 + LBP_BLOCK)], rax;
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+            );
+        }
         // set self
         monoasm! { &mut self.jit,
-            pushq r13;
-            addq  rsp, 64;
+            movq [rsp - (16 + LBP_SELF)], r13;
         }
     }
 
@@ -731,9 +744,8 @@ impl AsmIr {
         pc: BcPc,
     ) -> Option<()> {
         let CallSiteInfo { dst, recv, .. } = store[callid];
-        if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap()
-        /* the cache is invalid because the receiver class is not matched.*/
-        {
+        if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
+            // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_callargs(bb, &store[callid]);
             bb.link_stack(dst);
             self.writeback_acc(bb);
@@ -743,6 +755,12 @@ impl AsmIr {
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
             self.guard_class_version(pc, using_xmm, deopt, error);
+            let cached_class = pc.cached_class1().unwrap();
+            // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+            // Thus, we can omit a class guard.
+            if !recv.is_self() && !bb.is_class(recv, cached_class) {
+                self.guard_class(GP::Rdi, cached_class, deopt);
+            }
             self.gen_call_cached(store, bb, callid, fid, pc)?;
         }
         self.rax2acc(bb, dst);
@@ -763,32 +781,21 @@ impl AsmIr {
         fid: FuncId,
         pc: BcPc,
     ) -> Option<()> {
-        let CallSiteInfo {
-            recv,
-            args,
-            len,
-            dst,
-            ..
-        } = store[callid];
-        let cached_class = pc.cached_class1().unwrap();
-        let deopt = self.new_deopt(bb, pc);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
-        if !recv.is_self() {
-            self.guard_class(GP::Rdi, cached_class, deopt);
-        }
+        let CallSiteInfo { args, len, dst, .. } = store[callid];
+        // in this point, the receiver's class is guaranteed to be identical to cached_class.
+        let recv_class = pc.cached_class1().unwrap();
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                if cached_class.is_always_frozen() {
+                if recv_class.is_always_frozen() {
                     if dst.is_some() {
                         self.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
-                    let ivar_id = store[cached_class].get_ivarid(ivar_name)?;
+                    let ivar_id = store[recv_class].get_ivarid(ivar_name)?;
                     self.attr_reader(ivar_id);
                 }
             }
@@ -797,15 +804,15 @@ impl AsmIr {
                 assert!(store[callid].kw_num() == 0);
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                let ivar_id = store[cached_class].get_ivarid(ivar_name)?;
+                let ivar_id = store[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_to_reg(bb, args, GP::Rdx);
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
-                self.send_cached(store, bb, pc, callid, fid, cached_class, true);
+                self.send_cached(store, bb, pc, callid, fid, recv_class, true);
             }
             FuncKind::ISeq(_) => {
-                self.send_cached(store, bb, pc, callid, fid, cached_class, false);
+                self.send_cached(store, bb, pc, callid, fid, recv_class, false);
             }
         };
         Some(())

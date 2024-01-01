@@ -153,6 +153,19 @@ impl AsmIr {
         self.inst.push(AsmInst::XmmSwap(x1, x2));
     }
 
+    ///
+    /// Float binary operation
+    ///
+    /// ### in
+    /// - depends on *mode*
+    ///
+    /// ### out
+    /// - xmm(*dst*): dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: UsingXmm) {
         self.inst.push(AsmInst::XmmBinOp {
             kind,
@@ -321,6 +334,8 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         let callsite = &store[callid];
         self.set_arguments(bb, callsite);
+        bb.link_stack(callsite.dst);
+        bb.clear();
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
         self.inst.push(AsmInst::SendCached {
@@ -348,12 +363,17 @@ impl AsmIr {
             for i in pos_num..callsite.len as u16 {
                 self.write_back_slot(bb, args + i);
             }
-            let ofs = (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16;
+            let ofs = if (args..args + pos_num).any(|reg| matches!(bb[reg], LinkMode::Xmm(_))) {
+                (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16
+            } else {
+                0
+            };
+
             self.reg_sub(GP::Rsp, ofs);
             for i in 0..pos_num {
                 let reg = args + i;
-                self.fetch_to_reg(bb, reg, GP::Rax);
-                self.reg2rsp_offset(GP::Rax, ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32));
+                let offset = ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32);
+                self.fetch_to_rsp_offset(bb, reg, offset);
             }
             self.reg_add(GP::Rsp, ofs);
             self.inst.push(AsmInst::I32ToReg(pos_num as _, GP::Rdi));
@@ -1326,15 +1346,19 @@ impl Codegen {
                 );
             }
             AsmInst::RegAdd(r, i) => {
-                let r = r as u64;
-                monoasm! { &mut self.jit,
-                    addq R(r), (i);
+                if i != 0 {
+                    let r = r as u64;
+                    monoasm! { &mut self.jit,
+                        addq R(r), (i);
+                    }
                 }
             }
             AsmInst::RegSub(r, i) => {
-                let r = r as u64;
-                monoasm! { &mut self.jit,
-                    subq R(r), (i);
+                if i != 0 {
+                    let r = r as u64;
+                    monoasm! { &mut self.jit,
+                        subq R(r), (i);
+                    }
                 }
             }
             AsmInst::RegToRSPOffset(r, ofs) => {

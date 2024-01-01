@@ -116,6 +116,31 @@ impl AsmIr {
         }
     }
 
+    pub(crate) fn fetch_to_rsp_offset(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
+        if reg >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
+            panic!();
+        };
+        match bb[reg] {
+            LinkMode::Xmm(x) => {
+                self.xmm2both(x, vec![reg]);
+                self.reg2rsp_offset(GP::Rax, offset);
+                bb[reg] = LinkMode::Both(x);
+            }
+            LinkMode::Literal(v) => {
+                self.inst.push(AsmInst::LitToReg(v, GP::Rax));
+                self.reg2rsp_offset(GP::Rax, offset);
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                self.stack2reg(reg, GP::Rax);
+                self.reg2rsp_offset(GP::Rax, offset);
+            }
+            LinkMode::R15 => {
+                self.reg2rsp_offset(GP::R15, offset);
+            }
+        }
+    }
+
     fn fetch_no_float(&mut self, bb: &mut BBContext, slot: SlotId, r: GP, deopt: AsmDeopt) {
         if slot >= bb.sp {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
