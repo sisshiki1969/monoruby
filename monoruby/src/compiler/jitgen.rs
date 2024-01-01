@@ -1324,8 +1324,11 @@ impl Codegen {
     ///
     /// Generate convert code from Xmm to Both.
     ///
+    /// ### out
+    /// - rax: Value
+    ///
     /// ### destroy
-    /// - rax, rcx
+    /// - rcx
     ///
     fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {

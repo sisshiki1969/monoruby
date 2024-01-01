@@ -194,30 +194,33 @@ impl AsmIr {
         match bb[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
-                let x = bb.alloc_xmm();
+                // -> Both
+                let x = bb.link_new_both(reg);
                 self.stack2reg(reg, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
-                bb.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
-                let x = bb.alloc_xmm();
+                // -> Both
+                let x = bb.link_new_both(reg);
+                self.reg2stack(GP::R15, reg);
                 self.int2xmm(GP::R15, x, deopt);
-                bb.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
-                let x = bb.alloc_xmm();
                 if let Some(f) = v.try_float() {
+                    // -> Xmm
+                    let x = bb.link_new_xmm(reg);
                     self.f64toxmm(f, x);
-                    bb.link_xmm(reg, x);
+                    x
                 } else if let Some(i) = v.try_fixnum() {
+                    // -> Both
+                    let x = bb.link_new_both(reg);
                     self.i64toboth(i, reg, x);
-                    bb.link_both(reg, x);
+                    x
                 } else {
                     unreachable!()
                 }
-                x
             }
         }
     }
@@ -238,30 +241,33 @@ impl AsmIr {
         match bb[reg] {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
-                let x = bb.alloc_xmm();
+                // -> Both
+                let x = bb.link_new_both(reg);
                 self.stack2reg(reg, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
-                bb.link_both(reg, x);
                 x
             }
             LinkMode::R15 => {
-                let x = bb.alloc_xmm();
+                // -> Both
+                let x = bb.link_new_both(reg);
+                self.reg2stack(GP::R15, reg);
                 self.float2xmm(GP::R15, x, deopt);
-                bb.link_both(reg, x);
                 x
             }
             LinkMode::Literal(v) => {
-                let x = bb.alloc_xmm();
                 if let Some(f) = v.try_float() {
+                    // -> Xmm
+                    let x = bb.link_new_xmm(reg);
                     self.f64toxmm(f, x);
-                    bb.link_xmm(reg, x);
+                    x
                 } else if let Some(i) = v.try_fixnum() {
+                    // -> Both
+                    let x = bb.link_new_both(reg);
                     self.i64toboth(i, reg, x);
-                    bb.link_both(reg, x);
+                    x
                 } else {
                     unreachable!()
                 }
-                x
             }
         }
     }

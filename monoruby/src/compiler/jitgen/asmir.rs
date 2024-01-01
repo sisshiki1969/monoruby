@@ -165,8 +165,11 @@ impl AsmIr {
     ///
     /// Generate convert code from Xmm to Both.
     ///
+    /// ### out
+    /// - rax: Value
+    ///
     /// ### destroy
-    /// - rax, rcx
+    /// - rcx
     ///
     pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
         self.inst.push(AsmInst::XmmToBoth(freg, reg));
@@ -737,8 +740,11 @@ pub(super) enum AsmInst {
     ///
     /// Generate convert code from Xmm to Both.
     ///
+    /// ### out
+    /// - rax: Value
+    ///
     /// ### destroy
-    /// - rax, rcx
+    /// - rcx
     ///
     XmmToBoth(Xmm, Vec<SlotId>),
     ///

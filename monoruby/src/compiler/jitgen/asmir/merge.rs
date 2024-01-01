@@ -171,7 +171,7 @@ impl AsmIr {
                 match bb[reg] {
                     LinkMode::Xmm(freg) => {
                         bb.xmm_to_both(freg);
-                        self.xmm2both(freg, bb.xmm_slots(freg).to_vec());
+                        self.xmm2both(freg, bb[freg].clone());
                     }
                     LinkMode::Literal(v) => {
                         self.lit2stack(v, reg);
