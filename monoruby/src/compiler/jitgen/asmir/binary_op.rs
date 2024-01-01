@@ -382,6 +382,16 @@ impl Codegen {
 }
 
 impl AsmIr {
+    ///
+    /// Integer ninary operations
+    ///
+    /// ### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    /// ### out
+    /// - r15: dst
+    ///
     pub(in crate::compiler::jitgen) fn gen_binop_integer(
         &mut self,
         bb: &mut BBContext,
@@ -476,6 +486,20 @@ impl AsmIr {
     }
 }
 
+///
+/// Integer binary operation.
+///
+/// ### in
+/// - rdi  lhs
+/// - rsi  rhs
+///
+/// ### out
+/// - rdi  dst
+///
+/// ### destroy
+/// - caller save registers
+/// - stack
+///
 impl Codegen {
     pub(super) fn integer_binop(
         &mut self,
@@ -587,6 +611,20 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Generic integer operation.
+    ///
+    /// ### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    /// ### out
+    /// - rax: dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     pub(super) fn generic_binop(&mut self, kind: BinOpK, using_xmm: UsingXmm, error: DestLabel) {
         let func = kind.generic_func();
         self.xmm_save(using_xmm);
@@ -605,6 +643,20 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Float binary operation with registers.
+    ///
+    /// ### in
+    /// - xmm(*l*): lhs
+    /// - xmm(*r*): rhs
+    ///
+    /// ### out
+    /// - xmm(*dst*): dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     fn binop_float_rr(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: Xmm, r: Xmm) {
         let lhs = l.enc();
         let rhs = r.enc();
@@ -679,6 +731,20 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Float binary operation with a register as lhs and small integer.
+    ///
+    /// ### in
+    /// - xmm(*l*): lhs
+    /// - xmm(*r*): rhs
+    ///
+    /// ### out
+    /// - xmm(*dst*): dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     fn binop_float_ri(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: Xmm, r: i16) {
         let rhs_label = self.jit.const_f64(r as f64);
         let ret = dst.enc();
@@ -725,6 +791,20 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Float binary operation with a register as rhs and small integer.
+    ///
+    /// ### in
+    /// - xmm(*l*): lhs
+    /// - xmm(*r*): rhs
+    ///
+    /// ### out
+    /// - xmm(*dst*): dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     fn binop_float_ir(&mut self, kind: BinOpK, using_xmm: UsingXmm, dst: Xmm, l: i16, r: Xmm) {
         let lhs = self.jit.const_f64(l as f64);
         let rhs = r.enc();

@@ -554,6 +554,7 @@ impl Codegen {
     ///
     /// ### destroy
     /// - caller save registers except rdi
+    /// - stack
     ///
     pub(in crate::compiler::jitgen) fn guard_class_version(
         &mut self,

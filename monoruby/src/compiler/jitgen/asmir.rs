@@ -238,6 +238,7 @@ impl AsmIr {
     ///
     /// ### destroy
     /// - caller save registers
+    /// - stack
     ///
     pub(super) fn guard_class_version(
         &mut self,
@@ -379,6 +380,20 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Generic integer operation.
+    ///
+    /// ### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    /// ### out
+    /// - rax: dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     pub(super) fn generic_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
@@ -389,6 +404,20 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Integer binary operation.
+    ///
+    /// ### in
+    /// - rdi  lhs
+    /// - rsi  rhs
+    ///
+    /// ### out
+    /// - rdi  dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = bb.get_using_xmm();
         let (deopt, error) = self.new_deopt_error(bb, pc);
@@ -743,6 +772,7 @@ pub(super) enum AsmInst {
     ///
     /// ### destroy
     /// - caller save registers
+    /// - stack
     ///
     GuardClassVersion(BcPc, UsingXmm, AsmDeopt, AsmError),
     ///
@@ -864,11 +894,39 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
 
+    ///
+    /// Generic integer operation.
+    ///
+    /// ### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    /// ### out
+    /// - rax: dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     GenericBinOp {
         kind: BinOpK,
         using_xmm: UsingXmm,
         error: AsmError,
     },
+    ///
+    /// Integer binary operation.
+    ///
+    /// ### in
+    /// - rdi  lhs
+    /// - rsi  rhs
+    ///
+    /// ### out
+    /// - rdi  dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
     IntegerBinOp {
         kind: BinOpK,
         mode: OpMode,

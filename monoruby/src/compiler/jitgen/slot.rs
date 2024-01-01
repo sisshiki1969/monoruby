@@ -120,11 +120,13 @@ impl SlotState {
         self[reg] = LinkMode::Literal(v);
     }
 
-    pub(super) fn link_r15(&mut self, reg: SlotId) {
-        assert!(self.r15.is_none());
-        self.link_stack(reg);
-        self[reg] = LinkMode::R15;
-        self.r15 = Some(reg);
+    pub(super) fn link_r15(&mut self, reg: impl Into<Option<SlotId>>) {
+        if let Some(reg) = reg.into() {
+            assert!(self.r15.is_none());
+            self.link_stack(reg);
+            self[reg] = LinkMode::R15;
+            self.r15 = Some(reg);
+        }
     }
 
     pub(super) fn xmm_to_both(&mut self, freg: Xmm) {
