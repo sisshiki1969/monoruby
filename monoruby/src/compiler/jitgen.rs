@@ -618,7 +618,7 @@ impl JitContext {
                 }
             }
             TraceIr::Mov(dst, src) => {
-                bb.copy_slot(&mut self.ir, src, dst);
+                self.ir.copy_slot(bb, src, dst);
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
@@ -925,8 +925,8 @@ impl BBContext {
         self.slot_state.len()
     }
 
-    fn merge_entries(entries: &[BranchEntry]) -> asmir::slot::MergeContext {
-        let mut merge_ctx = asmir::slot::MergeContext::new(&entries.last().unwrap().bb);
+    fn merge_entries(entries: &[BranchEntry]) -> MergeContext {
+        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bb);
         for BranchEntry {
             src_idx: _src_idx,
             bb,
@@ -982,7 +982,7 @@ impl BBContext {
     fn is_float(&mut self, slot: SlotId) -> bool {
         match self[slot] {
             LinkMode::Xmm(_) => true,
-            LinkMode::Literal(v) => matches!(v.unpack(), RV::Float(_)),
+            LinkMode::Literal(v) => v.is_float(),
             LinkMode::Both(_) | LinkMode::Stack => false,
             LinkMode::R15 => false,
         }
@@ -1414,31 +1414,5 @@ impl Codegen {
             jmp fetch;
         );
         self.jit.select_page(0);
-    }
-}
-
-impl BBContext {
-    ///
-    /// Copy *src* to *dst*.
-    ///
-    fn copy_slot(&mut self, ir: &mut AsmIr, src: SlotId, dst: SlotId) {
-        match self[src] {
-            LinkMode::Xmm(x) | LinkMode::Both(x) => {
-                ir.link_xmm(self, dst, x);
-            }
-            LinkMode::Stack => {
-                ir.link_stack(self, dst);
-                ir.stack2reg(src, GP::Rax);
-                ir.reg2stack(GP::Rax, dst);
-            }
-            LinkMode::Literal(v) => {
-                ir.link_literal(self, dst, v);
-            }
-            LinkMode::R15 => {
-                ir.reg2stack(GP::R15, src);
-                ir.link_stack(self, src);
-                ir.link_r15(self, dst);
-            }
-        }
     }
 }

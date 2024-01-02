@@ -455,6 +455,10 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_float(&self) -> bool {
+        self.class() == FLOAT_CLASS
+    }
+
     fn is_flonum(&self) -> bool {
         self.0.get() & 0b11 == 2
     }
