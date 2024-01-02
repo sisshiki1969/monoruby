@@ -45,7 +45,7 @@ impl AsmIr {
                 self.lit2stack(v, reg);
             }
             LinkMode::R15 => {
-                bb.link_stack(reg);
+                self.link_stack(bb, reg);
                 self.acc2stack(reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
@@ -197,7 +197,7 @@ impl AsmIr {
     }
 
     pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
-        if let Some(slot) = bb.clear_r15()
+        if let Some(slot) = self.clear_r15(bb)
             && slot < bb.sp
         {
             self.acc2stack(slot);
@@ -220,14 +220,14 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = bb.link_new_both(reg);
+                let x = self.link_new_both(bb, reg);
                 self.stack2reg(reg, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = bb.link_new_both(reg);
+                let x = self.link_new_both(bb, reg);
                 self.reg2stack(GP::R15, reg);
                 self.int2xmm(GP::R15, x, deopt);
                 x
@@ -235,12 +235,12 @@ impl AsmIr {
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = bb.link_new_xmm(reg);
+                    let x = self.link_new_xmm(bb, reg);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = bb.link_new_both(reg);
+                    let x = self.link_new_both(bb, reg);
                     self.i64toboth(i, reg, x);
                     x
                 } else {
@@ -267,14 +267,14 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = bb.link_new_both(reg);
+                let x = self.link_new_both(bb, reg);
                 self.stack2reg(reg, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = bb.link_new_both(reg);
+                let x = self.link_new_both(bb, reg);
                 self.reg2stack(GP::R15, reg);
                 self.float2xmm(GP::R15, x, deopt);
                 x
@@ -282,12 +282,12 @@ impl AsmIr {
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = bb.link_new_xmm(reg);
+                    let x = self.link_new_xmm(bb, reg);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = bb.link_new_both(reg);
+                    let x = self.link_new_both(bb, reg);
                     self.i64toboth(i, reg, x);
                     x
                 } else {

@@ -162,7 +162,7 @@ fn integer_tof(
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
     }
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = ir.xmm_write_enc(bb, ret);
         ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;

@@ -91,7 +91,7 @@ fn math_sqrt(
     }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = ir.xmm_write_enc(bb, ret);
         ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
@@ -113,7 +113,7 @@ fn math_cos(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallS
     }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = ir.xmm_write_enc(bb, ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
@@ -143,7 +143,7 @@ fn math_sin(ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallS
     }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ret);
+        let fret = ir.xmm_write_enc(bb, ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
