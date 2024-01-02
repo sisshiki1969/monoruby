@@ -401,7 +401,7 @@ fn object_send(
         ..
     } = *callsite;
     ir.write_back_callargs(bb, callsite);
-    bb.link_stack(dst);
+    ir.link_stack(bb, dst);
     let using = bb.get_using_xmm();
     let bh = match block_func_id {
         None => 0,

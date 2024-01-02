@@ -747,7 +747,7 @@ impl AsmIr {
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
             // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_callargs(bb, &store[callid]);
-            bb.link_stack(dst);
+            self.link_stack(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {

@@ -10,7 +10,7 @@ pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::SlotState;
+use slot::{MergeContext, SlotState};
 use trace_ir::*;
 
 pub mod analysis;
@@ -18,7 +18,6 @@ pub mod asmir;
 mod basic_block;
 mod guard;
 mod init_method;
-mod slot;
 pub mod trace_ir;
 
 const RECOMPILE_COUNT: i32 = 10;
@@ -77,7 +76,7 @@ struct JitContext {
     ///
     /// A map for backward branches.
     ///
-    backedge_map: HashMap<BcIndex, (DestLabel, BBContext, Vec<SlotId>)>,
+    backedge_map: HashMap<BcIndex, (DestLabel, MergeContext, Vec<SlotId>)>,
     ///
     /// the number of slots.
     ///
@@ -101,7 +100,7 @@ struct JitContext {
     ///
     /// Information for continuation bridge.
     ///
-    continuation_bridge: Option<(Option<(BBContext, BBContext, BcPc)>, AsmLabel)>,
+    continuation_bridge: Option<(Option<(BBContext, MergeContext, BcPc)>, AsmLabel)>,
     ///
     /// Information for opt_case table.
     ///
@@ -266,7 +265,7 @@ impl JitContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:[{:?}] {bb_pos}", bb.sp);
         self.backedge_map
-            .insert(bb_pos, (dest_label, bb.clone(), unused));
+            .insert(bb_pos, (dest_label, MergeContext::new(bb), unused));
     }
 
     fn compile_bb(
@@ -341,7 +340,7 @@ impl JitContext {
                 CompileResult::Break => break,
             }
 
-            bb.clear();
+            self.ir.clear(bb);
             bb.sp = bb.next_sp;
         }
 
@@ -370,18 +369,18 @@ impl JitContext {
                 }
             }
             TraceIr::Integer(dst, i) => {
-                bb.link_literal(dst, Value::i32(i));
+                self.ir.link_literal(bb, dst, Value::i32(i));
             }
             TraceIr::Symbol(dst, id) => {
-                bb.link_literal(dst, Value::symbol(id));
+                self.ir.link_literal(bb, dst, Value::symbol(id));
             }
             TraceIr::Nil(dst) => {
-                bb.link_literal(dst, Value::nil());
+                self.ir.link_literal(bb, dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 if val.is_packed_value() || val.class() == FLOAT_CLASS {
-                    bb.link_literal(dst, val);
+                    self.ir.link_literal(bb, dst, val);
                 } else {
                     self.ir.deep_copy_lit(&bb, val);
                     self.ir.rax2acc(bb, dst);
@@ -390,13 +389,13 @@ impl JitContext {
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 self.ir.write_back_range(bb, args, pos_num as u16);
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.new_array(&bb, callid);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.new_hash(&bb, args, len as _);
                 self.ir.rax2acc(bb, dst);
             }
@@ -407,7 +406,7 @@ impl JitContext {
                 exclude_end,
             } => {
                 self.ir.write_back_slots(bb, &[start, end]);
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.new_range(bb, pc, start, end, exclude_end);
                 self.ir.rax2acc(bb, dst);
             }
@@ -424,7 +423,7 @@ impl JitContext {
                 self.ir.index_assign(bb, src, base, idx, pc);
             }
             TraceIr::LoadConst(dst, id) => {
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
 
                 if let (cached_version, cached_baseclass, Some(cached_val)) = store[id].cache {
                     let base_slot = store[id].base;
@@ -441,7 +440,7 @@ impl JitContext {
                     }
                     let deopt = self.ir.new_deopt(bb, pc);
                     if let Some(f) = cached_val.try_float() {
-                        let fdst = bb.link_new_both(dst);
+                        let fdst = self.ir.link_new_both(bb, dst);
                         self.ir.inst.push(AsmInst::LoadFloatConstant {
                             fdst,
                             f,
@@ -469,11 +468,11 @@ impl JitContext {
                     .push(AsmInst::StoreConstant { name, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                bb.link_stack(ret);
+                self.ir.link_stack(bb, ret);
                 self.ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                bb.link_stack(ret);
+                self.ir.link_stack(bb, ret);
                 self.ir.block_arg(bb, pc, ret, outer);
             }
             TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
@@ -497,12 +496,12 @@ impl JitContext {
                 self.ir.jit_store_gvar(bb, name, val);
             }
             TraceIr::LoadSvar { dst, id } => {
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.load_svar(&bb, id);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 if !dst.is_self() {
                     self.ir.inst.push(AsmInst::LoadDynVar { src });
                     self.ir.rax2acc(bb, dst);
@@ -534,7 +533,7 @@ impl JitContext {
                 if pc.is_float1() {
                     let deopt = self.ir.new_deopt(bb, pc);
                     let fsrc = self.ir.fetch_float_assume_float(bb, src, deopt);
-                    let dst = bb.xmm_write(dst);
+                    let dst = self.ir.xmm_write(bb, dst);
                     self.ir.xmm_move(fsrc, dst);
                     self.ir.inst.push(AsmInst::XmmUnOp { kind, dst });
                 } else {
@@ -550,7 +549,7 @@ impl JitContext {
                 let deopt = self.ir.new_deopt(bb, pc);
                 let fmode = self.ir.fmode(&mode, bb, pc, deopt);
                 if let Some(ret) = dst {
-                    let dst = bb.xmm_write(ret);
+                    let dst = self.ir.xmm_write(bb, ret);
                     let using_xmm = bb.get_using_xmm();
                     self.ir.xmm_binop(kind, fmode, dst, using_xmm);
                 }
@@ -572,8 +571,8 @@ impl JitContext {
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
                     let deopt = self.ir.new_deopt(bb, pc);
                     let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                    bb.link_stack(ret);
-                    bb.clear();
+                    self.ir.link_stack(bb, ret);
+                    self.ir.clear(bb);
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else if mode.is_integer_op(&pc) {
                     self.ir.fetch_fixnum_binary(bb, pc, &mode);
@@ -594,19 +593,19 @@ impl JitContext {
                         if mode.is_float_op(&pc) {
                             let deopt = self.ir.new_deopt(bb, pc);
                             let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                            bb.link_stack(ret);
-                            bb.clear();
+                            self.ir.link_stack(bb, ret);
+                            self.ir.clear(bb);
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
                         } else {
                             if mode.is_integer_op(&pc) {
                                 self.ir.fetch_fixnum_binary(bb, pc, &mode);
-                                bb.link_stack(ret);
-                                bb.clear();
+                                self.ir.link_stack(bb, ret);
+                                self.ir.clear(bb);
                                 self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                             } else {
                                 self.ir.fetch_binary(bb, mode);
-                                bb.link_stack(ret);
-                                bb.clear();
+                                self.ir.link_stack(bb, ret);
+                                self.ir.clear(bb);
                                 self.ir.generic_cmp(&bb, pc, kind);
                                 self.ir.inst.push(AsmInst::GenericCondBr {
                                     brkind,
@@ -624,20 +623,20 @@ impl JitContext {
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.concat_str(&bb, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                bb.link_stack(dst);
+                self.ir.link_stack(bb, dst);
                 self.ir.concat_regexp(&bb, pc, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    bb.link_stack(SlotId(reg));
+                    self.ir.link_stack(bb, SlotId(reg));
                 }
                 self.ir.expand_array(&bb, dst, len);
             }
@@ -674,7 +673,7 @@ impl JitContext {
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);
-                bb.link_stack(store[callid].dst);
+                self.ir.link_stack(bb, store[callid].dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
@@ -927,16 +926,8 @@ impl BBContext {
         self.slot_state.len()
     }
 
-    fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.link_stack(*reg));
-    }
-
-    fn merge(&mut self, other: &Self) {
-        self.slot_state.merge(&other.slot_state);
-    }
-
-    fn merge_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_ctx = entries.last().unwrap().bb.clone();
+    fn merge_entries(entries: &[BranchEntry]) -> asmir::slot::MergeContext {
+        let mut merge_ctx = asmir::slot::MergeContext::new(&entries.last().unwrap().bb);
         for BranchEntry {
             src_idx: _src_idx,
             bb,
@@ -949,7 +940,7 @@ impl BBContext {
             merge_ctx.merge(bb);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
+        eprintln!("  merged_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 
@@ -1021,14 +1012,6 @@ impl BBContext {
 
     pub(crate) fn get_register(&self) -> WriteBack {
         self.slot_state.get_register()
-    }
-
-    pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
-        self.slot_state.clear_r15()
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.slot_state.clear(self.next_sp);
     }
 }
 
@@ -1442,20 +1425,20 @@ impl BBContext {
     fn copy_slot(&mut self, ir: &mut AsmIr, src: SlotId, dst: SlotId) {
         match self[src] {
             LinkMode::Xmm(x) | LinkMode::Both(x) => {
-                self.link_xmm(dst, x);
+                ir.link_xmm(self, dst, x);
             }
             LinkMode::Stack => {
-                self.link_stack(dst);
+                ir.link_stack(self, dst);
                 ir.stack2reg(src, GP::Rax);
                 ir.reg2stack(GP::Rax, dst);
             }
             LinkMode::Literal(v) => {
-                self.link_literal(dst, v);
+                ir.link_literal(self, dst, v);
             }
             LinkMode::R15 => {
                 ir.reg2stack(GP::R15, src);
-                self.link_stack(src);
-                self.link_r15(dst);
+                ir.link_stack(self, src);
+                ir.link_r15(self, dst);
             }
         }
     }

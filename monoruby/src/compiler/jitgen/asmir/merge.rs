@@ -16,8 +16,8 @@ impl JitContext {
             {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
-                bb.remove_unused(&unused);
                 let mut ir = AsmIr::new();
+                ir.remove_unused(&mut bb, &unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
                 self.bridges.push((ir, label, target_label));
             }
@@ -72,15 +72,15 @@ impl JitContext {
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    target_ctx.link_xmm(reg, r);
+                    self.ir.link_xmm(&mut target_ctx, reg, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    target_ctx.link_both(reg, r);
+                    self.ir.link_both(&mut target_ctx, reg, r);
                 }
             };
         }
         for r in const_vec {
-            target_ctx.link_new_xmm(r);
+            self.ir.link_new_xmm(&mut target_ctx, r);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!(
@@ -88,7 +88,14 @@ impl JitContext {
             target_ctx.sp, target_ctx.slot_state
         );
 
-        self.write_back_branches(&target_ctx, entries, cur_label, pc + 1, bb_pos, &unused);
+        self.write_back_branches(
+            &MergeContext::new(&target_ctx),
+            entries,
+            cur_label,
+            pc + 1,
+            bb_pos,
+            &unused,
+        );
 
         self.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
 
@@ -111,12 +118,12 @@ impl JitContext {
 
         self.write_back_branches(&target_ctx, entries, cur_label, pc, bb_pos, &[]);
 
-        Some(target_ctx)
+        Some(target_ctx.get())
     }
 
     fn write_back_branches(
         &mut self,
-        target_bb: &BBContext,
+        target_bb: &super::slot::MergeContext,
         entries: Vec<BranchEntry>,
         cur_label: DestLabel,
         pc: BcPc,
@@ -132,7 +139,6 @@ impl JitContext {
             cont,
         } in entries
         {
-            bb.remove_unused(unused);
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             if cont {
@@ -140,6 +146,7 @@ impl JitContext {
                 self.continuation_bridge = Some((Some((bb, target_ctx.clone(), pc)), label));
             } else {
                 let mut ir = AsmIr::new();
+                ir.remove_unused(&mut bb, unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
                 self.bridges.push((ir, label, cur_label));
             }
@@ -150,16 +157,22 @@ impl JitContext {
 }
 
 impl AsmIr {
+    fn remove_unused(&mut self, bb: &mut BBContext, unused: &[SlotId]) {
+        for r in unused {
+            self.link_stack(bb, *r);
+        }
+    }
+
     pub(in crate::compiler::jitgen) fn write_back_for_target(
         &mut self,
         mut bb: BBContext,
-        target: &BBContext,
+        target: &super::slot::MergeContext,
         pc: BcPc,
     ) {
         #[cfg(feature = "jit-debug")]
         {
             eprintln!("    src:    {:?}", bb.slot_state);
-            eprintln!("    target: {:?}", target.slot_state);
+            eprintln!("    target: {:?}", target);
         }
         let len = bb.reg_num();
 
@@ -179,7 +192,7 @@ impl AsmIr {
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 => unreachable!(),
                 }
-                bb.link_stack(reg);
+                self.link_stack(&mut bb, reg);
             };
         }
 
@@ -191,7 +204,7 @@ impl AsmIr {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        bb.link_xmm(reg, r);
+                        self.link_xmm(&mut bb, reg, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -202,7 +215,7 @@ impl AsmIr {
                     if l == r {
                         bb[reg] = LinkMode::Xmm(l);
                     } else if bb.is_xmm_vacant(r) {
-                        bb.link_xmm(reg, r);
+                        self.link_xmm(&mut bb, reg, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -216,7 +229,7 @@ impl AsmIr {
                     if l == r {
                         bb[reg] = LinkMode::Both(l);
                     } else if bb.is_xmm_vacant(r) {
-                        bb.link_both(reg, r);
+                        self.link_both(&mut bb, reg, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -226,7 +239,7 @@ impl AsmIr {
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        bb.link_both(reg, r);
+                        self.link_both(&mut bb, reg, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -234,13 +247,13 @@ impl AsmIr {
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    bb.link_both(reg, r);
+                    self.link_both(&mut bb, reg, r);
                     conv_list.push((reg, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        bb.link_xmm(reg, r);
+                        self.link_xmm(&mut bb, reg, r);
                         self.f64toxmm(f, r);
                     } else {
                         unreachable!()

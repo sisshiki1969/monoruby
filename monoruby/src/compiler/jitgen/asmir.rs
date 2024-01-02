@@ -10,6 +10,7 @@ mod index;
 mod merge;
 mod method_call;
 mod read_slot;
+pub mod slot;
 mod variables;
 
 #[derive(Debug, Clone, Copy)]
@@ -105,14 +106,14 @@ impl AsmIr {
 
     pub(crate) fn reg2acc(&mut self, bb: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
-            bb.clear();
-            if let Some(acc) = bb.clear_r15()
+            self.clear(bb);
+            if let Some(acc) = self.clear_r15(bb)
                 && acc < bb.sp
                 && acc != dst
             {
                 self.inst.push(AsmInst::AccToStack(acc));
             }
-            bb.link_r15(dst);
+            self.link_r15(bb, dst);
             self.inst.push(AsmInst::RegToAcc(src));
         }
     }
@@ -334,8 +335,8 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         let callsite = &store[callid];
         self.set_arguments(bb, callsite);
-        bb.link_stack(callsite.dst);
-        bb.clear();
+        self.link_stack(bb, callsite.dst);
+        self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
         self.inst.push(AsmInst::SendCached {
@@ -664,7 +665,7 @@ impl AsmIr {
     }
 
     pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        bb.link_stack(dst);
+        self.link_stack(bb, dst);
         self.load_gvar(bb, name);
         self.rax2acc(bb, dst);
     }
@@ -719,7 +720,7 @@ impl AsmIr {
     pub(super) fn write_back_locals(&mut self, bb: &mut BBContext) {
         let wb = bb.get_locals_write_back();
         self.inst.push(AsmInst::WriteBack(wb));
-        bb.release_locals();
+        self.release_locals(bb);
     }
 }
 
