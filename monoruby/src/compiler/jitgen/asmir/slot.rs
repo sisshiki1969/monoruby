@@ -15,12 +15,12 @@ impl std::fmt::Debug for SlotState {
             .slots
             .iter()
             .enumerate()
-            .flat_map(|(i, mode)| match mode {
-                LinkMode::Stack => None,
-                LinkMode::Literal(v) => Some(format!("%{i}:Literal({:?}) ", v)),
-                LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
-                LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
-                LinkMode::R15 => Some(format!("%{i}:R15 ")),
+            .map(|(i, mode)| match mode {
+                LinkMode::Stack => format!("%{i}:Stack ",),
+                LinkMode::Literal(v) => format!("%{i}:Literal({:?}) ", v),
+                LinkMode::Both(x) => format!("%{i}:Both({x:?}) "),
+                LinkMode::Xmm(x) => format!("%{i}:Xmm({x:?}) "),
+                LinkMode::R15 => format!("%{i}:R15 "),
             })
             .collect();
         write!(f, "[{s}]")
@@ -323,6 +323,35 @@ impl AsmIr {
     }
 
     ///
+    /// Copy *src* to *dst*.
+    ///
+    pub(in crate::compiler::jitgen) fn copy_slot(
+        &mut self,
+        bb: &mut BBContext,
+        src: SlotId,
+        dst: SlotId,
+    ) {
+        match bb[src] {
+            LinkMode::Xmm(x) | LinkMode::Both(x) => {
+                self.link_xmm(bb, dst, x);
+            }
+            LinkMode::Stack => {
+                self.link_stack(bb, dst);
+                self.stack2reg(src, GP::Rax);
+                self.reg2stack(GP::Rax, dst);
+            }
+            LinkMode::Literal(v) => {
+                self.link_literal(bb, dst, v);
+            }
+            LinkMode::R15 => {
+                self.reg2stack(GP::R15, src);
+                self.link_stack(bb, src);
+                self.link_r15(bb, dst);
+            }
+        }
+    }
+
+    ///
     /// Allocate new xmm register to the slot *reg* for read/write f64.
     ///
     pub(in crate::compiler::jitgen) fn xmm_write(
@@ -385,17 +414,13 @@ impl MergeContext {
             match (&self[i], &other[i]) {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                 | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
-                (LinkMode::Both(l), LinkMode::Literal(r)) if r.class() == FLOAT_CLASS => {
-                    self.link_both(i, *l)
-                }
-                (LinkMode::Literal(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
+                (LinkMode::Both(l), LinkMode::Literal(r)) if r.is_float() => self.link_both(i, *l),
+                (LinkMode::Literal(l), LinkMode::Both(_)) if l.is_float() => {
                     self.link_new_both(i);
                 }
                 (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
-                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.class() == FLOAT_CLASS => {
-                    self.link_xmm(i, *l)
-                }
-                (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
+                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.is_float() => self.link_xmm(i, *l),
+                (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.is_float() => {
                     self.link_new_xmm(i);
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),

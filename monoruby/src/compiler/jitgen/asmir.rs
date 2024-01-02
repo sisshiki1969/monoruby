@@ -1227,8 +1227,10 @@ pub(super) enum SideExit {
 
 impl Codegen {
     pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext) {
+        // generate machine code for a main math
         self.gen_asm(store, ctx, None, None);
 
+        // generate machinwe code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
             ctx.ir = ir;
             self.gen_asm(store, ctx, Some(entry), Some(exit));
@@ -1236,6 +1238,9 @@ impl Codegen {
         assert!(ctx.continuation_bridge.is_none());
     }
 
+    ///
+    /// Generate machine code for *ctx.ir*.
+    ///
     fn gen_asm(
         &mut self,
         store: &Store,
@@ -1291,6 +1296,9 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Generate machine code for *inst*.
+    ///
     fn gen_asmir(
         &mut self,
         store: &Store,

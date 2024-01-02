@@ -45,6 +45,21 @@ impl JitContext {
         Some(res)
     }
 
+    ///
+    ///
+    /// ```text
+    ///                     +------------+
+    ///      entries        |     bb     |
+    ///                     +------------+
+    ///     \   |   /              |
+    ///      \  |  / +-------------+
+    ///       v v v v
+    ///  +------------+
+    ///  |   target   |
+    ///  +------------+
+    ///         |
+    /// ```
+    ///
     fn incoming_context_loop(&mut self, func: &ISeqInfo, bb_pos: BcIndex) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bb_pos)?;
         let pc = func.get_pc(bb_pos);
@@ -59,37 +74,34 @@ impl JitContext {
             eprintln!("  not used: {:?}", unused);
         }
 
-        let template = BBContext::merge_entries(&entries);
+        let target = BBContext::merge_entries(&entries);
 
-        let mut target_ctx = BBContext::new(&self);
+        let mut bb = BBContext::new(&self);
         let mut const_vec = vec![];
         for (reg, coerced) in use_set {
-            match template[reg] {
+            match target[reg] {
                 LinkMode::Stack | LinkMode::R15 => {}
                 LinkMode::Literal(v) => {
-                    if v.class() == FLOAT_CLASS {
+                    if v.is_float() {
                         const_vec.push(reg);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    self.ir.link_xmm(&mut target_ctx, reg, r);
+                    self.ir.link_xmm(&mut bb, reg, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    self.ir.link_both(&mut target_ctx, reg, r);
+                    self.ir.link_both(&mut bb, reg, r);
                 }
             };
         }
         for r in const_vec {
-            self.ir.link_new_xmm(&mut target_ctx, r);
+            self.ir.link_new_xmm(&mut bb, r);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!(
-            "  target_ctx:[{:?}]   {:?}",
-            target_ctx.sp, target_ctx.slot_state
-        );
+        eprintln!("  target_ctx:[{:?}]   {:?}", bb.sp, bb.slot_state);
 
         self.write_back_branches(
-            &MergeContext::new(&target_ctx),
+            &MergeContext::new(&bb),
             entries,
             cur_label,
             pc + 1,
@@ -97,9 +109,9 @@ impl JitContext {
             &unused,
         );
 
-        self.new_backedge(func, &mut target_ctx, bb_pos, cur_label, unused);
+        self.new_backedge(func, &mut bb, bb_pos, cur_label, unused);
 
-        Some(target_ctx)
+        Some(bb)
     }
 
     fn incoming_context_method(&mut self, func: &ISeqInfo, bb_pos: BcIndex) -> Option<BBContext> {
@@ -123,7 +135,7 @@ impl JitContext {
 
     fn write_back_branches(
         &mut self,
-        target_bb: &super::slot::MergeContext,
+        target_bb: &MergeContext,
         entries: Vec<BranchEntry>,
         cur_label: DestLabel,
         pc: BcPc,
@@ -166,7 +178,7 @@ impl AsmIr {
     pub(in crate::compiler::jitgen) fn write_back_for_target(
         &mut self,
         mut bb: BBContext,
-        target: &super::slot::MergeContext,
+        target: &MergeContext,
         pc: BcPc,
     ) {
         #[cfg(feature = "jit-debug")]
