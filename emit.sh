@@ -8,6 +8,7 @@ ruby benchmark/tarai.rb
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.disas > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.disas > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
+target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas
 ruby benchmark/so_nbody.rb
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.disas > /dev/null
@@ -19,6 +20,7 @@ target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.bytecode > /dev/nu
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.bytecode > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.bytecode > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode
+target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.bytecode
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.bytecode > /dev/null
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.bytecode > /dev/null
 

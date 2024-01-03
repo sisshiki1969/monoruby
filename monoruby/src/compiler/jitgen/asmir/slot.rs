@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub(crate) struct SlotState {
     slots: Vec<LinkMode>,
+    alias: Vec<Vec<SlotId>>,
     /// Information for xmm registers (xmm2 - xmm15).
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
@@ -17,13 +18,14 @@ impl std::fmt::Debug for SlotState {
             .enumerate()
             .map(|(i, mode)| match mode {
                 LinkMode::Stack => format!("%{i}:Stack ",),
+                LinkMode::Alias(o) => format!("%{i}:Alias({:?}) ", o),
                 LinkMode::Literal(v) => format!("%{i}:Literal({:?}) ", v),
                 LinkMode::Both(x) => format!("%{i}:Both({x:?}) "),
                 LinkMode::Xmm(x) => format!("%{i}:Xmm({x:?}) "),
                 LinkMode::R15 => format!("%{i}:R15 "),
             })
             .collect();
-        write!(f, "[{s}]")
+        write!(f, "[{s}] {:?}", self.alias)
     }
 }
 
@@ -57,6 +59,7 @@ impl SlotState {
     pub(in crate::compiler::jitgen) fn new(cc: &JitContext) -> Self {
         SlotState {
             slots: vec![LinkMode::Stack; cc.total_reg_num],
+            alias: vec![vec![]; cc.total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
                 v.try_into().unwrap()
@@ -94,7 +97,7 @@ impl SlotState {
                     *x = l;
                 }
             }
-            LinkMode::Stack | LinkMode::Literal(_) | LinkMode::R15 => {}
+            LinkMode::Stack | LinkMode::Literal(_) | LinkMode::R15 | LinkMode::Alias(_) => {}
         });
     }
 
@@ -125,17 +128,32 @@ impl SlotState {
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
-                LinkMode::Literal(v) => Some((*v, SlotId(idx as u16))),
+                LinkMode::Literal(v) if SlotId::new(idx as u16) < sp => {
+                    Some((*v, SlotId(idx as u16)))
+                }
                 _ => None,
             })
             .collect();
+        let alias = self
+            .alias
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, v)| {
+                let v: Vec<_> = v.iter().filter(|slot| *slot < &sp).cloned().collect();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some((SlotId(idx as u16), v))
+                }
+            })
+            .collect();
         let r15 = self.get_r15();
-        WriteBack::new(xmm, literal, r15)
+        WriteBack::new(xmm, literal, alias, r15)
     }
 
     pub(in crate::compiler::jitgen) fn get_register(&self) -> WriteBack {
         let r15 = self.get_r15();
-        WriteBack::new(vec![], vec![], r15)
+        WriteBack::new(vec![], vec![], vec![], r15)
     }
 
     pub(super) fn get_locals_write_back(&self) -> WriteBack {
@@ -172,11 +190,28 @@ impl SlotState {
                 _ => None,
             })
             .collect();
+        let alias: Vec<_> = self
+            .alias
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, v)| {
+                let v: Vec<_> = v
+                    .into_iter()
+                    .filter(|slot| slot.0 as usize <= local_num)
+                    .cloned()
+                    .collect();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some((SlotId(idx as u16), v))
+                }
+            })
+            .collect();
         let r15 = match self.get_r15() {
             Some(slot) if slot.0 as usize <= local_num => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15)
+        WriteBack::new(xmm, literal, alias, r15)
     }
 
     pub(in crate::compiler::jitgen) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
@@ -211,12 +246,21 @@ impl AsmIr {
     ///
     /// xmm registers corresponding to *reg* are deallocated.
     ///
+    /// ### destroy
+    /// - r8
+    ///
     pub(crate) fn link_stack(&mut self, bb: &mut BBContext, reg: impl Into<Option<SlotId>>) {
         match reg.into() {
             Some(reg) => match bb[reg] {
                 LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                     assert!(bb[freg].contains(&reg));
                     bb[freg].retain(|e| *e != reg);
+                    bb[reg] = LinkMode::Stack;
+                }
+                LinkMode::Alias(origin) => {
+                    assert_eq!(bb[origin], LinkMode::Stack);
+                    assert!(bb.alias[origin.0 as usize].contains(&reg));
+                    bb.alias[origin.0 as usize].retain(|e| *e != reg);
                     bb[reg] = LinkMode::Stack;
                 }
                 LinkMode::Literal(_) => {
@@ -226,14 +270,48 @@ impl AsmIr {
                     bb.r15 = None;
                     bb[reg] = LinkMode::Stack;
                 }
-                LinkMode::Stack => {}
+                LinkMode::Stack => {
+                    // We must write back all aliases of *reg*.
+                    let dst = std::mem::take(&mut bb.alias[reg.0 as usize]);
+                    if !dst.is_empty() {
+                        self.stack2reg(reg, GP::R8);
+                        for dst in dst {
+                            self.reg2stack(GP::R8, dst);
+                            assert_eq!(bb[dst], LinkMode::Alias(reg));
+                            bb[dst] = LinkMode::Stack;
+                        }
+                    }
+                }
             },
             None => {}
         }
     }
 
     ///
+    /// Link the slot *reg* to the alias of *origin*.
+    ///
+    /// ### destroy
+    /// - r8
+    ///
+    pub(in crate::compiler::jitgen) fn link_alias(
+        &mut self,
+        bb: &mut BBContext,
+        origin: SlotId,
+        reg: SlotId,
+    ) {
+        self.link_stack(bb, reg);
+        if bb[origin] != LinkMode::Stack {
+            unreachable!("origin:{:?} reg:{:?} {:?}", origin, reg, bb);
+        };
+        bb[reg] = LinkMode::Alias(origin);
+        bb.alias[origin.0 as usize].push(reg);
+    }
+
+    ///
     /// Link the slot *reg* to the given xmm register *freg*.
+    ///
+    /// ### destroy
+    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn link_xmm(
         &mut self,
@@ -249,6 +327,9 @@ impl AsmIr {
     ///
     /// Link the slot *reg* to a new xmm register.
     ///
+    /// ### destroy
+    /// - r8
+    ///
     pub(super) fn link_new_xmm(&mut self, bb: &mut BBContext, reg: SlotId) -> Xmm {
         let freg = bb.alloc_xmm();
         self.link_xmm(bb, reg, freg);
@@ -258,6 +339,9 @@ impl AsmIr {
     ///
     /// Link the slot *reg* to both of the stack and the given xmm register *freg*.
     ///
+    /// ### destroy
+    /// - r8
+    ///
     pub(super) fn link_both(&mut self, bb: &mut BBContext, reg: SlotId, freg: Xmm) {
         self.link_stack(bb, reg);
         bb[reg] = LinkMode::Both(freg);
@@ -266,6 +350,9 @@ impl AsmIr {
 
     ///
     /// Link the slot *reg* to both of the stack and a new xmm register.
+    ///
+    /// ### destroy
+    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn link_new_both(
         &mut self,
@@ -280,6 +367,9 @@ impl AsmIr {
     ///
     /// Link the slot *reg* to a literal value *v*.
     ///
+    /// ### destroy
+    /// - r8
+    ///
     pub(in crate::compiler::jitgen) fn link_literal(
         &mut self,
         bb: &mut BBContext,
@@ -290,6 +380,9 @@ impl AsmIr {
         bb[reg] = LinkMode::Literal(v);
     }
 
+    /// ### destroy
+    /// - r8
+    ///
     pub(in crate::compiler::jitgen) fn link_r15(
         &mut self,
         bb: &mut BBContext,
@@ -304,7 +397,10 @@ impl AsmIr {
     }
 
     ///
-    /// Clear slots above *sp*.
+    /// Clear slots above *next_sp*.
+    ///
+    /// ### destroy
+    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn clear(&mut self, bb: &mut BBContext) {
         let sp = bb.next_sp;
@@ -313,6 +409,12 @@ impl AsmIr {
         }
     }
 
+    ///
+    /// Clear the LinkMode::R15 slot.
+    ///
+    /// ### destroy
+    /// - r8
+    ///
     pub(in crate::compiler::jitgen) fn clear_r15(&mut self, bb: &mut BBContext) -> Option<SlotId> {
         let res = bb.r15;
         if let Some(r) = res {
@@ -325,6 +427,9 @@ impl AsmIr {
     ///
     /// Copy *src* to *dst*.
     ///
+    /// ### destroy
+    /// - rax, r8
+    ///
     pub(in crate::compiler::jitgen) fn copy_slot(
         &mut self,
         bb: &mut BBContext,
@@ -332,13 +437,19 @@ impl AsmIr {
         dst: SlotId,
     ) {
         match bb[src] {
-            LinkMode::Xmm(x) | LinkMode::Both(x) => {
+            LinkMode::Xmm(x) => {
                 self.link_xmm(bb, dst, x);
             }
-            LinkMode::Stack => {
-                self.link_stack(bb, dst);
+            LinkMode::Both(x) => {
                 self.stack2reg(src, GP::Rax);
                 self.reg2stack(GP::Rax, dst);
+                self.link_both(bb, dst, x);
+            }
+            LinkMode::Stack => {
+                self.link_alias(bb, src, dst);
+            }
+            LinkMode::Alias(origin) => {
+                self.link_alias(bb, origin, dst);
             }
             LinkMode::Literal(v) => {
                 self.link_literal(bb, dst, v);
@@ -352,7 +463,10 @@ impl AsmIr {
     }
 
     ///
-    /// Allocate new xmm register to the slot *reg* for read/write f64.
+    /// Allocate new xmm register corresponding to the slot *reg* for read/write f64.
+    ///
+    /// ### destroy
+    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn xmm_write(
         &mut self,
@@ -367,6 +481,7 @@ impl AsmIr {
             LinkMode::Xmm(_)
             | LinkMode::Both(_)
             | LinkMode::Stack
+            | LinkMode::Alias(_)
             | LinkMode::Literal(_)
             | LinkMode::R15 => self.link_new_xmm(bb, reg),
         }
@@ -379,6 +494,23 @@ impl AsmIr {
     pub(super) fn release_locals(&mut self, bb: &mut BBContext) {
         for reg in 1..1 + bb.local_num as u16 {
             self.link_stack(bb, SlotId(reg));
+        }
+    }
+
+    ///
+    /// Write back LinkMode::Alias slots.
+    ///
+    /// ### destroy
+    /// - rax, r8
+    ///
+    pub(in crate::compiler::jitgen) fn writeback_alias(&mut self, bb: &mut BBContext) {
+        for i in 0..bb.sp.0 {
+            let r = SlotId::new(i);
+            if let LinkMode::Alias(origin) = bb[r] {
+                self.stack2reg(origin, GP::Rax);
+                self.reg2stack(GP::Rax, r);
+                self.link_stack(bb, r);
+            }
         }
     }
 }
@@ -424,7 +556,7 @@ impl MergeContext {
                     self.link_new_xmm(i);
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),
-                _ => self.link_stack(i),
+                _ => self.link_clear(i),
             };
         }
     }
@@ -434,13 +566,19 @@ impl MergeContext {
     ///
     /// xmm registers corresponding to *reg* are deallocated.
     ///
-    pub(super) fn link_stack(&mut self, reg: impl Into<Option<SlotId>>) {
+    pub(super) fn link_clear(&mut self, reg: impl Into<Option<SlotId>>) {
         match reg.into() {
             Some(reg) => match self[reg] {
                 LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                     assert!(self[freg].contains(&reg));
                     self[freg].retain(|e| *e != reg);
                     self[reg] = LinkMode::Stack;
+                }
+                LinkMode::Alias(origin) => {
+                    assert_eq!(self[origin], LinkMode::Stack);
+                    assert!(self.alias[origin.0 as usize].contains(&reg));
+                    self[reg] = LinkMode::Stack;
+                    self.alias[origin.0 as usize].retain(|e| *e != reg);
                 }
                 LinkMode::Literal(_) => {
                     self[reg] = LinkMode::Stack;
@@ -449,7 +587,16 @@ impl MergeContext {
                     self.r15 = None;
                     self[reg] = LinkMode::Stack;
                 }
-                LinkMode::Stack => {}
+                LinkMode::Stack => {
+                    // We must write back all aliases of *reg*.
+                    let dst = std::mem::take(&mut self.alias[reg.0 as usize]);
+                    if !dst.is_empty() {
+                        for dst in dst {
+                            assert_eq!(self[dst], LinkMode::Alias(reg));
+                            self[dst] = LinkMode::Stack;
+                        }
+                    }
+                }
             },
             None => {}
         }
@@ -458,8 +605,8 @@ impl MergeContext {
     ///
     /// Link the slot *reg* to the given xmm register *freg*.
     ///
-    pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.link_stack(reg);
+    fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
+        self.link_clear(reg);
         self[reg] = LinkMode::Xmm(freg);
         self[freg].push(reg);
     }
@@ -467,7 +614,7 @@ impl MergeContext {
     ///
     /// Link the slot *reg* to a new xmm register.
     ///
-    pub(super) fn link_new_xmm(&mut self, reg: SlotId) -> Xmm {
+    fn link_new_xmm(&mut self, reg: SlotId) -> Xmm {
         let freg = self.alloc_xmm();
         self.link_xmm(reg, freg);
         freg
@@ -476,8 +623,8 @@ impl MergeContext {
     ///
     /// Link the slot *reg* to both of the stack and the given xmm register *freg*.
     ///
-    pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.link_stack(reg);
+    fn link_both(&mut self, reg: SlotId, freg: Xmm) {
+        self.link_clear(reg);
         self[reg] = LinkMode::Both(freg);
         self[freg].push(reg);
     }
@@ -485,7 +632,7 @@ impl MergeContext {
     ///
     /// Link the slot *reg* to both of the stack and a new xmm register.
     ///
-    pub(super) fn link_new_both(&mut self, reg: SlotId) -> Xmm {
+    fn link_new_both(&mut self, reg: SlotId) -> Xmm {
         let x = self.alloc_xmm();
         self.link_both(reg, x);
         x
@@ -494,12 +641,12 @@ impl MergeContext {
     ///
     /// Link the slot *reg* to a literal value *v*.
     ///
-    pub(super) fn link_literal(&mut self, reg: SlotId, v: Value) {
-        self.link_stack(reg);
+    fn link_literal(&mut self, reg: SlotId, v: Value) {
+        self.link_clear(reg);
         self[reg] = LinkMode::Literal(v);
     }
 
     pub(in crate::compiler::jitgen) fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.link_stack(*reg));
+        unused.iter().for_each(|reg| self.link_clear(*reg));
     }
 }

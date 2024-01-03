@@ -35,6 +35,10 @@ impl AsmIr {
             eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
             panic!();
         };
+        if reg >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
+            panic!();
+        };
         match bb[reg] {
             LinkMode::Xmm(freg) => {
                 bb[reg] = LinkMode::Both(freg);
@@ -47,6 +51,11 @@ impl AsmIr {
             LinkMode::R15 => {
                 self.link_stack(bb, reg);
                 self.acc2stack(reg);
+            }
+            LinkMode::Alias(origin) => {
+                self.link_stack(bb, reg);
+                self.stack2reg(origin, GP::Rax);
+                self.reg2stack(GP::Rax, reg);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
@@ -110,6 +119,9 @@ impl AsmIr {
                 }
                 self.stack2reg(reg, dst);
             }
+            LinkMode::Alias(origin) => {
+                self.stack2reg(origin, dst);
+            }
             LinkMode::R15 => {
                 self.reg_move(GP::R15, dst);
             }
@@ -133,6 +145,10 @@ impl AsmIr {
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 self.stack2reg(reg, GP::Rax);
+                self.reg2rsp_offset(GP::Rax, offset);
+            }
+            LinkMode::Alias(origin) => {
+                self.stack2reg(origin, GP::Rax);
                 self.reg2rsp_offset(GP::Rax, offset);
             }
             LinkMode::R15 => {
@@ -161,6 +177,12 @@ impl AsmIr {
                     self.writeback_acc(bb);
                 }
                 self.stack2reg(slot, r);
+            }
+            LinkMode::Alias(origin) => {
+                if r == GP::R15 {
+                    self.writeback_acc(bb);
+                }
+                self.stack2reg(origin, r);
             }
             LinkMode::R15 => {
                 self.reg_move(GP::R15, r);
@@ -232,6 +254,13 @@ impl AsmIr {
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
+            LinkMode::Alias(origin) => {
+                // -> Both
+                let x = self.link_new_both(bb, origin);
+                self.stack2reg(origin, GP::Rdi);
+                self.int2xmm(GP::Rdi, x, deopt);
+                x
+            }
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
@@ -277,6 +306,13 @@ impl AsmIr {
                 let x = self.link_new_both(bb, reg);
                 self.reg2stack(GP::R15, reg);
                 self.float2xmm(GP::R15, x, deopt);
+                x
+            }
+            LinkMode::Alias(origin) => {
+                // -> Both
+                let x = self.link_new_both(bb, origin);
+                self.stack2reg(origin, GP::Rdi);
+                self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::Literal(v) => {

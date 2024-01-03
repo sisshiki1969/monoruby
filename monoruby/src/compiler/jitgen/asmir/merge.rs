@@ -80,7 +80,7 @@ impl JitContext {
         let mut const_vec = vec![];
         for (reg, coerced) in use_set {
             match target[reg] {
-                LinkMode::Stack | LinkMode::R15 => {}
+                LinkMode::Stack => {}
                 LinkMode::Literal(v) => {
                     if v.is_float() {
                         const_vec.push(reg);
@@ -92,6 +92,7 @@ impl JitContext {
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
                     self.ir.link_both(&mut bb, reg, r);
                 }
+                LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
             };
         }
         for r in const_vec {
@@ -189,6 +190,7 @@ impl AsmIr {
         let len = bb.reg_num();
 
         self.writeback_acc(&mut bb);
+        self.writeback_alias(&mut bb);
 
         for i in 0..len {
             let reg = SlotId(i as u16);
@@ -202,7 +204,7 @@ impl AsmIr {
                         self.lit2stack(v, reg);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
-                    LinkMode::R15 => unreachable!(),
+                    LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", reg),
                 }
                 self.link_stack(&mut bb, reg);
             };

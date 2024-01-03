@@ -871,6 +871,7 @@ pub(crate) fn conv(reg: SlotId) -> i64 {
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
+    alias: Vec<(SlotId, Vec<SlotId>)>,
     r15: Option<SlotId>,
 }
 
@@ -878,9 +879,15 @@ impl WriteBack {
     fn new(
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
+        alias: Vec<(SlotId, Vec<SlotId>)>,
         r15: Option<SlotId>,
     ) -> Self {
-        Self { xmm, literal, r15 }
+        Self {
+            xmm,
+            literal,
+            alias,
+            r15,
+        }
     }
 }
 
@@ -961,34 +968,37 @@ impl BBContext {
         }
     }
 
-    fn is_array_ty(&mut self, slot: SlotId) -> bool {
+    fn is_array_ty(&self, slot: SlotId) -> bool {
         match self[slot] {
             LinkMode::Xmm(_) => false,
             LinkMode::Literal(v) => v.is_array_ty(),
             LinkMode::Both(_) | LinkMode::Stack => false,
             LinkMode::R15 => false,
+            LinkMode::Alias(origin) => self.is_array_ty(origin),
         }
     }
 
-    fn is_fixnum(&mut self, slot: SlotId) -> bool {
+    fn is_fixnum(&self, slot: SlotId) -> bool {
         match self[slot] {
             LinkMode::Xmm(_) => false,
             LinkMode::Literal(v) => v.is_fixnum(),
             LinkMode::Both(_) | LinkMode::Stack => false,
             LinkMode::R15 => false,
+            LinkMode::Alias(origin) => self.is_fixnum(origin),
         }
     }
 
-    fn is_float(&mut self, slot: SlotId) -> bool {
+    fn is_float(&self, slot: SlotId) -> bool {
         match self[slot] {
             LinkMode::Xmm(_) => true,
             LinkMode::Literal(v) => v.is_float(),
             LinkMode::Both(_) | LinkMode::Stack => false,
             LinkMode::R15 => false,
+            LinkMode::Alias(origin) => self.is_float(origin),
         }
     }
 
-    fn is_class(&mut self, slot: SlotId, class: ClassId) -> bool {
+    fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
         match class {
             INTEGER_CLASS => self.is_fixnum(slot),
             FLOAT_CLASS => self.is_float(slot),
@@ -997,6 +1007,7 @@ impl BBContext {
                 LinkMode::Literal(v) => v.class() == class,
                 LinkMode::Both(_) | LinkMode::Stack => false,
                 LinkMode::R15 => false,
+                LinkMode::Alias(origin) => self.is_class(origin, class),
             },
         }
     }
@@ -1049,6 +1060,10 @@ pub(crate) enum LinkMode {
     /// No linkage with xmm regiter.
     ///
     Stack,
+    ///
+    /// Alias of *SlotId*.
+    ///
+    Alias(SlotId),
     ///
     /// Literal.
     ///
@@ -1327,6 +1342,14 @@ impl Codegen {
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
+        }
+        for (origin, v) in &wb.alias {
+            if !v.is_empty() {
+                self.load_rax(*origin);
+                for reg in v {
+                    self.store_rax(*reg);
+                }
+            }
         }
     }
 
