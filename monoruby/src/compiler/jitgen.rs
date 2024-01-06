@@ -448,14 +448,15 @@ impl JitContext {
                             cached_version,
                             deopt,
                         });
+                        self.ir.reg2stack(GP::Rax, dst);
                     } else {
                         self.ir.inst.push(AsmInst::LoadGenericConstant {
                             cached_val,
                             cached_version,
                             deopt,
                         });
+                        self.ir.rax2acc(bb, dst);
                     }
-                    self.ir.rax2acc(bb, dst);
                 } else {
                     return CompileResult::Recompile;
                 }

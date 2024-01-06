@@ -1,7 +1,8 @@
-def f(a,b,&block)
-  block.call
-end
-
+alias something eval
+evil = "Pi = '!'"
 15.times {
-  puts f(1,2){3}
+  Pi = 3.14
+  radius = 10
+  #something(evil)
+  puts Pi * radius * radius
 }
