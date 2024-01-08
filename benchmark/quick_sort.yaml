@@ -33,4 +33,4 @@ benchmark:
       0,
       999
     )
-loop_count: 500
+loop_count: 2000
