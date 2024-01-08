@@ -114,20 +114,12 @@ Currently, monoruby is about 20% faster than CRuby3.2.2preview1+YJIT in the optc
 ```sh
 ❯ ./optcarrot.sh
 
-ruby 3.2.2 (2023-03-30 revision e51014f9c0) +YJIT [x86_64-linux]
-fps: 102.02545586179582
-checksum: 59662
-
-ruby 3.3.0preview1 (2023-05-12 master a1b01e7701) +YJIT [x86_64-linux]
-fps: 115.5163025371511
-checksum: 59662
-
-ruby 3.3.0dev (2023-08-28T08:52:50Z master 00439dbdb4) +YJIT [x86_64-linux]
-fps: 148.73353885228963
+ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]
+fps: 126.70500588624708
 checksum: 59662
 
 monoruby 0.2.0
-fps: 151.06222422324366
+fps: 352.1105555393293
 checksum: 59662
 
 ❯ lscpu
@@ -152,35 +144,36 @@ L3 cache:                        12 MiB
 - benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with *).
 - measurements are shown in iteration/sec (the higher, the better).
 
-|                     |   3.2.2| 3.2.2 --yjit|     monoruby|
+|                     |   3.3.0| 3.3.0 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
-|loop_whileloop       |   3.151|        3.159|       18.044|
-|qsort*               |  1.435k|       3.342k|       6.287k|
-|app_fib              |   3.771|       14.614|       19.603|
-|tarai*               |   3.056|       13.392|       14.618|
-|so_mandelbrot        |   0.600|        0.984|       20.453|
-|so_nbody             |   1.066|        1.815|        6.866|
-|app_aobench          |   0.027|        0.048|        0.147|
+|loop_whileloop       |   3.030|        3.004|       28.734|
+|qsort*               |  1.371k|       3.855k|       7.150k|
+|app_fib              |   3.356|       18.950|       20.327|
+|tarai*               |   2.917|       14.289|       16.293|
+|so_mandelbrot        |   0.550|        0.944|       20.026|
+|so_nbody             |   0.984|        1.964|        6.925|
+|binarytrees          |   2.669|        4.842|        4.777|
+|app_aobench          |   0.025|        0.048|        0.148|
 
-|                     |   3.2.2| 3.2.2 --yjit|     monoruby|
-|:--------------------|-------:|------------:|------------:|
-|vm_ivar              |129.866M|     130.487M|       1.547G|
-|vm_ivar_get          |  12.187|       21.640|       76.887|
-|vm_ivar_set          |158.653M|     174.550M|       5.459G|
-|vm_ivar_generic_get  | 14.025M|      14.028M|     185.909M|
-|vm_ivar_generic_set  | 11.315M|      14.576M|     149.477M|
-|vm_attr_ivar         | 59.776M|      57.298M|     632.528M|
-|vm_attr_ivar_set     | 53.396M|      51.188M|     616.784M|
+|                     |   3.3.0| 3.3.0 --yjit|    monoruby|
+|:--------------------|-------:|------------:|-----------:|
+|vm_ivar              |135.987M|     140.434M|    877.408M|
+|vm_ivar_get          |  10.971|       27.283|      78.162|
+|vm_ivar_set          |163.651M|     200.768M|      1.109G|
+|vm_ivar_generic_get  | 15.051M|      15.051M|    188.579M|
+|vm_ivar_generic_set  |  8.475M|       9.827M|    167.269M|
+|vm_attr_ivar         | 47.534M|      48.266M|    398.173M|
+|vm_attr_ivar_set     | 42.305M|      42.606M|    482.824M|
 
-|                             |   3.2.2| 3.2.2 --yjit|   monoruby|
-|:----------------------------|-------:|------------:|----------:|
-|vm_array_index_small         |  8.634M|       8.514M|    42.198M|
-|vm_array_index_assign_small  |  3.350M|       3.348M|    36.469M|
-|vm_array_index               |  8.476M|       8.483M|    31.332M|
-|vm_array_index_assign        |  4.002M|       4.034M|    30.559M|
+|                             |   3.3.0| 3.3.0 --yjit|      monoruby|
+|:----------------------------|-------:|------------:|-------------:|
+|vm_array_index_small         |  7.662M|       7.705M|       52.798M|
+|vm_array_index_assign_small  |  3.195M|       3.195M|       42.554M|
+|vm_array_index               |  7.975M|       7.973M|       37.424M|
+|vm_array_index_assign        |  3.930M|       3.882M|       30.736M|
 
-|                       |      3.2.2| 3.2.2 --yjit|     monoruby|
-|:----------------------|----------:|------------:|------------:|
-|vm_const               |   133.905M|     132.822M|       2.535G|
-|vm_const_many          |    11.021M|      62.729M|      66.044M|
-|vm_method_with_block   |     8.846M|       9.322M|      44.352M|
+|                             |   3.3.0| 3.3.0 --yjit|    monoruby|
+|:----------------------------|-------:|------------:|-----------:|
+|vm_const                     | 89.278M|      86.284M|      1.105G|
+|vm_const_many                |  7.311M|      69.626M|     67.432M|
+|vm_method_with_block         |  8.000M|       8.136M|     44.042M|
