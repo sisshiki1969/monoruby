@@ -120,6 +120,9 @@ impl AsmIr {
                 self.stack2reg(reg, dst);
             }
             LinkMode::Alias(origin) => {
+                if dst == GP::R15 {
+                    self.writeback_acc(bb);
+                }
                 self.stack2reg(origin, dst);
             }
             LinkMode::R15 => {
