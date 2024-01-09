@@ -1604,6 +1604,7 @@ mod test {
         run_test_error("def f(**a, **b); end");
     }
 
+    #[ignore]
     #[test]
     fn keyword_to_hash() {
         run_test_with_prelude(

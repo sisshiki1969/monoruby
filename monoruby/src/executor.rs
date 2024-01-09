@@ -558,6 +558,19 @@ impl Executor {
         Ok(())
     }
 
+    pub(crate) fn invoke_block_iter_with_index1(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        iter: impl Iterator<Item = Value>,
+    ) -> Result<()> {
+        let data = globals.get_block_data(self.cfp(), bh);
+        for (index, val) in iter.enumerate() {
+            self.invoke_block(globals, &data, &[val, Value::integer(index as i64)])?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn invoke_block_map1(
         &mut self,
         globals: &mut Globals,
