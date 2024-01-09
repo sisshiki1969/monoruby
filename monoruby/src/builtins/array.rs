@@ -41,6 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_);
     globals.define_builtin_func(ARRAY_CLASS, "each", each);
+    globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index);
     globals.define_builtin_func(ARRAY_CLASS, "map", map);
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map);
@@ -809,8 +810,8 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// ### Array#each
 ///
-/// - each {|item| .... } -> self
 /// - each -> Enumerator
+/// - each {|item| .... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
 #[monoruby_builtin]
@@ -818,6 +819,24 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let ary: Array = lfp.self_val().into();
     if let Some(bh) = lfp.block() {
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
+        Ok(ary.into())
+    } else {
+        vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Enumerable#each_with_index
+///
+/// - each_with_index(*args) -> Enumerator
+/// - each_with_index(*args) {|item, index| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/each_with_index.html]
+#[monoruby_builtin]
+fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let ary: Array = lfp.self_val().into();
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter_with_index1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
         vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
@@ -1662,6 +1681,19 @@ mod test {
         x = 100
         [2, 3, 4, 5].each do |y|
           x += y
+        end
+        x
+        "##,
+        );
+    }
+
+    #[test]
+    fn each_with_index() {
+        run_test(
+            r##"
+        x = 100
+        [2, 3, 4, 5].each_with_index do |item, index|
+          x += item * 7 + index
         end
         x
         "##,
