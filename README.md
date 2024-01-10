@@ -80,63 +80,38 @@ and its REPL.
 > irm
 ```
 
-## Status of this project
-
-This project still remains in alpha stage. Currently, functionalities described below are implemented.
-
-- local variables
-- instance variables & accessor
-- global variables
-- block and dynamic local variables
-- if-then-elsif-end statement
-- for-in statement
-- while/until statement and postfix while/until modifier
-- begin-rescue-ensure statement
-- Object-oriented features
-  - classes: Object, Integer, Float, String, Symbol, Class, Array, Hash, Proc, ..
-  - superclass and singleton class and methods
-- class definition
-- method definition
-  - required parameter
-  - optional parameter
-  - rest parameter
-  - block parameter
-  - keyword parameter
-- coroutine (Fiber class)
-- garbage collector
-
 ## Benchmark
 
 ### optcarrot
 
-Currently, monoruby is about 20% faster than CRuby3.2.2preview1+YJIT in the optcarrot benchmark.
+#### optcarrot benchmark
 
-```sh
-❯ ./optcarrot.sh
+Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
 
-ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]
-fps: 126.70500588624708
-checksum: 59662
+- ruby33: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) [x86_64-linux]
+- ruby33yjit: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]
+- truffleruby: truffleruby 20.1.0, like ruby 2.6.5, GraalVM CE JVM [x86_64-linux]
+- jruby: jruby 9.4.5.0 (3.1.4) 2023-11-02 1abae2700f OpenJDK 64-Bit Server VM 25.392-b08 on 1.8.0_392-b08 +indy +jit [x86_64-linux]
+- monoruby: 3e348afd4141c40978342e67ad26d42dc0b8d2a7
 
-monoruby 0.2.0
-fps: 352.1105555393293
-checksum: 59662
+![optcarrot_benchmark](optcarrot_benchmark.png)
 
-❯ lscpu
-Architecture:                    x86_64
-CPU op-mode(s):                  32-bit, 64-bit
-CPU(s):                          12
-Thread(s) per core:              2
-Core(s) per socket:              6
-Socket(s):                       1
-Model name:                      Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz
-CPU MHz:                         3696.000
-L1d cache:                       192 KiB
-L1i cache:                       192 KiB
-L2 cache:                        1.5 MiB
-L3 cache:                        12 MiB
-<partially omitted>
-```
+#### optcarrot fps history (0-3000 frames)
+
+![optcarrot_fps_history](optcarrot_fps_history.png)
+
+#### machine spec
+
+- Architecture:            x86_64
+- CPU(s):                  32
+  -  Model name:            13th Gen Intel(R) Core(TM) i9-13900HX
+  -  Thread(s) per core:  2
+  -  Core(s) per socket:  16
+- Caches (sum of all):     
+  - L1d:                   768 KiB (16 instances)
+  - L1i:                   512 KiB (16 instances)
+  - L2:                    32 MiB (16 instances)
+  - L3:                    36 MiB (1 instance)
 
 ### micro benchmark
 
