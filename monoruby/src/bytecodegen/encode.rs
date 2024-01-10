@@ -607,7 +607,7 @@ impl BytecodeGen {
                 .collect();
             (kw_pos, kw_args, hash_splat_pos)
         } else {
-            (SlotId(0), HashMap::default(), vec![])
+            (SlotId(0), IndexMap::default(), vec![])
         };
         Ok(store.add_callsite(
             name,

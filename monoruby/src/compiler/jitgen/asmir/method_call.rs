@@ -269,14 +269,19 @@ impl Codegen {
                     self.single_arg_expand();
                 }
                 let kw_expansion = info.no_keyword() && callsite.kw_num() != 0;
-                if info.optional_num() == 0 && info.kw_rest().is_none() && !kw_expansion {
-                    // fast path: when no optional param, no rest param, no kw_rest param.
+                if info.optional_num() == 0
+                    && info.kw_rest().is_none()
+                    && !kw_expansion
+                    //&& info.no_keyword()
+                    && callsite.hash_splat_pos.is_empty()
+                {
+                    // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
                     if !info.no_keyword() {
                         self.handle_keyword_args(callsite, info)
                     }
-                    if !callsite.hash_splat_pos.is_empty() {
+                    /*if !callsite.hash_splat_pos.is_empty() {
                         self.handle_hash_splat(callid, callee_fid)
-                    }
+                    }*/
                 } else {
                     self.gen_handle_arguments(callid, meta, runtime::jit_handle_arguments as _);
                     self.handle_error(error);
@@ -526,33 +531,11 @@ impl Codegen {
             callee_ofs += 8;
         }
     }
-
-    ///
-    /// Handle Hash splat arguments.
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi
-    ///
-    fn handle_hash_splat(&mut self, callid: CallSiteId, callee_fid: FuncId) {
-        monoasm! { &mut self.jit,
-            lea  rcx, [rsp - (16 + LBP_SELF)];
-            subq rsp, 4088;
-            pushq rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());
-            movl r8, (callee_fid.get());
-            movq rax, (jit_handle_hash_splat);
-            call rax;
-            popq rdi;
-            addq rsp, 4088;
-        }
-    }
 }
 
 impl Codegen {
     ///
-    /// Class version guard fro JIT.
+    /// Class version guard for JIT.
     ///
     /// Check the cached class version, and if the version is changed, call `find_method` and
     /// compare obtained FuncId and cached FuncId.
@@ -707,30 +690,6 @@ impl Codegen {
             addq rsp, 4096;
             movq rdi, rdx;
         );
-    }
-}
-
-extern "C" fn jit_handle_hash_splat(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    callee_reg: *mut Option<Value>,
-    callee_func_id: FuncId,
-) {
-    let callsite = &globals.store[callid];
-    let CallSiteInfo { hash_splat_pos, .. } = callsite;
-    let info = globals.store[callee_func_id].as_ruby_func();
-    let callee_kw_pos = info.pos_num() + 1;
-    for (id, param_name) in info.args.kw_names.iter().enumerate() {
-        for hash in hash_splat_pos {
-            unsafe {
-                let h = vm.get_slot(*hash).unwrap();
-                // We must check whether h is a hash.
-                if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
-                    *callee_reg.sub(callee_kw_pos + id) = Some(v);
-                }
-            }
-        }
     }
 }
 

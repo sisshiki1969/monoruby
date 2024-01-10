@@ -186,19 +186,22 @@ impl ISeqInfo {
         self.args.required_num
     }
 
+    ///
+    /// Get a number of optional and rest parameters.
+    ///
     pub(crate) fn optional_num(&self) -> usize {
         self.args.pos_num - self.args.required_num
     }
 
     ///
-    /// Get a number of required arguments.
+    /// Get a number of required parameters.
     ///
     pub(crate) fn req_num(&self) -> usize {
         self.args.required_num
     }
 
     ///
-    /// get a number of required + optional arguments.
+    /// get a number of required or optional parameters.
     ///
     pub(crate) fn reqopt_num(&self) -> usize {
         self.args.reqopt_num

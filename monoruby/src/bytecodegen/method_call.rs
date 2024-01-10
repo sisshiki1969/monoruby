@@ -119,7 +119,7 @@ impl BytecodeGen {
             let kw = if kw_list.len() == 0 {
                 None
             } else {
-                let mut kw_args = HashMap::default();
+                let mut kw_args = IndexMap::default();
                 let kw_start = if outer == 0 {
                     BcLocal(mother_args.pos_num() as u16).into()
                 } else {
@@ -330,7 +330,7 @@ impl BytecodeGen {
         if kw_args_list.len() == 0 && hash_splat.is_empty() {
             Ok(None)
         } else {
-            let mut kw_args = HashMap::default();
+            let mut kw_args = IndexMap::default();
             let kw_start = self.sp().into();
             let mut hash_splat_pos = vec![];
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {

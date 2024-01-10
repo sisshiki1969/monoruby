@@ -1593,7 +1593,7 @@ mod test {
     fn keyword_rest() {
         run_test_with_prelude(
             r#"
-        [f{1}, f(a:1, c:4, z:6){2}, f(b:2, **{:z=>7, 5=>2}){3}]
+        [f{1}, f(a:18, c:4, z:6){2}, f(b:2, **{:z=>7, 5=>2}){3}]
         "#,
             r#"
         def f(a:1,b:2,**c,&block)
@@ -1604,7 +1604,6 @@ mod test {
         run_test_error("def f(**a, **b); end");
     }
 
-    #[ignore]
     #[test]
     fn keyword_to_hash() {
         run_test_with_prelude(

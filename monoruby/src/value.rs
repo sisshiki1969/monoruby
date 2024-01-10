@@ -1004,7 +1004,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
-            RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
+            RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{s}\""),
                 Err(_) => write!(f, "{s:?}"),

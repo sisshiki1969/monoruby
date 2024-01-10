@@ -379,7 +379,7 @@ impl JitContext {
             }
             TraceIr::Literal(dst, val) => {
                 self.ir.link_stack(bb, dst);
-                if val.is_packed_value() || val.class() == FLOAT_CLASS {
+                if val.is_packed_value() || val.is_float() {
                     self.ir.link_literal(bb, dst, val);
                 } else {
                     self.ir.deep_copy_lit(&bb, val);

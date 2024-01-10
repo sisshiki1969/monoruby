@@ -57,8 +57,14 @@ impl HashInner {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Clone, Copy, Eq)]
 pub struct HashKey(pub Value);
+
+impl std::fmt::Debug for HashKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HashKey({:?})", self.0)
+    }
+}
 
 impl Deref for HashKey {
     type Target = Value;

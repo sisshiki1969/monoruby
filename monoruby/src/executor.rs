@@ -908,15 +908,15 @@ impl Executor {
         }
 
         if let Some(rest) = info.kw_rest() {
-            let mut kw_args = kw_args.clone();
-            for param_name in info.args.kw_names.iter() {
-                kw_args.remove(param_name);
-            }
             let mut kw_rest = IndexMap::default();
-            for (name, i) in kw_args.into_iter() {
-                let v = unsafe { caller_lfp.get_slot(*kw_pos + i).unwrap() };
-                kw_rest.insert(HashKey(Value::symbol(name)), v);
+            for (name, i) in kw_args.iter() {
+                if info.args.kw_names.contains(name) {
+                    continue;
+                }
+                let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
+                kw_rest.insert(HashKey(Value::symbol(*name)), v);
             }
+            dbg!(&kw_rest);
             for h in hash_splat_pos
                 .iter()
                 .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })

@@ -297,7 +297,7 @@ struct KeywordArgs {
     /// Position of the first keyword argument.
     kw_start: BcReg,
     /// Names and positions of keyword arguments.
-    kw_args: HashMap<IdentId, usize>,
+    kw_args: IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }

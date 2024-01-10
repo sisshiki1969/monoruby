@@ -266,7 +266,7 @@ impl JitContext {
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
-                        value.class() == FLOAT_CLASS
+                        value.is_float()
                     } else {
                         false
                     };

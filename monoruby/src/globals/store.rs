@@ -235,7 +235,7 @@ impl Store {
         name: Option<IdentId>,
         pos_num: usize,
         kw_pos: SlotId,
-        kw_args: HashMap<IdentId, usize>,
+        kw_args: IndexMap<IdentId, usize>,
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
         block_fid: Option<FuncId>,
@@ -377,7 +377,7 @@ pub(crate) struct CallSiteInfo {
     /// Postion of keyword arguments.
     pub kw_pos: SlotId,
     /// Names and positions of keyword arguments.
-    pub kw_args: HashMap<IdentId, usize>,
+    pub kw_args: IndexMap<IdentId, usize>,
     /// Position of hash splat arguments.
     pub hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.

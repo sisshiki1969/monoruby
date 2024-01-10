@@ -12,10 +12,10 @@ ruby --yjit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master
 echo
 
 monoruby -v
-echo "with jit"
+echo "without jit"
 monoruby --no-jit ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
 monoruby --no-jit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
-
+echo
 
 monoruby -v
 echo "with jit"
