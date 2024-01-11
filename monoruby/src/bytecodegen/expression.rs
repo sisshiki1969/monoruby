@@ -955,33 +955,41 @@ impl BytecodeGen {
         is_module: bool,
         loc: Loc,
     ) -> Result<()> {
-        if let Some(base) = base {
-            return Err(MonorubyErr::unsupported_feature(
+        let old = self.temp;
+        let base = if let Some(box base) = base {
+            Some(self.push_expr(base)?.into())
+            /*return Err(MonorubyErr::unsupported_feature(
                 &format!("base in class def. {:?}", base.kind),
                 loc,
                 self.sourceinfo.clone(),
-            ));
+            ));*/
+        } else {
+            None
         };
         let func = self.add_classdef(Some(name), info);
         let superclass = match superclass {
-            Some(superclass) => Some(self.gen_temp_expr(*superclass)?),
+            Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
         };
+        self.temp = old;
         let ret = match use_mode {
             UseMode2::NotUse => None,
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
             UseMode2::Store(r) => Some(r),
         };
+        //let base = None;
         self.emit(
             if is_module {
                 BcIr::ModuleDef {
                     ret,
+                    base,
                     name,
                     func: Box::new(func),
                 }
             } else {
                 BcIr::ClassDef {
                     ret,
+                    base,
                     superclass,
                     name,
                     func: Box::new(func),

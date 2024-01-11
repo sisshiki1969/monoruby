@@ -705,14 +705,20 @@ impl JitContext {
             }
             TraceIr::ClassDef {
                 dst,
+                base,
                 superclass,
                 name,
                 func_id,
             } => {
-                self.class_def(bb, dst, superclass, name, func_id, false, pc);
+                self.class_def(bb, dst, base, superclass, name, func_id, false, pc);
             }
-            TraceIr::ModuleDef { dst, name, func_id } => {
-                self.class_def(bb, dst, SlotId::new(0), name, func_id, true, pc);
+            TraceIr::ModuleDef {
+                dst,
+                base,
+                name,
+                func_id,
+            } => {
+                self.class_def(bb, dst, base, None, name, func_id, true, pc);
             }
             TraceIr::SingletonClassDef { dst, base, func_id } => {
                 self.singleton_class_def(bb, dst, base, func_id, pc);

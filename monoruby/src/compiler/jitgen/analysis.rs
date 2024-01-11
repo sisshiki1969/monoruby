@@ -202,17 +202,17 @@ impl JitContext {
                 }
                 TraceIr::LoopStart(_) => {}
                 TraceIr::LoopEnd => {}
-                TraceIr::DefinedYield { dst: ret }
-                | TraceIr::DefinedConst { dst: ret, .. }
-                | TraceIr::DefinedGvar { dst: ret, .. }
-                | TraceIr::DefinedIvar { dst: ret, .. }
-                | TraceIr::Integer(ret, ..)
-                | TraceIr::Symbol(ret, ..)
-                | TraceIr::Nil(ret) => {
-                    info.def(ret);
+                TraceIr::DefinedYield { dst }
+                | TraceIr::DefinedConst { dst, .. }
+                | TraceIr::DefinedGvar { dst, .. }
+                | TraceIr::DefinedIvar { dst, .. }
+                | TraceIr::Integer(dst, ..)
+                | TraceIr::Symbol(dst, ..)
+                | TraceIr::Nil(dst) => {
+                    info.def(dst);
                 }
-                TraceIr::DefinedMethod { dst: ret, recv, .. } => {
-                    info.def(ret);
+                TraceIr::DefinedMethod { dst, recv, .. } => {
+                    info.def(dst);
                     info.r#use(recv);
                 }
                 TraceIr::Literal(dst, val) => {
@@ -249,20 +249,22 @@ impl JitContext {
                     info.r#use(idx);
                 }
                 TraceIr::ClassDef {
-                    dst: ret,
-                    superclass: base,
+                    dst,
+                    base,
+                    superclass,
                     ..
-                }
-                | TraceIr::SingletonClassDef { dst: ret, base, .. } => {
+                } => {
+                    info.r#use(superclass);
                     info.r#use(base);
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
-                TraceIr::ModuleDef { dst: ret, .. } => {
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                TraceIr::ModuleDef { dst, base, .. } => {
+                    info.r#use(base);
+                    info.def(dst);
+                }
+                TraceIr::SingletonClassDef { dst, base, .. } => {
+                    info.r#use(base);
+                    info.def(dst);
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
@@ -328,9 +330,7 @@ impl JitContext {
                 } => {
                     info.r#use(lhs);
                     info.r#use(rhs);
-                    if let Some(ret) = dst {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
                 TraceIr::IBinOp {
                     dst,
@@ -353,11 +353,9 @@ impl JitContext {
                     ..
                 } => {
                     info.r#use(reg);
-                    if let Some(ret) = dst {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
-                TraceIr::Cmp(_, ret, mode, _) => {
+                TraceIr::Cmp(_, dst, mode, _) => {
                     let is_float = mode.is_float_op(&pc);
                     match mode {
                         OpMode::RR(lhs, rhs) => {
@@ -369,40 +367,27 @@ impl JitContext {
                         }
                         _ => unreachable!(),
                     }
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
                 TraceIr::Mov(dst, src) => {
                     info.copy(dst, src);
                 }
-                TraceIr::ConcatStr(ret, args, len) => {
+                TraceIr::ConcatStr(dst, args, len) => {
                     info.use_range(args, len);
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
-                TraceIr::ConcatRegexp(ret, args, len) => {
+                TraceIr::ConcatRegexp(dst, args, len) => {
                     info.use_range(args, len);
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
                     info.use_range(dst, len);
                     info.r#use(src);
                 }
                 TraceIr::Yield { callid } => {
-                    let CallSiteInfo {
-                        args,
-                        len,
-                        dst: ret,
-                        ..
-                    } = store[callid];
+                    let CallSiteInfo { args, len, dst, .. } = store[callid];
                     info.use_range(args, len as u16);
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
                 TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
                     let has_block = store[callid].block_fid.is_some();
@@ -410,7 +395,7 @@ impl JitContext {
                         recv,
                         args,
                         len,
-                        dst: ret,
+                        dst,
                         ..
                     } = store[callid];
                     info.r#use(recv);
@@ -418,9 +403,7 @@ impl JitContext {
                     if has_block {
                         info.unlink_locals(func);
                     }
-                    if let Some(ret) = ret {
-                        info.def(ret);
-                    }
+                    info.def(dst);
                 }
                 TraceIr::InlineCall {
                     inline_id, callid, ..
@@ -544,8 +527,10 @@ impl SlotInfo {
     /// ### Arguments
     /// - `slot` - the slot to be used.
     ///
-    fn r#use(&mut self, slot: SlotId) {
-        self.use_as(slot, false, false);
+    fn r#use(&mut self, slot: impl Into<Option<SlotId>>) {
+        if let Some(slot) = slot.into() {
+            self.use_as(slot, false, false);
+        }
     }
 
     fn use_range(&mut self, args: SlotId, len: u16) {
@@ -606,8 +591,10 @@ impl SlotInfo {
         }
     }
 
-    fn def(&mut self, slot: SlotId) {
-        self.def_as(slot, false)
+    fn def(&mut self, slot: impl Into<Option<SlotId>>) {
+        if let Some(slot) = slot.into() {
+            self.def_as(slot, false)
+        }
     }
 
     fn def_as_float(&mut self, slot: SlotId) {
@@ -786,9 +773,7 @@ pub(super) enum ExitType {
 ///
 pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    if let Some(ret) = callsite.dst {
-        info.def(ret);
-    }
+    info.def(callsite.dst);
 }
 
 ///
@@ -797,9 +782,7 @@ pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
     info.r#use(callsite.args);
-    if let Some(ret) = callsite.dst {
-        info.def(ret);
-    }
+    info.def(callsite.dst);
 }
 
 ///
@@ -810,14 +793,12 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
         recv,
         args,
         len,
-        dst: ret,
+        dst,
         ..
     } = *callsite;
     info.r#use(recv);
     info.use_range(args, len as u16);
-    if let Some(ret) = ret {
-        info.def(ret);
-    }
+    info.def(dst);
 }
 
 ///

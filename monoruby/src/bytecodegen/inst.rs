@@ -170,18 +170,20 @@ pub(super) enum BcIr {
     },
     ClassDef {
         ret: Option<BcReg>,
+        base: Option<BcReg>,
         superclass: Option<BcReg>,
+        name: IdentId,
+        func: Box<Functions>,
+    },
+    ModuleDef {
+        ret: Option<BcReg>,
+        base: Option<BcReg>,
         name: IdentId,
         func: Box<Functions>,
     },
     SingletonClassDef {
         ret: Option<BcReg>,
         base: BcReg,
-        func: Box<Functions>,
-    },
-    ModuleDef {
-        ret: Option<BcReg>,
-        name: IdentId,
         func: Box<Functions>,
     },
     SingletonMethodDef {

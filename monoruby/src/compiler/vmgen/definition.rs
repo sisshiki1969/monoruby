@@ -6,17 +6,19 @@ impl Codegen {
     /// ~~~text
     /// -16 -14 -12 -10  -8  -6  -4  -2
     /// +---+---+---+---++---+---+---+---+
-    /// |sup|   |dst| op||  name |       |
+    /// |sup|bas|dst| op||  name |       |
     /// +---+---+---+---++---+---+---+---+
     ///  rsi rdi r15
     ///
     /// - sup: superclass (SlotId). If no superclass, sup is 0.
+    /// - base: base class Object(SlotId). If no base class, base is 0.
     /// - dst: destination slot (SlotId).
     /// - name: class name (IdentId)
     /// ~~~
     pub(super) fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let super_ = self.jit.label();
+        let base = self.jit.label();
         self.fetch3();
         if is_module {
             monoasm! { &mut self.jit,
@@ -32,8 +34,15 @@ impl Codegen {
             jeq super_;
         }
         self.vm_get_rsi();
+        self.jit.bind_label(super_);
         monoasm! { &mut self.jit,
-        super_:
+            cmpw rdi, 0;
+            jeq base;
+        }
+        self.vm_get_rdi();
+        self.jit.bind_label(base);
+        monoasm! { &mut self.jit,
+            movq r9, rdi; // r9 <- base: Value
             movq rcx, rsi; // rcx <- superclass: Option<Value>
             movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp

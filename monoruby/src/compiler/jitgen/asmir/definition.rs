@@ -16,7 +16,8 @@ impl Codegen {
     /// ~~~
     pub(super) fn class_def(
         &mut self,
-        superclass: SlotId,
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
         dst: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
@@ -25,11 +26,17 @@ impl Codegen {
         error: DestLabel,
     ) {
         self.xmm_save(using_xmm);
-        // rcx <- superclass: Option<Value>
-        if superclass.is_self() {
-            monoasm! { &mut self.jit, xorq rcx, rcx; }
+        // r9 <- base: Option<Value>
+        if let Some(base) = base {
+            monoasm! { &mut self.jit, movq r9, [r14 - (conv(base))]; }
         } else {
+            monoasm! { &mut self.jit, xorq r9, r9; }
+        }
+        // rcx <- superclass: Option<Value>
+        if let Some(superclass) = superclass {
             monoasm! { &mut self.jit, movq rcx, [r14 - (conv(superclass))]; }
+        } else {
+            monoasm! { &mut self.jit, xorq rcx, rcx; }
         }
         // r8 <- is_module
         if is_module {
@@ -145,17 +152,24 @@ impl JitContext {
         &mut self,
         bb: &mut BBContext,
         dst: Option<SlotId>,
-        superclass: SlotId,
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
         pc: BcPc,
     ) {
-        self.ir.write_back_slots(bb, &[superclass]);
+        if let Some(base) = base {
+            self.ir.write_back_slots(bb, &[base]);
+        }
+        if let Some(superclass) = superclass {
+            self.ir.write_back_slots(bb, &[superclass]);
+        }
         self.ir.link_stack(bb, dst);
         let using_xmm = bb.get_using_xmm();
         let error = self.ir.new_error(bb, pc);
         self.ir.inst.push(AsmInst::ClassDef {
+            base,
             superclass,
             dst,
             name,

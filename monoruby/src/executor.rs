@@ -696,11 +696,15 @@ impl Executor {
     pub(crate) fn define_class(
         &mut self,
         globals: &mut Globals,
+        base: Option<Value>,
         name: IdentId,
         superclass: Option<Value>,
         is_module: u32,
     ) -> Result<Value> {
-        let parent = self.context_class_id();
+        let parent = match base {
+            Some(base) => base.expect_class_or_module(globals)?,
+            None => self.context_class_id(),
+        };
         let self_val = match globals.get_constant(parent, name) {
             Some(val) => {
                 val.expect_class_or_module(globals)?;
@@ -1350,17 +1354,25 @@ impl BcPc {
                     let ivar = self.cached_ivarid();
                     TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
-                18 => TraceIr::ClassDef {
-                    dst: SlotId::from(op1),
-                    superclass: SlotId::new(op2 as u16),
-                    name: IdentId::from((self.op2.0) as u32),
-                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
-                },
-                19 => TraceIr::ModuleDef {
-                    dst: SlotId::from(op1),
-                    name: IdentId::from((self.op2.0) as u32),
-                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
-                },
+                18 => {
+                    let (op1, op2, op3) = dec_www(op);
+                    TraceIr::ClassDef {
+                        dst: SlotId::from(op1),
+                        base: SlotId::from(op2),
+                        superclass: SlotId::from(op3),
+                        name: IdentId::from((self.op2.0) as u32),
+                        func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                    }
+                }
+                19 => {
+                    let (op1, op2, _) = dec_www(op);
+                    TraceIr::ModuleDef {
+                        dst: SlotId::from(op1),
+                        base: SlotId::from(op2),
+                        name: IdentId::from((self.op2.0) as u32),
+                        func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                    }
+                }
                 20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => TraceIr::SingletonClassDef {

@@ -489,8 +489,9 @@ pub(super) extern "C" fn define_class(
     name: IdentId,
     superclass: Option<Value>,
     is_module: u32,
+    base: Option<Value>,
 ) -> Option<Value> {
-    match vm.define_class(globals, name, superclass, is_module) {
+    match vm.define_class(globals, base, name, superclass, is_module) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);

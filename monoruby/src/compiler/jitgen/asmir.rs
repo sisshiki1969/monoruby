@@ -1127,7 +1127,8 @@ pub(super) enum AsmInst {
     },
 
     ClassDef {
-        superclass: SlotId,
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
         dst: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
@@ -1814,6 +1815,7 @@ impl Codegen {
             AsmInst::LoadSVar { id, using_xmm } => self.load_svar(id, using_xmm),
 
             AsmInst::ClassDef {
+                base,
                 superclass,
                 dst,
                 name,
@@ -1823,6 +1825,7 @@ impl Codegen {
                 error,
             } => {
                 self.class_def(
+                    base,
                     superclass,
                     dst,
                     name,

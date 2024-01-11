@@ -149,12 +149,14 @@ pub(crate) enum TraceIr {
     /// class definition(method_name, func_id)
     ClassDef {
         dst: Option<SlotId>,
-        superclass: SlotId,
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
     },
     ModuleDef {
         dst: Option<SlotId>,
+        base: Option<SlotId>,
         name: IdentId,
         func_id: FuncId,
     },

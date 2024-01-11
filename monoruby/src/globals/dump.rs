@@ -556,24 +556,40 @@ impl Globals {
                 format!("singleton_method_def {:?}.{name}: {:?}", obj, func_id)
             }
             TraceIr::ClassDef {
-                dst: ret,
+                dst,
+                base,
                 superclass,
                 name,
                 func_id,
             } => {
                 format!(
-                    "{} = class_def {name} < {:?}: {:?}",
-                    ret_str(ret),
+                    "{} = class_def {}{name} < {:?}: {:?}",
+                    ret_str(dst),
+                    if let Some(base) = base {
+                        format!("{:?}::", base)
+                    } else {
+                        "".to_string()
+                    },
                     superclass,
                     func_id
                 )
             }
             TraceIr::ModuleDef {
-                dst: ret,
+                dst,
+                base,
                 name,
                 func_id,
             } => {
-                format!("{} = module_def {name}: {:?}", ret_str(ret), func_id)
+                format!(
+                    "{} = module_def {}{name}: {:?}",
+                    ret_str(dst),
+                    if let Some(base) = base {
+                        format!("{:?}::", base)
+                    } else {
+                        "".to_string()
+                    },
+                    func_id
+                )
             }
             TraceIr::SingletonClassDef {
                 dst: ret,

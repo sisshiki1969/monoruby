@@ -281,6 +281,7 @@ impl BytecodeGen {
             }
             BcIr::ClassDef {
                 ret,
+                base,
                 superclass,
                 name,
                 box func,
@@ -288,17 +289,22 @@ impl BytecodeGen {
                 // 18
                 let op1 = match ret {
                     None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
+                    Some(r) => self.slot_id(&r),
                 };
-                let op2 = match superclass {
+                let op2 = match base {
                     None => SlotId::new(0),
-                    Some(ret) => self.slot_id(&ret),
+                    Some(r) => self.slot_id(&r),
+                };
+                let op3 = match superclass {
+                    None => SlotId::new(0),
+                    Some(r) => self.slot_id(&r),
                 };
                 let func_id = self.new_function(store, func, loc)?;
-                Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), Some(name), func_id)
+                Bc::from_with_func_name_id(enc_www(18, op1.0, op2.0, op3.0), Some(name), func_id)
             }
             BcIr::ModuleDef {
                 ret,
+                base,
                 name,
                 box func,
             } => {
@@ -307,8 +313,12 @@ impl BytecodeGen {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
                 };
+                let op2 = match base {
+                    None => SlotId::new(0),
+                    Some(r) => self.slot_id(&r),
+                };
                 let func_id = self.new_function(store, func, loc)?;
-                Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), Some(name), func_id)
+                Bc::from_with_func_name_id(enc_www(19, op1.0, op2.0, 0), Some(name), func_id)
             }
             BcIr::BlockArgProxy(dst, outer) => {
                 // 21
