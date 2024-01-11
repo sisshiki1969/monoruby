@@ -17,8 +17,6 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        let super_ = self.jit.label();
-        let base = self.jit.label();
         self.fetch3();
         if is_module {
             monoasm! { &mut self.jit,
@@ -29,18 +27,8 @@ impl Codegen {
                 xorq r8, r8;
             }
         }
-        monoasm! { &mut self.jit,
-            cmpw rsi, 0;
-            jeq super_;
-        }
-        self.vm_get_rsi();
-        self.jit.bind_label(super_);
-        monoasm! { &mut self.jit,
-            cmpw rdi, 0;
-            jeq base;
-        }
-        self.vm_get_rdi();
-        self.jit.bind_label(base);
+        self.vm_get_slot_value_if_nonzero(GP::Rdi);
+        self.vm_get_slot_value_if_nonzero(GP::Rsi);
         monoasm! { &mut self.jit,
             movq r9, rdi; // r9 <- base: Value
             movq rcx, rsi; // rcx <- superclass: Option<Value>
@@ -59,7 +47,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let super_ = self.jit.label();
         self.fetch2();
-        self.vm_get_rdi();
+        self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
         super_:
             movq rdx, rdi; // rdx <- base: Value

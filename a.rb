@@ -1,9 +1,18 @@
-def f(a,&blk)
-  blk.call
+class C
+  @@x=100
+  class D
+    puts @@x
+  end
 end
 
-blk = Proc.new do puts 100 end
-a = 5
-b = 100
-f(a,&blk)
-f(a) do puts 200 end
+class C
+  def f
+    puts @@x
+  end
+  def self.g
+    puts @@x
+  end
+end
+
+C.new.f
+C.g

@@ -1354,25 +1354,6 @@ impl BcPc {
                     let ivar = self.cached_ivarid();
                     TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
-                18 => {
-                    let (op1, op2, op3) = dec_www(op);
-                    TraceIr::ClassDef {
-                        dst: SlotId::from(op1),
-                        base: SlotId::from(op2),
-                        superclass: SlotId::from(op3),
-                        name: IdentId::from((self.op2.0) as u32),
-                        func_id: FuncId::new((self.op2.0 >> 32) as u32),
-                    }
-                }
-                19 => {
-                    let (op1, op2, _) = dec_www(op);
-                    TraceIr::ModuleDef {
-                        dst: SlotId::from(op1),
-                        base: SlotId::from(op2),
-                        name: IdentId::from((self.op2.0) as u32),
-                        func_id: FuncId::new((self.op2.0 >> 32) as u32),
-                    }
-                }
                 20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => TraceIr::SingletonClassDef {
@@ -1445,6 +1426,19 @@ impl BcPc {
                 68 => TraceIr::DefinedIvar {
                     dst: SlotId::new(op1),
                     name: IdentId::from(self.op2.0 as u32),
+                },
+                70 => TraceIr::ClassDef {
+                    dst: SlotId::from(op1),
+                    base: SlotId::from(op2),
+                    superclass: SlotId::from(op3),
+                    name: IdentId::from((self.op2.0) as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
+                },
+                71 => TraceIr::ModuleDef {
+                    dst: SlotId::from(op1),
+                    base: SlotId::from(op2),
+                    name: IdentId::from((self.op2.0) as u32),
+                    func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 80 => TraceIr::Ret(SlotId::new(op1)),
                 81 => TraceIr::MethodRet(SlotId::new(op1)),
@@ -1519,7 +1513,7 @@ impl BcPc {
                     OpMode::RI(SlotId::new(op2), op3 as i16),
                     true,
                 ),
-                170 => TraceIr::InitMethod(FnInitInfo {
+                170 | 172 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
                     arg_num: self.u16(3) as usize,
                     reqopt_num: op2 as usize,
@@ -1528,14 +1522,6 @@ impl BcPc {
                     stack_offset: op3 as usize,
                 }),
                 171 => TraceIr::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
-                172 => TraceIr::InitMethod(FnInitInfo {
-                    reg_num: op1 as usize,
-                    arg_num: self.u16(3) as usize,
-                    reqopt_num: op2 as usize,
-                    req_num: self.u16(0) as usize,
-                    info: self.u16(2) as usize,
-                    stack_offset: op3 as usize,
-                }),
                 173 => TraceIr::AliasMethod {
                     new: SlotId::new(op2),
                     old: SlotId::new(op3),

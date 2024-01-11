@@ -286,7 +286,7 @@ impl BytecodeGen {
                 name,
                 box func,
             } => {
-                // 18
+                // 70
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(r) => self.slot_id(&r),
@@ -300,7 +300,7 @@ impl BytecodeGen {
                     Some(r) => self.slot_id(&r),
                 };
                 let func_id = self.new_function(store, func, loc)?;
-                Bc::from_with_func_name_id(enc_www(18, op1.0, op2.0, op3.0), Some(name), func_id)
+                Bc::from_with_func_name_id(enc_www(70, op1.0, op2.0, op3.0), Some(name), func_id)
             }
             BcIr::ModuleDef {
                 ret,
@@ -308,7 +308,7 @@ impl BytecodeGen {
                 name,
                 box func,
             } => {
-                // 19
+                // 71
                 let op1 = match ret {
                     None => SlotId::new(0),
                     Some(ret) => self.slot_id(&ret),
@@ -318,7 +318,7 @@ impl BytecodeGen {
                     Some(r) => self.slot_id(&r),
                 };
                 let func_id = self.new_function(store, func, loc)?;
-                Bc::from_with_func_name_id(enc_www(19, op1.0, op2.0, 0), Some(name), func_id)
+                Bc::from_with_func_name_id(enc_www(71, op1.0, op2.0, 0), Some(name), func_id)
             }
             BcIr::BlockArgProxy(dst, outer) => {
                 // 21

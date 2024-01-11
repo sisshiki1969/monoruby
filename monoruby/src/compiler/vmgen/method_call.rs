@@ -53,7 +53,7 @@ impl Codegen {
             movzxw rdi, [r13 + (RECV_REG)];
         };
         // rdi: receiver: Value
-        self.vm_get_rdi();
+        self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
             movq [rsp - (16 + LBP_SELF)], rdi;
             call get_class;
@@ -235,7 +235,7 @@ impl Codegen {
         }
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
-        self.vm_get_addr_rcx(); // rcx <- *args
+        self.vm_get_slot_addr(GP::Rcx); // rcx <- *args
         monoasm! { &mut self.jit,
             testq rdi, rdi;
             jeq  loop_exit;
