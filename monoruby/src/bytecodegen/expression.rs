@@ -21,17 +21,11 @@ impl BytecodeGen {
     /// * If *use_mode* is `UseMode2::Ret`, emit BcIr::Ret with the result.
     ///
     pub(super) fn gen_expr(&mut self, expr: Node, use_mode: UseMode2) -> Result<()> {
-        let use_mode = match use_mode {
-            UseMode2::Store(r) => return self.gen_store_expr(r, expr),
-            UseMode2::NotUse => UseMode::NotUse,
-            UseMode2::Push => UseMode::Push,
-            UseMode2::Ret => UseMode::Ret,
-        };
         let old = self.temp;
         //let loc = expr.loc;
         self.gen_expr_inner(expr, use_mode)?;
         match use_mode {
-            UseMode::Push => {
+            UseMode2::Push => {
                 assert_eq!(old + 1, self.temp);
             }
             _ => {
@@ -96,8 +90,7 @@ impl BytecodeGen {
                         IdentId::_INDEX,
                         Some(base),
                         arglist,
-                        Some(dst),
-                        UseMode::Push,
+                        UseMode2::Store(dst),
                         loc,
                     )?;
                 } else {
@@ -142,7 +135,7 @@ impl BytecodeGen {
                         self.emit_assign(dst, lhs, Some(temp), loc);
                     }
                 } else {
-                    self.gen_mul_assign(mlhs, mrhs, UseMode::Push)?;
+                    self.gen_mul_assign(mlhs, mrhs, UseMode2::Push)?;
                     let temp = self.pop().into();
                     self.emit_mov(dst, temp);
                 }
@@ -202,14 +195,7 @@ impl BytecodeGen {
                 safe_nav: false,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(
-                    method,
-                    Some(receiver),
-                    arglist,
-                    Some(dst),
-                    UseMode::Push,
-                    loc,
-                )?;
+                self.gen_method_call(method, Some(receiver), arglist, UseMode2::Store(dst), loc)?;
             }
             NodeKind::FuncCall {
                 method,
@@ -217,7 +203,7 @@ impl BytecodeGen {
                 safe_nav: false,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, None, arglist, Some(dst), UseMode::Push, loc)?;
+                self.gen_method_call(method, None, arglist, UseMode2::Store(dst), loc)?;
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
@@ -227,7 +213,7 @@ impl BytecodeGen {
                 }
             }
             NodeKind::CompStmt(nodes) => {
-                self.gen_comp_stmts(nodes, Some(dst), UseMode::NotUse)?;
+                self.gen_comp_stmts(nodes, Some(dst), UseMode2::NotUse)?;
             }
             NodeKind::ClassDef {
                 base,
@@ -259,8 +245,8 @@ impl BytecodeGen {
     fn gen_comp_stmts(
         &mut self,
         mut nodes: Vec<Node>,
-        ret: Option<BcReg>,
-        use_mode: UseMode,
+        dst: Option<BcReg>,
+        use_mode: UseMode2,
     ) -> Result<()> {
         let last = match nodes.pop() {
             Some(node) => node,
@@ -269,13 +255,13 @@ impl BytecodeGen {
         for node in nodes.into_iter() {
             self.gen_expr(node, UseMode2::NotUse)?;
         }
-        match ret {
+        match dst {
             Some(ret) => {
                 self.gen_store_expr(ret, last)?;
                 self.handle_mode(use_mode, ret)?;
             }
             None => {
-                self.gen_expr(last, use_mode.into())?;
+                self.gen_expr(last, use_mode)?;
             }
         }
         Ok(())
@@ -288,7 +274,7 @@ impl BytecodeGen {
     /// * If *use_mode* is `UseMode::Ret`, emit BcIr::Ret with the result.
     /// * If *use_mode* is `UseMode::NotUse`, the result is discarded.
     ///
-    fn gen_expr_inner(&mut self, expr: Node, use_mode: UseMode) -> Result<()> {
+    fn gen_expr_inner(&mut self, expr: Node, use_mode: UseMode2) -> Result<()> {
         if !use_mode.use_val() {
             match &expr.kind {
                 NodeKind::Nil
@@ -301,6 +287,9 @@ impl BytecodeGen {
                 | NodeKind::String(_) => return Ok(()),
                 _ => {}
             }
+        }
+        if let UseMode2::Store(r) = use_mode {
+            return self.gen_store_expr(r, expr);
         }
         let loc = expr.loc;
         match expr.kind {
@@ -326,7 +315,7 @@ impl BytecodeGen {
                 self.gen_store_expr(ret, expr)?;
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(op, lhs, rhs, use_mode.into(), loc)?;
+                self.gen_binop(op, lhs, rhs, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::Index {
@@ -337,14 +326,7 @@ impl BytecodeGen {
                     self.gen_index(None, base, index.remove(0), loc)?;
                 } else if index.len() == 2 {
                     let arglist = ArgList::from_args(index);
-                    self.gen_method_call(
-                        IdentId::_INDEX,
-                        Some(base),
-                        arglist,
-                        None,
-                        use_mode,
-                        loc,
-                    )?;
+                    self.gen_method_call(IdentId::_INDEX, Some(base), arglist, use_mode, loc)?;
                     return Ok(());
                 } else {
                     return Err(MonorubyErr::unsupported_feature(
@@ -369,20 +351,21 @@ impl BytecodeGen {
                 self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
                 // Assign rvalue to lvalue.
                 match use_mode {
-                    UseMode::Ret => {
+                    UseMode2::Ret => {
                         self.emit_assign(src, lhs_kind, None, lhs_loc);
                         self.temp = temp;
                         self.emit_ret(Some(src))?;
                     }
-                    UseMode::Push => {
+                    UseMode2::Push => {
                         self.emit_assign(src, lhs_kind, None, lhs_loc);
                         self.temp = temp;
                         let dst = self.push();
                         self.emit_mov(dst.into(), src);
                     }
-                    UseMode::NotUse => {
+                    UseMode2::NotUse => {
                         self.emit_assign(src, lhs_kind, Some(temp), lhs_loc);
                     }
+                    _ => unreachable!(),
                 }
                 return Ok(());
             }
@@ -399,20 +382,21 @@ impl BytecodeGen {
                     let src = self.gen_expr_reg(rhs)?;
 
                     match use_mode {
-                        UseMode::Ret => {
+                        UseMode2::Ret => {
                             self.emit_assign(src, lhs, None, loc);
                             self.temp = temp;
                             self.emit_ret(Some(src))?;
                         }
-                        UseMode::Push => {
+                        UseMode2::Push => {
                             self.emit_assign(src, lhs, None, loc);
                             self.temp = temp;
                             let dst = self.push();
                             self.emit_mov(dst.into(), src);
                         }
-                        UseMode::NotUse => {
+                        UseMode2::NotUse => {
                             self.emit_assign(src, lhs, Some(temp), loc);
                         }
+                        _ => unreachable!(),
                     }
                     return Ok(());
                 } else {
@@ -447,7 +431,7 @@ impl BytecodeGen {
                 safe_nav: false,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, Some(receiver), arglist, None, use_mode, loc);
+                return self.gen_method_call(method, Some(receiver), arglist, use_mode, loc);
             }
             NodeKind::FuncCall {
                 method,
@@ -455,15 +439,15 @@ impl BytecodeGen {
                 safe_nav: false,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, None, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
-                return self.gen_super(arglist, None, use_mode, loc);
+                return self.gen_super(arglist, use_mode, loc);
             }
             NodeKind::Command(box expr) => {
                 let arglist = ArgList::from_args(vec![expr]);
                 let method = IdentId::get_id("`");
-                return self.gen_method_call(method, None, arglist, None, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
                 return self.gen_yield(arglist, use_mode, loc);
@@ -471,7 +455,7 @@ impl BytecodeGen {
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, None, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, use_mode, loc);
             }
             NodeKind::If {
                 box cond,
@@ -481,16 +465,17 @@ impl BytecodeGen {
                 let else_pos = self.new_label();
                 self.gen_opt_condbr(false, cond, else_pos)?;
                 let old = self.temp;
-                self.gen_expr(then_, use_mode.into())?;
-                if else_.is_empty() && use_mode == UseMode::NotUse {
+                self.gen_expr(then_, use_mode)?;
+                if else_.is_empty() && use_mode == UseMode2::NotUse {
                     self.apply_label(else_pos);
                 } else {
                     let succ_pos = self.new_label();
                     match use_mode {
-                        UseMode::NotUse | UseMode::Push => {
+                        UseMode2::NotUse | UseMode2::Push => {
                             self.emit_br(succ_pos);
                         }
-                        UseMode::Ret => {}
+                        UseMode2::Ret => {}
+                        _ => unreachable!(),
                     }
                     self.temp = old;
                     self.apply_label(else_pos);
@@ -540,7 +525,7 @@ impl BytecodeGen {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.gen_break(val, use_mode.into())?;
+                            self.gen_break(val, use_mode)?;
                             return Ok(());
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
@@ -556,7 +541,7 @@ impl BytecodeGen {
                     self.gen_expr(val, UseMode2::NotUse)?;
                 }
                 self.emit(BcIr::Br(break_dest), loc);
-                if use_mode == UseMode::Push {
+                if use_mode == UseMode2::Push {
                     self.push();
                 }
                 return Ok(());
@@ -578,7 +563,7 @@ impl BytecodeGen {
                 };
                 self.gen_expr(val, UseMode2::NotUse)?;
                 self.emit(BcIr::Br(next_dest), loc);
-                if use_mode == UseMode::Push {
+                if use_mode == UseMode2::Push {
                     self.push();
                 }
                 return Ok(());
@@ -662,14 +647,15 @@ impl BytecodeGen {
                     _ => unimplemented!(),
                 };
                 match use_mode {
-                    UseMode::Ret => {
+                    UseMode2::Ret => {
                         self.push_nil();
                         self.emit_ret(None)?;
                     }
-                    UseMode::NotUse => {}
-                    UseMode::Push => {
+                    UseMode2::NotUse => {}
+                    UseMode2::Push => {
                         self.push_nil();
                     }
+                    _ => unreachable!(),
                 }
                 return Ok(());
             }
@@ -679,27 +665,31 @@ impl BytecodeGen {
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
         match use_mode {
-            UseMode::Ret => {
+            UseMode2::Ret => {
                 self.emit_ret(None)?;
             }
-            UseMode::NotUse => {
+            UseMode2::NotUse => {
                 self.pop();
             }
-            UseMode::Push => {}
+            UseMode2::Push => {}
+            _ => unreachable!(),
         }
         Ok(())
     }
 
-    fn handle_mode(&mut self, use_mode: UseMode, src: BcReg) -> Result<()> {
+    fn handle_mode(&mut self, use_mode: UseMode2, src: BcReg) -> Result<()> {
         match use_mode {
-            UseMode::Ret => {
+            UseMode2::Ret => {
                 self.emit_ret(Some(src))?;
             }
-            UseMode::Push => {
+            UseMode2::Push => {
                 let dst = self.push();
                 self.emit_mov(dst.into(), src);
             }
-            UseMode::NotUse => {}
+            UseMode2::NotUse => {}
+            UseMode2::Store(r) => {
+                self.emit_mov(r, src);
+            }
         }
         Ok(())
     }
@@ -715,7 +705,7 @@ impl BytecodeGen {
         &mut self,
         mlhs: Vec<Node>,
         mut mrhs: Vec<Node>,
-        use_mode: UseMode,
+        use_mode: UseMode2,
     ) -> Result<()> {
         let mlhs_len = mlhs.len();
         let mut mrhs_len = mrhs.len();
@@ -773,16 +763,26 @@ impl BytecodeGen {
         self.temp = temp;
 
         // Generate return value if needed.
-        if use_mode.use_val() {
-            let ret = self.push().into();
-            if ret_val.is_none() {
-                self.emit_array(ret, rhs_reg.into(), mrhs_len, vec![], loc);
+        match use_mode {
+            UseMode2::Push => {
+                let dst = self.push().into();
+                if ret_val.is_none() {
+                    self.emit_array(dst, rhs_reg.into(), mrhs_len, vec![], loc);
+                }
             }
+            UseMode2::Ret => {
+                let dst = self.push().into();
+                if ret_val.is_none() {
+                    self.emit_array(dst, rhs_reg.into(), mrhs_len, vec![], loc);
+                }
+                self.emit_ret(None)?;
+            }
+            UseMode2::Store(r) => {
+                self.emit_array(r, rhs_reg.into(), mrhs_len, vec![], loc);
+            }
+            UseMode2::NotUse => {}
         }
 
-        if use_mode.is_ret() {
-            self.emit_ret(None)?;
-        }
         Ok(())
     }
 

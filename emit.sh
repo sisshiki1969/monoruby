@@ -1,16 +1,21 @@
 #!/bin/bash
 
 cargo build --release --features emit-asm
-target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.disas
-ruby benchmark/app_fib.rb
-target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.disas
-ruby benchmark/tarai.rb
+target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.disas > monoruby.log
+ruby benchmark/app_fib.rb > ruby.log
+diff -s monoruby.log ruby.log
+target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.disas > monoruby.log
+ruby benchmark/tarai.rb > ruby.log
+diff -s monoruby.log ruby.log
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.disas > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.disas > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
-target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas
-target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas
-ruby benchmark/so_nbody.rb
+target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log
+ruby benchmark/quick_sort.rb > ruby.log
+diff -s monoruby.log ruby.log
+target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas > monoruby.log
+ruby benchmark/so_nbody.rb > ruby.log
+diff -s monoruby.log ruby.log
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.disas > /dev/null
 
 
@@ -19,8 +24,8 @@ target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.bytecode > /dev/nu
 target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.bytecode > /dev/null
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.bytecode > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.bytecode > /dev/null
-target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode
-target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.bytecode
+target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode > /dev/null
+target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.bytecode > /dev/null
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.bytecode > /dev/null
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.bytecode > /dev/null
 

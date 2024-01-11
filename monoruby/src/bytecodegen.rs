@@ -188,13 +188,6 @@ enum LvalueKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum UseMode {
-    Ret,
-    Push,
-    NotUse,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 enum UseMode2 {
     Ret,
     Push,
@@ -202,7 +195,7 @@ enum UseMode2 {
     NotUse,
 }
 
-impl From<UseMode> for UseMode2 {
+/*impl From<UseMode> for UseMode2 {
     fn from(value: UseMode) -> Self {
         match value {
             UseMode::Ret => Self::Ret,
@@ -210,15 +203,15 @@ impl From<UseMode> for UseMode2 {
             UseMode::NotUse => Self::NotUse,
         }
     }
-}
+}*/
 
-impl UseMode {
+impl UseMode2 {
     fn use_val(&self) -> bool {
-        *self != Self::NotUse
+        self != &Self::NotUse
     }
 
     fn is_ret(&self) -> bool {
-        *self == UseMode::Ret
+        self == &UseMode2::Ret
     }
 }
 
@@ -243,7 +236,7 @@ struct CallSite {
     /// *BcReg* of the receiver.
     recv: BcReg,
     /// *BcReg* of the return value. If None, the return value is discarded.
-    ret: Option<BcReg>,
+    dst: Option<BcReg>,
 }
 
 impl CallSite {
@@ -256,7 +249,7 @@ impl CallSite {
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
-        ret: Option<BcReg>,
+        dst: Option<BcReg>,
     ) -> Self {
         let name = name.into();
         let kw_len = kw.as_ref().map_or(0, |kw| kw.len());
@@ -271,7 +264,7 @@ impl CallSite {
             args,
             len,
             recv,
-            ret,
+            dst,
         }
     }
 
@@ -280,9 +273,9 @@ impl CallSite {
         len: usize,
         args: BcReg,
         recv: BcReg,
-        ret: Option<BcReg>,
+        dst: Option<BcReg>,
     ) -> CallSite {
-        CallSite::new(name, len, None, vec![], None, None, args, recv, ret)
+        CallSite::new(name, len, None, vec![], None, None, args, recv, dst)
     }
 
     fn has_splat(&self) -> bool {

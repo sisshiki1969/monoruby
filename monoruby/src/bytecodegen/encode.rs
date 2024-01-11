@@ -570,13 +570,13 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<Bc> {
         let CallSite {
-            ret,
+            dst,
             args,
             pos_num,
             recv,
             ..
         } = callsite;
-        let ret = match ret {
+        let ret = match dst {
             None => 0,
             Some(ret) => self.slot_id(&ret).0,
         };
@@ -601,7 +601,7 @@ impl BytecodeGen {
             args,
             len,
             recv,
-            ret,
+            dst,
         } = callsite;
 
         let block_fid = if let Some(block_fid) = block_fid {
@@ -613,7 +613,7 @@ impl BytecodeGen {
         let args = self.slot_id(&args);
         let recv = self.slot_id(&recv);
         let block_arg = block_arg.map(|r| self.slot_id(&r));
-        let ret = ret.map(|r| self.slot_id(&r));
+        let dst = dst.map(|r| self.slot_id(&r));
         let (kw_pos, kw_args, hash_splat_pos) = if let Some(KeywordArgs {
             kw_start,
             kw_args,
@@ -641,7 +641,7 @@ impl BytecodeGen {
             args,
             len,
             recv,
-            ret,
+            dst,
         ))
     }
 
