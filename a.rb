@@ -1,7 +1,7 @@
 class C
   @@x=100
   class D
-    puts @@x
+    @@x=200
   end
 end
 
@@ -14,5 +14,7 @@ class C
   end
 end
 
-C.new.f
-C.g
+20.times do
+  C.new.f
+  C.g
+end

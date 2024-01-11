@@ -349,7 +349,7 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     /// This fn returns the value of the constant and the class id of the base object.
-    /// It is necessary to check the base class for confirmation of cache consistency.
+    /// It is necessary to check the base class for keeping cache consistency.
     ///
     pub(crate) fn find_constant(
         &self,
@@ -366,6 +366,23 @@ impl Executor {
     pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.context_class_id();
         globals.set_constant(parent, name, val);
+    }
+
+    pub(crate) fn find_class_variable(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+    ) -> Result<Value> {
+        Ok(Value::nil())
+    }
+
+    pub(crate) fn set_class_variable(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -1370,9 +1387,17 @@ impl BcPc {
                     src: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
+                27 => TraceIr::LoadCvar {
+                    dst: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
                 28 => TraceIr::LoadSvar {
                     dst: SlotId::new(op1),
                     id: op2,
+                },
+                29 => TraceIr::StoreCvar {
+                    src: SlotId::new(op1),
+                    name: IdentId::from(op2),
                 },
                 30..=31 => {
                     let cached_fid = self.cached_fid();

@@ -477,17 +477,24 @@ impl JitContext {
             }
             TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                 if let Some(cached_class) = cached_class {
-                    self.load_ivar(bb, id, ret, cached_class, cached_ivarid);
+                    self.ir.load_ivar(bb, id, ret, cached_class, cached_ivarid);
                 } else {
                     return CompileResult::Recompile;
                 }
             }
             TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
                 if let Some(cached_class) = cached_class {
-                    self.store_ivar(bb, id, src, pc, cached_class, cached_ivarid);
+                    self.ir
+                        .store_ivar(bb, id, src, pc, cached_class, cached_ivarid);
                 } else {
                     return CompileResult::Recompile;
                 }
+            }
+            TraceIr::LoadCvar { dst, name } => {
+                self.ir.jit_load_cvar(bb, pc, name, dst);
+            }
+            TraceIr::StoreCvar { src: val, name } => {
+                self.ir.jit_store_cvar(bb, pc, name, val);
             }
             TraceIr::LoadGvar { dst, name } => {
                 self.ir.jit_load_gvar(bb, name, dst);

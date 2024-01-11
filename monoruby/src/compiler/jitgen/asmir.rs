@@ -609,6 +609,27 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn load_cvar(&mut self, bb: &BBContext, pc: BcPc, name: IdentId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::LoadCVar {
+            name,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn store_cvar(&mut self, bb: &BBContext, pc: BcPc, name: IdentId, src: SlotId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::StoreCVar {
+            name,
+            src,
+            using_xmm,
+            error,
+        });
+    }
+
     pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
         let using_xmm = bb.get_using_xmm();
         self.inst.push(AsmInst::LoadSVar { id, using_xmm });
@@ -673,6 +694,29 @@ impl AsmIr {
     pub(super) fn jit_store_gvar(&mut self, bb: &mut BBContext, name: IdentId, src: SlotId) {
         self.write_back_slots(bb, &[src]);
         self.store_gvar(bb, name, src);
+    }
+
+    pub(super) fn jit_load_cvar(
+        &mut self,
+        bb: &mut BBContext,
+        pc: BcPc,
+        name: IdentId,
+        dst: SlotId,
+    ) {
+        self.link_stack(bb, dst);
+        self.load_cvar(bb, pc, name);
+        self.rax2acc(bb, dst);
+    }
+
+    pub(super) fn jit_store_cvar(
+        &mut self,
+        bb: &mut BBContext,
+        pc: BcPc,
+        name: IdentId,
+        src: SlotId,
+    ) {
+        self.write_back_slots(bb, &[src]);
+        self.store_cvar(bb, pc, name, src);
     }
 }
 
@@ -1111,6 +1155,17 @@ pub(super) enum AsmInst {
     StoreDynVar {
         dst: DynVar,
         src: GP,
+    },
+    LoadCVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+        error: AsmError,
+    },
+    StoreCVar {
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+        error: AsmError,
     },
     LoadGVar {
         name: IdentId,
@@ -1806,6 +1861,24 @@ impl Codegen {
                 using_xmm,
                 labels[error],
             ),
+
+            AsmInst::LoadCVar {
+                name,
+                using_xmm,
+                error,
+            } => {
+                self.load_cvar(name, using_xmm);
+                self.handle_error(labels[error]);
+            }
+            AsmInst::StoreCVar {
+                name,
+                src,
+                using_xmm,
+                error,
+            } => {
+                self.store_cvar(name, src, using_xmm);
+                self.handle_error(labels[error]);
+            }
 
             AsmInst::LoadGVar { name, using_xmm } => self.load_gvar(name, using_xmm),
             AsmInst::StoreGVar {

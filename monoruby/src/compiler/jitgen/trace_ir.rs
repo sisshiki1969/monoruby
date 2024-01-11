@@ -63,6 +63,14 @@ pub(crate) enum TraceIr {
         src: SlotId,
         name: IdentId,
     },
+    LoadCvar {
+        dst: SlotId,
+        name: IdentId,
+    },
+    StoreCvar {
+        src: SlotId,
+        name: IdentId,
+    },
     LoadSvar {
         dst: SlotId,
         id: u32,

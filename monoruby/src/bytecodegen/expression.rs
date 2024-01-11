@@ -188,6 +188,10 @@ impl BytecodeGen {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_gvar(dst.into(), name, loc);
             }
+            NodeKind::ClassVar(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit_load_cvar(dst.into(), name, loc);
+            }
             NodeKind::SpecialVar(id) => {
                 self.emit_load_svar(dst.into(), id as u32, loc);
             }
@@ -315,6 +319,7 @@ impl BytecodeGen {
             | NodeKind::UnOp(..)
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
+            | NodeKind::ClassVar(_)
             | NodeKind::GlobalVar(_)
             | NodeKind::SpecialVar(_) => {
                 let ret = self.push().into();
