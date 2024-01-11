@@ -88,7 +88,9 @@ fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let name = arg[0].expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let v = if len == 1 || arg[1].as_bool() {
-        globals.search_constant_superclass(module, name)
+        globals
+            .search_constant_superclass(module, name)
+            .map(|(_, v)| v)
     } else {
         globals.get_constant(module.id(), name)
     };

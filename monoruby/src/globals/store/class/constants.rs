@@ -1,6 +1,59 @@
 use super::*;
 
 impl Globals {
+    pub fn dump_superclass(&self, mut module: Module) {
+        loop {
+            eprint!("{} ", module.id().get_name_id(self).unwrap());
+            match module.superclass() {
+                Some(superclass) => module = superclass,
+                None => break,
+            }
+        }
+        eprintln!();
+    }
+
+    pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
+        self.store[class_id].constants.insert(name, val);
+    }
+
+    pub(crate) fn get_class_variable(
+        &self,
+        parent: Module,
+        name: IdentId,
+    ) -> Result<(Module, Value)> {
+        let mut module = parent;
+        let mut res: Option<(Module, Value)> = None;
+        loop {
+            if let Some(v) = self.get_constant(module.id(), name) {
+                match res {
+                    Some((under, _)) => {
+                        return Err(MonorubyErr::runtimeerr(format!(
+                            "class variable {name} of {} is overtaken by {}",
+                            under.id().get_name_id(self).unwrap(),
+                            module.id().get_name_id(self).unwrap(),
+                        )));
+                    }
+                    None => {
+                        res = Some((module, v));
+                    }
+                }
+            };
+            match module.superclass() {
+                Some(superclass) => module = superclass,
+                None => break,
+            }
+        }
+        match res {
+            Some(res) => Ok(res),
+            None => Err(MonorubyErr::uninitialized_cvar(
+                name,
+                parent.id().get_name_id(self).unwrap(),
+            )),
+        }
+    }
+}
+
+impl Globals {
     pub fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
         let name = IdentId::get_id(name);
         self.set_constant(class_id, name, val);
@@ -24,10 +77,14 @@ impl Globals {
         self.store[class_id].constants.get(&name).cloned()
     }
 
-    pub fn search_constant_superclass(&self, mut module: Module, name: IdentId) -> Option<Value> {
+    pub fn search_constant_superclass(
+        &self,
+        mut module: Module,
+        name: IdentId,
+    ) -> Option<(Module, Value)> {
         loop {
             match self.get_constant(module.id(), name) {
-                Some(v) => return Some(v),
+                Some(v) => return Some((module, v)),
                 None => match module.superclass() {
                     Some(superclass) => module = superclass,
                     None => break,
@@ -139,7 +196,7 @@ impl Globals {
             .to_owned();
 
         match self.search_constant_superclass(module, name) {
-            Some(v) => Ok(v),
+            Some((_, v)) => Ok(v),
             None => Err(MonorubyErr::uninitialized_constant(name)),
         }
     }

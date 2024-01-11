@@ -373,7 +373,8 @@ impl Executor {
         globals: &mut Globals,
         name: IdentId,
     ) -> Result<Value> {
-        Ok(Value::nil())
+        let parent = self.get_parent(globals)?;
+        globals.get_class_variable(parent, name).map(|(_, v)| v)
     }
 
     pub(crate) fn set_class_variable(
@@ -382,7 +383,24 @@ impl Executor {
         name: IdentId,
         val: Value,
     ) -> Result<()> {
+        let parent = self.get_parent(globals)?;
+        let parent = match globals.search_constant_superclass(parent, name) {
+            Some((module, _)) => module,
+            None => parent,
+        };
+        globals.set_class_variable(parent.id(), name, val);
         Ok(())
+    }
+
+    fn get_parent(&self, globals: &Globals) -> Result<Module> {
+        let fid = self.cfp().method_func_id();
+        let parent = globals.store[fid].as_ruby_func().lexical_context.last();
+        match parent {
+            Some(parent) => Ok(*parent),
+            None => Err(MonorubyErr::runtimeerr(
+                "class variable access from toplevel",
+            )),
+        }
     }
 }
 
