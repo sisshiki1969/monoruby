@@ -100,25 +100,15 @@ impl Codegen {
     pub(super) fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        self.jit.const_align8();
-        let procinner = self.jit.bytes(32);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            lea  rdx, [rip + procinner];
-            movq rax, (runtime::get_yield_data);
-            call rax;
-        }
+        self.get_proc_data();
+        // rax: outer, rdx: FuncId
         self.vm_handle_error();
+        self.get_func_data();
+        // rax: outer, r15: &FuncData
         monoasm! { &mut self.jit,
-            lea  rax, [rip + procinner];
-            movl rdx, [rax + (PROCINNER_FUNCDATA)];
-            movq rax, [rax + (PROCINNER_OUTER)];
             pushq r13; // push pc
             subq rsp, 8;
         };
-        self.get_func_data();
-        // rax <- outer_cfp, r15 <- &FuncData
         self.set_block_self_outer();
 
         self.set_arguments(true);

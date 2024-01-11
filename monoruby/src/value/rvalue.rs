@@ -36,7 +36,7 @@ pub const RVALUE_OFFSET_HEAP_PTR: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_
 pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_LEN;
 
 pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
-pub const PROCINNER_FUNCDATA: i64 = std::mem::offset_of!(ProcInner, func_data) as _;
+pub const PROCINNER_FUNCID: i64 = std::mem::offset_of!(ProcInner, func_id) as _;
 
 /// Heap-allocated objects.
 #[repr(C)]
@@ -1160,7 +1160,7 @@ impl Proc {
 #[repr(C)]
 pub struct ProcInner {
     outer_lfp: LFP,
-    func_data: FuncId,
+    func_id: FuncId,
 }
 
 impl alloc::GC<RValue> for ProcInner {
@@ -1170,15 +1170,12 @@ impl alloc::GC<RValue> for ProcInner {
 }
 
 impl ProcInner {
-    pub(crate) fn from(outer_lfp: LFP, func_data: FuncId) -> Self {
-        Self {
-            outer_lfp,
-            func_data,
-        }
+    pub(crate) fn from(outer_lfp: LFP, func_id: FuncId) -> Self {
+        Self { outer_lfp, func_id }
     }
 
     pub fn func_id(&self) -> FuncId {
-        self.func_data
+        self.func_id
     }
 
     pub fn outer_lfp(&self) -> LFP {

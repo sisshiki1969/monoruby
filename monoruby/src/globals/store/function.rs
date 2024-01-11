@@ -60,10 +60,6 @@ impl FuncData {
         self.codeptr = Some(codeptr);
     }
 
-    pub fn func_id(&self) -> FuncId {
-        self.meta.func_id()
-    }
-
     pub fn meta(&self) -> Meta {
         self.meta
     }

@@ -401,23 +401,15 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
-        self.jit.const_align8();
-        let procinner = self.jit.bytes(32);
         self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            lea  rdx, [rip + procinner];
-            movq rax, (runtime::get_yield_data);
-            call rax;
-        }
+        self.get_proc_data();
+        // rax: outer, rdx: FuncId
         self.handle_error(error);
-        monoasm! { &mut self.jit,
-            lea  rax, [rip + procinner];
-            movl rdx, [rax + (PROCINNER_FUNCDATA)];
-            movq rdi, [rax + (PROCINNER_OUTER)];
-        }
         self.get_func_data();
+        // rax: outer, r15: &FuncData
+        monoasm! { &mut self.jit,
+            movq rdi, rax;
+        }
         // rdi <- outer_cfp, r15 <- &FuncData
 
         monoasm! { &mut self.jit,

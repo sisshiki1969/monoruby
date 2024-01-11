@@ -46,7 +46,7 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh)?;
     let obj = Value::new_generator(proc);
-    vm.generate_enumerator(globals, IdentId::EACH, obj, vec![])
+    vm.generate_enumerator(IdentId::EACH, obj, vec![])
 }
 
 ///
@@ -176,7 +176,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        return vm.generate_enumerator(globals, id, lfp.self_val(), vec![]);
+        return vm.generate_enumerator(id, lfp.self_val(), vec![]);
     };
 
     let internal = Fiber::new(self_val.proc);

@@ -35,6 +35,19 @@ impl MethodTableEntry {
     }
 }
 
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub(crate) struct ProcData {
+    outer: Option<LFP>,
+    func_id: Option<FuncId>,
+}
+
+impl ProcData {
+    pub fn is_none(&self) -> bool {
+        self.func_id.is_none()
+    }
+}
+
 pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
@@ -193,13 +206,19 @@ impl Globals {
         data
     }
 
-    pub(crate) fn get_yield_data(&mut self, cfp: CFP, info: &mut ProcInner) -> Option<Value> {
+    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> ProcData {
         match cfp.get_block() {
             Some(bh) => {
-                *info = self.get_block_data(cfp, bh);
-                Some(Value::nil())
+                let info = self.get_block_data(cfp, bh);
+                ProcData {
+                    outer: Some(info.outer_lfp()),
+                    func_id: Some(info.func_id()),
+                }
             }
-            None => None,
+            None => ProcData {
+                outer: None,
+                func_id: None,
+            },
         }
     }
 
