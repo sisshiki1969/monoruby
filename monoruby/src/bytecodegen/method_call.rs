@@ -35,16 +35,13 @@ impl BytecodeGen {
         method: IdentId,
         receiver: Option<Node>,
         arglist: ArgList,
-        ret: Option<BcReg>,
-        use_mode: UseMode,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (ret, ret_pop_flag) = if ret.is_some() {
-            (ret, false)
-        } else if use_mode.use_val() {
-            (Some(self.sp().into()), true)
-        } else {
-            (None, false)
+        let (dst, ret_pop_flag) = match use_mode {
+            UseMode2::NotUse => (None, false),
+            UseMode2::Push | UseMode2::Ret => (Some(self.sp().into()), true),
+            UseMode2::Store(dst) => (Some(dst), false),
         };
         let old_temp = self.temp;
         let recv = match receiver {
@@ -70,7 +67,7 @@ impl BytecodeGen {
             ));
         }
 
-        let callid = self.handle_arguments(arglist, method, recv, ret, loc)?;
+        let callid = self.handle_arguments(arglist, method, recv, dst, loc)?;
 
         self.temp = old_temp;
         if ret_pop_flag {
@@ -86,21 +83,18 @@ impl BytecodeGen {
     pub(super) fn gen_super(
         &mut self,
         arglist: Option<ArgList>,
-        ret: Option<BcReg>,
-        use_mode: UseMode,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (ret, ret_push_flag) = if ret.is_some() {
-            (ret, false)
-        } else if use_mode.use_val() {
-            (Some(self.sp().into()), true)
-        } else {
-            (None, false)
+        let (dst, ret_pop_flag) = match use_mode {
+            UseMode2::NotUse => (None, false),
+            UseMode2::Push | UseMode2::Ret => (Some(self.sp().into()), true),
+            UseMode2::Store(dst) => (Some(dst), false),
         };
         let old = self.temp;
         let callid = if let Some(arglist) = arglist {
             assert!(!arglist.delegate);
-            self.handle_arguments(arglist, None, BcReg::Self_, ret, loc)?
+            self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)?
         } else {
             let (_, mother_args, outer) = self.mother.clone();
             let pos_len = mother_args.pos_num();
@@ -146,11 +140,11 @@ impl BytecodeGen {
                 None,
                 pos_start,
                 BcReg::Self_,
-                ret,
+                dst,
             )
         };
         self.temp = old;
-        if ret_push_flag {
+        if ret_pop_flag {
             self.push();
         };
         self.emit_call(callid, loc);
@@ -165,8 +159,7 @@ impl BytecodeGen {
         param: Vec<(usize, String)>,
         iter: Node,
         mut block: BlockInfo,
-        ret: Option<BcReg>,
-        use_mode: UseMode,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
         // collect assignments for local variables.
@@ -201,12 +194,10 @@ impl BytecodeGen {
             RecvKind::Local(reg) => reg,
             RecvKind::Temp => self.pop().into(),
         };
-        let ret = if ret.is_some() {
-            ret
-        } else if use_mode.use_val() {
-            Some(self.push().into())
-        } else {
-            None
+        let dst = match use_mode {
+            UseMode2::NotUse => None,
+            UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
+            UseMode2::Store(dst) => Some(dst),
         };
         let callsite = CallSite::new(
             IdentId::EACH,
@@ -217,7 +208,7 @@ impl BytecodeGen {
             None,
             arg.into(),
             recv,
-            ret,
+            dst,
         );
         self.emit_call(callsite, loc);
         if use_mode.is_ret() {
@@ -229,13 +220,13 @@ impl BytecodeGen {
     pub(super) fn gen_yield(
         &mut self,
         arglist: ArgList,
-        use_mode: UseMode,
+        use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let ret = if use_mode.use_val() {
-            Some(self.push().into())
-        } else {
-            None
+        let dst = match use_mode {
+            UseMode2::NotUse => None,
+            UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
+            UseMode2::Store(dst) => Some(dst),
         };
         let old = self.temp;
         // TODO: We must check this in parser
@@ -256,7 +247,7 @@ impl BytecodeGen {
         }
 
         let callid =
-            self.handle_arguments(arglist, IdentId::get_id("<block>"), BcReg::Self_, ret, loc)?;
+            self.handle_arguments(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
         self.emit_yield(callid, loc);
 
         self.temp = old;
@@ -272,7 +263,7 @@ impl BytecodeGen {
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
         recv: BcReg,
-        ret: Option<BcReg>,
+        dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSite> {
         let (args, pos_num, splat_pos) = self.positional_args(&mut arglist)?;
@@ -292,7 +283,7 @@ impl BytecodeGen {
         };
 
         let callsite = CallSite::new(
-            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, ret,
+            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst,
         );
         Ok(callsite)
     }

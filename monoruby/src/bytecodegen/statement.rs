@@ -92,11 +92,11 @@ impl BytecodeGen {
             self.emit(BcIr::LoopEnd, loc);
         } else {
             let use_mode = if use_value {
-                UseMode::Push
+                UseMode2::Push
             } else {
-                UseMode::NotUse
+                UseMode2::NotUse
             };
-            self.gen_each(param, iter, body, None, use_mode, loc)?;
+            self.gen_each(param, iter, body, use_mode, loc)?;
         }
         Ok(())
     }
@@ -169,7 +169,7 @@ impl BytecodeGen {
         cond: Option<Box<Node>>,
         when_: Vec<CaseBranch>,
         else_: Node,
-        use_mode: UseMode,
+        use_mode: UseMode2,
     ) -> Result<()> {
         fn check_opt(when_: &[CaseBranch]) -> Option<(u16, u16)> {
             let branch_len = when_.iter().fold(0, |acc, branch| acc + branch.when.len());
@@ -234,7 +234,7 @@ impl BytecodeGen {
                 for (then_pos, body) in bodies {
                     self.temp = base;
                     self.apply_label(then_pos);
-                    self.gen_expr(body, use_mode.into())?;
+                    self.gen_expr(body, use_mode)?;
                     if !use_mode.is_ret() {
                         self.emit_br(exit_pos);
                     }
@@ -256,7 +256,7 @@ impl BytecodeGen {
                     }
 
                     self.temp = base;
-                    self.gen_expr(body, use_mode.into())?;
+                    self.gen_expr(body, use_mode)?;
 
                     if !use_mode.is_ret() {
                         self.emit_br(exit_pos);
@@ -281,7 +281,7 @@ impl BytecodeGen {
                     self.apply_label(then_pos);
                 }
 
-                self.gen_expr(body, use_mode.into())?;
+                self.gen_expr(body, use_mode)?;
 
                 if !use_mode.is_ret() {
                     self.emit_br(exit_pos);
@@ -293,11 +293,11 @@ impl BytecodeGen {
 
         self.temp = base;
         self.apply_label(else_pos);
-        self.gen_expr(else_, use_mode.into())?;
+        self.gen_expr(else_, use_mode)?;
 
         self.apply_label(exit_pos);
         match use_mode {
-            UseMode::Push => assert_eq!(self.temp, base + 1),
+            UseMode2::Push => assert_eq!(self.temp, base + 1),
             _ => assert_eq!(self.temp, base),
         }
         Ok(())
@@ -309,21 +309,21 @@ impl BytecodeGen {
         rescue: Vec<RescueEntry>,
         else_: Option<Box<Node>>,
         ensure: Option<Box<Node>>,
-        use_mode: UseMode,
+        use_mode: UseMode2,
     ) -> Result<()> {
         self.ensure.push(ensure.as_deref().cloned());
         let base = self.temp;
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.
-            UseMode::NotUse
+            UseMode2::NotUse
         } else if ensure.is_some() && use_mode.is_ret() {
-            UseMode::Push
+            UseMode2::Push
         } else {
             use_mode
         };
         let rescue_use = if ensure.is_some() && use_mode.is_ret() {
-            UseMode::Push
+            UseMode2::Push
         } else {
             use_mode
         };
@@ -331,7 +331,7 @@ impl BytecodeGen {
         let body_end = self.new_label();
         let range = body_start..body_end;
         self.apply_label(body_start);
-        self.gen_expr(body, body_use.into())?;
+        self.gen_expr(body, body_use)?;
         let finish = self.temp;
         self.apply_label(body_end);
         let else_label = self.new_label();
@@ -366,7 +366,7 @@ impl BytecodeGen {
                 };
                 self.apply_label(cont_pos);
                 self.temp = base;
-                self.gen_expr(body, rescue_use.into())?;
+                self.gen_expr(body, rescue_use)?;
                 if !rescue_use.is_ret() {
                     self.emit_br(ensure_label);
                 }
@@ -425,7 +425,7 @@ impl BytecodeGen {
         }
         self.apply_label(else_label);
         if let Some(box else_) = else_ {
-            self.gen_expr(else_, rescue_use.into())?;
+            self.gen_expr(else_, rescue_use)?;
         }
         self.apply_label(ensure_label);
         self.ensure.pop().unwrap();
@@ -437,7 +437,7 @@ impl BytecodeGen {
             }
         }
         match use_mode {
-            UseMode::Push => assert_eq!(self.temp, base + 1),
+            UseMode2::Push => assert_eq!(self.temp, base + 1),
             _ => assert_eq!(self.temp, base),
         }
 
