@@ -762,9 +762,8 @@ impl Executor {
         obj: Value,
         args: Vec<Value>,
     ) -> Result<Value> {
-        let func_data = globals.get_func_data(FuncId::new(1)).clone();
         let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
-        let proc = Proc::from(outer_lfp, func_data);
+        let proc = Proc::from(outer_lfp, FuncId::new(1));
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }

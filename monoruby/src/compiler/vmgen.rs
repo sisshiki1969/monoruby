@@ -597,8 +597,10 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], 0;
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
-                lea  r15, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- &FuncData
+                movl rdx, [rdx + (PROCINNER_FUNCDATA)];    // rdx <- FuncId
             };
+            self.get_func_data();
+            // r15: &FuncData
             self.set_block_outer();
             if !specify_self {
                 monoasm! { &mut self.jit,
