@@ -208,8 +208,7 @@ impl Globals {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
-            let func_data = self.get_func_data(func_id).clone();
-            ProcInner::from(cfp.lfp(), func_data)
+            ProcInner::from(cfp.lfp(), func_id)
         } else {
             bh.as_proc().clone()
         }

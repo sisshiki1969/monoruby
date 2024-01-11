@@ -414,10 +414,11 @@ impl Codegen {
         self.handle_error(error);
         monoasm! { &mut self.jit,
             lea  rax, [rip + procinner];
-            lea  r15, [rax + (PROCINNER_FUNCDATA)];
+            movl rdx, [rax + (PROCINNER_FUNCDATA)];
             movq rdi, [rax + (PROCINNER_OUTER)];
-            // rdi <- outer_cfp, r15 <- &FuncData
         }
+        self.get_func_data();
+        // rdi <- outer_cfp, r15 <- &FuncData
 
         monoasm! { &mut self.jit,
             subq  rsp, 16;

@@ -112,12 +112,13 @@ impl Codegen {
         self.vm_handle_error();
         monoasm! { &mut self.jit,
             lea  rax, [rip + procinner];
-            lea  r15, [rax + (PROCINNER_FUNCDATA)];
+            movl rdx, [rax + (PROCINNER_FUNCDATA)];
             movq rax, [rax + (PROCINNER_OUTER)];
-            // rax <- outer_cfp, r15 <- &FuncData
             pushq r13; // push pc
             subq rsp, 8;
         };
+        self.get_func_data();
+        // rax <- outer_cfp, r15 <- &FuncData
         self.set_block_self_outer();
 
         self.set_arguments(true);
