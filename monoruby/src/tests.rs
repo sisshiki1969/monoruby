@@ -2077,6 +2077,24 @@ mod test {
     }
 
     #[test]
+    fn test_yield_in_loop() {
+        run_test_with_prelude(
+            r#"
+        m{}
+        "#,
+            r#"
+        def m
+            i = 0
+            while i<30
+              i += 1
+              yield
+            end
+        end
+        "#,
+        );
+    }
+
+    #[test]
     fn test_for_each() {
         run_test(
             r#"

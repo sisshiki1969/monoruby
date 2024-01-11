@@ -1,3 +1,10 @@
-[5, 10, 15].each_with_index do |n, idx|
-  p [n, idx]
+def m
+  i = 0
+  while i<30_000
+    puts i
+    i += 1
+    yield
+  end
 end
+
+m{}

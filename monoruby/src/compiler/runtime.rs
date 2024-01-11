@@ -117,11 +117,17 @@ pub(super) extern "C" fn enter_classdef<'a>(
 ///
 /// Get *BlockData* for yield.
 ///
+/// ### in
 /// - rdi: &mut Executor
 /// - rsi: &mut Globals
+/// - rdx: &mut ProcInner
 ///
-pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> Option<Proc> {
-    let res = globals.get_yield_data(vm.cfp());
+pub(super) extern "C" fn get_yield_data(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    info: &mut ProcInner,
+) -> Option<Value> {
+    let res = globals.get_yield_data(vm.cfp(), info);
     if res.is_none() {
         vm.set_error(MonorubyErr::no_block_given());
     }
