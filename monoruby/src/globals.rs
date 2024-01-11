@@ -193,9 +193,14 @@ impl Globals {
         data
     }
 
-    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> Option<Proc> {
-        cfp.get_block()
-            .map(|bh| Proc::new(self.get_block_data(cfp, bh)))
+    pub(crate) fn get_yield_data(&mut self, cfp: CFP, info: &mut ProcInner) -> Option<Value> {
+        match cfp.get_block() {
+            Some(bh) => {
+                *info = self.get_block_data(cfp, bh);
+                Some(Value::nil())
+            }
+            None => None,
+        }
     }
 
     pub(crate) fn get_block_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> ProcInner {
