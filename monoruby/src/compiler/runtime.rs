@@ -120,14 +120,13 @@ pub(super) extern "C" fn enter_classdef<'a>(
 /// ### in
 /// - rdi: &mut Executor
 /// - rsi: &mut Globals
-/// - rdx: &mut ProcInner
 ///
-pub(super) extern "C" fn get_yield_data(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    info: &mut ProcInner,
-) -> Option<Value> {
-    let res = globals.get_yield_data(vm.cfp(), info);
+/// ### out
+/// - rax: outer
+/// - rdx: FuncId
+///
+pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
+    let res = globals.get_yield_data(vm.cfp());
     if res.is_none() {
         vm.set_error(MonorubyErr::no_block_given());
     }

@@ -373,6 +373,29 @@ impl Codegen {
     }
 
     ///
+    /// Get ProcData.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &Globals
+    ///
+    /// ### out
+    /// - rax: outer_lfp: Option<LFP>
+    /// - rdx: func_id: Option<FuncId>
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn get_proc_data(&mut self) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::get_yield_data);
+            call rax;
+        }
+    }
+
+    ///
     /// Get FuncData.
     ///
     /// ### in

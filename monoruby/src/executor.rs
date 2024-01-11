@@ -757,7 +757,6 @@ impl Executor {
     ///
     pub fn generate_enumerator(
         &mut self,
-        globals: &mut Globals,
         method: IdentId,
         obj: Value,
         args: Vec<Value>,

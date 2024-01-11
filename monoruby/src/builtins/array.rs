@@ -821,7 +821,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
-        vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
+        vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
     }
 }
 
@@ -839,7 +839,7 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg
         vm.invoke_block_iter_with_index1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
-        vm.generate_enumerator(globals, IdentId::EACH, lfp.self_val(), vec![])
+        vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
     }
 }
 
@@ -861,7 +861,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
         Ok(res)
     } else {
         let id = IdentId::get_id("map");
-        vm.generate_enumerator(globals, id, lfp.self_val(), vec![])
+        vm.generate_enumerator(id, lfp.self_val(), vec![])
     }
 }
 
