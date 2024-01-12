@@ -914,7 +914,6 @@ impl Executor {
                 let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
                 kw_rest.insert(HashKey(Value::symbol(*name)), v);
             }
-            dbg!(&kw_rest);
             for h in hash_splat_pos
                 .iter()
                 .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
