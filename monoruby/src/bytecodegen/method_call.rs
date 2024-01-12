@@ -302,7 +302,7 @@ impl BytecodeGen {
     ///
     fn positional_args(&mut self, arglist: &mut ArgList) -> Result<(BcReg, usize, Vec<usize>)> {
         if arglist.args.len() == 1
-            && arglist.block.is_some()
+            //&& arglist.block.is_none()
             && arglist.kw_args.is_empty()
             && arglist.hash_splat.is_empty()
             && !arglist.delegate

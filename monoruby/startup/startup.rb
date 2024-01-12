@@ -36,6 +36,11 @@ class Hash
   end
 end
 
+class GC
+  def self.auto_compact=(x)
+  end
+end
+
 class Symbol
   def match(other)
     self.to_s.match(other)

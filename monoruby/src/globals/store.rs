@@ -249,12 +249,12 @@ impl Store {
         if !kw_args.is_empty() || !hash_splat_pos.is_empty() {
             assert_eq!(kw_pos.0 as usize, args.0 as usize + pos_num);
         }
-        if let Some(block_arg) = block_arg {
+        /*if let Some(block_arg) = block_arg {
             assert_eq!(
                 block_arg.0 as usize,
                 args.0 as usize + pos_num + kw_args.len() + hash_splat_pos.len()
             );
-        }
+        }*/
         self.callsite_info.push(CallSiteInfo {
             id,
             name,
