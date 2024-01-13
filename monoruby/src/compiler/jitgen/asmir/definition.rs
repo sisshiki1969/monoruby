@@ -1,6 +1,19 @@
 use super::*;
 
 impl Codegen {
+    /// Class definition
+    ///
+    /// ~~~text
+    /// -16 -14 -12 -10  -8  -6  -4  -2
+    /// +---+---+---+---++---+---+---+---+
+    /// |sup|   |dst| op||  name |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///  rsi rdi r15
+    ///
+    /// - sup: superclass (SlotId). If no superclass, sup is 0.
+    /// - dst: destination slot (SlotId).
+    /// - name: class name (IdentId)
+    /// ~~~
     pub(super) fn class_def(
         &mut self,
         superclass: SlotId,

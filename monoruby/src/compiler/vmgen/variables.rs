@@ -193,21 +193,21 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | op|dst|src|out||       |       |
+    /// |out|src|dst|op ||       |       |
     /// +---+---+---+---++---+---+---+---+
+    ///  rsi rdi r15
     ///
-    /// dst: destination register
-    /// src: source register
+    /// dst: destination slot (SlotId)
+    /// src: source slot (SlotId)
     /// out: source outer level
     /// ~~~
     pub(super) fn vm_load_dvar(&mut self) -> CodePtr {
         // r15: dst
-        // rdi: src reg
+        // rdi: src
         // rsi: src outer
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
-        let exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
             movq rax, [r14 - (LBP_OUTER)];
@@ -221,7 +221,7 @@ impl Codegen {
             negq rdi;
             movq rax, [rax + rdi * 8 - (LBP_SELF)];
         };
-        self.vm_store_r15_if_nonzero(exit);
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }

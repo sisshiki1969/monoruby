@@ -5,6 +5,7 @@ use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
+mod definition;
 pub mod init_method;
 mod method_call;
 mod variables;
@@ -903,7 +904,8 @@ impl Codegen {
         };
     }
 
-    fn vm_store_r15_if_nonzero(&mut self, exit: DestLabel) {
+    fn vm_store_r15_if_nonzero(&mut self) {
+        let exit = self.jit.label();
         monoasm! { &mut self.jit,
             testq r15, r15;
             jeq exit;
@@ -1063,7 +1065,6 @@ impl Codegen {
     /// ~~~
     fn vm_concat(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let exit = self.jit.label();
         self.fetch3();
         self.vm_get_addr_rdi();
         monoasm! { &mut self.jit,
@@ -1073,14 +1074,13 @@ impl Codegen {
             movq rax, (runtime::concatenate_string);
             call rax;
         };
-        self.vm_store_r15_if_nonzero(exit);
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
 
     fn vm_concat_regexp(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let exit = self.jit.label();
         self.fetch3();
         self.vm_get_addr_rdi();
         monoasm! { &mut self.jit,
@@ -1092,7 +1092,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero(exit);
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -1578,135 +1578,6 @@ impl Codegen {
         monoasm!( &mut self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
-    }
-
-    fn vm_method_def(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let raise = self.entry_raise;
-        self.fetch2();
-        monoasm! { &mut self.jit,
-            movl rdx, [r13 - 8];  // name
-            movl rcx, [r13 - 4];  // func_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_method);
-            call rax;
-            testq rax, rax;
-            jz   raise;
-        };
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_singleton_method_def(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch_val_r15();
-        monoasm! { &mut self.jit,
-            movq r8, r15;
-            movl rdx, [r13 - 8];  // name
-            movl rcx, [r13 - 4];  // func_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::singleton_define_method);
-            call rax;
-        };
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let super_ = self.jit.label();
-        self.fetch2();
-        if is_module {
-            monoasm! { &mut self.jit,
-                movl r8, 1;
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                xorq r8, r8;
-            }
-        }
-        monoasm! { &mut self.jit,
-            cmpl rdi, 0;
-            jeq super_;
-        }
-        self.vm_get_rdi();
-        monoasm! { &mut self.jit,
-        super_:
-            movq rcx, rdi; // rcx <- superclass: Option<Value>
-            movl rdx, [r13 - 8];  // rdx <- name
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_class);
-            call rax;  // rax <- self: Value
-
-        };
-        self.class_def_sub();
-        label
-    }
-
-    fn vm_singleton_class_def(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let super_ = self.jit.label();
-        self.fetch2();
-        self.vm_get_rdi();
-        monoasm! { &mut self.jit,
-        super_:
-            movq rdx, rdi; // rdx <- base: Value
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::define_singleton_class);
-            call rax;  // rax <- self: Value
-        };
-        self.class_def_sub();
-        label
-    }
-
-    fn class_def_sub(&mut self) {
-        self.vm_handle_error();
-        monoasm! { &mut self.jit,
-            pushq r13;
-            pushq r15;
-
-            movq r15, rax; // r15 <- self
-            movq rcx, rax; // rcx <- self
-            movl rdx, [r13 - 4];  // rdx <- func_id
-            movq rdi, rbx;  // &mut Executor
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::enter_classdef);
-            call rax; // rax <- &FuncData
-
-            movq r13, rax;
-            movq rdi, [r13 + (FUNCDATA_META)];
-            movq [rsp - (16 + LBP_META)], rdi;
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_SELF)], r15;
-        };
-        self.set_method_outer();
-        monoasm! { &mut self.jit,
-            movq rax, [r13 + (FUNCDATA_CODEPTR)];
-            movq r13 , [r13 + (FUNCDATA_PC)];
-            xorq rdx, rdx;
-        };
-        self.call_rax();
-        // pop class context.
-        monoasm!( &mut self.jit,
-            movq r15, rax;
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::exit_classdef);
-            call rax;
-            movq rax, r15;
-        );
-        monoasm! { &mut self.jit,
-            popq r15;
-            popq r13;
-        };
-        self.vm_handle_error();
-        let exit = self.jit.label();
-        self.vm_store_r15_if_nonzero(exit);
-        self.fetch_and_dispatch();
     }
 
     fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {

@@ -41,7 +41,6 @@ impl Codegen {
     pub(super) fn vm_call(&mut self, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
-        let exit = self.jit.label();
         let slow_path1 = self.jit.label();
         let slow_path2 = self.jit.label();
         let class_version = self.class_version;
@@ -80,7 +79,7 @@ impl Codegen {
             addq r13, 16;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero(exit);
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
 
         self.slow_path(exec, slow_path1, slow_path2);
@@ -99,7 +98,6 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let exit = self.jit.label();
         self.get_proc_data();
         // rax: outer, rdx: FuncId
         self.vm_handle_error();
@@ -119,7 +117,7 @@ impl Codegen {
             movzxw r15, [r13 + (RET_REG)]; // r15 <- %ret
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero(exit);
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
