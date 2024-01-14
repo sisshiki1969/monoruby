@@ -66,7 +66,7 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 #[monoruby_builtin]
 fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    lfp.check_number_of_arguments_range(0..=1)?;
     let class_id = lfp.self_val().as_class_id();
     let v = if len == 0 || arg[0].as_bool() {
         globals.get_constant_names_inherit(class_id)
@@ -84,7 +84,7 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 #[monoruby_builtin]
 fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
+    lfp.check_number_of_arguments_range(1..=2)?;
     let name = arg[0].expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
     let v = if len == 1 || arg[1].as_bool() {
@@ -205,9 +205,8 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
 fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
     let self_ = lfp.self_val();
-    MonorubyErr::check_min_number_of_arguments(len, 1)?;
+    lfp.check_min_number_of_arguments(1)?;
     let class = self_.as_class();
     for v in lfp.rev() {
         v.expect_module(globals)?;
@@ -283,8 +282,7 @@ fn change_visi(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
 fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 1)?;
+    lfp.check_number_of_arguments(1)?;
     let class_id = lfp.self_val().as_class_id();
     let func_name = arg[0].expect_symbol_or_string(globals)?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))

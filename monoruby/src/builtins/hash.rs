@@ -226,8 +226,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let inner = self_val.as_hash();
@@ -248,8 +247,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 /// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/invert.html]
 #[monoruby_builtin]
 fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let inner = self_val.as_hash();
@@ -295,8 +293,7 @@ fn compare_by_identity(
     lfp: LFP,
     _arg: Arg,
 ) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let mut self_val = lfp.self_val();
     self_val.as_hash_mut().compare_by_identity();
@@ -337,7 +334,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     let self_ = lfp.self_val();
     let map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
-        MonorubyErr::check_number_of_arguments(len, 1)?;
+        lfp.check_number_of_arguments(1)?;
         match map.get(arg[0]) {
             Some(v) => v,
             None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
@@ -353,7 +350,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             }
         }
     } else {
-        MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
+        lfp.check_number_of_arguments_range(1..=2)?;
         match map.get(arg[0]) {
             Some(v) => v,
             None => arg[1],

@@ -266,7 +266,7 @@ impl MonorubyErr {
         )
     }
 
-    fn wrong_number_of_arg(expected: usize, given: usize) -> MonorubyErr {
+    pub fn wrong_number_of_arg(expected: usize, given: usize) -> MonorubyErr {
         Self::argumenterr(format!(
             "wrong number of arguments (given {given}, expected {expected})"
         ))
@@ -281,7 +281,7 @@ impl MonorubyErr {
         ))
     }
 
-    fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
+    pub(crate) fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
         Self::argumenterr(format!(
             "wrong number of arguments (given {given}, expeted {min}+)"
         ))
@@ -410,14 +410,6 @@ impl MonorubyErr {
 
     pub(crate) fn create_proc_no_block() -> MonorubyErr {
         MonorubyErr::argumenterr("tried to create Proc object without a block")
-    }
-
-    pub(crate) fn check_number_of_arguments(given: usize, expect: usize) -> Result<()> {
-        if given == expect {
-            Ok(())
-        } else {
-            Err(MonorubyErr::wrong_number_of_arg(expect, given))
-        }
     }
 
     pub(crate) fn check_number_of_arguments_range(

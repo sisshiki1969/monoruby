@@ -7,9 +7,8 @@ pub(crate) fn init(globals: &mut Globals) {
 
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
     let self_val = lfp.self_val();
-    MonorubyErr::check_min_number_of_arguments(len, 1)?;
+    lfp.check_min_number_of_arguments(1)?;
     let mut arg_vec = lfp.to_vec();
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
@@ -74,8 +73,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();

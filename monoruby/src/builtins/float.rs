@@ -26,8 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_f.html]
 #[monoruby_builtin]
 fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     Ok(lfp.self_val())
 }
 
@@ -40,8 +39,7 @@ fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]
 #[monoruby_builtin]
 fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.trunc() as i64)),
         _ => unreachable!(),
@@ -56,8 +54,7 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/floor.html]
 #[monoruby_builtin]
 fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.check_number_of_arguments(0)?;
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
         _ => unreachable!(),

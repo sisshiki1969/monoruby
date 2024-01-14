@@ -21,7 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    lfp.check_number_of_arguments_range(0..=1)?;
     lfp.expect_no_block()?;
     let superclass = if len == 0 {
         None

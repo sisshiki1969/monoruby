@@ -48,7 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    lfp.check_number_of_arguments_range(0..=1)?;
     let class_id = lfp.self_val().expect_class(globals)?;
     let msg = if len == 0 {
         globals.get_class_name(class_id)

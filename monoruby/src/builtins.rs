@@ -92,23 +92,4 @@ impl Arg {
     pub fn as_ptr(&self) -> *const Value {
         self.0
     }
-
-    /*pub fn to_vec(&self, len: usize) -> Vec<Value> {
-        self.iter(len).collect()
-    }*/
-
-    /*pub fn iter(&self, len: usize) -> impl DoubleEndedIterator<Item = Value> + '_ {
-        self.iter_inner(len).rev().cloned()
-    }*/
-
-    /*fn iter_inner(&self, len: usize) -> impl DoubleEndedIterator<Item = &Value> {
-        unsafe {
-            let data = if len == 0 {
-                self.0
-            } else {
-                self.0.sub(len - 1)
-            };
-            std::slice::from_raw_parts(data, len).iter()
-        }
-    }*/
 }
