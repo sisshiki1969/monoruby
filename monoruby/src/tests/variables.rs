@@ -4,10 +4,7 @@ mod test {
 
     #[test]
     fn class_variables1() {
-        run_test_with_prelude(
-            r#"
-            Baz.new.foo      # => 3
-            "#,
+        run_test_once(
             r#"
             class Foo
               @@foo = 1
@@ -21,18 +18,24 @@ mod test {
             end
 
             class Baz < Bar
-              @@foo += 1          # => 3
+              def baz
+                @@foo += 1
+              end
             end
-        "#,
+
+            $res = []
+            20.times do
+              $res << Baz.new.baz
+              $res << Baz.new.foo
+            end
+            $res
+            "#,
         );
     }
 
     #[test]
     fn class_variables2() {
-        run_test_with_prelude(
-            r#"
-            Baz.new.foo      # => 3
-            "#,
+        run_test_once(
             r#"
             module Foo
               @@foo = 1
@@ -48,9 +51,18 @@ mod test {
 
             class Baz
               include Foo
-              @@foo += 1          # => 3
+              def baz
+                @@foo += 1
+              end
             end
-        "#,
+
+            $res = []
+            20.times do
+              $res << Baz.new.baz
+              $res << Baz.new.foo
+            end
+            $res
+            "#,
         );
     }
 
