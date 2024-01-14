@@ -1,7 +1,7 @@
 use super::*;
 
 impl Globals {
-    pub fn dump_superclass(&self, mut module: Module) {
+    /*pub fn dump_superclass(&self, mut module: Module) {
         loop {
             eprint!("{} ", module.id().get_name_id(self).unwrap());
             match module.superclass() {
@@ -10,7 +10,7 @@ impl Globals {
             }
         }
         eprintln!();
-    }
+    }*/
 
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
         self.store[class_id].constants.insert(name, val);

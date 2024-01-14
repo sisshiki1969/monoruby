@@ -74,5 +74,27 @@ mod test {
             end
         "#,
         );
+        run_test_error(
+            r#"
+            @@x = 1
+        "#,
+        );
+        run_test_error(
+            r#"
+            class C
+              @@x
+            end
+        "#,
+        );
+        run_test_error(
+            r#"
+            class C
+              def foo
+                @@x
+              end
+            end
+            C.new.foo
+        "#,
+        );
     }
 }
