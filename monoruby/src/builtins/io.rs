@@ -30,8 +30,8 @@ fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Res
 }
 
 #[monoruby_builtin]
-fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
-    Ok(arg[0])
+fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    Ok(lfp.arg(0))
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
-fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh)?;
     Ok(Value::new_fiber(proc))
@@ -31,7 +31,7 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
-fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     if vm.parent_fiber().is_none() {
         return Err(MonorubyErr::fibererr(
@@ -41,7 +41,7 @@ fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
     let val = if len == 0 {
         Value::nil()
     } else if len == 1 {
-        arg[0]
+        lfp.arg(0)
     } else {
         Value::array_from_iter(lfp.iter())
     };

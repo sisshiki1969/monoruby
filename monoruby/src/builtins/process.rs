@@ -77,7 +77,7 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
 fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    MonorubyErr::check_number_of_arguments_range(lfp.arg_len(), 1..=2)?;
+    lfp.check_number_of_arguments_range(1..=2)?;
     let unit = if lfp.arg_len() == 1 {
         IdentId::FLOAT_SECOND
     } else {

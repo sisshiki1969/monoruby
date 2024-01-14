@@ -155,12 +155,69 @@ impl alloc::GC<RValue> for LFP {
 }
 
 impl LFP {
-    pub unsafe fn new(ptr: *mut u8) -> Self {
+    unsafe fn new(ptr: *mut u8) -> Self {
         Self(std::ptr::NonNull::new(ptr).unwrap())
     }
 
-    pub fn sub(self, count: i64) -> *mut u8 {
+    ///
+    /// Get CFP.
+    ///
+    /// ### safety
+    ///
+    /// *self* must be on the stack
+    ///
+    unsafe fn cfp(&self) -> CFP {
+        assert!(self.on_stack());
+        CFP::new(self.sub(BP_PREV_CFP) as _)
+    }
+
+    ///
+    /// Set outer.
+    ///
+    unsafe fn set_outer(&mut self, outer: Option<DFP>) {
+        *(self.outer_address().0.as_ptr()) = outer;
+    }
+
+    fn sub(self, count: i64) -> *mut u8 {
         unsafe { self.as_ptr().sub(count as usize) }
+    }
+
+    ///
+    /// Get the address of outer.
+    ///
+    fn outer_address(&self) -> DFP {
+        unsafe { DFP::new(self.sub(LBP_OUTER) as _) }
+    }
+
+    fn meta_mut(&mut self) -> &mut Meta {
+        unsafe { &mut *(self.sub(LBP_META) as *mut Meta) }
+    }
+
+    fn on_stack(&self) -> bool {
+        self.meta().on_stack()
+    }
+
+    fn frame_bytes(&self) -> usize {
+        LBP_SELF as usize + 8 * self.meta().reg_num() as usize
+    }
+
+    fn frame_ref(&self) -> &[u8] {
+        let len = self.frame_bytes();
+        unsafe {
+            std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
+        }
+    }
+
+    fn iter_inner(&self) -> impl DoubleEndedIterator<Item = &Value> {
+        let len = self.arg_len();
+        unsafe {
+            let data = if len == 0 {
+                self.0.as_ptr().sub(LBP_ARG0 as usize)
+            } else {
+                self.0.as_ptr().sub(LBP_ARG0 as usize + len * 8 - 8)
+            };
+            std::slice::from_raw_parts(data as *const Value, len).iter()
+        }
     }
 
     /// Move the frame to heap.
@@ -208,20 +265,6 @@ impl LFP {
     }
 
     ///
-    /// Get CFP.
-    ///
-    pub unsafe fn cfp(&self) -> CFP {
-        CFP::new(self.sub(BP_PREV_CFP) as _)
-    }
-
-    ///
-    /// Get the address of outer.
-    ///
-    pub fn outer_address(&self) -> DFP {
-        unsafe { DFP::new(self.sub(LBP_OUTER) as _) }
-    }
-
-    ///
     /// Get outer DFP.
     ///
     pub fn outer(&self) -> Option<DFP> {
@@ -229,25 +272,10 @@ impl LFP {
     }
 
     ///
-    /// Set outer.
-    ///
-    pub unsafe fn set_outer(&mut self, outer: Option<DFP>) {
-        *(self.outer_address().0.as_ptr()) = outer;
-    }
-
-    ///
     /// Get Meta.
     ///
     pub(crate) fn meta(&self) -> &Meta {
         unsafe { &*(self.sub(LBP_META) as *const Meta) }
-    }
-
-    fn meta_mut(&mut self) -> &mut Meta {
-        unsafe { &mut *(self.sub(LBP_META) as *mut Meta) }
-    }
-
-    fn on_stack(&self) -> bool {
-        self.meta().on_stack()
     }
 
     ///
@@ -315,17 +343,6 @@ impl LFP {
         std::ptr::write(self.register_ptr(index), val);
     }
 
-    fn frame_bytes(&self) -> usize {
-        LBP_SELF as usize + 8 * self.meta().reg_num() as usize
-    }
-
-    fn frame_ref(&self) -> &[u8] {
-        let len = self.frame_bytes();
-        unsafe {
-            std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
-        }
-    }
-
     // APIs for native methods.
 
     pub fn to_vec(&self) -> Vec<Value> {
@@ -338,18 +355,6 @@ impl LFP {
 
     pub fn rev(&self) -> impl Iterator<Item = Value> + '_ {
         self.iter_inner().cloned()
-    }
-
-    fn iter_inner(&self) -> impl DoubleEndedIterator<Item = &Value> {
-        let len = self.arg_len();
-        unsafe {
-            let data = if len == 0 {
-                self.0.as_ptr().sub(LBP_ARG0 as usize)
-            } else {
-                self.0.as_ptr().sub(LBP_ARG0 as usize + len * 8 - 8)
-            };
-            std::slice::from_raw_parts(data as *const Value, len).iter()
-        }
     }
 
     pub fn slice(&self, start_pos: usize, len: usize) -> impl DoubleEndedIterator<Item = Value> {
@@ -373,6 +378,39 @@ impl LFP {
                     .as_ref()
                     .unwrap(),
             )
+        }
+    }
+
+    pub fn check_number_of_arguments(&self, expect: usize) -> Result<()> {
+        if self.arg_len() == expect {
+            Ok(())
+        } else {
+            Err(MonorubyErr::wrong_number_of_arg(expect, self.arg_len()))
+        }
+    }
+
+    pub(crate) fn check_min_number_of_arguments(&self, min: usize) -> Result<()> {
+        let given = self.arg_len();
+        if given >= min {
+            return Ok(());
+        }
+        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
+    }
+
+    pub fn check_number_of_arguments_range(
+        &self,
+        range: std::ops::RangeInclusive<usize>,
+    ) -> Result<()> {
+        let given = self.arg_len();
+        if range.contains(&given) {
+            Ok(())
+        } else {
+            let err = if range.start() == range.end() {
+                MonorubyErr::wrong_number_of_arg(*range.start(), given)
+            } else {
+                MonorubyErr::wrong_number_of_arg_range(given, range)
+            };
+            Err(err)
         }
     }
 }

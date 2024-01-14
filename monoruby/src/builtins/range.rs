@@ -25,10 +25,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments_range(len, 2..=3)?;
-    globals.generate_range(arg[0], arg[1], false)
+fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    lfp.check_number_of_arguments_range(2..=3)?;
+    globals.generate_range(lfp.arg(0), lfp.arg(1), false)
 }
 
 /// ### Range#begin
@@ -95,7 +94,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
 #[monoruby_builtin]
 fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    MonorubyErr::check_number_of_arguments(lfp.arg_len(), 0)?;
+    lfp.check_number_of_arguments(0)?;
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
@@ -161,9 +160,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    MonorubyErr::check_number_of_arguments(len, 0)?;
-
+    lfp.check_number_of_arguments(0)?;
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
