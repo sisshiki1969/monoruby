@@ -180,7 +180,7 @@ fn integer_tof(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
 #[monoruby_builtin]
-fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -191,9 +191,9 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
 #[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
+    match super::op::add_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
             let err = vm.take_error();
@@ -210,9 +210,9 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    let b = vm.eq_values_bool(globals, lfp.self_val(), arg[0])?;
+    let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
 
@@ -222,9 +222,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
 /// - self != other -> bool
 ///
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    let b = vm.ne_values_bool(globals, lfp.self_val(), arg[0])?;
+    let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
 
@@ -234,9 +234,9 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
 /// - self >= other -> bool
 ///
 #[monoruby_builtin]
-fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), arg[0]) {
+    match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
             let err = vm.take_error();
@@ -251,9 +251,9 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
 /// - self <= other -> bool
 ///
 #[monoruby_builtin]
-fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), arg[0]) {
+    match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
             let err = vm.take_error();
@@ -269,9 +269,9 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
 #[monoruby_builtin]
-fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn shr(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    match super::op::shr_values(vm, globals, lfp.self_val(), arg[0]) {
+    match super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
             let err = vm.take_error();
@@ -311,9 +311,9 @@ fn integer_shr(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    match super::op::shl_values(vm, globals, lfp.self_val(), arg[0]) {
+    match super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
             let err = vm.take_error();
@@ -357,10 +357,10 @@ fn integer_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let self_val = lfp.self_val();
-    op::integer_index1(globals, self_val, arg[0])
+    op::integer_index1(globals, self_val, lfp.arg(0))
 }
 
 ///
@@ -370,7 +370,7 @@ fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/even=3f.html]
 #[monoruby_builtin]
-fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(0)?;
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i % 2 == 0,

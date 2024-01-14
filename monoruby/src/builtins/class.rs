@@ -19,15 +19,15 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
-fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     lfp.expect_no_block()?;
     let superclass = if len == 0 {
         None
     } else {
-        arg[0].expect_class(globals)?;
-        Some(arg[0].as_class())
+        lfp.arg(0).expect_class(globals)?;
+        Some(lfp.arg(0).as_class())
     };
     let obj = globals.new_unnamed_class(superclass);
     Ok(obj)

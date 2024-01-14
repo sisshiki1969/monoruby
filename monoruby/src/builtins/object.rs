@@ -95,8 +95,8 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/is_a=3f.html]
 #[monoruby_builtin]
-fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let class = arg[0].expect_class_or_module(globals)?;
+fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let class = lfp.arg(0).expect_class_or_module(globals)?;
     Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
 
@@ -110,7 +110,7 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
-fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
 }
 
@@ -156,8 +156,8 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
-fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let name = match arg[0].unpack() {
+fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let name = match lfp.arg(0).unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => IdentId::get_id(String::from_utf8_lossy(b).as_ref()),
         _ => unimplemented!(),
@@ -197,8 +197,9 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
 #[monoruby_builtin]
-fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let b = lfp.self_val().real_class(globals).id() == arg[0].expect_class_or_module(globals)?;
+fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let b =
+        lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?;
     Ok(Value::bool(b))
 }
 
@@ -209,10 +210,10 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
 #[monoruby_builtin]
-fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let receiver = lfp.self_val();
-    let method_name = arg[0].expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = globals.find_method(receiver, method_name, false)?;
     Ok(Value::new_method(receiver, func_id))
 }
@@ -235,11 +236,11 @@ fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
-fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let id = match arg[0].unpack() {
+fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, arg[0])),
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -252,9 +253,9 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let id = arg[0].expect_symbol_or_string(globals)?;
-    let val = arg[1];
+fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let val = lfp.arg(1);
     globals.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
 }
@@ -266,8 +267,8 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let id = arg[0].expect_symbol_or_string(globals)?;
+fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Ok(v)
 }
@@ -323,11 +324,11 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     use std::process::Command;
     let len = lfp.arg_len();
     lfp.check_min_number_of_arguments(1)?;
-    let (program, mut args) = prepare_command_arg(&arg[0].as_str());
+    let (program, mut args) = prepare_command_arg(&lfp.arg(0).as_str());
     if len > 1 {
         let iter = lfp.iter();
         //iter.take(1);
@@ -348,9 +349,9 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
-fn command(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
+fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     use std::process::Command;
-    let (program, args) = prepare_command_arg(&arg[0].as_str());
+    let (program, args) = prepare_command_arg(&lfp.arg(0).as_str());
     match Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();

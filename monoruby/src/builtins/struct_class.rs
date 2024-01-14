@@ -6,14 +6,14 @@ pub(crate) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let self_val = lfp.self_val();
     lfp.check_min_number_of_arguments(1)?;
     let mut arg_vec = lfp.to_vec();
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = class.as_class_id();
-    match arg[0].is_str() {
+    match lfp.arg(0).is_str() {
         None => {}
         Some(s) => {
             match s.chars().nth(0) {
@@ -72,7 +72,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 }
 
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(0)?;
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
