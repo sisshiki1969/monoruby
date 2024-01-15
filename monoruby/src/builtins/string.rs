@@ -16,6 +16,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "===", eq);
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp);
     globals.define_builtin_func(STRING_CLASS, "!=", ne);
+    globals.define_builtin_func(STRING_CLASS, ">=", ge);
+    globals.define_builtin_func(STRING_CLASS, ">", gt);
+    globals.define_builtin_func(STRING_CLASS, "<=", le);
+    globals.define_builtin_func(STRING_CLASS, "<", lt);
+    globals.define_builtin_func(STRING_CLASS, "<<", shl);
     globals.define_builtin_func(STRING_CLASS, "%", rem);
     globals.define_builtin_func(STRING_CLASS, "=~", match_);
     globals.define_builtin_func(STRING_CLASS, "[]", index);
@@ -32,6 +37,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_s", tos);
     globals.define_builtin_func(STRING_CLASS, "length", length);
     globals.define_builtin_func(STRING_CLASS, "size", length);
+    globals.define_builtin_func(STRING_CLASS, "ord", ord);
     globals.define_builtin_func(STRING_CLASS, "ljust", ljust);
     globals.define_builtin_func(STRING_CLASS, "rjust", rjust);
     globals.define_builtin_func(STRING_CLASS, "lines", lines);
@@ -117,6 +123,26 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     Ok(Value::bool(!b))
 }
 
+fn string_cmp(lfp: LFP) -> Result<Option<std::cmp::Ordering>> {
+    lfp.check_number_of_arguments(1)?;
+    let self_ = lfp.self_val();
+    let lhs = self_.as_bytes();
+    let res = match lfp.arg(0).is_bytes() {
+        Some(rhs) => Some(lhs.string_cmp(rhs)),
+        None => None,
+    };
+    Ok(res)
+}
+
+fn string_cmp2(lfp: LFP) -> Result<std::cmp::Ordering> {
+    match string_cmp(lfp)? {
+        Some(ord) => Ok(ord),
+        None => Err(MonorubyErr::argumenterr(
+            "comparison of String with non-String failed",
+        )),
+    }
+}
+
 ///
 /// ### String#<=>
 ///
@@ -125,14 +151,86 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
-    let self_ = lfp.self_val();
-    let lhs = self_.as_bytes();
-    let b = match lfp.arg(0).is_bytes() {
-        Some(rhs) => lhs.string_cmp(rhs),
-        None => return Ok(Value::nil()),
-    };
-    Ok(Value::from_ord(b))
+    Ok(string_cmp(lfp)?.map(Value::from_ord).unwrap_or_default())
+}
+
+///
+/// ### Comparable#<=
+///
+/// - self <= other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c=3d.html]
+#[monoruby_builtin]
+fn le(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let ord = string_cmp2(lfp)?;
+    Ok(Value::bool(ord != std::cmp::Ordering::Greater))
+}
+
+///
+/// ### Comparable#<=
+///
+/// - self < other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3c.html]
+#[monoruby_builtin]
+fn lt(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let ord = string_cmp2(lfp)?;
+    Ok(Value::bool(ord == std::cmp::Ordering::Less))
+}
+
+///
+/// ### Comparable#<=
+///
+/// - self >= other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e=3d.html]
+#[monoruby_builtin]
+fn ge(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let ord = string_cmp2(lfp)?;
+    Ok(Value::bool(ord != std::cmp::Ordering::Less))
+}
+
+///
+/// ### Comparable#<=
+///
+/// - self > other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Comparable/i/=3e.html]
+#[monoruby_builtin]
+fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let ord = string_cmp2(lfp)?;
+    Ok(Value::bool(ord == std::cmp::Ordering::Greater))
+}
+
+///
+/// ### Strring#<<
+///
+/// - self << other -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
+#[monoruby_builtin]
+fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    if let Some(other) = lfp.arg(0).is_bytes() {
+        self_.as_bytes_mut().extend_from_slice(other);
+    } else if let Some(i) = lfp.arg(0).try_fixnum() {
+        let ch = match u32::try_from(i) {
+            Ok(ch) => ch,
+            Err(_) => return Err(MonorubyErr::char_out_of_range(globals, lfp.arg(0))),
+        };
+        if let Ok(ch) = u8::try_from(ch) {
+            self_.as_bytes_mut().extend_from_slice(&[ch]);
+        } else {
+            self_.as_bytes_mut().extend_from_slice(&ch.to_ne_bytes());
+        }
+    } else {
+        return Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            lfp.arg(0),
+            STRING_CLASS,
+        ));
+    }
+    Ok(self_)
 }
 
 fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
@@ -932,8 +1030,21 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    lfp.check_number_of_arguments(0)?;
     let length = lfp.self_val().as_str().chars().count();
     Ok(Value::integer(length as i64))
+}
+
+///
+/// ### String#ord
+///
+/// - ord -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/ord.html]
+#[monoruby_builtin]
+fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    lfp.check_number_of_arguments(0)?;
+    Ok(Value::integer(lfp.self_val().as_bytes().ord()? as _))
 }
 
 fn gen_pad(padding: &str, len: usize) -> String {
@@ -1226,6 +1337,25 @@ mod test {
     }
 
     #[test]
+    fn string_shl() {
+        run_test(
+            r##"
+            a = "Ruby"
+            a << " on Rails"
+            a << 100
+            a
+        "##,
+        );
+        /*run_test(
+            r##"
+            a = "Ruby"
+            a << 1024
+            a
+        "##,
+        );*/
+    }
+
+    #[test]
     fn string_eq() {
         run_test(r##""abcde" == "abcde""##);
         run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##);
@@ -1235,14 +1365,30 @@ mod test {
 
     #[test]
     fn string_cmp() {
-        run_test(r##""aaa" <=> "xxx""##);
-        run_test(r##""aaa" <=> "aaa""##);
-        run_test(r##""xxx" <=> "aaa""##);
-        run_test(r##""aaaa" <=> "aaa""##);
-        run_test(r##""aaaa" <=> "xxx""##);
-        run_test(r##""xxx" <=> "aaaa""##);
-        run_test(r##""aaa" <=> "aaaa""##);
-        run_test(r##""aaaa" <=> "aaa""##);
+        run_binop_tests2(
+            &[
+                "'a'", "'aa'", "'aaa'", "'x'", "'xx'", "'xxx'", "'山田'", "'山川'",
+            ],
+            &["<=", "<", ">", ">=", "<=>", "==", "!="],
+            &[
+                "'a'", "'aa'", "'aaa'", "'x'", "'xx'", "'xxx'", "'山田'", "'山川'",
+            ],
+        );
+    }
+
+    #[test]
+    fn string_ord() {
+        run_test("'ruby'.ord");
+        run_test("'ルビー'.ord");
+        run_test_error("''.ord");
+        run_test(
+            r#"
+            a = ""
+            a << 1
+            a << "Ruby"
+            a.ord
+        "#,
+        );
     }
 
     #[test]

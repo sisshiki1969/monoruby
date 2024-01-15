@@ -767,6 +767,10 @@ impl RValue {
         unsafe { &self.kind.string }
     }
 
+    pub(super) fn as_bytes_mut(&mut self) -> &mut StringInner {
+        unsafe { &mut self.kind.string }
+    }
+
     pub(super) fn as_str(&self) -> std::borrow::Cow<'_, str> {
         unsafe { self.kind.string.as_str() }
     }

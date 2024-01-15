@@ -796,6 +796,11 @@ impl Value {
         self.rvalue().as_bytes()
     }
 
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut StringInner {
+        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        self.rvalue_mut().as_bytes_mut()
+    }
+
     pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {

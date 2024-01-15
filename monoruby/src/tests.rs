@@ -98,6 +98,18 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
     run_tests(&test);
 }
 
+pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
+    let mut test = vec![];
+    for lhs in lhs {
+        for rhs in rhs {
+            for op in op {
+                test.extend_from_slice(&[format!("{lhs} {op} {rhs}")]);
+            }
+        }
+    }
+    run_tests(&test);
+}
+
 pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
     let mut test = vec![];
     for rhs in rhs {

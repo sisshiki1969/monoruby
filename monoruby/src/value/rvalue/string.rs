@@ -71,4 +71,15 @@ impl StringInner {
             Ordering::Less
         }
     }
+
+    pub fn ord(&self) -> Result<u32> {
+        if self.len() == 0 {
+            return Err(MonorubyErr::argumenterr("empty string"));
+        }
+        let ord = match std::str::from_utf8(self.as_bytes()) {
+            Ok(s) => s.chars().next().unwrap() as u32,
+            Err(_) => self.as_bytes()[0] as u32,
+        };
+        Ok(ord as u32)
+    }
 }
