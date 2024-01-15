@@ -349,7 +349,7 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     /// This fn returns the value of the constant and the class id of the base object.
-    /// It is necessary to check the base class for confirmation of cache consistency.
+    /// It is necessary to check the base class for keeping cache consistency.
     ///
     pub(crate) fn find_constant(
         &self,
@@ -366,6 +366,41 @@ impl Executor {
     pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.context_class_id();
         globals.set_constant(parent, name, val);
+    }
+
+    pub(crate) fn find_class_variable(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+    ) -> Result<Value> {
+        let parent = self.get_parent(globals)?;
+        globals.get_class_variable(parent, name).map(|(_, v)| v)
+    }
+
+    pub(crate) fn set_class_variable(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        let parent = self.get_parent(globals)?;
+        let parent = match globals.search_constant_superclass(parent, name) {
+            Some((module, _)) => module,
+            None => parent,
+        };
+        globals.set_class_variable(parent.id(), name, val);
+        Ok(())
+    }
+
+    fn get_parent(&self, globals: &Globals) -> Result<Module> {
+        let fid = self.cfp().method_func_id();
+        let parent = globals.store[fid].as_ruby_func().lexical_context.last();
+        match parent {
+            Some(parent) => Ok(*parent),
+            None => Err(MonorubyErr::runtimeerr(
+                "class variable access from toplevel",
+            )),
+        }
     }
 }
 
@@ -1370,9 +1405,17 @@ impl BcPc {
                     src: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
+                27 => TraceIr::LoadCvar {
+                    dst: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
                 28 => TraceIr::LoadSvar {
                     dst: SlotId::new(op1),
                     id: op2,
+                },
+                29 => TraceIr::StoreCvar {
+                    src: SlotId::new(op1),
+                    name: IdentId::from(op2),
                 },
                 30..=31 => {
                     let cached_fid = self.cached_fid();

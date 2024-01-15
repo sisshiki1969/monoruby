@@ -122,13 +122,75 @@ impl Codegen {
         label
     }
 
+    ///
+    /// Load class variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | name  |dst| op||               |
+    /// +---+---+---+---++---+---+---+---+
+    ///    rdi   r15
+    /// ~~~
+    /// - name: name of class variable (IdentId)
+    /// - dst: destination slot (SlotId)
+    ///
+    pub(super) fn vm_load_cvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movl rdx, rdi; // name: IdentId
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq rax, (runtime::get_class_var);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    ///
+    /// Store class variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | name  |val| op||               |
+    /// +---+---+---+---++---+---+---+---+
+    ///    rdi   r15
+    /// ~~~
+    /// - name: name of the class variable (IdentId)
+    /// - val: source slot (Value)
+    ///
+    pub(super) fn vm_store_cvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_value(GP::R15);
+        monoasm! { &mut self.jit,
+            movl rdx, rdi; // name: IdentId
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq rcx, r15;  // dst: Value
+            movq rax, (runtime::set_class_var);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    ///
     /// Load global variable
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | op|dst|identId||               |
+    /// | name  |dst| op||               |
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
+    /// - name: name of the global variable (IdentId)
+    /// - dst: destination slot (SlotId)
+    ///
     pub(super) fn vm_load_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
@@ -144,13 +206,17 @@ impl Codegen {
         label
     }
 
+    ///
     /// Store global variable
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | op|val|identId||               |
+    /// | name  |val| op||               |
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
+    /// - name: name of the global variable (IdentId)
+    /// - val: source slot (Value)
+    ///
     pub(super) fn vm_store_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();

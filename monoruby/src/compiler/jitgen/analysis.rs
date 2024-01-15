@@ -278,6 +278,7 @@ impl JitContext {
                 | TraceIr::BlockArg(dst, _)
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
+                | TraceIr::LoadCvar { dst, .. }
                 | TraceIr::LoadGvar { dst, .. }
                 | TraceIr::LoadSvar { dst, .. } => {
                     info.def(dst);
@@ -285,6 +286,7 @@ impl JitContext {
                 TraceIr::StoreConst(src, _)
                 | TraceIr::StoreDynVar(_, src)
                 | TraceIr::StoreIvar(src, ..)
+                | TraceIr::StoreCvar { src, .. }
                 | TraceIr::StoreGvar { src, .. } => {
                     info.r#use(src);
                 }

@@ -97,6 +97,14 @@ pub(super) enum BcIr {
         val: BcReg,
         name: IdentId,
     },
+    LoadCvar {
+        dst: BcReg,
+        name: IdentId,
+    },
+    StoreCvar {
+        val: BcReg,
+        name: IdentId,
+    },
     LoadSvar {
         ret: BcReg,
         id: u32,

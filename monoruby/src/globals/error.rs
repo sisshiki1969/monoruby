@@ -323,6 +323,13 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn uninitialized_cvar(name: IdentId, class_name: IdentId) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::Name,
+            format!("uninitialized class variable {name} in {class_name}"),
+        )
+    }
+
     pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::Name,

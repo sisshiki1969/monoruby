@@ -178,6 +178,7 @@ fn is_smi(node: &Node) -> Option<i16> {
 enum LvalueKind {
     Const(IdentId),
     InstanceVar(IdentId),
+    ClassVar(IdentId),
     GlobalVar(IdentId),
     DynamicVar { outer: usize, dst: BcReg },
     Index { base: BcReg, index: BcReg },
@@ -857,6 +858,11 @@ impl BytecodeGen {
         self.emit(BcIr::LoadGvar { dst: ret, name }, loc);
     }
 
+    fn emit_load_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let ret = self.get_reg(dst);
+        self.emit(BcIr::LoadCvar { dst: ret, name }, loc);
+    }
+
     fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {
         let ret = self.get_reg(dst);
         self.emit(BcIr::LoadSvar { ret, id }, loc);
@@ -936,6 +942,10 @@ impl BytecodeGen {
                 let name = IdentId::get_id(name);
                 LvalueKind::InstanceVar(name)
             }
+            NodeKind::ClassVar(name) => {
+                let name = IdentId::get_id(name);
+                LvalueKind::ClassVar(name)
+            }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
@@ -1008,6 +1018,10 @@ impl BytecodeGen {
             LvalueKind::InstanceVar(name) => {
                 self.set_temp(old_temp);
                 self.emit(BcIr::StoreIvar(src, name), loc);
+            }
+            LvalueKind::ClassVar(name) => {
+                self.set_temp(old_temp);
+                self.emit(BcIr::StoreCvar { val: src, name }, loc);
             }
             LvalueKind::GlobalVar(name) => {
                 self.set_temp(old_temp);

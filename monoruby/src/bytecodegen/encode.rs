@@ -354,10 +354,20 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&val);
                 Bc::from(enc_wl(26, op1.0, name.get()))
             }
+            BcIr::LoadCvar { dst, name } => {
+                // 27
+                let op1 = self.slot_id(&dst);
+                Bc::from(enc_wl(27, op1.0, name.get()))
+            }
             BcIr::LoadSvar { ret, id } => {
                 // 28
                 let op1 = self.slot_id(&ret);
                 Bc::from(enc_wl(28, op1.0, id))
+            }
+            BcIr::StoreCvar { val, name } => {
+                // 29
+                let op1 = self.slot_id(&val);
+                Bc::from(enc_wl(29, op1.0, name.get()))
             }
             BcIr::MethodCall(box callsite) => {
                 // 30, 31

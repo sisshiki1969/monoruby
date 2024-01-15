@@ -187,6 +187,31 @@ impl Codegen {
 }
 
 impl Codegen {
+    pub(super) fn load_cvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (name.get());
+            movq rax, (runtime::get_class_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
+    pub(super) fn store_cvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (name.get());
+            movq rcx, [r14 - (conv(src))];
+            movq rax, (runtime::set_class_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
     pub(super) fn load_gvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
@@ -223,7 +248,7 @@ impl Codegen {
     }
 }
 
-impl JitContext {
+impl AsmIr {
     pub(in crate::compiler::jitgen) fn load_ivar(
         &mut self,
         bb: &mut BBContext,
@@ -233,19 +258,19 @@ impl JitContext {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.ir.link_stack(bb, dst);
-        self.ir.stack2reg(SlotId(0), GP::Rdi);
+        self.link_stack(bb, dst);
+        self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);
         let is_self_cached = bb.self_value.class() == cached_class;
-        self.ir.inst.push(AsmInst::LoadIVar {
+        self.inst.push(AsmInst::LoadIVar {
             name,
             cached_ivarid,
             is_object_ty,
             is_self_cached,
             using_xmm,
         });
-        self.ir.rax2acc(bb, dst);
+        self.rax2acc(bb, dst);
     }
 
     pub(in crate::compiler::jitgen) fn store_ivar(
@@ -258,13 +283,13 @@ impl JitContext {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.ir.fetch_to_reg(bb, src, GP::Rax);
-        self.ir.stack2reg(SlotId(0), GP::Rdi);
+        self.fetch_to_reg(bb, src, GP::Rax);
+        self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
-        let error = self.ir.new_error(bb, pc);
-        let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
-        let is_self_cached = self.self_value.class() == cached_class;
-        self.ir.inst.push(AsmInst::StoreIVar {
+        let error = self.new_error(bb, pc);
+        let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);
+        let is_self_cached = bb.self_value.class() == cached_class;
+        self.inst.push(AsmInst::StoreIVar {
             name,
             cached_ivarid,
             is_object_ty,

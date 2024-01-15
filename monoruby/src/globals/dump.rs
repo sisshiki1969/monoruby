@@ -325,6 +325,12 @@ impl Globals {
             TraceIr::StoreGvar { src, name } => {
                 format!("{name} = {:?}", src)
             }
+            TraceIr::LoadCvar { dst: ret, name } => {
+                format!("{:?} = {name}", ret)
+            }
+            TraceIr::StoreCvar { src, name } => {
+                format!("{name} = {:?}", src)
+            }
             TraceIr::LoadSvar { dst: ret, id } => {
                 // 0 => $&
                 // 1 => $'

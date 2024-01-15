@@ -448,6 +448,41 @@ pub(super) extern "C" fn set_constant(
 }
 
 ///
+/// Get class variable.
+///
+pub(super) extern "C" fn get_class_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Option<Value> {
+    match vm.find_class_variable(globals, name) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+///
+/// Set class variable.
+///
+pub(super) extern "C" fn set_class_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    src: Value,
+) -> Option<Value> {
+    match vm.set_class_variable(globals, name, src) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+///
 /// Get Global variable.
 ///
 /// rax: Value

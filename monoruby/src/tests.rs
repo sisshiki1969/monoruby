@@ -7,6 +7,7 @@ use tempfile::NamedTempFile;
 mod case;
 mod method_call;
 mod rescue;
+mod variables;
 
 pub fn run_test(code: &str) {
     let wrapped = format!(
