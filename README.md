@@ -98,6 +98,10 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 #### optcarrot fps history (0-3000 frames)
 
+- ruby33yjit: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]fps: 232.57980491198208
+- truffleruby: truffleruby 23.1.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]
+- monoruby: 3e348afd4141c40978342e67ad26d42dc0b8d2a7
+
 ![optcarrot_fps_history](optcarrot_fps_history.png)
 
 #### machine spec
