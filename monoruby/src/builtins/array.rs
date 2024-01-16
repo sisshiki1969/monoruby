@@ -40,6 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "max", max);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_);
+    globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_);
     globals.define_builtin_func(ARRAY_CLASS, "each", each);
     globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index);
     globals.define_builtin_func(ARRAY_CLASS, "map", map);
@@ -794,6 +795,37 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().dup().into();
     vm.sort_by(globals, &mut ary, Executor::compare_values)?;
+    Ok(ary.into())
+}
+
+///
+/// ### Array#sort_by!
+///
+/// - sort_by! {|item| ... } -> self
+/// - [NOT SUPPORTED] sort_by! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
+#[monoruby_builtin]
+fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    lfp.check_number_of_arguments(0)?;
+    let bh = lfp.expect_block()?;
+    let data = globals.get_block_data(vm.cfp(), bh);
+    let f = |vm: &mut Executor,
+             globals: &mut Globals,
+             lhs: Value,
+             rhs: Value|
+     -> Result<std::cmp::Ordering> {
+        let len = vm.temp_len();
+        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
+        vm.temp_push(lhs);
+        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
+        vm.temp_push(rhs);
+        let res = Executor::compare_values(vm, globals, lhs, rhs);
+        vm.temp_clear(len);
+        res
+    };
+    let mut ary: Array = lfp.self_val().into();
+    vm.sort_by(globals, &mut ary, f)?;
     Ok(ary.into())
 }
 
@@ -1654,6 +1686,13 @@ mod test {
         run_test_error("[1,:hh].sort");
         run_test_error("[Float::NAN, Float::NAN].sort!");
         run_test_error("[Float::NAN, Float::NAN].sort");
+        run_test(
+            r#"
+        fruits = %w{apple pear fig}
+        fruits.sort_by! { |word| word.length }
+        fruits
+        "#,
+        );
     }
 
     #[test]

@@ -13,9 +13,11 @@ impl Executor {
     where
         F: FnMut(&mut Executor, &mut Globals, Value, Value) -> Result<std::cmp::Ordering>,
     {
-        self.merge_sort(globals, vec, |vm, globals, a, b| {
-            Ok(compare(vm, globals, a, b)? == std::cmp::Ordering::Less)
-        })
+        let f = |vm: &mut Executor, globals: &mut Globals, a: Value, b: Value| {
+            let ord = compare(vm, globals, a, b)?;
+            Result::Ok(ord == std::cmp::Ordering::Less)
+        };
+        self.merge_sort(globals, vec, f)
     }
 
     fn merge_sort<F>(
