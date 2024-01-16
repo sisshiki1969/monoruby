@@ -773,33 +773,6 @@ impl Codegen {
         l1:
         }
     }
-
-    ///
-    /// Assume the Value is Integer, and convert to f64.
-    ///
-    /// side-exit if not Integer.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    /// ### out
-    /// - xmm(*xmm*)
-    ///
-    /// ### destroy
-    /// - none
-    pub(super) fn integer_val_to_f64(
-        &mut self,
-        reg: jitgen::asmir::GP,
-        xmm: u64,
-        side_exit: DestLabel,
-    ) {
-        monoasm!(&mut self.jit,
-            testq R(reg as _), 0b01;
-            jz side_exit;
-            sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm), R(reg as _);
-        );
-    }
 }
 ///
 /// Get *ClassId* of the *Value*.
