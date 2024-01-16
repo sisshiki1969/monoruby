@@ -489,6 +489,8 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
         .sourceinfo
         .path
         .clone();
+    //let extern_fid = vm.cfp().lfp().meta().func_id();
+    //globals[extern_fid].as_ruby_func();
     let fid = globals.compile_script_with_binding(expr, path, None, None)?;
     #[cfg(feature = "emit-bc")]
     globals.dump_bc();

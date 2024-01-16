@@ -84,15 +84,13 @@ and its REPL.
 
 ### optcarrot
 
-#### optcarrot benchmark
-
 Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
 
-- ruby33: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) [x86_64-linux]
-- ruby33yjit: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]
-- truffleruby: truffleruby 20.1.0, like ruby 2.6.5, GraalVM CE JVM [x86_64-linux]
-- jruby: jruby 9.4.5.0 (3.1.4) 2023-11-02 1abae2700f OpenJDK 64-Bit Server VM 25.392-b08 on 1.8.0_392-b08 +indy +jit [x86_64-linux]
+- ruby33yjit: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]fps: 232.57980491198208
+- truffleruby: truffleruby 23.1.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]
 - monoruby: 3e348afd4141c40978342e67ad26d42dc0b8d2a7
+
+#### optcarrot benchmark
 
 ![optcarrot_benchmark](optcarrot_benchmark.png)
 
@@ -119,36 +117,16 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 - benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with *).
 - measurements are shown in iteration/sec (the higher, the better).
 
-|                     |   3.3.0| 3.3.0 --yjit|     monoruby|
-|:--------------------|-------:|------------:|------------:|
-|loop_whileloop       |   3.030|        3.004|       28.734|
-|qsort*               |  1.371k|       3.855k|       7.150k|
-|app_fib              |   3.356|       18.950|       20.327|
-|tarai*               |   2.917|       14.289|       16.293|
-|so_mandelbrot        |   0.550|        0.944|       20.026|
-|so_nbody             |   0.984|        1.964|        6.925|
-|binarytrees          |   2.669|        4.842|        4.777|
-|app_aobench          |   0.025|        0.048|        0.148|
+|                |    3.3.0| 3.3.0 --yjit| truffleruby-23.1.1| monoruby| monoruby --no-jit|
+|:---------------|--------:|------------:|------------------:|--------:|-----------------:|
+|qsort*          |   1.773k|       7.005k|            31.249k|  13.332k|            3.024k|
+|app_fib         |    6.002|       43.535|             32.699|   40.039|             5.838|
+|tarai*          |    4.918|       37.935|             16.687|   30.698|             4.554|
+|so_mandelbrot   |    1.009|        2.140|              3.397|   31.814|             1.258|
+|so_nbody        |    1.896|        3.959|             13.364|   13.585|             1.408|
+|binarytrees*    |    5.668|       10.884|              6.996|    8.217|             4.140|
+|app_aobench     |    0.051|        0.093|              0.627|    0.260|             0.048|
 
-|                     |   3.3.0| 3.3.0 --yjit|    monoruby|
-|:--------------------|-------:|------------:|-----------:|
-|vm_ivar              |135.987M|     140.434M|    877.408M|
-|vm_ivar_get          |  10.971|       27.283|      78.162|
-|vm_ivar_set          |163.651M|     200.768M|      1.109G|
-|vm_ivar_generic_get  | 15.051M|      15.051M|    188.579M|
-|vm_ivar_generic_set  |  8.475M|       9.827M|    167.269M|
-|vm_attr_ivar         | 47.534M|      48.266M|    398.173M|
-|vm_attr_ivar_set     | 42.305M|      42.606M|    482.824M|
+ratio to Ruby 3.3.0 were shown in the graph below. 
 
-|                             |   3.3.0| 3.3.0 --yjit|      monoruby|
-|:----------------------------|-------:|------------:|-------------:|
-|vm_array_index_small         |  7.662M|       7.705M|       52.798M|
-|vm_array_index_assign_small  |  3.195M|       3.195M|       42.554M|
-|vm_array_index               |  7.975M|       7.973M|       37.424M|
-|vm_array_index_assign        |  3.930M|       3.882M|       30.736M|
-
-|                             |   3.3.0| 3.3.0 --yjit|    monoruby|
-|:----------------------------|-------:|------------:|-----------:|
-|vm_const                     | 89.278M|      86.284M|      1.105G|
-|vm_const_many                |  7.311M|      69.626M|     67.432M|
-|vm_method_with_block         |  8.000M|       8.136M|     44.042M|
+![micro_bench](benchmark.png)

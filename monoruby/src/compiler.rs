@@ -53,6 +53,39 @@ type FiberInvoker = extern "C" fn(
 ) -> Option<Value>;
 
 ///
+/// General purpose registers.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GP {
+    Rax = 0,
+    Rcx = 1,
+    Rdx = 2,
+    Rsp = 4,
+    Rsi = 6,
+    Rdi = 7,
+    R8 = 8,
+    R13 = 13,
+    R15 = 15,
+}
+
+///
+/// Floating point registers.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct Xmm(u16);
+
+impl Xmm {
+    fn new(id: u16) -> Self {
+        Self(id)
+    }
+
+    pub fn enc(&self) -> u64 {
+        self.0 as u64 + 2
+    }
+}
+
+///
 /// Bytecode compiler
 ///
 /// This generates x86-64 machine code from a bytecode.
@@ -90,19 +123,6 @@ pub struct Codegen {
     /// - rcx
     ///
     f64_to_val: DestLabel,
-    ///
-    /// Copy f64 of flonum to *xmm*.
-    ///
-    /// ### in
-    /// - rdi: Value
-    ///
-    /// ### out
-    /// - xmm0
-    ///
-    /// ### destroy
-    /// - rax, rdi
-    ///
-    flonum_to_f64: DestLabel,
     div_by_zero: DestLabel,
     ///
     /// Raise "wrong number of arguments" error.
@@ -160,7 +180,6 @@ impl Codegen {
         let get_class = get_class(&mut jit);
         let wrong_argument = wrong_arguments(&mut jit);
         let f64_to_val = f64_to_val(&mut jit);
-        let flonum_to_f64 = flonum_to_f64(&mut jit);
         let entry_unimpl = unimplemented_inst(&mut jit);
 
         // dispatch table.
@@ -176,7 +195,6 @@ impl Codegen {
             vm_fetch: entry_panic,
             entry_raise: entry_panic,
             f64_to_val,
-            flonum_to_f64,
             div_by_zero: entry_panic,
             wrong_argument,
             get_class,
@@ -787,20 +805,16 @@ impl Codegen {
     ///
     /// ### destroy
     /// - none
-    pub(super) fn integer_val_to_f64(
-        &mut self,
-        reg: jitgen::asmir::GP,
-        xmm: u64,
-        side_exit: DestLabel,
-    ) {
+    fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
         monoasm!(&mut self.jit,
             testq R(reg as _), 0b01;
             jz side_exit;
             sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm), R(reg as _);
+            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
     }
 }
+
 ///
 /// Get *ClassId* of the *Value*.
 ///
@@ -879,41 +893,6 @@ fn entry_panic(jit: &mut JitMemory) -> DestLabel {
         movq rax, (runtime::panic);
         jmp rax;
         leave;
-        ret;
-    }
-    label
-}
-
-///
-/// Copy f64 of flonum to *xmm*.
-///
-/// ### in
-/// - rdi: Value
-///
-/// ### out
-/// - xmm0
-///
-/// ### destroy
-/// - rax, rdi
-///
-fn flonum_to_f64(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    let exit = jit.label();
-    monoasm! {jit,
-    label:
-        xorps xmm0, xmm0;
-        movq rax, (FLOAT_ZERO);
-        cmpq rdi, rax;
-        // in the case of 0.0
-        je exit;
-        movq rax, rdi;
-        sarq rax, 63;
-        addq rax, 2;
-        andq rdi, (-4);
-        orq rdi, rax;
-        rolq rdi, 61;
-        movq xmm0, rdi;
-    exit:
         ret;
     }
     label

@@ -51,6 +51,22 @@ impl ProcData {
 pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
+pub struct ExternalContext {
+    scope: Vec<HashSet<IdentId>>,
+}
+
+impl ruruby_parse::LocalsContext for ExternalContext {
+    fn find_lvar(&self, name: &str) -> Option<usize> {
+        let id = IdentId::get_id(name);
+        for (outer, scope) in self.scope.iter().enumerate() {
+            if scope.contains(&id) {
+                return Some(outer);
+            }
+        }
+        None
+    }
+}
+
 ///
 /// Global state.
 ///
@@ -187,12 +203,24 @@ impl Globals {
         res
     }
 
+    pub fn compile_script_eval(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        extern_context: Option<ExternalContext>,
+    ) -> Result<FuncId> {
+        match Parser::parse_program_eval(code, path.into(), extern_context) {
+            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }
+
     pub fn compile_script_with_binding(
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
         context: Option<ruruby_parse::LvarCollector>,
-        extern_context: Option<ruruby_parse::DummyFrame>,
+        extern_context: Option<ExternalContext>,
     ) -> Result<FuncId> {
         match Parser::parse_program_binding(code, path.into(), context, extern_context) {
             Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),

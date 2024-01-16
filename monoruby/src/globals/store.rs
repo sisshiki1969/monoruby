@@ -208,7 +208,10 @@ impl Store {
     pub fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        outer: (
+            FuncId,
+            Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+        ),
         optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
         info: BlockInfo,
         loc: Loc,

@@ -314,7 +314,7 @@ enum Functions {
     },
     Block {
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     },
@@ -445,9 +445,9 @@ struct BytecodeGen {
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: HashMap<IdentId, u16>,
+    locals: HashMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
+    outer_locals: Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
@@ -517,7 +517,7 @@ impl BytecodeGen {
     fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     ) -> Functions {
@@ -611,7 +611,7 @@ impl BytecodeGen {
 // local variables handling.
 //
 impl BytecodeGen {
-    fn get_locals(&self) -> Vec<(HashMap<IdentId, u16>, Option<IdentId>)> {
+    fn get_locals(&self) -> Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)> {
         let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
         locals.extend_from_slice(&self.outer_locals);
         locals
@@ -624,7 +624,7 @@ impl BytecodeGen {
 
     fn assign_local(&mut self, name: IdentId) -> BcLocal {
         match self.locals.get(&name) {
-            Some(local) => BcLocal(*local),
+            Some(local) => *local,
             None => self.add_local(name),
         }
     }
@@ -632,7 +632,7 @@ impl BytecodeGen {
     fn refer_local(&mut self, ident: &str) -> Option<BcLocal> {
         let name = IdentId::get_id(ident);
         match self.locals.get(&name) {
-            Some(r) => Some(BcLocal(*r)),
+            Some(r) => Some(*r),
             None => {
                 assert_eq!(Some(name), self.block_param);
                 None
@@ -641,20 +641,17 @@ impl BytecodeGen {
     }
 
     fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
-        self.outer_locals[outer - 1]
-            .0
-            .get(&name)
-            .map(|r| BcLocal(*r))
+        self.outer_locals[outer - 1].0.get(&name).cloned()
     }
 
     /// Add a variable identifier without checking duplicates.
     fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
-        let local = self.non_temp_num;
+        let local = BcLocal(self.non_temp_num);
         if let Some(ident) = ident.into() {
             assert!(self.locals.insert(ident, local).is_none());
         };
         self.non_temp_num += 1;
-        BcLocal(local)
+        local
     }
 
     fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {

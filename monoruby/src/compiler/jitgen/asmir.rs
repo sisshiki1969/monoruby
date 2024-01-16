@@ -1265,19 +1265,6 @@ pub(super) enum FMode {
     IR(i16, Xmm),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum GP {
-    Rax = 0,
-    Rcx = 1,
-    Rdx = 2,
-    Rsp = 4,
-    Rsi = 6,
-    Rdi = 7,
-    R8 = 8,
-    R13 = 13,
-    R15 = 15,
-}
-
 pub(super) enum SideExit {
     Deoptimize(BcPc, WriteBack),
     Error(BcPc, WriteBack),
@@ -1454,7 +1441,7 @@ impl Codegen {
             },
 
             AsmInst::NumToXmm(reg, x, side_exit) => {
-                self.numeric_val_to_f64(reg, x.enc(), labels[side_exit]);
+                self.numeric_val_to_f64(reg, x, labels[side_exit]);
             }
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(f);
@@ -1463,10 +1450,10 @@ impl Codegen {
                 );
             }
             AsmInst::IntToXmm(r, x, side_exit) => {
-                self.integer_val_to_f64(r, x.enc(), labels[side_exit]);
+                self.integer_val_to_f64(r, x, labels[side_exit]);
             }
             AsmInst::FloatToXmm(reg, x, side_exit) => {
-                self.float_to_f64(reg, x.enc(), labels[side_exit]);
+                self.float_to_f64(reg, x, labels[side_exit]);
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
@@ -1792,12 +1779,12 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.gen_array_u16_index_assign(using_xmm, idx);
-                self.handle_error(labels[error]);
+                self.gen_array_u16_index_assign(using_xmm, labels[error], idx);
+                //self.handle_error(labels[error]);
             }
             AsmInst::ArrayIndexAssign { using_xmm, error } => {
-                self.gen_array_index_assign(using_xmm);
-                self.handle_error(labels[error]);
+                self.gen_array_index_assign(using_xmm, labels[error]);
+                //self.handle_error(labels[error]);
             }
 
             AsmInst::NewArray(callid, using_xmm) => {
