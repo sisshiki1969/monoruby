@@ -1265,19 +1265,6 @@ pub(super) enum FMode {
     IR(i16, Xmm),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum GP {
-    Rax = 0,
-    Rcx = 1,
-    Rdx = 2,
-    Rsp = 4,
-    Rsi = 6,
-    Rdi = 7,
-    R8 = 8,
-    R13 = 13,
-    R15 = 15,
-}
-
 pub(super) enum SideExit {
     Deoptimize(BcPc, WriteBack),
     Error(BcPc, WriteBack),
@@ -1454,7 +1441,7 @@ impl Codegen {
             },
 
             AsmInst::NumToXmm(reg, x, side_exit) => {
-                self.numeric_val_to_f64(reg, x.enc(), labels[side_exit]);
+                self.numeric_val_to_f64(reg, x, labels[side_exit]);
             }
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(f);
@@ -1466,7 +1453,7 @@ impl Codegen {
                 self.integer_val_to_f64(r, x, labels[side_exit]);
             }
             AsmInst::FloatToXmm(reg, x, side_exit) => {
-                self.float_to_f64(reg, x.enc(), labels[side_exit]);
+                self.float_to_f64(reg, x, labels[side_exit]);
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);

@@ -1,7 +1,7 @@
 #[cfg(feature = "perf")]
 use std::io::Write;
 
-use super::{jitgen::asmir::GP, *};
+use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 

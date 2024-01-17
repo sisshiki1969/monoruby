@@ -1039,20 +1039,6 @@ impl BBContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(transparent)]
-pub(crate) struct Xmm(u16);
-
-impl Xmm {
-    fn new(id: u16) -> Self {
-        Self(id)
-    }
-
-    pub fn enc(&self) -> u64 {
-        self.0 as u64 + 2
-    }
-}
-
 pub(crate) type UsingXmm = bitvec::prelude::BitArr!(for 14, in u16);
 
 ///
@@ -1281,29 +1267,6 @@ impl Codegen {
         }
         monoasm!( &mut self.jit,
             addq rsp, (sp_offset);
-        );
-    }
-
-    ///
-    /// Assume the Value is Integer, and convert to f64.
-    ///
-    /// side-exit if not Integer.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    /// ### out
-    /// - xmm(*xmm*)
-    ///
-    /// ### destroy
-    /// - none
-    fn integer_val_to_f64(&mut self, reg: jitgen::asmir::GP, xmm: Xmm, side_exit: DestLabel) {
-        let xmm = xmm.enc();
-        monoasm!(&mut self.jit,
-            testq R(reg as _), 0b01;
-            jz side_exit;
-            sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm), rdi;
         );
     }
 

@@ -1,4 +1,44 @@
 #!/bin/bash
 
-cargo build --release
-benchmark-driver test.rb --rbenv '3.2.0-dev; 3.2.0-dev --yjit; 3.2.0-dev --mjit' -e target/release/monoruby -e 'target/release/monoruby --no-jit' --repeat-count 10
+cargo install --path monoruby
+monoruby benchmark/app_fib.rb > monoruby.log
+ruby benchmark/app_fib.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/tarai.rb > monoruby.log
+ruby benchmark/tarai.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log
+ruby benchmark/quick_sort.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/so_nbody.rb > monoruby.log
+ruby benchmark/so_nbody.rb > ruby.log
+diff -s monoruby.log ruby.log
+
+echo "checking plb2.."
+monoruby benchmark/plb2/nqueen.rb > monoruby.log
+ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/plb2/sudoku.rb > monoruby.log
+ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/plb2/matmul.rb > monoruby.log
+ruby --yjit benchmark/plb2/matmul.rb > ruby.log
+diff -s monoruby.log ruby.log
+monoruby benchmark/plb2/bedcov.rb > monoruby.log
+ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
+diff -s monoruby.log ruby.log
+
+monoruby benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
+ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
+
+monoruby benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
+ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
+monoruby --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
+diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
+diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
+rm benchmark/*.ppm
+
+monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
+ruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
+diff -s monoruby.log ruby.log
+rm *.log

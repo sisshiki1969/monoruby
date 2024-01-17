@@ -142,7 +142,7 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: u64, deopt: DestLabel) {
+    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b001;
             jnz deopt;
@@ -167,7 +167,7 @@ impl Codegen {
     ///
     /// - rdi, rax
     ///
-    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: u64, deopt: DestLabel) {
+    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
         let integer = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -179,7 +179,7 @@ impl Codegen {
             jmp  exit;
         integer:
             sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm), R(reg as _);
+            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         exit:
         };
     }
@@ -196,7 +196,7 @@ impl Codegen {
     /// ### destroy
     /// - rax, rdi
     ///
-    fn float_val_to_f64(&mut self, reg: GP, xmm: u64, side_exit: DestLabel) {
+    fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
         let flonum = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -206,7 +206,7 @@ impl Codegen {
         self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
         let flonum_to_f64 = self.flonum_to_f64;
         monoasm! {&mut self.jit,
-            movq xmm(xmm), [R(reg as _) + (RVALUE_OFFSET_KIND)];
+            movq xmm(xmm.enc()), [R(reg as _) + (RVALUE_OFFSET_KIND)];
             jmp  exit;
         flonum:
         }
@@ -217,7 +217,7 @@ impl Codegen {
         }
         monoasm! {&mut self.jit,
             call flonum_to_f64;
-            movq xmm(xmm), xmm0;
+            movq xmm(xmm.enc()), xmm0;
         exit:
         }
     }
@@ -280,8 +280,10 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.float_to_f64(GP::Rdi, 0, side_exit);
+        let x = Xmm(0);
+        gen.float_to_f64(GP::Rdi, x, side_exit);
         monoasm!( &mut gen.jit,
+            movq xmm0, xmm(x.enc());
             ret;
         );
         gen.jit.finalize();
@@ -312,8 +314,10 @@ mod test {
         let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
-        gen.numeric_val_to_f64(GP::Rdi, 0, side_exit);
+        let x = Xmm(0);
+        gen.numeric_val_to_f64(GP::Rdi, x, side_exit);
         monoasm!( &mut gen.jit,
+            movq xmm0, xmm(x.enc());
             ret;
         );
         gen.jit.finalize();

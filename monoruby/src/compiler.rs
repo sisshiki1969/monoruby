@@ -53,6 +53,39 @@ type FiberInvoker = extern "C" fn(
 ) -> Option<Value>;
 
 ///
+/// General purpose registers.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GP {
+    Rax = 0,
+    Rcx = 1,
+    Rdx = 2,
+    Rsp = 4,
+    Rsi = 6,
+    Rdi = 7,
+    R8 = 8,
+    R13 = 13,
+    R15 = 15,
+}
+
+///
+/// Floating point registers.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct Xmm(u16);
+
+impl Xmm {
+    fn new(id: u16) -> Self {
+        Self(id)
+    }
+
+    pub fn enc(&self) -> u64 {
+        self.0 as u64 + 2
+    }
+}
+
+///
 /// Bytecode compiler
 ///
 /// This generates x86-64 machine code from a bytecode.
@@ -787,20 +820,16 @@ impl Codegen {
     ///
     /// ### destroy
     /// - none
-    pub(super) fn integer_val_to_f64(
-        &mut self,
-        reg: jitgen::asmir::GP,
-        xmm: u64,
-        side_exit: DestLabel,
-    ) {
+    fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
         monoasm!(&mut self.jit,
             testq R(reg as _), 0b01;
             jz side_exit;
             sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm), R(reg as _);
+            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
     }
 }
+
 ///
 /// Get *ClassId* of the *Value*.
 ///
