@@ -1792,12 +1792,12 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.gen_array_u16_index_assign(using_xmm, idx);
-                self.handle_error(labels[error]);
+                self.gen_array_u16_index_assign(using_xmm, labels[error], idx);
+                //self.handle_error(labels[error]);
             }
             AsmInst::ArrayIndexAssign { using_xmm, error } => {
-                self.gen_array_index_assign(using_xmm);
-                self.handle_error(labels[error]);
+                self.gen_array_index_assign(using_xmm, labels[error]);
+                //self.handle_error(labels[error]);
             }
 
             AsmInst::NewArray(callid, using_xmm) => {
