@@ -1463,7 +1463,7 @@ impl Codegen {
                 );
             }
             AsmInst::IntToXmm(r, x, side_exit) => {
-                self.integer_val_to_f64(r, x.enc(), labels[side_exit]);
+                self.integer_val_to_f64(r, x, labels[side_exit]);
             }
             AsmInst::FloatToXmm(reg, x, side_exit) => {
                 self.float_to_f64(reg, x.enc(), labels[side_exit]);
