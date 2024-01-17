@@ -16,6 +16,21 @@ diff -s monoruby.log ruby.log
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas > monoruby.log
 ruby benchmark/so_nbody.rb > ruby.log
 diff -s monoruby.log ruby.log
+
+echo "checking plb2.."
+target/release/monoruby benchmark/plb2/nqueen.rb 2> benchmark/plb2/nqueen.disas > monoruby.log
+ruby benchmark/plb2/nqueen.rb > ruby.log
+diff -s monoruby.log ruby.log
+target/release/monoruby benchmark/plb2/sudoku.rb 2> benchmark/plb2/sudoku.disas > monoruby.log
+ruby benchmark/plb2/sudoku.rb > ruby.log
+diff -s monoruby.log ruby.log
+target/release/monoruby benchmark/plb2/matmul.rb 2> benchmark/plb2/matmul.disas > monoruby.log
+ruby benchmark/plb2/matmul.rb > ruby.log
+diff -s monoruby.log ruby.log
+target/release/monoruby benchmark/plb2/bedcov.rb 2> benchmark/plb2/bedcov.disas > monoruby.log
+ruby benchmark/plb2/bedcov.rb > ruby.log
+diff -s monoruby.log ruby.log
+
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.disas > /dev/null
 
 
