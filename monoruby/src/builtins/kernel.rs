@@ -489,9 +489,15 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
         .sourceinfo
         .path
         .clone();
-    //let extern_fid = vm.cfp().lfp().meta().func_id();
-    //globals[extern_fid].as_ruby_func();
-    let fid = globals.compile_script_with_binding(expr, path, None, None)?;
+    let extern_fid = vm.cfp().prev().unwrap().lfp().meta().func_id();
+    let mut external = HashSet::default();
+    for (name, idx) in &globals[extern_fid].as_ruby_func().locals {
+        external.insert(*name);
+    }
+    let external = ExternalContext {
+        scope: vec![external],
+    };
+    let fid = globals.compile_script_eval(expr, path, Some(external))?;
     #[cfg(feature = "emit-bc")]
     globals.dump_bc();
     let proc = ProcInner::from(vm.cfp().prev().unwrap().lfp(), fid);

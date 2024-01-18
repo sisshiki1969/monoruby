@@ -52,7 +52,7 @@ pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
 pub struct ExternalContext {
-    scope: Vec<HashSet<IdentId>>,
+    pub scope: Vec<HashSet<IdentId>>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -60,7 +60,7 @@ impl ruruby_parse::LocalsContext for ExternalContext {
         let id = IdentId::get_id(name);
         for (outer, scope) in self.scope.iter().enumerate() {
             if scope.contains(&id) {
-                return Some(outer);
+                return Some(outer + 1);
             }
         }
         None
@@ -210,7 +210,7 @@ impl Globals {
         extern_context: Option<ExternalContext>,
     ) -> Result<FuncId> {
         match Parser::parse_program_eval(code, path.into(), extern_context) {
-            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
+            Ok(res) => bytecodegen::compile_script(self, dbg!(res.node), res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }

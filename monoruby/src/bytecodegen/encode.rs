@@ -59,6 +59,7 @@ impl BytecodeGen {
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
+        info.locals = std::mem::take(&mut self.locals);
         info.loc = loc;
         info.set_bytecode(ops);
         info.sourcemap = sourcemap;
