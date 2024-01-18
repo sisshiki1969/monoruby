@@ -197,29 +197,36 @@ impl Codegen {
     /// - rax, rdi
     ///
     fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
-        let flonum = self.jit.label();
+        let heap = self.jit.label();
         let exit = self.jit.label();
+        let r = reg as _;
+        let dst = xmm.enc();
         monoasm! { &mut self.jit,
-            testq R(reg as _), 0b010;
-            jnz flonum;
-        }
-        self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
-        let flonum_to_f64 = self.flonum_to_f64;
-        monoasm! {&mut self.jit,
-            movq xmm(xmm.enc()), [R(reg as _) + (RVALUE_OFFSET_KIND)];
-            jmp  exit;
-        flonum:
-        }
-        if reg != GP::Rdi {
-            monoasm! {&mut self.jit,
-                movq rdi, R(reg as _);
-            }
-        }
-        monoasm! {&mut self.jit,
-            call flonum_to_f64;
-            movq xmm(xmm.enc()), xmm0;
+            testq R(r), 0b010;
+            jz    heap;
+            xorps xmm(dst), xmm(dst);
+            movq rax, (FLOAT_ZERO);
+            cmpq R(r), rax;
+            // in the case of 0.0
+            je exit;
+            movq rax, R(r);
+            sarq rax, 63;
+            addq rax, 2;
+            andq R(r), (-4);
+            orq R(r), rax;
+            rolq R(r), 61;
+            movq xmm(dst), R(r);
         exit:
         }
+
+        self.jit.select_page(1);
+        self.jit.bind_label(heap);
+        self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
+        monoasm! {&mut self.jit,
+            movq xmm(xmm.enc()), [R(r) + (RVALUE_OFFSET_KIND)];
+            jmp  exit;
+        }
+        self.jit.select_page(0);
     }
 
     ///
