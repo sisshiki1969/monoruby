@@ -192,7 +192,7 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
         context: Option<ruruby_parse::LvarCollector>,
-        extern_context: Option<ruruby_parse::DummyFrame>,
+        extern_context: Option<ruruby_parse::DummyContext>,
     ) -> Result<FuncId> {
         match Parser::parse_program_binding(code, path.into(), context, extern_context) {
             Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
