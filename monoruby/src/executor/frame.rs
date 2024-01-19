@@ -51,8 +51,21 @@ impl CFP {
     ///
     pub(crate) fn outermost_lfp(&self) -> LFP {
         match self.lfp().outer() {
-            Some(dfp) => dfp.outermost().lfp(),
+            Some(dfp) => dfp.outermost().0.lfp(),
             None => self.lfp(),
+        }
+    }
+
+    ///
+    /// Get outermost LFP and the depth.
+    ///
+    pub(crate) fn outermost_lfp_depth(&self) -> (LFP, usize) {
+        match self.lfp().outer() {
+            Some(dfp) => {
+                let (dfp, depth) = dfp.outermost();
+                (dfp.lfp(), depth)
+            }
+            None => (self.lfp(), 0),
         }
     }
 
@@ -73,6 +86,11 @@ impl CFP {
     ///
     pub fn method_func_id(&self) -> FuncId {
         self.outermost_lfp().meta().func_id()
+    }
+
+    pub fn method_func_id_depth(&self) -> (FuncId, usize) {
+        let (lfp, depth) = self.outermost_lfp_depth();
+        (lfp.meta().func_id(), depth)
     }
 
     ///
@@ -438,12 +456,14 @@ impl DFP {
     ///
     /// Get DFP of an outermost frame of *self*.
     ///
-    fn outermost(&self) -> DFP {
+    fn outermost(&self) -> (DFP, usize) {
         let mut dfp = *self;
+        let mut depth = 0;
         while let Some(outer) = dfp.outer() {
             dfp = outer;
+            depth += 1;
         }
-        dfp
+        (dfp, depth)
     }
 
     ///

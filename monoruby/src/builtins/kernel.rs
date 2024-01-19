@@ -484,14 +484,15 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) 
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_min_number_of_arguments(1)?;
     let expr = lfp.arg(0).expect_string(globals)?;
-    let path = globals.store[vm.cfp().get_source_pos()]
+    let cfp = vm.cfp();
+    let caller_cfp = cfp.prev().unwrap();
+    let path = globals.store[cfp.get_source_pos()]
         .as_ruby_func()
         .sourceinfo
         .path
         .clone();
-    //let extern_fid = vm.cfp().lfp().meta().func_id();
-    //globals[extern_fid].as_ruby_func();
-    let fid = globals.compile_script_with_binding(expr, path, None, None)?;
+
+    let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
     #[cfg(feature = "emit-bc")]
     globals.dump_bc();
     let proc = ProcInner::from(vm.cfp().prev().unwrap().lfp(), fid);
@@ -627,6 +628,18 @@ mod test {
     #[test]
     fn eval() {
         run_test(r##"eval "1+2+3""##);
+        run_test(
+            r##"
+        res = []
+        5.times do |a|
+            5.times do |b|
+                eval "res << a; res << b"
+            end
+        end
+        res
+        "##,
+        );
         run_test_error(r##"eval "1/0""##);
+        run_test_error(r##"eval "jk""##);
     }
 }

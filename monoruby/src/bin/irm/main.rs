@@ -53,7 +53,7 @@ fn main() {
                     buf.clone(),
                     std::path::Path::new(&format!("(irm):{script_line}")).into(),
                     context.clone(),
-                    None::<ruruby_parse::DummyContext>,
+                    None::<&ruruby_parse::DummyContext>,
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;

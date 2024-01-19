@@ -291,7 +291,7 @@ impl Funcs {
     pub(super) fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         for_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
         loc: Loc,
@@ -539,7 +539,7 @@ impl FuncInfo {
     fn new_block_iseq(
         func_id: FuncId,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,

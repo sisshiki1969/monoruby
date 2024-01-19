@@ -1,20 +1,5 @@
-class C
-  @@x=100
-  class D
-    @@x=200
+3.times do |b|
+  3.times do |a|
+    eval "puts a,b"
   end
-end
-
-class C
-  def f
-    puts @@x
-  end
-  def self.g
-    puts @@x
-  end
-end
-
-20.times do
-  C.new.f
-  C.g
 end

@@ -28,3 +28,4 @@ target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_
 
 cargo build --release && target/release/monoruby benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
 ruby benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
+rm benchmark/*.ppm
