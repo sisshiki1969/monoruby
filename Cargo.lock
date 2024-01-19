@@ -880,7 +880,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
- "smallvec 1.12.0",
+ "smallvec 1.13.0",
 ]
 
 [[package]]
@@ -1247,7 +1247,7 @@ dependencies = [
 [[package]]
 name = "ruruby-parse"
 version = "0.0.1"
-source = "git+https://github.com/sisshiki1969/ruruby-parse.git#aa140a3805c29a56a3d30a0940e2bb5b135c18dd"
+source = "git+https://github.com/sisshiki1969/ruruby-parse.git#db8766777457a7b15256ed831ef14707c6ff2c3a"
 dependencies = [
  "clap",
  "console",
@@ -1407,9 +1407,9 @@ source = "git+https://github.com/sisshiki1969/rust-smallvec.git#cc47289010090f37
 
 [[package]]
 name = "smallvec"
-version = "1.12.0"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2593d31f82ead8df961d8bd23a64c2ccf2eb5dd34b0a34bfb4dd54011c72009e"
+checksum = "3b187f0231d56fe41bfb12034819dd2bf336422a5866de41bc3fec4b2e3883e8"
 
 [[package]]
 name = "socket2"

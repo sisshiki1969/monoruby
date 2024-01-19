@@ -20,6 +20,26 @@ pub fn compile_script(
     sourceinfo: SourceInfoRef,
 ) -> Result<FuncId> {
     let main_fid = globals.store.add_main(ast, sourceinfo)?;
+    compile(globals, main_fid)?;
+    Ok(main_fid)
+}
+
+pub fn compile_eval(
+    globals: &mut Globals,
+    ast: Node,
+    mother: (FuncId, usize),
+    outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+    loc: Loc,
+    sourceinfo: SourceInfoRef,
+) -> Result<FuncId> {
+    let main_fid = globals
+        .store
+        .add_eval(mother, outer, ast, loc, sourceinfo)?;
+    compile(globals, main_fid)?;
+    Ok(main_fid)
+}
+
+fn compile(globals: &mut Globals, main_fid: FuncId) -> Result<()> {
     let mut fid = main_fid;
 
     while globals.store.func_len() > fid.get() as usize {
@@ -28,7 +48,7 @@ pub fn compile_script(
         fid = FuncId::new(fid.get() + 1);
     }
 
-    Ok(main_fid)
+    Ok(())
 }
 
 fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {

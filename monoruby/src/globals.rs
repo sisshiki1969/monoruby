@@ -51,15 +51,15 @@ impl ProcData {
 pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
-pub struct ExternalContext {
-    pub scope: Vec<HashSet<IdentId>>,
+pub(crate) struct ExternalContext {
+    pub scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
     fn find_lvar(&self, name: &str) -> Option<usize> {
         let id = IdentId::get_id(name);
         for (outer, scope) in self.scope.iter().enumerate() {
-            if scope.contains(&id) {
+            if scope.0.get(&id).is_some() {
                 return Some(outer + 1);
             }
         }
@@ -203,27 +203,43 @@ impl Globals {
         res
     }
 
-    pub fn compile_script_eval(
+    pub(crate) fn compile_script_eval(
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        extern_context: Option<ExternalContext>,
+        caller_cfp: CFP,
     ) -> Result<FuncId> {
-        match Parser::parse_program_eval(code, path.into(), extern_context) {
-            Ok(res) => bytecodegen::compile_script(self, dbg!(res.node), res.source_info),
-            Err(err) => Err(MonorubyErr::parse(err)),
+        let outer_fid = caller_cfp.lfp().meta().func_id();
+        let mut fid = caller_cfp.lfp().meta().func_id();
+        let mother = caller_cfp.method_func_id_depth();
+        let mut scope = vec![];
+        let mut dfp = caller_cfp.lfp().outer();
+        loop {
+            let mut ex_scope = HashMap::default();
+            for (name, idx) in &self[fid].as_ruby_func().locals {
+                ex_scope.insert(*name, *idx);
+            }
+            scope.push((ex_scope, None));
+            if let Some(outer) = dfp {
+                dfp = outer.lfp().outer();
+                fid = outer.lfp().meta().func_id();
+            } else {
+                break;
+            }
         }
-    }
 
-    pub fn compile_script_with_binding(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-        context: Option<ruruby_parse::LvarCollector>,
-        extern_context: Option<ExternalContext>,
-    ) -> Result<FuncId> {
-        match Parser::parse_program_binding(code, path.into(), context, extern_context) {
-            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
+        let extern_context = ExternalContext {
+            scope: scope.clone(),
+        };
+        match Parser::parse_program_eval(code, path.into(), Some(extern_context)) {
+            Ok(res) => bytecodegen::compile_eval(
+                self,
+                res.node,
+                mother,
+                (outer_fid, scope),
+                Loc::default(),
+                res.source_info,
+            ),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }
