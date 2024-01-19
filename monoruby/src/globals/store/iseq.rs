@@ -49,7 +49,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
-    pub outer_locals: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    pub outer_locals: ExternalContext,
     ///
     /// literal values. (for GC)
     ///
@@ -97,7 +97,7 @@ impl ISeqInfo {
     fn new(
         id: FuncId,
         mother: (FuncId, usize),
-        outer_locals: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+        outer_locals: ExternalContext,
         name: Option<IdentId>,
         args: ParamsInfo,
         loc: Loc,
@@ -133,10 +133,7 @@ impl ISeqInfo {
     pub(super) fn new_block(
         id: FuncId,
         mother: (FuncId, usize),
-        outer: (
-            FuncId,
-            Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
-        ),
+        outer: (FuncId, ExternalContext),
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
@@ -151,7 +148,16 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, (id, 0), vec![], name, args, loc, sourceinfo, false)
+        Self::new(
+            id,
+            (id, 0),
+            ExternalContext::new(),
+            name,
+            args,
+            loc,
+            sourceinfo,
+            false,
+        )
     }
 
     pub(crate) fn id(&self) -> FuncId {

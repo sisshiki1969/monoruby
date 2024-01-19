@@ -51,8 +51,9 @@ impl ProcData {
 pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
+#[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    pub scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -64,6 +65,33 @@ impl ruruby_parse::LocalsContext for ExternalContext {
             }
         }
         None
+    }
+}
+
+impl std::ops::Index<usize> for ExternalContext {
+    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.scope[index]
+    }
+}
+
+impl ExternalContext {
+    pub fn new() -> Self {
+        Self { scope: vec![] }
+    }
+
+    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+        Self {
+            scope: vec![(locals, block)],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scope.is_empty()
+    }
+
+    pub fn extend_from_slice(&mut self, other: &Self) {
+        self.scope.extend_from_slice(&other.scope);
     }
 }
 
@@ -215,18 +243,15 @@ impl Globals {
         for (name, idx) in &self[outer_fid].as_ruby_func().locals {
             ex_scope.insert(*name, *idx);
         }
-        let mut scope = vec![(ex_scope, None)];
-        scope.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+        let mut external_context = ExternalContext::one(ex_scope, None);
+        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
-        let extern_context = ExternalContext {
-            scope: scope.clone(),
-        };
-        match Parser::parse_program_eval(code, path.into(), Some(extern_context)) {
+        match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(res) => bytecodegen::compile_eval(
                 self,
                 res.node,
                 mother,
-                (outer_fid, scope),
+                (outer_fid, external_context),
                 Loc::default(),
                 res.source_info,
             ),

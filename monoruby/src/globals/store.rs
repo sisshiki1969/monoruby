@@ -208,10 +208,7 @@ impl Store {
     pub fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (
-            FuncId,
-            Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
-        ),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
         info: BlockInfo,
         loc: Loc,
@@ -224,10 +221,7 @@ impl Store {
     pub fn add_eval(
         &mut self,
         mother: (FuncId, usize),
-        outer: (
-            FuncId,
-            Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
-        ),
+        outer: (FuncId, ExternalContext),
         ast: Node,
         loc: Loc,
         sourceinfo: SourceInfoRef,

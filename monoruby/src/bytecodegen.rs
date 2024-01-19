@@ -28,7 +28,7 @@ pub fn compile_eval(
     globals: &mut Globals,
     ast: Node,
     mother: (FuncId, usize),
-    outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+    outer: (FuncId, ExternalContext),
     loc: Loc,
     sourceinfo: SourceInfoRef,
 ) -> Result<FuncId> {
@@ -334,7 +334,7 @@ enum Functions {
     },
     Block {
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     },
@@ -467,7 +467,7 @@ struct BytecodeGen {
     /// local variables.
     locals: HashMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>,
+    outer_locals: ExternalContext,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
@@ -537,7 +537,7 @@ impl BytecodeGen {
     fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     ) -> Functions {
@@ -631,8 +631,8 @@ impl BytecodeGen {
 // local variables handling.
 //
 impl BytecodeGen {
-    fn get_locals(&self) -> Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)> {
-        let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
+    fn get_locals(&self) -> ExternalContext {
+        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param.clone());
         locals.extend_from_slice(&self.outer_locals);
         locals
     }
