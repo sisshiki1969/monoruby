@@ -210,23 +210,13 @@ impl Globals {
         caller_cfp: CFP,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().meta().func_id();
-        let mut fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
-        let mut scope = vec![];
-        let mut dfp = caller_cfp.lfp().outer();
-        loop {
-            let mut ex_scope = HashMap::default();
-            for (name, idx) in &self[fid].as_ruby_func().locals {
-                ex_scope.insert(*name, *idx);
-            }
-            scope.push((ex_scope, None));
-            if let Some(outer) = dfp {
-                dfp = outer.lfp().outer();
-                fid = outer.lfp().meta().func_id();
-            } else {
-                break;
-            }
+        let mut ex_scope = HashMap::default();
+        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+            ex_scope.insert(*name, *idx);
         }
+        let mut scope = vec![(ex_scope, None)];
+        scope.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
         let extern_context = ExternalContext {
             scope: scope.clone(),
