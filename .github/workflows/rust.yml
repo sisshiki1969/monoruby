@@ -38,18 +38,22 @@ jobs:
         run: LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" cargo run < test.rb
       - name: Run tests
         run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" cargo run -- -e ""
-      - name: Run tests
-        run:  cargo install --path monoruby && \
-              LLVM_PROFILE_FILE="monoruby-fib-%p-%m.profraw" monoruby benchmark/app_fib.rb > monoruby.log && \
+      - name: Install
+        run:  cargo install --path monoruby
+      - name: Run fib
+        run:  LLVM_PROFILE_FILE="monoruby-fib-%p-%m.fib" monoruby benchmark/app_fib.rb > monoruby.log && \
               ruby benchmark/app_fib.rb > ruby.log && \
-              diff -s monoruby.log ruby.log && \
-              LLVM_PROFILE_FILE="monoruby-tarai-%p-%m.profraw" monoruby benchmark/tarai.rb > monoruby.log && \
+              diff -s monoruby.log ruby.log
+      - name: Run tarai
+        run:  LLVM_PROFILE_FILE="monoruby-tarai-%p-%m.profraw" monoruby benchmark/tarai.rb > monoruby.log && \
               ruby benchmark/tarai.rb > ruby.log && \
-              diff -s monoruby.log ruby.log && \
-              LLVM_PROFILE_FILE="monoruby-quick_sort-%p-%m.profraw" monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log && \
+              diff -s monoruby.log ruby.log
+      - name: Run quick_sort
+        run:  LLVM_PROFILE_FILE="monoruby-quick_sort-%p-%m.profraw" monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log && \
               ruby benchmark/quick_sort.rb > ruby.log && \
-              diff -s monoruby.log ruby.log && \
-              LLVM_PROFILE_FILE="monoruby-nbody-%p-%m.profraw" monoruby benchmark/so_nbody.rb > monoruby.log && \
+              diff -s monoruby.log ruby.log
+      - name: Run nbody
+        run:  LLVM_PROFILE_FILE="monoruby-nbody-%p-%m.profraw" monoruby benchmark/so_nbody.rb > monoruby.log && \
               ruby benchmark/so_nbody.rb > ruby.log && \
               diff -s monoruby.log ruby.log
 
