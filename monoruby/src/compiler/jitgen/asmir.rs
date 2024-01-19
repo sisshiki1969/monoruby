@@ -1253,6 +1253,7 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
+    #[allow(dead_code)]
     BcIndex(BcIndex),
     Label(AsmLabel),
     DestLabel(DestLabel),

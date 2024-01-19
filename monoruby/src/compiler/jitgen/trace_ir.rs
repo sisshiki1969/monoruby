@@ -202,6 +202,7 @@ pub(crate) enum TraceIr {
         name: IdentId,
     },
     /// loop start marker
+    #[allow(dead_code)]
     LoopStart(u32),
     LoopEnd,
 }
