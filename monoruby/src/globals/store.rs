@@ -208,10 +208,7 @@ impl Store {
     pub fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (
-            FuncId,
-            Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
-        ),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
         info: BlockInfo,
         loc: Loc,
@@ -219,6 +216,24 @@ impl Store {
     ) -> Result<FuncId> {
         self.functions
             .add_block(mother, outer, optional_params, info, loc, sourceinfo)
+    }
+
+    pub fn add_eval(
+        &mut self,
+        mother: (FuncId, usize),
+        outer: (FuncId, ExternalContext),
+        ast: Node,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let info = BlockInfo {
+            params: vec![],
+            body: Box::new(ast),
+            lvar: LvarCollector::new(),
+            loc,
+        };
+        self.functions
+            .add_block(mother, outer, vec![], info, loc, sourceinfo)
     }
 
     pub(super) fn add_builtin_func(&mut self, name: String, address: BuiltinFn) -> FuncId {

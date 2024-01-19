@@ -20,6 +20,26 @@ pub fn compile_script(
     sourceinfo: SourceInfoRef,
 ) -> Result<FuncId> {
     let main_fid = globals.store.add_main(ast, sourceinfo)?;
+    compile(globals, main_fid)?;
+    Ok(main_fid)
+}
+
+pub fn compile_eval(
+    globals: &mut Globals,
+    ast: Node,
+    mother: (FuncId, usize),
+    outer: (FuncId, ExternalContext),
+    loc: Loc,
+    sourceinfo: SourceInfoRef,
+) -> Result<FuncId> {
+    let main_fid = globals
+        .store
+        .add_eval(mother, outer, ast, loc, sourceinfo)?;
+    compile(globals, main_fid)?;
+    Ok(main_fid)
+}
+
+fn compile(globals: &mut Globals, main_fid: FuncId) -> Result<()> {
     let mut fid = main_fid;
 
     while globals.store.func_len() > fid.get() as usize {
@@ -28,7 +48,7 @@ pub fn compile_script(
         fid = FuncId::new(fid.get() + 1);
     }
 
-    Ok(main_fid)
+    Ok(())
 }
 
 fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
@@ -314,7 +334,7 @@ enum Functions {
     },
     Block {
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     },
@@ -447,7 +467,7 @@ struct BytecodeGen {
     /// local variables.
     locals: HashMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>,
+    outer_locals: ExternalContext,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
@@ -517,7 +537,7 @@ impl BytecodeGen {
     fn add_block(
         &mut self,
         mother: (FuncId, usize),
-        outer: (FuncId, Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)>),
+        outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     ) -> Functions {
@@ -611,8 +631,8 @@ impl BytecodeGen {
 // local variables handling.
 //
 impl BytecodeGen {
-    fn get_locals(&self) -> Vec<(HashMap<IdentId, BcLocal>, Option<IdentId>)> {
-        let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
+    fn get_locals(&self) -> ExternalContext {
+        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param.clone());
         locals.extend_from_slice(&self.outer_locals);
         locals
     }

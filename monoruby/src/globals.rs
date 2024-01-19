@@ -51,19 +51,47 @@ impl ProcData {
 pub const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
-pub struct ExternalContext {
-    scope: Vec<HashSet<IdentId>>,
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalContext {
+    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
     fn find_lvar(&self, name: &str) -> Option<usize> {
         let id = IdentId::get_id(name);
         for (outer, scope) in self.scope.iter().enumerate() {
-            if scope.contains(&id) {
-                return Some(outer);
+            if scope.0.get(&id).is_some() {
+                return Some(outer + 1);
             }
         }
         None
+    }
+}
+
+impl std::ops::Index<usize> for ExternalContext {
+    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.scope[index]
+    }
+}
+
+impl ExternalContext {
+    pub fn new() -> Self {
+        Self { scope: vec![] }
+    }
+
+    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+        Self {
+            scope: vec![(locals, block)],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scope.is_empty()
+    }
+
+    pub fn extend_from_slice(&mut self, other: &Self) {
+        self.scope.extend_from_slice(&other.scope);
     }
 }
 
@@ -203,27 +231,30 @@ impl Globals {
         res
     }
 
-    pub fn compile_script_eval(
+    pub(crate) fn compile_script_eval(
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        extern_context: Option<ExternalContext>,
+        caller_cfp: CFP,
     ) -> Result<FuncId> {
-        match Parser::parse_program_eval(code, path.into(), extern_context) {
-            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
-            Err(err) => Err(MonorubyErr::parse(err)),
+        let outer_fid = caller_cfp.lfp().meta().func_id();
+        let mother = caller_cfp.method_func_id_depth();
+        let mut ex_scope = HashMap::default();
+        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+            ex_scope.insert(*name, *idx);
         }
-    }
+        let mut external_context = ExternalContext::one(ex_scope, None);
+        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
-    pub fn compile_script_with_binding(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-        context: Option<ruruby_parse::LvarCollector>,
-        extern_context: Option<ExternalContext>,
-    ) -> Result<FuncId> {
-        match Parser::parse_program_binding(code, path.into(), context, extern_context) {
-            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
+        match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
+            Ok(res) => bytecodegen::compile_eval(
+                self,
+                res.node,
+                mother,
+                (outer_fid, external_context),
+                Loc::default(),
+                res.source_info,
+            ),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }

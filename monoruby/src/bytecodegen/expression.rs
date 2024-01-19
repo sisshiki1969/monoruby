@@ -963,11 +963,6 @@ impl BytecodeGen {
         let old = self.temp;
         let base = if let Some(box base) = base {
             Some(self.push_expr(base)?.into())
-            /*return Err(MonorubyErr::unsupported_feature(
-                &format!("base in class def. {:?}", base.kind),
-                loc,
-                self.sourceinfo.clone(),
-            ));*/
         } else {
             None
         };
