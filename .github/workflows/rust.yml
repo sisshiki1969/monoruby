@@ -27,19 +27,19 @@ jobs:
           cargo install grcov cargo-nextest
           rustup component add llvm-tools-preview
       - name: Build
-        run: cargo build
+        run:  cargo build
       - name: Install
-        run:  cargo install --path monoruby
+        run:  cargo install --debug --path monoruby
       - name: chdir
-        run: cd monoruby
+        run:  cd monoruby
       - name: Run tests
-        run: LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
+        run:  LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
       - name: Run tests
-        run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
+        run:  LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
       - name: Run tests
-        run: LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
+        run:  LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
       - name: Run tests
-        run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""
+        run:  LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""
       - name: Run tests
         run:  |
           LLVM_PROFILE_FILE="monoruby-fib-%p-%m.fib" monoruby benchmark/app_fib.rb > monoruby.log
