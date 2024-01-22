@@ -207,6 +207,24 @@ impl Codegen {
     ///
     /// Compare two values with *mode*, and set flags.
     ///
+    /// ### in
+    ///
+    /// ~~~text
+    /// +-----+--------------------+
+    /// |     |        mode        |
+    /// |     +--------------------+
+    /// |     |  RR     RI     IR  |
+    /// +--------------------------+
+    /// | rdi | lhs    lhs    ---  |
+    /// +--------------------------|
+    /// | rsi | rhs    ---    rhs  |
+    /// +--------------------------+
+    /// ~~~
+    ///
+    /// ### destroy
+    ///
+    /// - rdi
+    ///
     pub(super) fn cmp_integer(&mut self, mode: &OpMode) {
         match mode {
             OpMode::RR(..) => {

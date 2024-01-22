@@ -248,6 +248,19 @@ impl Codegen {
         self.icmp_eq()
     }
 
+    ///
+    /// Compare(<=>) Fixnums.
+    ///
+    /// ### in
+    /// - rdi: lhs (must be Fixnum)
+    /// - rsi: rhs (must be Fixnum)
+    ///
+    /// ### out
+    /// - rax: result(Value)
+    ///
+    /// ### destroy
+    /// - rdx
+    ///
     fn icmp_cmp(&mut self) {
         monoasm! { &mut self.jit,
             movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());

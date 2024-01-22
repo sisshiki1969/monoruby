@@ -240,6 +240,10 @@ impl Store {
         self.functions.add_native_func(name, address)
     }
 
+    pub(super) fn add_builtin_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
+        self.functions.add_native_func_eval(name, address)
+    }
+
     pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_reader(name, ivar_name)
     }
@@ -332,8 +336,7 @@ impl Store {
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
         let pc = info.get_top_pc();
-        self[func_id].data.set_pc(pc);
-        self[func_id].data.set_reg_num(regs as i64);
+        self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {

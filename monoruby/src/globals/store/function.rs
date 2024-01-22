@@ -44,15 +44,15 @@ pub(crate) struct FuncData {
 }
 
 impl FuncData {
-    pub fn pc(&self) -> BcPc {
-        self.pc.unwrap()
+    pub fn pc(&self) -> Option<BcPc> {
+        self.pc
     }
 
     pub(super) fn set_pc(&mut self, pc: BcPc) {
         self.pc = Some(pc);
     }
 
-    pub(super) fn set_reg_num(&mut self, reg_num: i64) {
+    pub(super) fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
     }
 
@@ -85,6 +85,7 @@ pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 3:  0:no eval 1:eval(which possibly manipulates stack slots in outer frames)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
     /// bit 0:  0:method 1:class_def
@@ -96,14 +97,14 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "on_stack:{:?} kind:{} mode:{} {:?} regs:{}",
-            self.on_stack(),
+            "{} {} {} {:?} reg_num:{}",
             if self.is_native() { "NATIVE" } else { "Ruby" },
             if self.is_class_def() {
                 "class_def"
             } else {
                 "method"
             },
+            if self.on_stack() { "stack" } else { "heap" },
             self.func_id(),
             self.reg_num()
         )
@@ -114,6 +115,7 @@ impl Meta {
     pub fn new(
         func_id: Option<FuncId>,
         reg_num: u16,
+        is_eval: bool,
         is_native: bool,
         is_class_def: bool,
         is_block_style: bool,
@@ -121,7 +123,10 @@ impl Meta {
         Self {
             func_id,
             reg_num,
-            kind: (is_block_style as u8) << 2 | (is_native as u8) << 1 | is_class_def as u8,
+            kind: (is_eval as u8) << 3
+                | (is_block_style as u8) << 2
+                | (is_native as u8) << 1
+                | is_class_def as u8,
             mode: 0,
         }
     }
@@ -132,16 +137,20 @@ impl Meta {
 
     fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64, is_block_style: bool) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false, is_block_style)
+        Self::new(func_id.into(), reg_num, false, false, false, is_block_style)
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, true, false)
+        Self::new(func_id.into(), reg_num, false, false, true, false)
     }
 
     fn native(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, true, false, false)
+        Self::new(Some(func_id), 1, false, true, false, false)
+    }
+
+    fn native_eval(func_id: FuncId) -> Self {
+        Self::new(Some(func_id), 1, true, true, false, false)
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -152,8 +161,15 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
+    ///
+    /// Returns true if this function possibly manipulates outer local variables.
+    ///
+    pub fn is_eval(&self) -> bool {
+        (self.kind & 0b1000) != 0
+    }
+
     pub fn is_native(&self) -> bool {
-        (self.kind & 0b10) >> 1 == 1
+        (self.kind & 0b10) != 0
     }
 
     pub fn on_stack(&self) -> bool {
@@ -172,8 +188,8 @@ impl Meta {
     ///
     /// Set the number of registers in Meta.
     ///
-    pub fn set_reg_num(&mut self, reg_num: i64) {
-        self.reg_num = reg_num as i16 as u16;
+    pub fn set_reg_num(&mut self, reg_num: u16) {
+        self.reg_num = reg_num;
     }
 }
 
@@ -323,6 +339,12 @@ impl Funcs {
     pub(super) fn add_native_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
         let id = self.next_func_id();
         self.info.push(FuncInfo::new_native(id, name, address));
+        id
+    }
+
+    pub(super) fn add_native_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
+        let id = self.next_func_id();
+        self.info.push(FuncInfo::new_native_eval(id, name, address));
         id
     }
 
@@ -491,7 +513,7 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 pub struct FuncInfo {
     /// name of this function.
     name: Option<IdentId>,
-    pub(crate) data: FuncData,
+    data: FuncData,
     pub(crate) kind: FuncKind,
     /// JIT code entries for each class of *self*.
     jit_entry: Box<HashMap<ClassId, DestLabel>>,
@@ -576,6 +598,16 @@ impl FuncInfo {
         )
     }
 
+    fn new_native_eval(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
+        Self::new(
+            IdentId::get_id_from_string(name),
+            FuncKind::Builtin {
+                abs_address: address as *const u8 as u64,
+            },
+            Meta::native_eval(func_id),
+        )
+    }
+
     fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
         Self::new(
             name,
@@ -594,6 +626,50 @@ impl FuncInfo {
 
     pub(crate) fn name(&self) -> Option<IdentId> {
         self.name
+    }
+
+    ///
+    /// Get meta data (Meta) of this function.
+    ///
+    pub(crate) fn meta(&self) -> Meta {
+        self.data.meta()
+    }
+
+    ///
+    /// Get program counter (BcPc) of this function.
+    ///
+    pub(crate) fn pc(&self) -> BcPc {
+        self.data.pc().unwrap()
+    }
+
+    ///
+    /// Get code pointer (Option<CodePtr>) of this function.
+    ///
+    pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
+        self.data.codeptr()
+    }
+
+    ///
+    /// Set a program counter (BcPc) and the number of registers of this function.
+    ///
+    pub(super) fn set_pc_regnum(&mut self, pc: BcPc, reg_num: u16) {
+        self.data.set_pc(pc);
+        self.data.set_reg_num(reg_num);
+    }
+
+    pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
+        self.data.set_codeptr(codeptr)
+    }
+
+    pub(crate) fn data_ref(&self) -> &FuncData {
+        &self.data
+    }
+
+    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BcPc>) {
+        let meta = self.data.meta();
+        let codeptr = self.data.codeptr().unwrap();
+        let pc = self.data.pc();
+        (meta, codeptr, pc)
     }
 
     pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {

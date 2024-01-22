@@ -259,8 +259,7 @@ impl Codegen {
         error: DestLabel,
     ) {
         let callsite = &store[callid];
-        let func_data = &store[callee_fid].data;
-        let meta = func_data.meta();
+        let (meta, codeptr, pc) = store[callee_fid].get_data();
         self.setup_frame(meta, callsite);
         //   rdi: args len
         match &store[callee_fid].kind {
@@ -306,7 +305,6 @@ impl Codegen {
         );
 
         if native {
-            let codeptr = func_data.codeptr().unwrap();
             self.call_codeptr(codeptr);
         } else {
             match store[callee_fid].get_jit_code(recv_class) {
@@ -318,9 +316,8 @@ impl Codegen {
                 None => {
                     // set pc.
                     monoasm! { &mut self.jit,
-                        movq r13, (func_data.pc().u64());
+                        movq r13, (pc.unwrap().u64());
                     }
-                    let codeptr = func_data.codeptr().unwrap();
                     self.call_codeptr(codeptr);
                 }
             };

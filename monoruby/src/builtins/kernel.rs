@@ -24,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer);
     globals.define_builtin_module_func(kernel_class, "abort", abort);
     globals.define_builtin_module_func(kernel_class, "block_given?", block_given);
-    globals.define_builtin_module_func(kernel_class, "eval", eval);
+    globals.define_builtin_module_func_eval(kernel_class, "eval", eval);
     globals.define_builtin_module_func(kernel_class, "fail", raise);
     globals.define_builtin_module_func(kernel_class, "loop", loop_);
     globals.define_builtin_module_func(kernel_class, "p", p);

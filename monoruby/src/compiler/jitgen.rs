@@ -652,13 +652,13 @@ impl JitContext {
                 self.ir.alias_method(&bb, pc, new, old);
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
-                // We must write back and unlink all local vars since they may be accessed from block.
-                if store[callid].block_fid.is_some() {
-                    self.ir.write_back_locals(bb);
-                }
                 if let Some(fid) = pc.cached_fid()
                     && self.class_version == (pc + 1).cached_version()
                 {
+                    // We must write back and unlink all local vars since they are possibly accessed from inner blocks.
+                    if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
+                        self.ir.write_back_locals(bb);
+                    }
                     if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
                         return CompileResult::Recompile;
                     }
