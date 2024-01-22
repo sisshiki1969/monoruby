@@ -177,7 +177,7 @@ impl AsmIr {
     }
 
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from xmm to stack slots.
     ///
     /// ### out
     /// - rax: Value
@@ -185,8 +185,8 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
-        self.inst.push(AsmInst::XmmToBoth(freg, reg));
+    pub(super) fn xmm2stack(&mut self, xmm: Xmm, reg: Vec<SlotId>) {
+        self.inst.push(AsmInst::XmmToStack(xmm, reg));
     }
 
     ///
@@ -335,7 +335,7 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         let callsite = &store[callid];
         self.set_arguments(bb, callsite);
-        self.link_stack(bb, callsite.dst);
+        self.clear_link(bb, callsite.dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
@@ -364,7 +364,8 @@ impl AsmIr {
             for i in pos_num..callsite.len as u16 {
                 self.write_back_slot(bb, args + i);
             }
-            let ofs = if (args..args + pos_num).any(|reg| matches!(bb[reg], LinkMode::Xmm(_))) {
+            let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
+            {
                 (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16
             } else {
                 0
@@ -686,7 +687,7 @@ impl AsmIr {
     }
 
     pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        self.link_stack(bb, dst);
+        self.clear_link(bb, dst);
         self.load_gvar(bb, name);
         self.rax2acc(bb, dst);
     }
@@ -703,7 +704,7 @@ impl AsmIr {
         name: IdentId,
         dst: SlotId,
     ) {
-        self.link_stack(bb, dst);
+        self.clear_link(bb, dst);
         self.load_cvar(bb, pc, name);
         self.rax2acc(bb, dst);
     }
@@ -811,7 +812,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToBoth(Xmm, Vec<SlotId>),
+    XmmToStack(Xmm, Vec<SlotId>),
     ///
     /// ### destroy
     /// - rax
@@ -1463,7 +1464,7 @@ impl Codegen {
                     movq xmm(x.enc()), [rip + f];
                 }
             }
-            AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(x, &slots),
+            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &slots),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => {
                 self.xmm_save(using_xmm);

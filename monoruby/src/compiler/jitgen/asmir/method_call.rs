@@ -259,8 +259,7 @@ impl Codegen {
         error: DestLabel,
     ) {
         let callsite = &store[callid];
-        let func_data = &store[callee_fid].data;
-        let meta = func_data.meta();
+        let (meta, codeptr, pc) = store[callee_fid].get_data();
         self.setup_frame(meta, callsite);
         //   rdi: args len
         match &store[callee_fid].kind {
@@ -306,7 +305,6 @@ impl Codegen {
         );
 
         if native {
-            let codeptr = func_data.codeptr().unwrap();
             self.call_codeptr(codeptr);
         } else {
             match store[callee_fid].get_jit_code(recv_class) {
@@ -318,9 +316,8 @@ impl Codegen {
                 None => {
                     // set pc.
                     monoasm! { &mut self.jit,
-                        movq r13, (func_data.pc().u64());
+                        movq r13, (pc.unwrap().u64());
                     }
-                    let codeptr = func_data.codeptr().unwrap();
                     self.call_codeptr(codeptr);
                 }
             };
@@ -702,11 +699,16 @@ impl AsmIr {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
             // the inline method cache is invalid because the receiver class is not matched.
+            self.write_back_locals(bb);
             self.write_back_callargs(bb, &store[callid]);
-            self.link_stack(bb, dst);
+            self.clear_link(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {
+            // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
+            if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
+                self.write_back_locals(bb);
+            }
             self.fetch_to_reg(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();

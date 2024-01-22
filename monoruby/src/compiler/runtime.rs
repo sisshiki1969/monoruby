@@ -761,7 +761,7 @@ pub(super) extern "C" fn handle_error(
                     }
                 };
             }
-            let bc_base = func_info.data.pc();
+            let bc_base = func_info.pc();
             let sourceinfo = info.sourceinfo.clone();
             let loc = info.sourcemap[pc - bc_base];
             vm.push_error_location(loc, sourceinfo);

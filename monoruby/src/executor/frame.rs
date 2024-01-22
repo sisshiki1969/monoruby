@@ -3,13 +3,19 @@ use super::*;
 ///
 /// Control frame pointer.
 ///
+/// CFP points to a control frame which corresponds to an each function call.
+/// The control frame contains a CFP of the previous control frame, LFP, and a base pointer.
+///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct CFP(std::ptr::NonNull<Option<CFP>>);
 
 impl CFP {
     ///
-    /// Create CFP from raw pointer.
+    /// Create new CFP from a raw pointer.
+    ///
+    /// ### safety
+    /// This function is extremely dangerous. Programmer must ensure that *ptr* is a valid pointer which pointes to a control frame.
     ///
     unsafe fn new(ptr: *mut u8) -> Self {
         CFP(std::ptr::NonNull::new(ptr as *mut Option<CFP>).unwrap())
@@ -130,6 +136,12 @@ impl CFP {
     }
 }
 
+///
+/// Local frame pointer.
+///
+/// the LFP points a local frame which contains self value, local variables, given block, and meta data which correspond to an each function call.
+/// Most local frames are on the stack, but some local frames are placed on the heap in such situations like closures.
+///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct LFP(std::ptr::NonNull<u8>);
@@ -173,6 +185,11 @@ impl alloc::GC<RValue> for LFP {
 }
 
 impl LFP {
+    ///
+    /// Create LFP from a raw pointer.
+    ///
+    /// This function is extremely dangerous. Programmer must ensure that *ptr* is a valid pointer which points to a local frame.
+    ///
     unsafe fn new(ptr: *mut u8) -> Self {
         Self(std::ptr::NonNull::new(ptr).unwrap())
     }
@@ -182,11 +199,11 @@ impl LFP {
     ///
     /// ### safety
     ///
-    /// *self* must be on the stack
+    /// *self* must be on the stack. otherwise, panic.
     ///
-    unsafe fn cfp(&self) -> CFP {
+    fn cfp(&self) -> CFP {
         assert!(self.on_stack());
-        CFP::new(self.sub(BP_PREV_CFP) as _)
+        unsafe { CFP::new(self.sub(BP_PREV_CFP) as _) }
     }
 
     ///
@@ -226,6 +243,15 @@ impl LFP {
         }
     }
 
+    ///
+    /// Returns an iterator over the arguments of a natve function.
+    ///
+    /// The iterator yields all values from start to end.
+    ///
+    /// ### safety
+    ///
+    /// *self* must be native function. otherwise, panic.
+    ///
     fn iter_inner(&self) -> impl DoubleEndedIterator<Item = &Value> {
         let len = self.arg_len();
         unsafe {
@@ -238,6 +264,7 @@ impl LFP {
         }
     }
 
+    ///
     /// Move the frame to heap.
     ///
     /// If the frame is already on the heap, do nothing.
@@ -297,44 +324,17 @@ impl LFP {
     }
 
     ///
-    /// Get the length of arguments for a native function.
-    ///
-    pub fn arg_len(&self) -> usize {
-        self.meta().reg_num() as usize - 1
-    }
-
-    ///
-    /// Get *self*.
-    ///
-    pub fn self_val(&self) -> Value {
-        unsafe { *(self.sub(LBP_SELF) as *const _) }
-    }
-
-    ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {
         unsafe { *(self.sub(LBP_BLOCK) as *const _) }
     }
 
+    ///
+    /// Set block.
+    ///
     pub fn set_block(&self, bh: Option<BlockHandler>) {
         unsafe { *(self.sub(LBP_BLOCK) as *mut _) = bh }
-    }
-
-    pub fn expect_block(&self) -> Result<BlockHandler> {
-        if let Some(block) = self.block() {
-            Ok(block)
-        } else {
-            Err(MonorubyErr::no_block_given())
-        }
-    }
-
-    pub fn expect_no_block(&self) -> Result<()> {
-        if self.block().is_none() {
-            Ok(())
-        } else {
-            Err(MonorubyErr::runtimeerr("not supported."))
-        }
     }
 
     pub unsafe fn register_ptr(&self, index: usize) -> *mut Option<Value> {
@@ -360,8 +360,54 @@ impl LFP {
     pub(crate) unsafe fn set_register(&mut self, index: usize, val: Option<Value>) {
         std::ptr::write(self.register_ptr(index), val);
     }
+}
 
-    // APIs for native methods.
+// APIs for native methods.
+impl LFP {
+    ///
+    /// Get the length of arguments for a native function.
+    ///
+    /// ### safety
+    ///
+    /// *self* must be native function. otherwise, panic.
+    ///
+    pub fn arg_len(&self) -> usize {
+        assert!(self.meta().is_native());
+        self.meta().reg_num() as usize - 1
+    }
+
+    ///
+    /// Get *self*.
+    ///
+    pub fn self_val(&self) -> Value {
+        unsafe { *(self.sub(LBP_SELF) as *const _) }
+    }
+
+    ///
+    /// Get the given block.
+    ///
+    /// If none, return Err.
+    ///
+    pub fn expect_block(&self) -> Result<BlockHandler> {
+        if let Some(block) = self.block() {
+            Ok(block)
+        } else {
+            Err(MonorubyErr::no_block_given())
+        }
+    }
+
+    ///
+    /// Ensure a block was not given.
+    ///
+    /// If given, return Err.
+    ///
+    pub fn expect_no_block(&self) -> Result<()> {
+        if self.block().is_none() {
+            Ok(())
+        } else {
+            Err(MonorubyErr::runtimeerr("not supported."))
+        }
+    }
 
     pub fn to_vec(&self) -> Vec<Value> {
         self.iter().collect()
@@ -407,7 +453,7 @@ impl LFP {
         }
     }
 
-    pub(crate) fn check_min_number_of_arguments(&self, min: usize) -> Result<()> {
+    pub fn check_min_number_of_arguments(&self, min: usize) -> Result<()> {
         let given = self.arg_len();
         if given >= min {
             return Ok(());
@@ -433,6 +479,11 @@ impl LFP {
     }
 }
 
+///
+/// Dynamic frame pointer.
+///
+/// The DFP points to a DFP in the frame that holds a scope outside the current frame.
+///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct DFP(std::ptr::NonNull<Option<DFP>>);

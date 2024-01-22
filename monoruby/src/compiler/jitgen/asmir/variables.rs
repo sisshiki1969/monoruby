@@ -258,7 +258,7 @@ impl AsmIr {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.link_stack(bb, dst);
+        self.clear_link(bb, dst);
         self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);

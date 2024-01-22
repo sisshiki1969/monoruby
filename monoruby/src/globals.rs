@@ -260,9 +260,9 @@ impl Globals {
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
-        let data = &self[func_id].data;
-        assert!(data.codeptr().is_some());
-        data
+        let info = &self[func_id];
+        assert!(info.codeptr().is_some());
+        info.data_ref()
     }
 
     pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> ProcData {
@@ -413,7 +413,7 @@ impl Globals {
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
-        self[func_id].data.set_codeptr(codeptr);
+        self[func_id].set_codeptr(codeptr);
     }
 
     pub(crate) fn class_version_inc(&mut self) {

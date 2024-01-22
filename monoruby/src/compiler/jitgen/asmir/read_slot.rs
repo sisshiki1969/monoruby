@@ -6,39 +6,35 @@ impl AsmIr {
     ///
     /// ### destroy
     /// - rax, rcx
-    pub(crate) fn write_back_slot(&mut self, bb: &mut BBContext, reg: SlotId) {
-        if reg >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
+    pub(crate) fn write_back_slot(&mut self, bb: &mut BBContext, slot: SlotId) {
+        if slot >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_slot()", slot, bb.sp);
             panic!();
         };
-        if reg >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
-            panic!();
-        };
-        match bb[reg] {
-            LinkMode::Xmm(freg) => {
-                bb[reg] = LinkMode::Both(freg);
-                self.xmm2both(freg, vec![reg]);
+        match bb.slot(slot) {
+            LinkMode::Xmm(xmm) => {
+                bb.set_both(slot, xmm);
+                self.xmm2stack(xmm, vec![slot]);
             }
             LinkMode::Literal(v) => {
-                bb[reg] = LinkMode::Stack;
-                self.lit2stack(v, reg);
+                bb.set_stack(slot);
+                self.lit2stack(v, slot);
             }
             LinkMode::R15 => {
-                self.link_stack(bb, reg);
-                self.acc2stack(reg);
+                self.clear_link(bb, slot);
+                self.acc2stack(slot);
             }
             LinkMode::Alias(origin) => {
-                self.link_stack(bb, reg);
+                self.clear_link(bb, slot);
                 self.stack2reg(origin, GP::Rax);
-                self.reg2stack(GP::Rax, reg);
+                self.reg2stack(GP::Rax, slot);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
     }
 
-    pub(crate) fn write_back_slots(&mut self, bb: &mut BBContext, reg: &[SlotId]) {
-        reg.iter().for_each(|r| self.write_back_slot(bb, *r));
+    pub(crate) fn write_back_slots(&mut self, bb: &mut BBContext, slot: &[SlotId]) {
+        slot.iter().for_each(|r| self.write_back_slot(bb, *r));
     }
 
     ///
@@ -74,14 +70,14 @@ impl AsmIr {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
             panic!();
         };
-        match bb[reg] {
-            LinkMode::Xmm(x) => {
+        match bb.slot(reg) {
+            LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.xmm2both(x, vec![reg]);
+                self.xmm2stack(xmm, vec![reg]);
                 self.reg_move(GP::Rax, dst);
-                bb[reg] = LinkMode::Both(x);
+                bb.set_both(reg, xmm);
             }
             LinkMode::Literal(v) => {
                 if dst == GP::R15 {
@@ -112,11 +108,11 @@ impl AsmIr {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
             panic!();
         };
-        match bb[reg] {
+        match bb.slot(reg) {
             LinkMode::Xmm(x) => {
-                self.xmm2both(x, vec![reg]);
+                self.xmm2stack(x, vec![reg]);
                 self.reg2rsp_offset(GP::Rax, offset);
-                bb[reg] = LinkMode::Both(x);
+                bb.set_both(reg, x);
             }
             LinkMode::Literal(v) => {
                 self.inst.push(AsmInst::LitToReg(v, GP::Rax));
@@ -141,7 +137,7 @@ impl AsmIr {
             eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
             panic!();
         };
-        match bb[slot] {
+        match bb.slot(slot) {
             LinkMode::Xmm(_) => {
                 self.inst.push(AsmInst::Deopt(deopt));
             }
@@ -217,7 +213,7 @@ impl AsmIr {
         reg: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match bb[reg] {
+        match bb.slot(reg) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
@@ -268,22 +264,22 @@ impl AsmIr {
     pub(crate) fn fetch_float_assume_float(
         &mut self,
         bb: &mut BBContext,
-        reg: SlotId,
+        slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match bb[reg] {
+        match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.link_new_both(bb, reg);
-                self.stack2reg(reg, GP::Rdi);
+                let x = self.link_new_both(bb, slot);
+                self.stack2reg(slot, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = self.link_new_both(bb, reg);
-                self.reg2stack(GP::R15, reg);
+                let x = self.link_new_both(bb, slot);
+                self.reg2stack(GP::R15, slot);
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
@@ -297,13 +293,13 @@ impl AsmIr {
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = self.link_new_xmm(bb, reg);
+                    let x = self.link_new_xmm(bb, slot);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.link_new_both(bb, reg);
-                    self.i64toboth(i, reg, x);
+                    let x = self.link_new_both(bb, slot);
+                    self.i64toboth(i, slot, x);
                     x
                 } else {
                     unreachable!()

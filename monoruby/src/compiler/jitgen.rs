@@ -10,7 +10,7 @@ pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::{MergeContext, SlotState};
+use slot::SlotState;
 use trace_ir::*;
 
 pub mod analysis;
@@ -378,7 +378,7 @@ impl JitContext {
                 self.ir.link_literal(bb, dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 if val.is_packed_value() || val.is_float() {
                     self.ir.link_literal(bb, dst, val);
                 } else {
@@ -389,13 +389,13 @@ impl JitContext {
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 self.ir.write_back_range(bb, args, pos_num as u16);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_array(&bb, callid);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_hash(&bb, args, len as _);
                 self.ir.rax2acc(bb, dst);
             }
@@ -406,7 +406,7 @@ impl JitContext {
                 exclude_end,
             } => {
                 self.ir.write_back_slots(bb, &[start, end]);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_range(bb, pc, start, end, exclude_end);
                 self.ir.rax2acc(bb, dst);
             }
@@ -423,7 +423,7 @@ impl JitContext {
                 self.ir.index_assign(bb, src, base, idx, pc);
             }
             TraceIr::LoadConst(dst, id) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
 
                 if let (cached_version, cached_baseclass, Some(cached_val)) = store[id].cache {
                     let base_slot = store[id].base;
@@ -468,11 +468,11 @@ impl JitContext {
                     .push(AsmInst::StoreConstant { name, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                self.ir.link_stack(bb, ret);
+                self.ir.clear_link(bb, ret);
                 self.ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                self.ir.link_stack(bb, ret);
+                self.ir.clear_link(bb, ret);
                 self.ir.block_arg(bb, pc, ret, outer);
             }
             TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
@@ -503,12 +503,12 @@ impl JitContext {
                 self.ir.jit_store_gvar(bb, name, val);
             }
             TraceIr::LoadSvar { dst, id } => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.load_svar(&bb, id);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 if !dst.is_self() {
                     self.ir.inst.push(AsmInst::LoadDynVar { src });
                     self.ir.rax2acc(bb, dst);
@@ -578,7 +578,7 @@ impl JitContext {
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
                     let deopt = self.ir.new_deopt(bb, pc);
                     let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                    self.ir.link_stack(bb, ret);
+                    self.ir.clear_link(bb, ret);
                     self.ir.clear(bb);
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else if mode.is_integer_op(&pc) {
@@ -600,18 +600,18 @@ impl JitContext {
                         if mode.is_float_op(&pc) {
                             let deopt = self.ir.new_deopt(bb, pc);
                             let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                            self.ir.link_stack(bb, ret);
+                            self.ir.clear_link(bb, ret);
                             self.ir.clear(bb);
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
                         } else {
                             if mode.is_integer_op(&pc) {
                                 self.ir.fetch_fixnum_binary(bb, pc, &mode);
-                                self.ir.link_stack(bb, ret);
+                                self.ir.clear_link(bb, ret);
                                 self.ir.clear(bb);
                                 self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                             } else {
                                 self.ir.fetch_binary(bb, mode);
-                                self.ir.link_stack(bb, ret);
+                                self.ir.clear_link(bb, ret);
                                 self.ir.clear(bb);
                                 self.ir.generic_cmp(&bb, pc, kind);
                                 self.ir.inst.push(AsmInst::GenericCondBr {
@@ -630,20 +630,20 @@ impl JitContext {
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.concat_str(&bb, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.concat_regexp(&bb, pc, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    self.ir.link_stack(bb, SlotId(reg));
+                    self.ir.clear_link(bb, SlotId(reg));
                 }
                 self.ir.expand_array(&bb, dst, len);
             }
@@ -652,10 +652,6 @@ impl JitContext {
                 self.ir.alias_method(&bb, pc, new, old);
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
-                // We must write back and unlink all local vars since they may be accessed from block.
-                if store[callid].block_fid.is_some() {
-                    self.ir.write_back_locals(bb);
-                }
                 if let Some(fid) = pc.cached_fid()
                     && self.class_version == (pc + 1).cached_version()
                 {
@@ -680,7 +676,7 @@ impl JitContext {
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);
-                self.ir.link_stack(bb, store[callid].dst);
+                self.ir.clear_link(bb, store[callid].dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
@@ -908,7 +904,7 @@ impl WriteBack {
 ///
 /// Context of an each basic block.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     /// state stack slots.
     slot_state: SlotState,
@@ -964,68 +960,6 @@ impl BBContext {
         merge_ctx
     }
 
-    fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::Literal(v) = self[slot] {
-            let i = v.try_fixnum()?;
-            u16::try_from(i).ok()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::Literal(v) = self[slot] {
-            let i = v.try_fixnum()?;
-            u8::try_from(i).ok()
-        } else {
-            None
-        }
-    }
-
-    fn is_array_ty(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_array_ty(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_array_ty(origin),
-        }
-    }
-
-    fn is_fixnum(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_fixnum(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_fixnum(origin),
-        }
-    }
-
-    fn is_float(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => true,
-            LinkMode::Literal(v) => v.is_float(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_float(origin),
-        }
-    }
-
-    fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
-        match class {
-            INTEGER_CLASS => self.is_fixnum(slot),
-            FLOAT_CLASS => self.is_float(slot),
-            _ => match self[slot] {
-                LinkMode::Xmm(_) => false,
-                LinkMode::Literal(v) => v.class() == class,
-                LinkMode::Both(_) | LinkMode::Stack => false,
-                LinkMode::R15 => false,
-                LinkMode::Alias(origin) => self.is_class(origin, class),
-            },
-        }
-    }
-
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         self.slot_state.get_using_xmm(self.sp)
     }
@@ -1072,6 +1006,39 @@ pub(crate) enum LinkMode {
     /// On R15 register.
     ///
     R15,
+}
+
+#[derive(Debug, Clone)]
+struct MergeContext(BBContext);
+
+impl std::ops::Deref for MergeContext {
+    type Target = BBContext;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for MergeContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl MergeContext {
+    fn new(bb: &BBContext) -> Self {
+        MergeContext(bb.clone())
+    }
+
+    fn get(self) -> BBContext {
+        self.0
+    }
+
+    fn remove_unused(&mut self, unused: &[SlotId]) {
+        let mut ir = AsmIr::new();
+        unused
+            .iter()
+            .for_each(|reg| ir.clear_link(&mut self.0, *reg));
+    }
 }
 
 impl Codegen {
@@ -1334,8 +1301,8 @@ impl Codegen {
     /// xmms are not deallocated.
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
-        for (freg, v) in &wb.xmm {
-            self.xmm_to_both(*freg, v);
+        for (xmm, v) in &wb.xmm {
+            self.xmm_to_stack(*xmm, v);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
@@ -1354,7 +1321,7 @@ impl Codegen {
     }
 
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from xmm to stack slots.
     ///
     /// ### out
     /// - rax: Value
@@ -1362,15 +1329,15 @@ impl Codegen {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
+    fn xmm_to_stack(&mut self, xmm: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("      wb: {:?}->{:?}", freg, v);
+        eprintln!("      wb: {:?}->{:?}", xmm, v);
         let f64_to_val = self.f64_to_val;
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(freg.enc());
+            movq xmm0, xmm(xmm.enc());
             call f64_to_val;
         );
         for reg in v {

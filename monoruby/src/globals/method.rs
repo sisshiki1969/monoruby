@@ -1,7 +1,7 @@
 use super::*;
 
 impl Globals {
-    fn new_builtin_func(
+    fn new_builtin_fn(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -15,13 +15,27 @@ impl Globals {
         func_id
     }
 
+    fn define_builtin_module_fn(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        func_id: FuncId,
+    ) -> FuncId {
+        self.gen_wrapper(func_id);
+        let name_id = IdentId::get_id(name);
+        self.add_method(class_id, name_id, func_id, Visibility::Private);
+        let class_id = self.get_metaclass(class_id).id();
+        self.add_method(class_id, name_id, func_id, Visibility::Public);
+        func_id
+    }
+
     pub(crate) fn define_builtin_func(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
     ) -> FuncId {
-        self.new_builtin_func(class_id, name, address, Visibility::Public)
+        self.new_builtin_fn(class_id, name, address, Visibility::Public)
     }
 
     pub(crate) fn define_private_builtin_func(
@@ -30,7 +44,7 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
     ) -> FuncId {
-        self.new_builtin_func(class_id, name, address, Visibility::Private)
+        self.new_builtin_fn(class_id, name, address, Visibility::Private)
     }
 
     pub(crate) fn define_builtin_module_func(
@@ -40,11 +54,18 @@ impl Globals {
         address: BuiltinFn,
     ) -> FuncId {
         let func_id = self.store.add_builtin_func(name.to_string(), address);
-        self.gen_wrapper(func_id);
-        let name_id = IdentId::get_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Private);
-        let class_id = self.get_metaclass(class_id).id();
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
+        self.define_builtin_module_fn(class_id, name, func_id);
+        func_id
+    }
+
+    pub(crate) fn define_builtin_module_func_eval(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+    ) -> FuncId {
+        let func_id = self.store.add_builtin_func_eval(name.to_string(), address);
+        self.define_builtin_module_fn(class_id, name, func_id);
         func_id
     }
 

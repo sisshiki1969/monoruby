@@ -13,7 +13,7 @@ impl AsmIr {
             let deopt = self.new_deopt(bb, pc);
             self.fetch_guard_array(bb, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {
-                self.link_stack(bb, dst);
+                self.clear_link(bb, dst);
                 self.array_u16_index(idx);
             } else {
                 self.fetch_guard_fixnum(bb, idx, GP::Rsi, deopt);
@@ -21,7 +21,7 @@ impl AsmIr {
             }
         } else {
             self.write_back_slots(bb, &[base, idx]);
-            self.link_stack(bb, dst);
+            self.clear_link(bb, dst);
             self.generic_index(bb, base, idx, pc);
         }
         self.rax2acc(bb, dst);
