@@ -401,7 +401,7 @@ impl Codegen {
 
 impl AsmIr {
     ///
-    /// Integer ninary operations
+    /// Integer binary operations
     ///
     /// ### in
     /// - rdi: lhs
