@@ -8,8 +8,8 @@
 #![feature(let_chains)]
 #![feature(step_trait)]
 #![feature(naked_functions)]
-#![feature(offset_of)]
-//#![feature(ptr_internals)]
+#![feature(offset_of_nested)]
+
 mod alloc;
 mod builtins;
 mod bytecodegen;
