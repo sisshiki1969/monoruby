@@ -83,7 +83,7 @@ fn inline_class_new(
         ..
     } = *callsite;
     ir.write_back_callargs(bb, callsite);
-    ir.link_stack(bb, ret);
+    ir.clear_link(bb, ret);
     ir.stack2reg(recv, GP::Rdi);
     let using = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);

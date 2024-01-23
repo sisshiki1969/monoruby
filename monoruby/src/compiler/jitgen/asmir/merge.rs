@@ -172,7 +172,7 @@ impl JitContext {
 impl AsmIr {
     fn remove_unused(&mut self, bb: &mut BBContext, unused: &[SlotId]) {
         for r in unused {
-            self.link_stack(bb, *r);
+            self.clear_link(bb, *r);
         }
     }
 
@@ -197,8 +197,7 @@ impl AsmIr {
             if target[reg] == LinkMode::Stack {
                 match bb[reg] {
                     LinkMode::Xmm(freg) => {
-                        bb.xmm_to_both(freg);
-                        self.xmm2stack(freg, bb[freg].clone());
+                        self.xmm_to_both(&mut bb, freg);
                     }
                     LinkMode::Literal(v) => {
                         self.lit2stack(v, reg);
@@ -206,7 +205,7 @@ impl AsmIr {
                     LinkMode::Both(_) | LinkMode::Stack => {}
                     LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", reg),
                 }
-                self.link_stack(&mut bb, reg);
+                self.clear_link(&mut bb, reg);
             };
         }
 

@@ -165,7 +165,7 @@ impl JitContext {
         if let Some(superclass) = superclass {
             self.ir.write_back_slots(bb, &[superclass]);
         }
-        self.ir.link_stack(bb, dst);
+        self.ir.clear_link(bb, dst);
         let using_xmm = bb.get_using_xmm();
         let error = self.ir.new_error(bb, pc);
         self.ir.inst.push(AsmInst::ClassDef {
@@ -189,7 +189,7 @@ impl JitContext {
         pc: BcPc,
     ) {
         self.ir.write_back_slots(bb, &[base]);
-        self.ir.link_stack(bb, dst);
+        self.ir.clear_link(bb, dst);
         let using_xmm = bb.get_using_xmm();
         let error = self.ir.new_error(bb, pc);
         self.ir.inst.push(AsmInst::SingletonClassDef {

@@ -378,7 +378,7 @@ impl JitContext {
                 self.ir.link_literal(bb, dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 if val.is_packed_value() || val.is_float() {
                     self.ir.link_literal(bb, dst, val);
                 } else {
@@ -389,13 +389,13 @@ impl JitContext {
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 self.ir.write_back_range(bb, args, pos_num as u16);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_array(&bb, callid);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_hash(&bb, args, len as _);
                 self.ir.rax2acc(bb, dst);
             }
@@ -406,7 +406,7 @@ impl JitContext {
                 exclude_end,
             } => {
                 self.ir.write_back_slots(bb, &[start, end]);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.new_range(bb, pc, start, end, exclude_end);
                 self.ir.rax2acc(bb, dst);
             }
@@ -423,7 +423,7 @@ impl JitContext {
                 self.ir.index_assign(bb, src, base, idx, pc);
             }
             TraceIr::LoadConst(dst, id) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
 
                 if let (cached_version, cached_baseclass, Some(cached_val)) = store[id].cache {
                     let base_slot = store[id].base;
@@ -468,11 +468,11 @@ impl JitContext {
                     .push(AsmInst::StoreConstant { name, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                self.ir.link_stack(bb, ret);
+                self.ir.clear_link(bb, ret);
                 self.ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                self.ir.link_stack(bb, ret);
+                self.ir.clear_link(bb, ret);
                 self.ir.block_arg(bb, pc, ret, outer);
             }
             TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
@@ -503,12 +503,12 @@ impl JitContext {
                 self.ir.jit_store_gvar(bb, name, val);
             }
             TraceIr::LoadSvar { dst, id } => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.load_svar(&bb, id);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 if !dst.is_self() {
                     self.ir.inst.push(AsmInst::LoadDynVar { src });
                     self.ir.rax2acc(bb, dst);
@@ -578,7 +578,7 @@ impl JitContext {
                 if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
                     let deopt = self.ir.new_deopt(bb, pc);
                     let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                    self.ir.link_stack(bb, ret);
+                    self.ir.clear_link(bb, ret);
                     self.ir.clear(bb);
                     self.ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else if mode.is_integer_op(&pc) {
@@ -600,18 +600,18 @@ impl JitContext {
                         if mode.is_float_op(&pc) {
                             let deopt = self.ir.new_deopt(bb, pc);
                             let mode = self.ir.fmode(&mode, bb, pc, deopt);
-                            self.ir.link_stack(bb, ret);
+                            self.ir.clear_link(bb, ret);
                             self.ir.clear(bb);
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
                         } else {
                             if mode.is_integer_op(&pc) {
                                 self.ir.fetch_fixnum_binary(bb, pc, &mode);
-                                self.ir.link_stack(bb, ret);
+                                self.ir.clear_link(bb, ret);
                                 self.ir.clear(bb);
                                 self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                             } else {
                                 self.ir.fetch_binary(bb, mode);
-                                self.ir.link_stack(bb, ret);
+                                self.ir.clear_link(bb, ret);
                                 self.ir.clear(bb);
                                 self.ir.generic_cmp(&bb, pc, kind);
                                 self.ir.inst.push(AsmInst::GenericCondBr {
@@ -630,20 +630,20 @@ impl JitContext {
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.concat_str(&bb, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
-                self.ir.link_stack(bb, dst);
+                self.ir.clear_link(bb, dst);
                 self.ir.concat_regexp(&bb, pc, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    self.ir.link_stack(bb, SlotId(reg));
+                    self.ir.clear_link(bb, SlotId(reg));
                 }
                 self.ir.expand_array(&bb, dst, len);
             }
@@ -680,7 +680,7 @@ impl JitContext {
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);
-                self.ir.link_stack(bb, store[callid].dst);
+                self.ir.clear_link(bb, store[callid].dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);

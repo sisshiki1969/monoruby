@@ -335,7 +335,7 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         let callsite = &store[callid];
         self.set_arguments(bb, callsite);
-        self.link_stack(bb, callsite.dst);
+        self.clear_link(bb, callsite.dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
@@ -686,7 +686,7 @@ impl AsmIr {
     }
 
     pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        self.link_stack(bb, dst);
+        self.clear_link(bb, dst);
         self.load_gvar(bb, name);
         self.rax2acc(bb, dst);
     }
@@ -703,7 +703,7 @@ impl AsmIr {
         name: IdentId,
         dst: SlotId,
     ) {
-        self.link_stack(bb, dst);
+        self.clear_link(bb, dst);
         self.load_cvar(bb, pc, name);
         self.rax2acc(bb, dst);
     }

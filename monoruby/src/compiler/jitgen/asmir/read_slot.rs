@@ -21,11 +21,11 @@ impl AsmIr {
                 self.lit2stack(v, reg);
             }
             LinkMode::R15 => {
-                self.link_stack(bb, reg);
+                self.clear_link(bb, reg);
                 self.acc2stack(reg);
             }
             LinkMode::Alias(origin) => {
-                self.link_stack(bb, reg);
+                self.clear_link(bb, reg);
                 self.stack2reg(origin, GP::Rax);
                 self.reg2stack(GP::Rax, reg);
             }
