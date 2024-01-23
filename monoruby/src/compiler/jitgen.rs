@@ -1335,7 +1335,7 @@ impl Codegen {
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
         for (freg, v) in &wb.xmm {
-            self.xmm_to_both(*freg, v);
+            self.xmm_to_stack(*freg, v);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
@@ -1354,7 +1354,7 @@ impl Codegen {
     }
 
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from xmm to stack slots.
     ///
     /// ### out
     /// - rax: Value
@@ -1362,7 +1362,7 @@ impl Codegen {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_both(&mut self, freg: Xmm, v: &[SlotId]) {
+    fn xmm_to_stack(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }

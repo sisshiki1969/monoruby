@@ -198,7 +198,7 @@ impl AsmIr {
                 match bb[reg] {
                     LinkMode::Xmm(freg) => {
                         bb.xmm_to_both(freg);
-                        self.xmm2both(freg, bb[freg].clone());
+                        self.xmm2stack(freg, bb[freg].clone());
                     }
                     LinkMode::Literal(v) => {
                         self.lit2stack(v, reg);
@@ -239,7 +239,7 @@ impl AsmIr {
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.xmm2both(l, vec![reg]);
+                    self.xmm2stack(l, vec![reg]);
                     if l == r {
                         bb[reg] = LinkMode::Both(l);
                     } else if bb.is_xmm_vacant(r) {

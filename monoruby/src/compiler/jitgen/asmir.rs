@@ -177,7 +177,7 @@ impl AsmIr {
     }
 
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from xmm to stack slots.
     ///
     /// ### out
     /// - rax: Value
@@ -185,8 +185,8 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub(super) fn xmm2both(&mut self, freg: Xmm, reg: Vec<SlotId>) {
-        self.inst.push(AsmInst::XmmToBoth(freg, reg));
+    pub(super) fn xmm2stack(&mut self, freg: Xmm, reg: Vec<SlotId>) {
+        self.inst.push(AsmInst::XmmToStack(freg, reg));
     }
 
     ///
@@ -811,7 +811,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToBoth(Xmm, Vec<SlotId>),
+    XmmToStack(Xmm, Vec<SlotId>),
     ///
     /// ### destroy
     /// - rax
@@ -1463,7 +1463,7 @@ impl Codegen {
                     movq xmm(x.enc()), [rip + f];
                 }
             }
-            AsmInst::XmmToBoth(x, slots) => self.xmm_to_both(x, &slots),
+            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &slots),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => {
                 self.xmm_save(using_xmm);

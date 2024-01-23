@@ -11,14 +11,10 @@ impl AsmIr {
             eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
             panic!();
         };
-        if reg >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", reg, bb.sp);
-            panic!();
-        };
         match bb[reg] {
             LinkMode::Xmm(freg) => {
                 bb[reg] = LinkMode::Both(freg);
-                self.xmm2both(freg, vec![reg]);
+                self.xmm2stack(freg, vec![reg]);
             }
             LinkMode::Literal(v) => {
                 bb[reg] = LinkMode::Stack;
@@ -79,7 +75,7 @@ impl AsmIr {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.xmm2both(x, vec![reg]);
+                self.xmm2stack(x, vec![reg]);
                 self.reg_move(GP::Rax, dst);
                 bb[reg] = LinkMode::Both(x);
             }
@@ -114,7 +110,7 @@ impl AsmIr {
         };
         match bb[reg] {
             LinkMode::Xmm(x) => {
-                self.xmm2both(x, vec![reg]);
+                self.xmm2stack(x, vec![reg]);
                 self.reg2rsp_offset(GP::Rax, offset);
                 bb[reg] = LinkMode::Both(x);
             }
