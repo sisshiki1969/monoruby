@@ -83,10 +83,6 @@ impl SlotState {
         }
     }
 
-    pub(super) fn get_r15(&self) -> Option<SlotId> {
-        self.r15
-    }
-
     pub(super) fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
         self.xmm.swap(l.0 as usize, r.0 as usize);
         self.slots.iter_mut().for_each(|mode| match mode {
@@ -147,13 +143,11 @@ impl SlotState {
                 }
             })
             .collect();
-        let r15 = self.get_r15();
-        WriteBack::new(xmm, literal, alias, r15)
+        WriteBack::new(xmm, literal, alias, self.r15)
     }
 
     pub(in crate::compiler::jitgen) fn get_register(&self) -> WriteBack {
-        let r15 = self.get_r15();
-        WriteBack::new(vec![], vec![], vec![], r15)
+        WriteBack::new(vec![], vec![], vec![], self.r15)
     }
 
     pub(super) fn get_locals_write_back(&self) -> WriteBack {
@@ -207,7 +201,7 @@ impl SlotState {
                 }
             })
             .collect();
-        let r15 = match self.get_r15() {
+        let r15 = match self.r15 {
             Some(slot) if slot.0 as usize <= local_num => Some(slot),
             _ => None,
         };
