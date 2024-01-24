@@ -699,11 +699,16 @@ impl AsmIr {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
             // the inline method cache is invalid because the receiver class is not matched.
+            self.write_back_locals(bb);
             self.write_back_callargs(bb, &store[callid]);
             self.clear_link(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {
+            // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
+            if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
+                self.write_back_locals(bb);
+            }
             self.fetch_to_reg(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();

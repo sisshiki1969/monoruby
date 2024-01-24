@@ -465,31 +465,7 @@ impl AsmIr {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(in crate::compiler::jitgen) struct MergeContext(BBContext);
-
-impl std::ops::Deref for MergeContext {
-    type Target = BBContext;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for MergeContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl MergeContext {
-    pub(in crate::compiler::jitgen) fn new(bb: &BBContext) -> Self {
-        MergeContext(bb.clone())
-    }
-
-    pub(in crate::compiler::jitgen) fn get(self) -> BBContext {
-        self.0
-    }
-
     pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotState) {
         let mut ir = AsmIr::new();
         for i in 0..self.slots.len() {
@@ -516,12 +492,5 @@ impl MergeContext {
                 _ => ir.clear_link(&mut self.0, i),
             };
         }
-    }
-
-    pub(in crate::compiler::jitgen) fn remove_unused(&mut self, unused: &[SlotId]) {
-        let mut ir = AsmIr::new();
-        unused
-            .iter()
-            .for_each(|reg| ir.clear_link(&mut self.0, *reg));
     }
 }

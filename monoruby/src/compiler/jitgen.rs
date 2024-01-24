@@ -10,7 +10,7 @@ pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::{MergeContext, SlotState};
+use slot::SlotState;
 use trace_ir::*;
 
 pub mod analysis;
@@ -655,10 +655,6 @@ impl JitContext {
                 if let Some(fid) = pc.cached_fid()
                     && self.class_version == (pc + 1).cached_version()
                 {
-                    // We must write back and unlink all local vars since they are possibly accessed from inner blocks.
-                    if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
-                        self.ir.write_back_locals(bb);
-                    }
                     if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
                         return CompileResult::Recompile;
                     }
@@ -1072,6 +1068,39 @@ pub(crate) enum LinkMode {
     /// On R15 register.
     ///
     R15,
+}
+
+#[derive(Debug, Clone)]
+struct MergeContext(BBContext);
+
+impl std::ops::Deref for MergeContext {
+    type Target = BBContext;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for MergeContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl MergeContext {
+    fn new(bb: &BBContext) -> Self {
+        MergeContext(bb.clone())
+    }
+
+    fn get(self) -> BBContext {
+        self.0
+    }
+
+    fn remove_unused(&mut self, unused: &[SlotId]) {
+        let mut ir = AsmIr::new();
+        unused
+            .iter()
+            .for_each(|reg| ir.clear_link(&mut self.0, *reg));
+    }
 }
 
 impl Codegen {
