@@ -491,112 +491,37 @@ impl MergeContext {
     }
 
     pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotState) {
+        let mut ir = AsmIr::new();
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
-            match (&self[i], &other[i]) {
+            match (self[i], other[i]) {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
-                | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
-                (LinkMode::Both(l), LinkMode::Literal(r)) if r.is_float() => self.link_both(i, *l),
+                | (LinkMode::Xmm(l), LinkMode::Both(_)) => ir.link_both(&mut self.0, i, l),
+                (LinkMode::Both(l), LinkMode::Literal(r)) if r.is_float() => {
+                    ir.link_both(&mut self.0, i, l)
+                }
                 (LinkMode::Literal(l), LinkMode::Both(_)) if l.is_float() => {
-                    self.link_new_both(i);
+                    ir.link_new_both(&mut self.0, i);
                 }
-                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
-                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.is_float() => self.link_xmm(i, *l),
+                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => ir.link_xmm(&mut self.0, i, l),
+                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.is_float() => {
+                    ir.link_xmm(&mut self.0, i, l)
+                }
                 (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.is_float() => {
-                    self.link_new_xmm(i);
+                    ir.link_new_xmm(&mut self.0, i);
                 }
-                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => self.link_literal(i, *l),
-                _ => self.clear_link(i),
+                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {
+                    ir.link_literal(&mut self.0, i, l)
+                }
+                _ => ir.clear_link(&mut self.0, i),
             };
         }
     }
 
-    ///
-    /// Link slot *reg* to the stack.
-    ///
-    /// xmm registers corresponding to *reg* are deallocated.
-    ///
-    pub(super) fn clear_link(&mut self, reg: impl Into<Option<SlotId>>) {
-        match reg.into() {
-            Some(reg) => match self[reg] {
-                LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
-                    assert!(self.xmm(freg).contains(&reg));
-                    self.xmm_mut(freg).retain(|e| *e != reg);
-                    self[reg] = LinkMode::Stack;
-                }
-                LinkMode::Alias(origin) => {
-                    assert_eq!(self[origin], LinkMode::Stack);
-                    assert!(self.alias[origin.0 as usize].contains(&reg));
-                    self[reg] = LinkMode::Stack;
-                    self.alias[origin.0 as usize].retain(|e| *e != reg);
-                }
-                LinkMode::Literal(_) => {
-                    self[reg] = LinkMode::Stack;
-                }
-                LinkMode::R15 => {
-                    self.r15 = None;
-                    self[reg] = LinkMode::Stack;
-                }
-                LinkMode::Stack => {
-                    // We must write back all aliases of *reg*.
-                    let dst = std::mem::take(&mut self.alias[reg.0 as usize]);
-                    if !dst.is_empty() {
-                        for dst in dst {
-                            assert_eq!(self[dst], LinkMode::Alias(reg));
-                            self[dst] = LinkMode::Stack;
-                        }
-                    }
-                }
-            },
-            None => {}
-        }
-    }
-
-    ///
-    /// Link the slot *reg* to the given xmm register *freg*.
-    ///
-    fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.clear_link(reg);
-        self[reg] = LinkMode::Xmm(freg);
-        self.xmm_mut(freg).push(reg);
-    }
-
-    ///
-    /// Link the slot *reg* to a new xmm register.
-    ///
-    fn link_new_xmm(&mut self, reg: SlotId) -> Xmm {
-        let freg = self.alloc_xmm();
-        self.link_xmm(reg, freg);
-        freg
-    }
-
-    ///
-    /// Link the slot *reg* to both of the stack and the given xmm register *freg*.
-    ///
-    fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.clear_link(reg);
-        self[reg] = LinkMode::Both(freg);
-        self.xmm_mut(freg).push(reg);
-    }
-
-    ///
-    /// Link the slot *reg* to both of the stack and a new xmm register.
-    ///
-    fn link_new_both(&mut self, reg: SlotId) -> Xmm {
-        let x = self.alloc_xmm();
-        self.link_both(reg, x);
-        x
-    }
-
-    ///
-    /// Link the slot *reg* to a literal value *v*.
-    ///
-    fn link_literal(&mut self, reg: SlotId, v: Value) {
-        self.clear_link(reg);
-        self[reg] = LinkMode::Literal(v);
-    }
-
     pub(in crate::compiler::jitgen) fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.clear_link(*reg));
+        let mut ir = AsmIr::new();
+        unused
+            .iter()
+            .for_each(|reg| ir.clear_link(&mut self.0, *reg));
     }
 }
