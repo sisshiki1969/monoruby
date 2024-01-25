@@ -904,7 +904,7 @@ impl WriteBack {
 ///
 /// Context of an each basic block.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     /// state stack slots.
     slot_state: SlotState,
@@ -958,68 +958,6 @@ impl BBContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("  merged_entries: {:?}", &merge_ctx);
         merge_ctx
-    }
-
-    fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::Literal(v) = self[slot] {
-            let i = v.try_fixnum()?;
-            u16::try_from(i).ok()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::Literal(v) = self[slot] {
-            let i = v.try_fixnum()?;
-            u8::try_from(i).ok()
-        } else {
-            None
-        }
-    }
-
-    fn is_array_ty(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_array_ty(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_array_ty(origin),
-        }
-    }
-
-    fn is_fixnum(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_fixnum(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_fixnum(origin),
-        }
-    }
-
-    fn is_float(&self, slot: SlotId) -> bool {
-        match self[slot] {
-            LinkMode::Xmm(_) => true,
-            LinkMode::Literal(v) => v.is_float(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_float(origin),
-        }
-    }
-
-    fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
-        match class {
-            INTEGER_CLASS => self.is_fixnum(slot),
-            FLOAT_CLASS => self.is_float(slot),
-            _ => match self[slot] {
-                LinkMode::Xmm(_) => false,
-                LinkMode::Literal(v) => v.class() == class,
-                LinkMode::Both(_) | LinkMode::Stack => false,
-                LinkMode::R15 => false,
-                LinkMode::Alias(origin) => self.is_class(origin, class),
-            },
-        }
     }
 
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
@@ -1363,8 +1301,8 @@ impl Codegen {
     /// xmms are not deallocated.
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
-        for (freg, v) in &wb.xmm {
-            self.xmm_to_stack(*freg, v);
+        for (xmm, v) in &wb.xmm {
+            self.xmm_to_stack(*xmm, v);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
@@ -1391,15 +1329,15 @@ impl Codegen {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_stack(&mut self, freg: Xmm, v: &[SlotId]) {
+    fn xmm_to_stack(&mut self, xmm: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("      wb: {:?}->{:?}", freg, v);
+        eprintln!("      wb: {:?}->{:?}", xmm, v);
         let f64_to_val = self.f64_to_val;
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(freg.enc());
+            movq xmm0, xmm(xmm.enc());
             call f64_to_val;
         );
         for reg in v {

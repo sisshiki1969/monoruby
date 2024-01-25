@@ -185,8 +185,8 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub(super) fn xmm2stack(&mut self, freg: Xmm, reg: Vec<SlotId>) {
-        self.inst.push(AsmInst::XmmToStack(freg, reg));
+    pub(super) fn xmm2stack(&mut self, xmm: Xmm, reg: Vec<SlotId>) {
+        self.inst.push(AsmInst::XmmToStack(xmm, reg));
     }
 
     ///
@@ -364,7 +364,8 @@ impl AsmIr {
             for i in pos_num..callsite.len as u16 {
                 self.write_back_slot(bb, args + i);
             }
-            let ofs = if (args..args + pos_num).any(|reg| matches!(bb[reg], LinkMode::Xmm(_))) {
+            let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
+            {
                 (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16
             } else {
                 0

@@ -79,7 +79,7 @@ impl JitContext {
         let mut bb = BBContext::new(&self);
         let mut const_vec = vec![];
         for (reg, coerced) in use_set {
-            match target[reg] {
+            match target.slot(reg) {
                 LinkMode::Stack => {}
                 LinkMode::Literal(v) => {
                     if v.is_float() {
@@ -194,10 +194,10 @@ impl AsmIr {
 
         for i in 0..len {
             let reg = SlotId(i as u16);
-            if target[reg] == LinkMode::Stack {
-                match bb[reg] {
-                    LinkMode::Xmm(freg) => {
-                        self.xmm_to_both(&mut bb, freg);
+            if target.slot(reg) == LinkMode::Stack {
+                match bb.slot(reg) {
+                    LinkMode::Xmm(xmm) => {
+                        self.xmm_to_both(&mut bb, xmm);
                     }
                     LinkMode::Literal(v) => {
                         self.lit2stack(v, reg);
@@ -213,7 +213,7 @@ impl AsmIr {
         let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
-            match (bb[reg], target[reg]) {
+            match (bb.slot(reg), target.slot(reg)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
@@ -226,7 +226,7 @@ impl AsmIr {
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        bb[reg] = LinkMode::Xmm(l);
+                        bb.set_xmm(reg, l);
                     } else if bb.is_xmm_vacant(r) {
                         self.link_xmm(&mut bb, reg, r);
                         self.xmm_move(l, r);
@@ -240,7 +240,7 @@ impl AsmIr {
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
                     self.xmm2stack(l, vec![reg]);
                     if l == r {
-                        bb[reg] = LinkMode::Both(l);
+                        bb.set_both(reg, l);
                     } else if bb.is_xmm_vacant(r) {
                         self.link_both(&mut bb, reg, r);
                         self.xmm_move(l, r);
