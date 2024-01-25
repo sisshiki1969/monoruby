@@ -90,7 +90,7 @@ impl JitContext {
                     self.ir.link_xmm(&mut bb, reg, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    self.ir.link_both(&mut bb, reg, r);
+                    self.ir.link_both(&mut bb, reg, r, Guarded::Value);
                 }
                 LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
             };
@@ -193,31 +193,32 @@ impl AsmIr {
         self.writeback_alias(&mut bb);
 
         for i in 0..len {
-            let reg = SlotId(i as u16);
-            if target.slot(reg) == LinkMode::Stack {
-                match bb.slot(reg) {
+            let slot = SlotId(i as u16);
+            if target.slot(slot) == LinkMode::Stack {
+                match bb.slot(slot) {
                     LinkMode::Xmm(xmm) => {
                         self.xmm_to_both(&mut bb, xmm);
                     }
                     LinkMode::Literal(v) => {
-                        self.lit2stack(v, reg);
+                        self.lit2stack(v, slot);
                     }
                     LinkMode::Both(_) | LinkMode::Stack => {}
-                    LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", reg),
+                    LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", slot),
                 }
-                self.clear_link(&mut bb, reg);
+                self.clear_link(&mut bb, slot);
             };
         }
 
         let mut conv_list = vec![];
         let mut guard_list = vec![];
         for i in 0..len {
-            let reg = SlotId(i as u16);
-            match (bb.slot(reg), target.slot(reg)) {
+            let slot = SlotId(i as u16);
+            let guarded = bb.guarded(slot).merge(&target.guarded(slot));
+            match (bb.slot(slot), target.slot(slot)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_xmm(&mut bb, reg, r);
+                        self.link_xmm(&mut bb, slot, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -226,23 +227,23 @@ impl AsmIr {
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        bb.set_xmm(reg, l);
+                        bb.set_xmm(slot, l);
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_xmm(&mut bb, reg, r);
+                        self.link_xmm(&mut bb, slot, r);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
                         self.xmm_swap(l, r);
                     }
-                    guard_list.push(reg);
+                    guard_list.push(slot);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.xmm2stack(l, vec![reg]);
+                    self.xmm2stack(l, vec![slot]);
                     if l == r {
-                        bb.set_both(reg, l);
+                        bb.set_both_float(slot, l);
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_both(&mut bb, reg, r);
+                        self.link_both(&mut bb, slot, r, guarded);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -252,7 +253,7 @@ impl AsmIr {
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_both(&mut bb, reg, r);
+                        self.link_both(&mut bb, slot, r, guarded);
                         self.xmm_move(l, r);
                     } else {
                         bb.xmm_swap(l, r);
@@ -260,13 +261,13 @@ impl AsmIr {
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    self.link_both(&mut bb, reg, r);
-                    conv_list.push((reg, r));
+                    self.link_both(&mut bb, slot, r, guarded);
+                    conv_list.push((slot, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        self.link_xmm(&mut bb, reg, r);
+                        self.link_xmm(&mut bb, slot, r);
                         self.f64toxmm(f, r);
                     } else {
                         unreachable!()

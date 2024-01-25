@@ -1,5 +1,5 @@
-3.times do |b|
-  3.times do |a|
-    eval "puts a,b"
-  end
+10.times do
+  a = 1 + 2
+  b = 3.5 + 7
+  c = a + b
 end

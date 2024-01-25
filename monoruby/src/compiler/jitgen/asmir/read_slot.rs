@@ -13,11 +13,11 @@ impl AsmIr {
         };
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
-                bb.set_both(slot, xmm);
+                bb.set_both_float(slot, xmm);
                 self.xmm2stack(xmm, vec![slot]);
             }
             LinkMode::Literal(v) => {
-                bb.set_stack(slot);
+                bb.set_stack_from_literal(slot, v);
                 self.lit2stack(v, slot);
             }
             LinkMode::R15 => {
@@ -77,7 +77,7 @@ impl AsmIr {
                 }
                 self.xmm2stack(xmm, vec![reg]);
                 self.reg_move(GP::Rax, dst);
-                bb.set_both(reg, xmm);
+                bb.set_both_float(reg, xmm);
             }
             LinkMode::Literal(v) => {
                 if dst == GP::R15 {
@@ -112,7 +112,7 @@ impl AsmIr {
             LinkMode::Xmm(x) => {
                 self.xmm2stack(x, vec![reg]);
                 self.reg2rsp_offset(GP::Rax, offset);
-                bb.set_both(reg, x);
+                bb.set_both_float(reg, x);
             }
             LinkMode::Literal(v) => {
                 self.inst.push(AsmInst::LitToReg(v, GP::Rax));
@@ -189,8 +189,9 @@ impl AsmIr {
         let is_fixnum = bb.is_fixnum(slot);
         self.fetch_no_float(bb, slot, r, deopt);
         if !is_fixnum {
-            self.guard_fixnum(r, deopt)
+            self.guard_fixnum(r, deopt);
         }
+        bb.set_guard_fixnum(slot);
     }
 
     pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
@@ -217,21 +218,21 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.link_new_both(bb, reg);
+                let x = self.link_new_both(bb, reg, Guarded::Fixnum);
                 self.stack2reg(reg, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = self.link_new_both(bb, reg);
+                let x = self.link_new_both(bb, reg, Guarded::Fixnum);
                 self.reg2stack(GP::R15, reg);
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.link_new_both(bb, origin);
+                let x = self.link_new_both(bb, origin, Guarded::Fixnum);
                 self.stack2reg(origin, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
@@ -244,7 +245,7 @@ impl AsmIr {
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.link_new_both(bb, reg);
+                    let x = self.link_new_both(bb, reg, Guarded::Fixnum);
                     self.i64toboth(i, reg, x);
                     x
                 } else {
@@ -271,21 +272,21 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.link_new_both(bb, slot);
+                let x = self.link_new_both(bb, slot, Guarded::Float);
                 self.stack2reg(slot, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = self.link_new_both(bb, slot);
+                let x = self.link_new_both(bb, slot, Guarded::Float);
                 self.reg2stack(GP::R15, slot);
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.link_new_both(bb, origin);
+                let x = self.link_new_both(bb, origin, Guarded::Float);
                 self.stack2reg(origin, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
@@ -298,7 +299,7 @@ impl AsmIr {
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.link_new_both(bb, slot);
+                    let x = self.link_new_both(bb, slot, Guarded::Float);
                     self.i64toboth(i, slot, x);
                     x
                 } else {

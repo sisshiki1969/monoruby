@@ -6,6 +6,7 @@ use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::BasicBlockInfo;
 pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
+use self::slot::Guarded;
 
 use super::*;
 use analysis::{ExitType, SlotInfo};
@@ -355,6 +356,8 @@ impl JitContext {
         bb_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bb_pos);
+        //eprintln!("{:?}", &bb.slot_state);
+        //eprintln!("{:?}", &pc.trace_ir());
         match pc.trace_ir() {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart(_) => {
@@ -383,7 +386,8 @@ impl JitContext {
                     self.ir.link_literal(bb, dst, val);
                 } else {
                     self.ir.deep_copy_lit(&bb, val);
-                    self.ir.rax2acc(bb, dst);
+                    self.ir
+                        .reg2acc_guarded(bb, GP::Rax, dst, Guarded::from_literal(val));
                 }
             }
             TraceIr::Array { dst, callid } => {
@@ -391,7 +395,7 @@ impl JitContext {
                 self.ir.write_back_range(bb, args, pos_num as u16);
                 self.ir.clear_link(bb, dst);
                 self.ir.new_array(&bb, callid);
-                self.ir.rax2acc(bb, dst);
+                self.ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
             }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
@@ -440,7 +444,7 @@ impl JitContext {
                     }
                     let deopt = self.ir.new_deopt(bb, pc);
                     if let Some(f) = cached_val.try_float() {
-                        let fdst = self.ir.link_new_both(bb, dst);
+                        let fdst = self.ir.link_new_both(bb, dst, Guarded::Float);
                         self.ir.inst.push(AsmInst::LoadFloatConstant {
                             fdst,
                             f,

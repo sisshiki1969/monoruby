@@ -105,6 +105,25 @@ impl AsmIr {
     }
 
     pub(crate) fn reg2acc(&mut self, bb: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc_guarded(bb, src, dst, slot::Guarded::Value)
+    }
+
+    pub(crate) fn reg2acc_fixnum(
+        &mut self,
+        bb: &mut BBContext,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(bb, src, dst, slot::Guarded::Fixnum)
+    }
+
+    pub(crate) fn reg2acc_guarded(
+        &mut self,
+        bb: &mut BBContext,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        guarded: slot::Guarded,
+    ) {
         if let Some(dst) = dst.into() {
             self.clear(bb);
             if let Some(acc) = self.clear_r15(bb)
@@ -113,7 +132,7 @@ impl AsmIr {
             {
                 self.inst.push(AsmInst::AccToStack(acc));
             }
-            self.link_r15(bb, dst);
+            self.link_r15(bb, dst, guarded);
             self.inst.push(AsmInst::RegToAcc(src));
         }
     }
