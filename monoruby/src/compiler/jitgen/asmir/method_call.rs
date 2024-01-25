@@ -701,7 +701,7 @@ impl AsmIr {
             // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_locals(bb);
             self.write_back_callargs(bb, &store[callid]);
-            self.clear_link(bb, dst);
+            self.unlink(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
         } else {

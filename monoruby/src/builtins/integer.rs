@@ -289,19 +289,17 @@ fn integer_shr(
 ) {
     let CallSiteInfo { dst, args, .. } = *callsite;
     if let Some(rhs) = bb.is_u8_literal(args) {
-        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
         ir.fetch_to_reg(bb, args, GP::Rsi);
-        //bb.link_stack(dst);
         let deopt = ir.new_deopt(bb, pc);
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
-    ir.reg2acc(bb, GP::Rdi, dst);
+    ir.reg2acc_fixnum(bb, GP::Rdi, dst);
 }
 
 ///
@@ -345,7 +343,7 @@ fn integer_shl(
         ir.guard_class(GP::Rsi, INTEGER_CLASS, deopt);
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
-    ir.reg2acc(bb, GP::Rdi, dst);
+    ir.reg2acc_fixnum(bb, GP::Rdi, dst);
 }
 
 ///

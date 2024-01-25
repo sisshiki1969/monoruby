@@ -87,16 +87,16 @@ impl JitContext {
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    self.ir.link_xmm(&mut bb, reg, r);
+                    self.ir.store_xmm(&mut bb, reg, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    self.ir.link_both(&mut bb, reg, r);
+                    self.ir.store_both(&mut bb, reg, r, Guarded::Value);
                 }
                 LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
             };
         }
         for r in const_vec {
-            self.ir.link_new_xmm(&mut bb, r);
+            self.ir.store_new_xmm(&mut bb, r);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bb.sp, bb.slot_state);
@@ -172,7 +172,7 @@ impl JitContext {
 impl AsmIr {
     fn remove_unused(&mut self, bb: &mut BBContext, unused: &[SlotId]) {
         for r in unused {
-            self.clear_link(bb, *r);
+            self.unlink(bb, *r);
         }
     }
 
@@ -187,86 +187,79 @@ impl AsmIr {
             eprintln!("    src:    {:?}", bb.slot_state);
             eprintln!("    target: {:?}", target);
         }
-        let len = bb.reg_num();
-
-        self.writeback_acc(&mut bb);
-        self.writeback_alias(&mut bb);
+        let len = bb.sp.0 as usize;
 
         for i in 0..len {
-            let reg = SlotId(i as u16);
-            if target.slot(reg) == LinkMode::Stack {
-                match bb.slot(reg) {
-                    LinkMode::Xmm(xmm) => {
-                        self.xmm_to_both(&mut bb, xmm);
-                    }
-                    LinkMode::Literal(v) => {
-                        self.lit2stack(v, reg);
-                    }
-                    LinkMode::Both(_) | LinkMode::Stack => {}
-                    LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", reg),
-                }
-                self.clear_link(&mut bb, reg);
+            let slot = SlotId(i as u16);
+            let guarded = target.guarded(slot);
+            if target.slot(slot) == LinkMode::Stack {
+                self.into_stack(&mut bb, slot, guarded);
             };
         }
 
-        let mut conv_list = vec![];
-        let mut guard_list = vec![];
+        //let mut conv_list = vec![];
+        //let mut guard_list = vec![];
         for i in 0..len {
-            let reg = SlotId(i as u16);
-            match (bb.slot(reg), target.slot(reg)) {
+            let slot = SlotId(i as u16);
+            let guarded = target.guarded(slot);
+            match (bb.slot(slot), target.slot(slot)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_xmm(&mut bb, reg, r);
+                        self.store_xmm(&mut bb, slot, r);
                         self.xmm_move(l, r);
                     } else {
-                        bb.xmm_swap(l, r);
-                        self.xmm_swap(l, r);
+                        self.xmm_swap(&mut bb, l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
+                    let deopt = self.new_deopt(&bb, pc + 1);
+                    self.stack2reg(slot, GP::Rax);
+                    self.guard_float(GP::Rax, deopt);
                     if l == r {
-                        bb.set_xmm(reg, l);
+                        // Both(l) -> Xmm(l)
+                        bb.set_xmm(slot, l);
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_xmm(&mut bb, reg, r);
+                        // Xmm(l) -> Xmm(r)
+                        self.store_xmm(&mut bb, slot, r);
                         self.xmm_move(l, r);
                     } else {
-                        bb.xmm_swap(l, r);
-                        self.xmm_swap(l, r);
+                        self.xmm_swap(&mut bb, l, r);
                     }
-                    guard_list.push(reg);
+                    //guard_list.push(slot);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.xmm2stack(l, vec![reg]);
+                    self.xmm2stack(l, vec![slot]);
                     if l == r {
-                        bb.set_both(reg, l);
+                        bb.set_both_float(slot, l);
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_both(&mut bb, reg, r);
+                        self.store_both(&mut bb, slot, r, guarded);
                         self.xmm_move(l, r);
                     } else {
-                        bb.xmm_swap(l, r);
-                        self.xmm_swap(l, r);
+                        self.xmm_swap(&mut bb, l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
                     } else if bb.is_xmm_vacant(r) {
-                        self.link_both(&mut bb, reg, r);
+                        self.store_both(&mut bb, slot, r, guarded);
                         self.xmm_move(l, r);
                     } else {
-                        bb.xmm_swap(l, r);
-                        self.xmm_swap(l, r);
+                        self.xmm_swap(&mut bb, l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    self.link_both(&mut bb, reg, r);
-                    conv_list.push((reg, r));
+                    let deopt = self.new_deopt(&bb, pc + 1);
+                    self.stack2reg(slot, GP::Rax);
+                    self.inst.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
+                    self.store_both(&mut bb, slot, r, guarded);
+                    //conv_list.push((slot, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        self.link_xmm(&mut bb, reg, r);
+                        self.store_xmm(&mut bb, slot, r);
                         self.f64toxmm(f, r);
                     } else {
                         unreachable!()
@@ -276,16 +269,16 @@ impl AsmIr {
             }
         }
 
-        let deopt = self.new_deopt(&bb, pc + 1);
+        //let deopt = self.new_deopt(&bb, pc + 1);
 
-        for (r, x) in conv_list {
+        /*for (r, x) in conv_list {
             self.stack2reg(r, GP::Rax);
             self.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
-        }
+        }*/
 
-        for r in guard_list {
+        /*for r in guard_list {
             self.stack2reg(r, GP::Rax);
             self.guard_float(GP::Rax, deopt);
-        }
+        }*/
     }
 }

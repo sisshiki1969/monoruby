@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtins::slot::Guarded;
 use smallvec::smallvec;
 use std::cmp::Ordering;
 
@@ -360,7 +361,7 @@ fn array_shl(
         );
         gen.xmm_restore(using_xmm);
     });
-    ir.rax2acc(bb, dst);
+    ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
 }
 
 ///
