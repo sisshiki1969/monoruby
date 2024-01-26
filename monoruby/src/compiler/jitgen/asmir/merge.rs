@@ -195,17 +195,7 @@ impl AsmIr {
         for i in 0..len {
             let slot = SlotId(i as u16);
             if target.slot(slot) == LinkMode::Stack {
-                match bb.slot(slot) {
-                    LinkMode::Xmm(xmm) => {
-                        self.xmm_to_both(&mut bb, xmm);
-                    }
-                    LinkMode::Literal(v) => {
-                        self.lit2stack(v, slot);
-                    }
-                    LinkMode::Both(_) | LinkMode::Stack => {}
-                    LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", slot),
-                }
-                self.clear_link(&mut bb, slot);
+                self.into_stack(&mut bb, slot);
             };
         }
 

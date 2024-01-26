@@ -98,6 +98,18 @@ impl SlotState {
         }
     }
 
+    fn xmm(&self, xmm: Xmm) -> &[SlotId] {
+        &self.xmm[xmm.0 as usize]
+    }
+
+    fn xmm_mut(&mut self, xmm: Xmm) -> &mut Vec<SlotId> {
+        &mut self.xmm[xmm.0 as usize]
+    }
+
+    fn alias_mut(&mut self, slot: SlotId) -> &mut Vec<SlotId> {
+        &mut self.alias[slot.0 as usize]
+    }
+
     fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
         self.slots.0[slot.0 as usize] = (mode, guarded);
     }
@@ -106,31 +118,31 @@ impl SlotState {
         self.slots.len()
     }
 
-    pub fn slot(&self, slot: SlotId) -> LinkMode {
+    pub(super) fn slot(&self, slot: SlotId) -> LinkMode {
         self.slots[slot]
     }
 
-    pub fn guarded(&self, slot: SlotId) -> Guarded {
+    pub(super) fn guarded(&self, slot: SlotId) -> Guarded {
         self.slots.0[slot.0 as usize].1
     }
 
-    pub fn set_guard_fixnum(&mut self, slot: SlotId) {
+    pub(super) fn set_guard_fixnum(&mut self, slot: SlotId) {
         self.slots.0[slot.0 as usize].1 = Guarded::Fixnum
     }
 
-    pub fn set_xmm(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_xmm(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_slot(slot, LinkMode::Xmm(xmm), Guarded::Float)
     }
 
-    pub fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_both(slot, xmm, Guarded::Float)
     }
 
-    pub fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
+    fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
         self.set_slot(slot, LinkMode::Both(xmm), guarded)
     }
 
-    pub fn set_stack_from_literal(&mut self, slot: SlotId, v: Value) {
+    pub(super) fn set_stack_from_literal(&mut self, slot: SlotId, v: Value) {
         self.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v))
     }
 
@@ -138,17 +150,17 @@ impl SlotState {
         self.set_slot(slot, LinkMode::Stack, Guarded::Value)
     }
 
-    pub fn set_literal(&mut self, slot: SlotId, v: Value) {
+    fn set_literal(&mut self, slot: SlotId, v: Value) {
         let guarded = Guarded::from_literal(v);
         self.set_slot(slot, LinkMode::Literal(v), guarded);
     }
 
-    pub fn set_alias(&mut self, slot: SlotId, origin: SlotId) {
+    fn set_alias(&mut self, slot: SlotId, origin: SlotId) {
         let guarded = self.guarded(origin);
         self.set_slot(slot, LinkMode::Alias(origin), guarded);
     }
 
-    pub fn set_acc(&mut self, slot: SlotId, guarded: Guarded) {
+    fn set_acc(&mut self, slot: SlotId, guarded: Guarded) {
         self.set_slot(slot, LinkMode::R15, guarded);
     }
 
@@ -170,7 +182,7 @@ impl SlotState {
         }
     }
 
-    pub fn is_array_ty(&self, slot: SlotId) -> bool {
+    pub(super) fn is_array_ty(&self, slot: SlotId) -> bool {
         match self.slots[slot] {
             LinkMode::Xmm(_) => false,
             LinkMode::Literal(v) => v.is_array_ty(),
@@ -180,18 +192,17 @@ impl SlotState {
         }
     }
 
-    pub fn is_fixnum(&self, slot: SlotId) -> bool {
+    pub(super) fn is_fixnum(&self, slot: SlotId) -> bool {
+        let b = self.guarded(slot) == Guarded::Fixnum;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_fixnum(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_fixnum(origin),
+            LinkMode::Xmm(_) => assert_eq!(false, b),
+            LinkMode::Literal(v) => assert_eq!(v.is_fixnum(), b),
+            _ => {}
         };
-        self.guarded(slot) == Guarded::Fixnum
+        b
     }
 
-    pub fn is_float(&self, slot: SlotId) -> bool {
+    pub(super) fn is_float(&self, slot: SlotId) -> bool {
         match self.slots[slot] {
             LinkMode::Xmm(_) => true,
             LinkMode::Literal(v) => v.is_float(),
@@ -201,7 +212,7 @@ impl SlotState {
         }
     }
 
-    pub fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
+    pub(super) fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
         match class {
             INTEGER_CLASS => self.is_fixnum(slot),
             FLOAT_CLASS => self.is_float(slot),
@@ -213,18 +224,6 @@ impl SlotState {
                 LinkMode::Alias(origin) => self.is_class(origin, class),
             },
         }
-    }
-
-    fn xmm(&self, xmm: Xmm) -> &[SlotId] {
-        &self.xmm[xmm.0 as usize]
-    }
-
-    fn xmm_mut(&mut self, xmm: Xmm) -> &mut Vec<SlotId> {
-        &mut self.xmm[xmm.0 as usize]
-    }
-
-    fn alias_mut(&mut self, slot: SlotId) -> &mut Vec<SlotId> {
-        &mut self.alias[slot.0 as usize]
     }
 
     pub(super) fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
@@ -375,11 +374,29 @@ impl SlotState {
 }
 
 impl AsmIr {
-    pub(super) fn xmm_to_both(&mut self, bb: &mut BBContext, xmm: Xmm) {
-        for i in bb.xmm(xmm).to_vec() {
-            bb.set_both_float(i, xmm);
+    pub(super) fn into_stack(&mut self, bb: &mut BBContext, slot: SlotId) {
+        match bb.slot(slot) {
+            LinkMode::Xmm(xmm) => {
+                assert_eq!(Guarded::Float, bb.guarded(slot));
+                let slots = bb.xmm(xmm).to_vec();
+                for i in &slots {
+                    bb.set_both_float(*i, xmm);
+                }
+                bb.set_slot(slot, LinkMode::Stack, Guarded::Float);
+                self.xmm2stack(xmm, slots);
+            }
+            LinkMode::Literal(v) => {
+                bb.set_stack_from_literal(slot, v);
+                self.lit2stack(v, slot);
+            }
+            LinkMode::Both(_) => {
+                let guarded = bb.guarded(slot);
+                bb.set_slot(slot, LinkMode::Stack, guarded);
+            }
+            LinkMode::Stack => {}
+            LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", slot),
         }
-        self.xmm2stack(xmm, bb.xmm(xmm).to_vec());
+        //self.clear_link(bb, slot);
     }
 
     ///
