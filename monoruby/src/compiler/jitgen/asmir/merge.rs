@@ -187,7 +187,7 @@ impl AsmIr {
             eprintln!("    src:    {:?}", bb.slot_state);
             eprintln!("    target: {:?}", target);
         }
-        let len = bb.reg_num();
+        let len = bb.sp.0 as usize; //reg_num();
 
         self.writeback_acc(&mut bb);
         self.writeback_alias(&mut bb);

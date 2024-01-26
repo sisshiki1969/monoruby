@@ -114,9 +114,9 @@ impl SlotState {
         self.slots.0[slot.0 as usize] = (mode, guarded);
     }
 
-    pub fn len(&self) -> usize {
+    /*pub fn len(&self) -> usize {
         self.slots.len()
-    }
+    }*/
 
     pub(super) fn slot(&self, slot: SlotId) -> LinkMode {
         self.slots[slot]
@@ -146,7 +146,7 @@ impl SlotState {
         self.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v))
     }
 
-    fn clear_slot(&mut self, slot: SlotId) {
+    pub(super) fn clear_slot(&mut self, slot: SlotId) {
         self.set_slot(slot, LinkMode::Stack, Guarded::Value)
     }
 
@@ -183,13 +183,13 @@ impl SlotState {
     }
 
     pub(super) fn is_array_ty(&self, slot: SlotId) -> bool {
+        let b = self.guarded(slot) == Guarded::ArrayTy;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => false,
-            LinkMode::Literal(v) => v.is_array_ty(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_array_ty(origin),
-        }
+            LinkMode::Xmm(_) => assert_eq!(false, b),
+            LinkMode::Literal(v) => assert_eq!(v.is_array_ty(), b),
+            _ => {}
+        };
+        b
     }
 
     pub(super) fn is_fixnum(&self, slot: SlotId) -> bool {
@@ -203,13 +203,13 @@ impl SlotState {
     }
 
     pub(super) fn is_float(&self, slot: SlotId) -> bool {
+        let b = self.guarded(slot) == Guarded::Float;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => true,
-            LinkMode::Literal(v) => v.is_float(),
-            LinkMode::Both(_) | LinkMode::Stack => false,
-            LinkMode::R15 => false,
-            LinkMode::Alias(origin) => self.is_float(origin),
-        }
+            LinkMode::Xmm(_) => assert_eq!(true, b),
+            LinkMode::Literal(v) => assert_eq!(v.is_float(), b),
+            _ => {}
+        };
+        b
     }
 
     pub(super) fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
@@ -394,7 +394,7 @@ impl AsmIr {
                 bb.set_slot(slot, LinkMode::Stack, guarded);
             }
             LinkMode::Stack => {}
-            LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} ", slot),
+            LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} {:?}", slot, bb.slot(slot)),
         }
         //self.clear_link(bb, slot);
     }

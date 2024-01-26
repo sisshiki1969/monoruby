@@ -942,9 +942,9 @@ impl BBContext {
         }
     }
 
-    fn reg_num(&self) -> usize {
+    /*fn reg_num(&self) -> usize {
         self.slot_state.len()
-    }
+    }*/
 
     fn merge_entries(entries: &[BranchEntry]) -> MergeContext {
         let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bb);
