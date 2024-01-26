@@ -101,7 +101,7 @@ impl AsmIr {
                 && acc < bb.sp
                 && acc != dst
             {
-                self.inst.push(AsmInst::AccToStack(acc));
+                self.acc2stack(acc);
             }
             self.store_r15(bb, dst, guarded);
             self.inst.push(AsmInst::RegToAcc(src));

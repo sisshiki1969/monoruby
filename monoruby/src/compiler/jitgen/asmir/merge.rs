@@ -197,8 +197,8 @@ impl AsmIr {
             };
         }
 
-        let mut conv_list = vec![];
-        let mut guard_list = vec![];
+        //let mut conv_list = vec![];
+        //let mut guard_list = vec![];
         for i in 0..len {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
@@ -213,6 +213,9 @@ impl AsmIr {
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
+                    let deopt = self.new_deopt(&bb, pc + 1);
+                    self.stack2reg(slot, GP::Rax);
+                    self.guard_float(GP::Rax, deopt);
                     if l == r {
                         // Both(l) -> Xmm(l)
                         bb.set_xmm(slot, l);
@@ -223,7 +226,7 @@ impl AsmIr {
                     } else {
                         self.xmm_swap(&mut bb, l, r);
                     }
-                    guard_list.push(slot);
+                    //guard_list.push(slot);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
@@ -247,8 +250,11 @@ impl AsmIr {
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
+                    let deopt = self.new_deopt(&bb, pc + 1);
+                    self.stack2reg(slot, GP::Rax);
+                    self.inst.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                     self.store_both(&mut bb, slot, r, guarded);
-                    conv_list.push((slot, r));
+                    //conv_list.push((slot, r));
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
                 (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
@@ -263,16 +269,16 @@ impl AsmIr {
             }
         }
 
-        let deopt = self.new_deopt(&bb, pc + 1);
+        //let deopt = self.new_deopt(&bb, pc + 1);
 
-        for (r, x) in conv_list {
+        /*for (r, x) in conv_list {
             self.stack2reg(r, GP::Rax);
             self.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
-        }
+        }*/
 
-        for r in guard_list {
+        /*for r in guard_list {
             self.stack2reg(r, GP::Rax);
             self.guard_float(GP::Rax, deopt);
-        }
+        }*/
     }
 }
