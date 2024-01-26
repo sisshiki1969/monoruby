@@ -430,19 +430,19 @@ impl AsmIr {
                         self.fetch_guard_fixnum(bb, slot, GP::Rdi, deopt);
                     }
                 }
-                self.clear_link(bb, dst);
+                self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc_fixnum(bb, GP::Rdi, dst);
             }
             BinOpK::Sub => {
                 self.fetch_fixnum_binary(bb, pc, &mode);
-                self.clear_link(bb, dst);
+                self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc_fixnum(bb, GP::Rdi, dst);
             }
             BinOpK::Exp | BinOpK::Mul | BinOpK::Div => {
                 self.fetch_fixnum_mode(bb, &mode, pc);
-                self.clear_link(bb, dst);
+                self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc(bb, GP::Rax, dst);
             }
@@ -450,13 +450,13 @@ impl AsmIr {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     let deopt = self.new_deopt(bb, pc);
                     self.fetch_guard_fixnum(bb, lhs, GP::Rdi, deopt);
-                    self.clear_link(bb, dst);
+                    self.unlink(bb, dst);
                     self.integer_binop(bb, pc, kind, mode);
                     self.reg2acc(bb, GP::Rdi, dst);
                 }
                 _ => {
                     self.fetch_fixnum_mode(bb, &mode, pc);
-                    self.clear_link(bb, dst);
+                    self.unlink(bb, dst);
                     self.integer_binop(bb, pc, kind, mode);
                     self.reg2acc(bb, GP::Rax, dst);
                 }

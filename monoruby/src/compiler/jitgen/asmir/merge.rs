@@ -172,7 +172,7 @@ impl JitContext {
 impl AsmIr {
     fn remove_unused(&mut self, bb: &mut BBContext, unused: &[SlotId]) {
         for r in unused {
-            self.clear_link(bb, *r);
+            self.unlink(bb, *r);
         }
     }
 
@@ -191,7 +191,7 @@ impl AsmIr {
 
         for i in 0..len {
             let slot = SlotId(i as u16);
-            let guarded = bb.guarded(slot).merge(&target.guarded(slot));
+            let guarded = target.guarded(slot);
             if target.slot(slot) == LinkMode::Stack {
                 self.into_stack(&mut bb, slot, guarded);
             };
@@ -201,7 +201,7 @@ impl AsmIr {
         let mut guard_list = vec![];
         for i in 0..len {
             let slot = SlotId(i as u16);
-            let guarded = bb.guarded(slot).merge(&target.guarded(slot));
+            let guarded = target.guarded(slot);
             match (bb.slot(slot), target.slot(slot)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
