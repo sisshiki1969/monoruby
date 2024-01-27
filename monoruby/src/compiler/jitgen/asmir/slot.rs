@@ -24,7 +24,7 @@ impl Guarded {
         }
     }
 
-    pub fn merge(&self, other: &Self) -> Self {
+    pub(super) fn merge(&self, other: &Self) -> Self {
         match (self, other) {
             (Guarded::Float, Guarded::Float) => Guarded::Float,
             (Guarded::Fixnum, Guarded::Fixnum) => Guarded::Fixnum,
@@ -142,11 +142,11 @@ impl SlotState {
         self.set_slot(slot, LinkMode::Both(xmm), guarded)
     }
 
-    pub(super) fn set_stack_from_literal(&mut self, slot: SlotId, v: Value) {
+    fn set_stack_from_literal(&mut self, slot: SlotId, v: Value) {
         self.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v))
     }
 
-    pub(super) fn clear_slot(&mut self, slot: SlotId) {
+    fn clear_slot(&mut self, slot: SlotId) {
         self.set_slot(slot, LinkMode::Stack, Guarded::Value)
     }
 
@@ -230,7 +230,7 @@ impl SlotState {
         self.xmm(xmm).is_empty()
     }
 
-    pub(super) fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
+    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
         let mut guarded_l = None;
         let mut guarded_r = None;
         for (mode, guarded) in self.slots.iter() {
@@ -374,7 +374,7 @@ impl SlotState {
 }
 
 impl AsmIr {
-    pub(super) fn into_stack(&mut self, bb: &mut BBContext, slot: SlotId) {
+    pub(super) fn into_stack(&mut self, bb: &mut BBContext, slot: SlotId, guarded: Guarded) {
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 assert_eq!(Guarded::Float, bb.guarded(slot));
@@ -382,21 +382,55 @@ impl AsmIr {
                 for i in &slots {
                     bb.set_both_float(*i, xmm);
                 }
-                bb.set_slot(slot, LinkMode::Stack, Guarded::Float);
                 self.xmm2stack(xmm, slots);
             }
             LinkMode::Literal(v) => {
-                bb.set_stack_from_literal(slot, v);
-                self.lit2stack(v, slot);
+                self.lit2stack(bb, v, slot);
             }
-            LinkMode::Both(_) => {
-                let guarded = bb.guarded(slot);
-                bb.set_slot(slot, LinkMode::Stack, guarded);
+            LinkMode::Alias(origin) => {
+                assert_eq!(bb.slots[origin], LinkMode::Stack);
+                assert!(bb.alias[origin.0 as usize].contains(&slot));
+                self.stack2reg(origin, GP::Rax);
+                self.reg2stack(GP::Rax, slot);
+                bb.alias[origin.0 as usize].retain(|e| *e != slot);
             }
-            LinkMode::Stack => {}
-            LinkMode::R15 | LinkMode::Alias(_) => unreachable!("{:?} {:?}", slot, bb.slot(slot)),
+            LinkMode::R15 => {
+                self.acc2stack(slot);
+                bb.r15 = None;
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {}
         }
-        //self.clear_link(bb, slot);
+        bb.set_slot(slot, LinkMode::Stack, guarded);
+    }
+
+    ///
+    /// Write back the value of the *slot* to the corresponding stack slot.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    pub(super) fn write_back_slot(&mut self, bb: &mut BBContext, slot: SlotId) {
+        if slot >= bb.sp {
+            unreachable!("{:?} >= {:?} in write_back_slot()", slot, bb.sp);
+        };
+        match bb.slot(slot) {
+            LinkMode::Xmm(xmm) => {
+                bb.set_both_float(slot, xmm);
+                self.xmm2stack(xmm, vec![slot]);
+            }
+            LinkMode::Literal(v) => {
+                self.lit2stack(bb, v, slot);
+            }
+            LinkMode::R15 => {
+                self.acc2stack(slot);
+                self.clear_link(bb, slot);
+            }
+            LinkMode::Alias(origin) => {
+                self.stack2reg(origin, GP::Rax);
+                self.reg2stack(GP::Rax, slot);
+                self.clear_link(bb, slot);
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {}
+        }
     }
 
     ///
@@ -451,7 +485,7 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    fn link_alias(&mut self, bb: &mut BBContext, origin: SlotId, slot: SlotId) {
+    fn store_alias(&mut self, bb: &mut BBContext, origin: SlotId, slot: SlotId) {
         self.clear_link(bb, slot);
         if bb.slots[origin] != LinkMode::Stack {
             unreachable!("origin:{:?} reg:{:?} {:?}", origin, slot, bb);
@@ -466,7 +500,7 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(super) fn link_xmm(&mut self, bb: &mut BBContext, slot: SlotId, xmm: Xmm) {
+    pub(super) fn store_xmm(&mut self, bb: &mut BBContext, slot: SlotId, xmm: Xmm) {
         self.clear_link(bb, slot);
         bb.set_xmm(slot, xmm);
         bb.xmm_mut(xmm).push(slot);
@@ -478,9 +512,9 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(super) fn link_new_xmm(&mut self, bb: &mut BBContext, slot: SlotId) -> Xmm {
+    pub(super) fn store_new_xmm(&mut self, bb: &mut BBContext, slot: SlotId) -> Xmm {
         let xmm = bb.alloc_xmm();
-        self.link_xmm(bb, slot, xmm);
+        self.store_xmm(bb, slot, xmm);
         xmm
     }
 
@@ -490,7 +524,7 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(super) fn link_both(
+    pub(super) fn store_both(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
@@ -508,14 +542,14 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn link_new_both(
+    pub(in crate::compiler::jitgen) fn store_new_both(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
         guarded: Guarded,
     ) -> Xmm {
         let x = bb.alloc_xmm();
-        self.link_both(bb, slot, x, guarded);
+        self.store_both(bb, slot, x, guarded);
         x
     }
 
@@ -525,7 +559,7 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn link_literal(
+    pub(in crate::compiler::jitgen) fn store_literal(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
@@ -541,7 +575,7 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(super) fn link_r15(
+    pub(super) fn store_r15(
         &mut self,
         bb: &mut BBContext,
         slot: impl Into<Option<SlotId>>,
@@ -553,6 +587,20 @@ impl AsmIr {
             bb.set_acc(slot, guarded);
             bb.r15 = Some(slot);
         }
+    }
+
+    pub(super) fn xmm_swap(&mut self, bb: &mut BBContext, l: Xmm, r: Xmm) {
+        bb.xmm_swap(l, r);
+        self.inst.push(AsmInst::XmmSwap(l, r));
+    }
+
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn lit2stack(&mut self, bb: &mut BBContext, v: Value, slot: SlotId) {
+        bb.set_stack_from_literal(slot, v);
+        self.inst.push(AsmInst::LitToStack(v, slot));
     }
 
     ///
@@ -601,26 +649,26 @@ impl AsmIr {
         let guarded = bb.guarded(src);
         match bb.slots[src] {
             LinkMode::Xmm(x) => {
-                self.link_xmm(bb, dst, x);
+                self.store_xmm(bb, dst, x);
             }
             LinkMode::Both(x) => {
                 self.stack2reg(src, GP::Rax);
                 self.reg2stack(GP::Rax, dst);
-                self.link_both(bb, dst, x, guarded);
+                self.store_both(bb, dst, x, guarded);
             }
             LinkMode::Stack => {
-                self.link_alias(bb, src, dst);
+                self.store_alias(bb, src, dst);
             }
             LinkMode::Alias(origin) => {
-                self.link_alias(bb, origin, dst);
+                self.store_alias(bb, origin, dst);
             }
             LinkMode::Literal(v) => {
-                self.link_literal(bb, dst, v);
+                self.store_literal(bb, dst, v);
             }
             LinkMode::R15 => {
                 self.reg2stack(GP::R15, src);
                 self.clear_link(bb, src);
-                self.link_r15(bb, dst, guarded)
+                self.store_r15(bb, dst, guarded)
             }
         }
     }
@@ -646,7 +694,7 @@ impl AsmIr {
             | LinkMode::Stack
             | LinkMode::Alias(_)
             | LinkMode::Literal(_)
-            | LinkMode::R15 => self.link_new_xmm(bb, slot),
+            | LinkMode::R15 => self.store_new_xmm(bb, slot),
         }
     }
 
@@ -657,23 +705,6 @@ impl AsmIr {
     pub(super) fn release_locals(&mut self, bb: &mut BBContext) {
         for reg in 1..1 + bb.local_num as u16 {
             self.clear_link(bb, SlotId(reg));
-        }
-    }
-
-    ///
-    /// Write back LinkMode::Alias slots.
-    ///
-    /// ### destroy
-    /// - rax, r8
-    ///
-    pub(super) fn writeback_alias(&mut self, bb: &mut BBContext) {
-        for i in 0..bb.sp.0 {
-            let r = SlotId::new(i);
-            if let LinkMode::Alias(origin) = bb.slots[r] {
-                self.stack2reg(origin, GP::Rax);
-                self.reg2stack(GP::Rax, r);
-                self.clear_link(bb, r);
-            }
         }
     }
 }
@@ -687,23 +718,23 @@ impl MergeContext {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                 | (LinkMode::Xmm(l), LinkMode::Both(_)) => {
                     let guarded = self.guarded(i).merge(&other.guarded(i));
-                    ir.link_both(&mut self.0, i, l, guarded);
+                    ir.store_both(&mut self.0, i, l, guarded);
                 }
                 (LinkMode::Both(l), LinkMode::Literal(r)) if r.is_float() => {
-                    ir.link_both(&mut self.0, i, l, Guarded::Float)
+                    ir.store_both(&mut self.0, i, l, Guarded::Float)
                 }
                 (LinkMode::Literal(l), LinkMode::Both(_)) if l.is_float() => {
-                    ir.link_new_both(&mut self.0, i, Guarded::Float);
+                    ir.store_new_both(&mut self.0, i, Guarded::Float);
                 }
-                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => ir.link_xmm(&mut self.0, i, l),
+                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => ir.store_xmm(&mut self.0, i, l),
                 (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.is_float() => {
-                    ir.link_xmm(&mut self.0, i, l)
+                    ir.store_xmm(&mut self.0, i, l)
                 }
                 (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.is_float() => {
-                    ir.link_new_xmm(&mut self.0, i);
+                    ir.store_new_xmm(&mut self.0, i);
                 }
                 (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {
-                    ir.link_literal(&mut self.0, i, l)
+                    ir.store_literal(&mut self.0, i, l)
                 }
                 _ => ir.clear_link(&mut self.0, i),
             };

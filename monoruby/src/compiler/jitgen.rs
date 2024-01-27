@@ -372,18 +372,18 @@ impl JitContext {
                 }
             }
             TraceIr::Integer(dst, i) => {
-                self.ir.link_literal(bb, dst, Value::i32(i));
+                self.ir.store_literal(bb, dst, Value::i32(i));
             }
             TraceIr::Symbol(dst, id) => {
-                self.ir.link_literal(bb, dst, Value::symbol(id));
+                self.ir.store_literal(bb, dst, Value::symbol(id));
             }
             TraceIr::Nil(dst) => {
-                self.ir.link_literal(bb, dst, Value::nil());
+                self.ir.store_literal(bb, dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
                 self.ir.clear_link(bb, dst);
                 if val.is_packed_value() || val.is_float() {
-                    self.ir.link_literal(bb, dst, val);
+                    self.ir.store_literal(bb, dst, val);
                 } else {
                     self.ir.deep_copy_lit(&bb, val);
                     self.ir
@@ -444,7 +444,7 @@ impl JitContext {
                     }
                     let deopt = self.ir.new_deopt(bb, pc);
                     if let Some(f) = cached_val.try_float() {
-                        let fdst = self.ir.link_new_both(bb, dst, Guarded::Float);
+                        let fdst = self.ir.store_new_both(bb, dst, Guarded::Float);
                         self.ir.inst.push(AsmInst::LoadFloatConstant {
                             fdst,
                             f,

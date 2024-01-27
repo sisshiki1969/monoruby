@@ -2,64 +2,6 @@ use super::*;
 
 impl AsmIr {
     ///
-    /// Fetch *reg* and store in a corresponding stack slot.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    pub(crate) fn write_back_slot(&mut self, bb: &mut BBContext, slot: SlotId) {
-        if slot >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_slot()", slot, bb.sp);
-            panic!();
-        };
-        match bb.slot(slot) {
-            LinkMode::Xmm(xmm) => {
-                bb.set_both_float(slot, xmm);
-                self.xmm2stack(xmm, vec![slot]);
-            }
-            LinkMode::Literal(v) => {
-                bb.set_stack_from_literal(slot, v);
-                self.lit2stack(v, slot);
-            }
-            LinkMode::R15 => {
-                self.clear_link(bb, slot);
-                self.acc2stack(slot);
-            }
-            LinkMode::Alias(origin) => {
-                self.clear_link(bb, slot);
-                self.stack2reg(origin, GP::Rax);
-                self.reg2stack(GP::Rax, slot);
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {}
-        }
-    }
-
-    pub(crate) fn write_back_slots(&mut self, bb: &mut BBContext, slot: &[SlotId]) {
-        slot.iter().for_each(|r| self.write_back_slot(bb, *r));
-    }
-
-    ///
-    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
-    ///
-    pub(crate) fn write_back_range(&mut self, bb: &mut BBContext, args: SlotId, len: u16) {
-        for reg in args.0..args.0 + len {
-            self.write_back_slot(bb, SlotId::new(reg))
-        }
-    }
-
-    pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo {
-            recv, args, len, ..
-        } = callsite;
-        self.write_back_slot(bb, *recv);
-        self.write_back_range(bb, *args, *len as u16);
-    }
-
-    pub(crate) fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo { args, len, .. } = callsite;
-        self.write_back_range(bb, *args, *len as u16);
-    }
-
-    ///
     /// fetch *reg* and store in *dst*.
     ///
     /// ### destroy
@@ -218,21 +160,21 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.link_new_both(bb, reg, Guarded::Fixnum);
+                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
                 self.stack2reg(reg, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = self.link_new_both(bb, reg, Guarded::Fixnum);
+                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
                 self.reg2stack(GP::R15, reg);
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.link_new_both(bb, origin, Guarded::Fixnum);
+                let x = self.store_new_both(bb, origin, Guarded::Fixnum);
                 self.stack2reg(origin, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
@@ -240,12 +182,12 @@ impl AsmIr {
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = self.link_new_xmm(bb, reg);
+                    let x = self.store_new_xmm(bb, reg);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.link_new_both(bb, reg, Guarded::Fixnum);
+                    let x = self.store_new_both(bb, reg, Guarded::Fixnum);
                     self.i64toboth(i, reg, x);
                     x
                 } else {
@@ -272,21 +214,21 @@ impl AsmIr {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.link_new_both(bb, slot, Guarded::Float);
+                let x = self.store_new_both(bb, slot, Guarded::Float);
                 self.stack2reg(slot, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::R15 => {
                 // -> Both
-                let x = self.link_new_both(bb, slot, Guarded::Float);
+                let x = self.store_new_both(bb, slot, Guarded::Float);
                 self.reg2stack(GP::R15, slot);
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.link_new_both(bb, origin, Guarded::Float);
+                let x = self.store_new_both(bb, origin, Guarded::Float);
                 self.stack2reg(origin, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
@@ -294,12 +236,12 @@ impl AsmIr {
             LinkMode::Literal(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = self.link_new_xmm(bb, slot);
+                    let x = self.store_new_xmm(bb, slot);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.link_new_both(bb, slot, Guarded::Float);
+                    let x = self.store_new_both(bb, slot, Guarded::Float);
                     self.i64toboth(i, slot, x);
                     x
                 } else {

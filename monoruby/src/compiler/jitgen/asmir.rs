@@ -52,14 +52,8 @@ pub(crate) struct AsmIr {
     pub(super) side_exit: Vec<SideExit>,
 }
 
+// public interface
 impl AsmIr {
-    pub fn new() -> Self {
-        Self {
-            inst: vec![],
-            side_exit: vec![],
-        }
-    }
-
     pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BcPc) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
         AsmDeopt(i)
@@ -75,29 +69,6 @@ impl AsmIr {
         let deopt = self.new_label(SideExit::Deoptimize(pc, wb.clone()));
         let error = self.new_label(SideExit::Error(pc, wb));
         (AsmDeopt(deopt), AsmError(error))
-    }
-
-    fn new_label(&mut self, side_exit: SideExit) -> usize {
-        let label = self.side_exit.len();
-        self.side_exit.push(side_exit);
-        label
-    }
-
-    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BcPc) {
-        let exit = self.new_deopt(bb, pc);
-        self.inst.push(AsmInst::Deopt(exit));
-    }
-
-    pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, pc: BcPc, position: Option<BcPc>) {
-        let deopt = self.new_deopt(bb, pc);
-        self.inst.push(AsmInst::RecompileDeopt { position, deopt });
-    }
-
-    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.inst.push(AsmInst::XmmSave(using_xmm));
-    }
-    pub(super) fn exec_gc(&mut self, wb: WriteBack) {
-        self.inst.push(AsmInst::ExecGc(wb));
     }
 
     pub(crate) fn rax2acc(&mut self, bb: &mut BBContext, dst: impl Into<Option<SlotId>>) {
@@ -132,26 +103,58 @@ impl AsmIr {
             {
                 self.inst.push(AsmInst::AccToStack(acc));
             }
-            self.link_r15(bb, dst, guarded);
+            self.store_r15(bb, dst, guarded);
             self.inst.push(AsmInst::RegToAcc(src));
         }
     }
+}
 
-    pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
+impl AsmIr {
+    pub(super) fn new() -> Self {
+        Self {
+            inst: vec![],
+            side_exit: vec![],
+        }
+    }
+
+    fn new_label(&mut self, side_exit: SideExit) -> usize {
+        let label = self.side_exit.len();
+        self.side_exit.push(side_exit);
+        label
+    }
+
+    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BcPc) {
+        let exit = self.new_deopt(bb, pc);
+        self.inst.push(AsmInst::Deopt(exit));
+    }
+
+    pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, pc: BcPc, position: Option<BcPc>) {
+        let deopt = self.new_deopt(bb, pc);
+        self.inst.push(AsmInst::RecompileDeopt { position, deopt });
+    }
+
+    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+        self.inst.push(AsmInst::XmmSave(using_xmm));
+    }
+    pub(super) fn exec_gc(&mut self, wb: WriteBack) {
+        self.inst.push(AsmInst::ExecGc(wb));
+    }
+
+    fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.inst.push(AsmInst::RegMove(src, dst));
         }
     }
 
-    pub(super) fn reg_add(&mut self, r: GP, i: i32) {
+    fn reg_add(&mut self, r: GP, i: i32) {
         self.inst.push(AsmInst::RegAdd(r, i));
     }
 
-    pub(super) fn reg_sub(&mut self, r: GP, i: i32) {
+    fn reg_sub(&mut self, r: GP, i: i32) {
         self.inst.push(AsmInst::RegSub(r, i));
     }
 
-    pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
+    fn reg2rsp_offset(&mut self, r: GP, i: i32) {
         self.inst.push(AsmInst::RegToRSPOffset(r, i));
     }
 
@@ -167,10 +170,6 @@ impl AsmIr {
 
     pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
         self.inst.push(AsmInst::XmmMove(src, dst));
-    }
-
-    pub(super) fn xmm_swap(&mut self, x1: Xmm, x2: Xmm) {
-        self.inst.push(AsmInst::XmmSwap(x1, x2));
     }
 
     ///
@@ -204,39 +203,31 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub(super) fn xmm2stack(&mut self, xmm: Xmm, reg: Vec<SlotId>) {
+    fn xmm2stack(&mut self, xmm: Xmm, reg: Vec<SlotId>) {
         self.inst.push(AsmInst::XmmToStack(xmm, reg));
     }
 
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn lit2stack(&mut self, v: Value, reg: SlotId) {
-        self.inst.push(AsmInst::LitToStack(v, reg));
-    }
-
-    pub(super) fn lit2reg(&mut self, v: Value, reg: GP) {
+    fn lit2reg(&mut self, v: Value, reg: GP) {
         self.inst.push(AsmInst::LitToReg(v, reg));
     }
 
-    pub(super) fn acc2stack(&mut self, reg: SlotId) {
+    fn acc2stack(&mut self, reg: SlotId) {
         self.inst.push(AsmInst::AccToStack(reg));
     }
 
-    pub(super) fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::IntToXmm(reg, x, deopt));
     }
 
-    pub(super) fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
-    pub(super) fn f64toxmm(&mut self, f: f64, x: Xmm) {
+    fn f64toxmm(&mut self, f: f64, x: Xmm) {
         self.inst.push(AsmInst::F64ToXmm(f, x));
     }
 
-    pub(super) fn i64toboth(&mut self, i: i64, reg: SlotId, x: Xmm) {
+    fn i64toboth(&mut self, i: i64, reg: SlotId, x: Xmm) {
         self.inst.push(AsmInst::I64ToBoth(i, reg, x));
     }
 
@@ -333,7 +324,38 @@ impl AsmIr {
     pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
         self.inst.push(AsmInst::AttrReader { ivar_id });
     }
+}
 
+// write back operations
+impl AsmIr {
+    pub(super) fn write_back_slots(&mut self, bb: &mut BBContext, slot: &[SlotId]) {
+        slot.iter().for_each(|r| self.write_back_slot(bb, *r));
+    }
+
+    ///
+    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
+    ///
+    pub(super) fn write_back_range(&mut self, bb: &mut BBContext, args: SlotId, len: u16) {
+        for reg in args.0..args.0 + len {
+            self.write_back_slot(bb, SlotId::new(reg))
+        }
+    }
+
+    pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
+        let CallSiteInfo {
+            recv, args, len, ..
+        } = callsite;
+        self.write_back_slot(bb, *recv);
+        self.write_back_range(bb, *args, *len as u16);
+    }
+
+    fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
+        let CallSiteInfo { args, len, .. } = callsite;
+        self.write_back_range(bb, *args, *len as u16);
+    }
+}
+
+impl AsmIr {
     ///
     /// ### in
     /// rdi: receiver: Value
