@@ -347,12 +347,13 @@ fn array_shl(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo { dst, args, .. } = *callsite;
+    let CallSiteInfo {
+        recv, dst, args, ..
+    } = *callsite;
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    //bb.link_stack(dst);
     let deopt = ir.new_deopt(bb, pc);
     let using_xmm = bb.get_using_xmm();
-    ir.guard_class(GP::Rdi, ARRAY_CLASS, deopt);
+    ir.guard_class(bb, recv, GP::Rdi, ARRAY_CLASS, deopt);
     ir.inline(move |gen, _| {
         gen.xmm_save(using_xmm);
         monoasm!( &mut gen.jit,

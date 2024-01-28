@@ -846,8 +846,7 @@ impl JitContext {
                 self.opt_case.push(opt_case_info);
 
                 let deopt = self.ir.new_deopt(bb, pc);
-                self.ir.fetch_to_reg(bb, cond, GP::Rdi);
-                self.ir.guard_fixnum(GP::Rdi, deopt);
+                self.ir.fetch_guard_fixnum(bb, cond, GP::Rdi, deopt);
                 self.ir.opt_case(*max, *min, opt_case_id, else_dest);
                 return CompileResult::Exit;
             }

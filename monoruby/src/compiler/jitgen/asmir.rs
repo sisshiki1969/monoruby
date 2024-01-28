@@ -237,15 +237,15 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
+    fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardFixnum(r, deopt));
     }
 
-    pub(super) fn guard_float(&mut self, r: GP, deopt: AsmDeopt) {
+    fn guard_float(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
-    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
+    fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
@@ -287,7 +287,19 @@ impl AsmIr {
     /// ### in
     /// - R(*reg*): Value
     ///
-    pub(crate) fn guard_class(&mut self, r: GP, class: ClassId, deopt: AsmDeopt) {
+    pub(crate) fn guard_class(
+        &mut self,
+        bb: &mut BBContext,
+        slot: SlotId,
+        r: GP,
+        class: ClassId,
+        deopt: AsmDeopt,
+    ) {
+        if class == INTEGER_CLASS {
+            bb.set_guard_fixnum(slot);
+        } else if class == FLOAT_CLASS {
+            bb.set_guard_float(slot);
+        }
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
 

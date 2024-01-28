@@ -7,19 +7,19 @@ impl AsmIr {
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, reg: SlotId, dst: GP) {
-        if reg >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
+    pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
+        if slot >= bb.sp {
+            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
             panic!();
         };
-        match bb.slot(reg) {
+        match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.xmm2stack(xmm, vec![reg]);
+                self.xmm2stack(xmm, vec![slot]);
                 self.reg_move(GP::Rax, dst);
-                bb.set_both_float(reg, xmm);
+                bb.set_both_float(slot, xmm);
             }
             LinkMode::Literal(v) => {
                 if dst == GP::R15 {
@@ -31,7 +31,7 @@ impl AsmIr {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.stack2reg(reg, dst);
+                self.stack2reg(slot, dst);
             }
             LinkMode::Alias(origin) => {
                 if dst == GP::R15 {
@@ -46,63 +46,13 @@ impl AsmIr {
     }
 
     pub(crate) fn fetch_to_rsp_offset(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
-        if reg >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", reg, bb.sp);
-            panic!();
-        };
         match bb.slot(reg) {
-            LinkMode::Xmm(x) => {
-                self.xmm2stack(x, vec![reg]);
-                self.reg2rsp_offset(GP::Rax, offset);
-                bb.set_both_float(reg, x);
-            }
-            LinkMode::Literal(v) => {
-                self.inst.push(AsmInst::LitToReg(v, GP::Rax));
-                self.reg2rsp_offset(GP::Rax, offset);
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                self.stack2reg(reg, GP::Rax);
-                self.reg2rsp_offset(GP::Rax, offset);
-            }
-            LinkMode::Alias(origin) => {
-                self.stack2reg(origin, GP::Rax);
-                self.reg2rsp_offset(GP::Rax, offset);
-            }
             LinkMode::R15 => {
                 self.reg2rsp_offset(GP::R15, offset);
             }
-        }
-    }
-
-    fn fetch_no_float(&mut self, bb: &mut BBContext, slot: SlotId, r: GP, deopt: AsmDeopt) {
-        if slot >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
-            panic!();
-        };
-        match bb.slot(slot) {
-            LinkMode::Xmm(_) => {
-                self.inst.push(AsmInst::Deopt(deopt));
-            }
-            LinkMode::Literal(v) => {
-                if r == GP::R15 {
-                    self.writeback_acc(bb);
-                }
-                self.inst.push(AsmInst::LitToReg(v, r));
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                if r == GP::R15 {
-                    self.writeback_acc(bb);
-                }
-                self.stack2reg(slot, r);
-            }
-            LinkMode::Alias(origin) => {
-                if r == GP::R15 {
-                    self.writeback_acc(bb);
-                }
-                self.stack2reg(origin, r);
-            }
-            LinkMode::R15 => {
-                self.reg_move(GP::R15, r);
+            _ => {
+                self.fetch_to_reg(bb, reg, GP::Rax);
+                self.reg2rsp_offset(GP::Rax, offset);
             }
         }
     }
@@ -111,13 +61,14 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
-        r: GP,
+        dst: GP,
         deopt: AsmDeopt,
     ) {
         let is_array = bb.is_array_ty(slot);
-        self.fetch_no_float(bb, slot, r, deopt);
+        self.fetch_to_reg(bb, slot, dst);
         if !is_array {
-            self.guard_array_ty(r, deopt)
+            self.guard_array_ty(dst, deopt);
+            bb.set_guard_array_ty(slot);
         }
     }
 
@@ -125,15 +76,15 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
-        r: GP,
+        dst: GP,
         deopt: AsmDeopt,
     ) {
         let is_fixnum = bb.is_fixnum(slot);
-        self.fetch_no_float(bb, slot, r, deopt);
+        self.fetch_to_reg(bb, slot, dst);
         if !is_fixnum {
-            self.guard_fixnum(r, deopt);
+            self.guard_fixnum(dst, deopt);
+            bb.set_guard_fixnum(slot);
         }
-        bb.set_guard_fixnum(slot);
     }
 
     pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
