@@ -206,7 +206,7 @@ impl Value {
     }
 
     fn is_i63(num: i64) -> bool {
-        let top = (num as u64) >> 62 ^ (num as u64) >> 63;
+        let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }
 

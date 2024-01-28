@@ -296,8 +296,14 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) {
         if class == INTEGER_CLASS {
+            if bb.is_fixnum(slot) {
+                return;
+            }
             bb.set_guard_fixnum(slot);
         } else if class == FLOAT_CLASS {
+            if bb.is_float(slot) {
+                return;
+            }
             bb.set_guard_float(slot);
         }
         self.inst.push(AsmInst::GuardClass(r, class, deopt));

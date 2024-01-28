@@ -670,7 +670,6 @@ impl JitContext {
                 inline_id, callid, ..
             } => {
                 let inline_gen = store.get_inline_info(inline_id).0;
-                //self.ir.writeback_acc(bb);
                 let recv = store[callid].recv;
                 self.ir.fetch_to_reg(bb, recv, GP::Rdi);
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);

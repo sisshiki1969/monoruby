@@ -100,33 +100,33 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 #### machine spec
 
-- Architecture:            x86_64
-- CPU(s):                  32
-  -  Model name:            13th Gen Intel(R) Core(TM) i9-13900HX
-  -  Thread(s) per core:  2
-  -  Core(s) per socket:  16
-- Caches (sum of all):     
-  - L1d:                   768 KiB (16 instances)
-  - L1i:                   512 KiB (16 instances)
-  - L2:                    32 MiB (16 instances)
-  - L3:                    36 MiB (1 instance)
+- Architecture: x86_64
+- CPU(s): 32
+  - Model name: 13th Gen Intel(R) Core(TM) i9-13900HX
+  - Thread(s) per core: 2
+  - Core(s) per socket: 16
+- Caches (sum of all):
+  - L1d: 768 KiB (16 instances)
+  - L1i: 512 KiB (16 instances)
+  - L2: 32 MiB (16 instances)
+  - L3: 36 MiB (1 instance)
 
 ### micro benchmark
 
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
-- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with *).
+- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with \*) in this repo.
 - measurements are shown in iteration/sec (the higher, the better).
 
-|                |    3.3.0| 3.3.0 --yjit| truffleruby-23.1.1| monoruby| monoruby --no-jit|
-|:---------------|--------:|------------:|------------------:|--------:|-----------------:|
-|qsort*          |   1.773k|       7.005k|            31.249k|  13.332k|            3.024k|
-|app_fib         |    6.002|       43.535|             32.699|   40.039|             5.838|
-|tarai*          |    4.918|       37.935|             16.687|   30.698|             4.554|
-|so_mandelbrot   |    1.009|        2.140|              3.397|   31.814|             1.258|
-|so_nbody        |    1.896|        3.959|             13.364|   13.585|             1.408|
-|binarytrees*    |    5.668|       10.884|              6.996|    8.217|             4.140|
-|app_aobench     |    0.051|        0.093|              0.627|    0.260|             0.048|
+|               |  3.3.0 | 3.3.0 --yjit | truffleruby-23.1.1 | monoruby | monoruby --no-jit |
+| :------------ | -----: | -----------: | -----------------: | -------: | ----------------: |
+| app_fib       |  6.002 |       43.535 |             32.699 |   40.039 |             5.838 |
+| so_mandelbrot |  1.009 |        2.140 |              3.397 |   31.814 |             1.258 |
+| so_nbody      |  1.896 |        3.959 |             13.364 |   13.585 |             1.408 |
+| app_aobench   |  0.051 |        0.093 |              0.627 |    0.260 |             0.048 |
+| quick_sort\*  | 1.773k |       7.005k |            31.249k |  13.332k |            3.024k |
+| tarai\*       |  4.918 |       37.935 |             16.687 |   30.698 |             4.554 |
+| binarytrees\* |  5.668 |       10.884 |              6.996 |    8.217 |             4.140 |
 
-ratio to Ruby 3.3.0 were shown in the graph below. 
+ratio to Ruby 3.3.0 were shown in the graph below.
 
 ![micro_bench](benchmark.png)
