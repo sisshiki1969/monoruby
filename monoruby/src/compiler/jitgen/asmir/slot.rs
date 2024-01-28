@@ -130,6 +130,14 @@ impl SlotState {
         self.slots.0[slot.0 as usize].1 = Guarded::Fixnum
     }
 
+    pub(super) fn set_guard_float(&mut self, slot: SlotId) {
+        self.slots.0[slot.0 as usize].1 = Guarded::Float
+    }
+
+    pub(super) fn set_guard_array_ty(&mut self, slot: SlotId) {
+        self.slots.0[slot.0 as usize].1 = Guarded::ArrayTy
+    }
+
     fn clear_link(&mut self, slot: SlotId) {
         self.set_slot(slot, LinkMode::Stack, Guarded::Value)
     }

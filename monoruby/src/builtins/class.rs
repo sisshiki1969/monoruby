@@ -68,7 +68,7 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
     Ok(obj)
 }
 
-fn inline_class_new(
+pub(super) fn inline_class_new(
     ir: &mut AsmIr,
     _store: &Store,
     bb: &mut BBContext,
@@ -79,11 +79,11 @@ fn inline_class_new(
         recv,
         args,
         pos_num,
-        dst: ret,
+        dst,
         ..
     } = *callsite;
     ir.write_back_callargs(bb, callsite);
-    ir.unlink(bb, ret);
+    ir.unlink(bb, dst);
     ir.stack2reg(recv, GP::Rdi);
     let using = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
@@ -93,6 +93,7 @@ fn inline_class_new(
         let class_version = gen.class_version_label();
         let slow_path = gen.jit.label();
         let checked = gen.jit.label();
+        let initialize = gen.jit.label();
         let exit = gen.jit.label();
         let error = labels[error];
         gen.xmm_save(using);
@@ -104,11 +105,19 @@ fn inline_class_new(
             cmpl rax, [rip + cached_version];
             jne  slow_path;
             movl rax, [rip + cached_funcid];
-            checked:
+        checked:
             testq rax, rax;
-            je  exit;
+            jne  initialize;
+        exit:
+            movq rax, r15;
         );
+
+        gen.xmm_restore(using);
+        gen.handle_error(error);
+
+        gen.jit.select_page(1);
         monoasm!( &mut gen.jit,
+        initialize:
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rax;
@@ -123,16 +132,8 @@ fn inline_class_new(
             testq rax, rax;
             jne  exit;
             xorq r15, r15;
-            exit:
-            movq rax, r15;
-        );
-        gen.xmm_restore(using);
-        gen.handle_error(error);
-        gen.store_rax(ret);
-
-        gen.jit.select_page(1);
-        monoasm!( &mut gen.jit,
-            slow_path:
+            jmp  exit;
+        slow_path:
             movq rdi, r12;
             movq rsi, r15;
             movq rax, (check_initializer);
@@ -144,6 +145,7 @@ fn inline_class_new(
         );
         gen.jit.select_page(0);
     });
+    ir.rax2acc(bb, dst);
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

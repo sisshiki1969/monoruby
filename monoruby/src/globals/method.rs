@@ -97,6 +97,18 @@ impl Globals {
         self.define_builtin_func(class_id, name, address)
     }
 
+    pub(crate) fn define_builtin_class_inline_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        inline_gen: InlineGen,
+        inline_analysis: InlineAnalysis,
+    ) -> FuncId {
+        let class_id = self.get_metaclass(class_id).id();
+        self.define_builtin_inline_func(class_id, name, address, inline_gen, inline_analysis)
+    }
+
     pub(crate) fn define_builtin_singleton_func(
         &mut self,
         obj: Value,

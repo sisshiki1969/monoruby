@@ -717,7 +717,7 @@ impl AsmIr {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.
             if !recv.is_self() && !bb.is_class(recv, cached_class) {
-                self.guard_class(GP::Rdi, cached_class, deopt);
+                self.guard_class(bb, recv, GP::Rdi, cached_class, deopt);
             }
             self.gen_call_cached(store, bb, callid, fid, pc)?;
         }

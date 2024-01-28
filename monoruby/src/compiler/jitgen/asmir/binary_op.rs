@@ -419,7 +419,7 @@ impl AsmIr {
         mode: OpMode,
     ) {
         match kind {
-            BinOpK::Add | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
+            BinOpK::Add | BinOpK::Mul | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
                 let deopt = self.new_deopt(bb, pc);
                 match mode {
                     OpMode::RR(lhs, rhs) => {
@@ -430,17 +430,15 @@ impl AsmIr {
                         self.fetch_guard_fixnum(bb, slot, GP::Rdi, deopt);
                     }
                 }
-                self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc_fixnum(bb, GP::Rdi, dst);
             }
             BinOpK::Sub => {
                 self.fetch_fixnum_binary(bb, pc, &mode);
-                self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc_fixnum(bb, GP::Rdi, dst);
             }
-            BinOpK::Exp | BinOpK::Mul | BinOpK::Div => {
+            BinOpK::Exp | BinOpK::Div => {
                 self.fetch_fixnum_mode(bb, &mode, pc);
                 self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
@@ -543,6 +541,26 @@ impl Codegen {
                     );
                 }
             },
+            BinOpK::Mul => match mode {
+                OpMode::RR(_, _) => {
+                    monoasm!( &mut self.jit,
+                        subq rdi, 1;
+                        sarq rsi,1;
+                        imul rdi, rsi;
+                        jo deopt;
+                        orq  rdi, 1;
+                    );
+                }
+                OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                    monoasm!( &mut self.jit,
+                        subq rdi, 1;
+                        movq rsi, (*i as i64);
+                        imul rdi, rsi;
+                        jo deopt;
+                        orq  rdi, 1;
+                    );
+                }
+            },
             BinOpK::Sub => match mode {
                 OpMode::RR(_, _) => {
                     monoasm!( &mut self.jit,
@@ -576,7 +594,7 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
-            BinOpK::Mul | BinOpK::Div => {
+            BinOpK::Div => {
                 self.generic_binop(kind, using_xmm, error);
             }
             BinOpK::Rem => match mode {
