@@ -27,46 +27,20 @@ jobs:
           cargo install grcov cargo-nextest
           rustup component add llvm-tools-preview
       - name: Build
-        run:  cargo build
+        run: cargo build
       - name: Install
-        run:  cargo install --debug --path monoruby
+        run: cargo install --debug --path monoruby
       - name: chdir
-        run:  cd monoruby
+        run: cd monoruby
       - name: Run tests
-        run:  |
+        run: |
           LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
           LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
           LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
           LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""
       - name: Run tests
-        run:  |
-          LLVM_PROFILE_FILE="monoruby-fib-%p-%m.fib" monoruby benchmark/app_fib.rb > monoruby.log
-          ruby benchmark/app_fib.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-tarai-%p-%m.profraw" monoruby benchmark/tarai.rb > monoruby.log
-          ruby benchmark/tarai.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-quick_sort-%p-%m.profraw" monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.disas > monoruby.log
-          ruby benchmark/quick_sort.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-nbody-%p-%m.profraw" monoruby benchmark/so_nbody.rb > monoruby.log
-          ruby benchmark/so_nbody.rb > ruby.log
-          diff -s monoruby.log ruby.log
-      - name: Run plb2
         run: |
-          LLVM_PROFILE_FILE="monoruby-fib-%p-%m.nqueen" monoruby benchmark/plb2/nqueen.rb > monoruby.log
-          ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-fib-%p-%m.sudoku" monoruby benchmark/plb2/sudoku.rb > monoruby.log
-          ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-fib-%p-%m.matmul" monoruby benchmark/plb2/matmul.rb > monoruby.log
-          ruby --yjit benchmark/plb2/matmul.rb > ruby.log
-          diff -s monoruby.log ruby.log
-          LLVM_PROFILE_FILE="monoruby-fib-%p-%m.bedcov" monoruby benchmark/plb2/bedcov.rb > monoruby.log
-          ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
-          diff -s monoruby.log ruby.log
-
+          LLVM_PROFILE_FILE="monoruby-tests-%p-%m.profrow" ./test.sh
       - name: Run grcov
         run: grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
       - name: Upload to codecov.io
