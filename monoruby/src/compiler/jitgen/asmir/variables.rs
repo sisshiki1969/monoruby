@@ -13,9 +13,7 @@ impl Codegen {
             if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
-                );
-                // We must check whether the ivar slot is None.
-                monoasm!( &mut self.jit,
+                    // We must check whether the ivar slot is None.
                     movq rdi, (NIL_VALUE);
                     testq rax, rax;
                     cmoveqq rax, rdi;

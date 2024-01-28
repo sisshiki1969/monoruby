@@ -494,6 +494,12 @@ mod test {
         run_test("-4611686018427387904"); // min number of 63bit signed int.
         run_test("-4611686018427387904 - 1");
         run_test("-4611686018400000001 - 27387904");
+        run_test("1 << 62");
+        run_test("1 << 63");
+        run_test("1 << 64");
+        run_test("-1 << 62");
+        run_test("-1 << 63");
+        run_test("-1 << 64");
     }
 
     #[test]

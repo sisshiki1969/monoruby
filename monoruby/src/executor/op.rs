@@ -282,8 +282,9 @@ fn int_shr(lhs: i64, rhs: u32) -> Value {
 
 fn int_shl(lhs: i64, rhs: u32) -> Value {
     match lhs.checked_shl(rhs) {
-        Some(res) => Value::integer(res),
-        None => bigint_shl(&BigInt::from(lhs), rhs),
+        // Work around
+        Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
+        _ => bigint_shl(&BigInt::from(lhs), rhs),
     }
 }
 

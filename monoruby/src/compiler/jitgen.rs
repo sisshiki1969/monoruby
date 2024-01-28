@@ -45,19 +45,19 @@ struct JitContext {
     ///
     bb_scan: Vec<(ExitType, SlotInfo)>,
     ///
-    /// Back edges to the loop head.
+    /// Backedges to the loop head.
     ///
     loop_backedges: HashMap<BasicBlockId, SlotInfo>,
     ///
-    /// Loop
+    /// Loop information.
     ///
     /// ### key
-    /// start basic block.
+    /// the first basic block.
     ///
     /// ### value
-    /// (end basic block, slot_info)
+    /// (the last basic block, slot_info at the loop exit)
     ///
-    loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
+    loop_info: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
     ///
     /// Nested loop count.
     ///
@@ -77,7 +77,7 @@ struct JitContext {
     ///
     /// A map for backward branches.
     ///
-    backedge_map: HashMap<BcIndex, (DestLabel, MergeContext, Vec<SlotId>)>,
+    backedge_map: HashMap<BcIndex, BackedgeInfo>,
     ///
     /// the number of slots.
     ///
@@ -106,6 +106,10 @@ struct JitContext {
     /// Information for opt_case table.
     ///
     opt_case: Vec<OptCaseAsmInfo>,
+    ///
+    /// Class version at compile time.
+    ///
+    #[allow(dead_code)]
     class_version: u32,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
@@ -119,6 +123,13 @@ impl std::ops::Index<AsmLabel> for JitContext {
     fn index(&self, index: AsmLabel) -> &Self::Output {
         self.asm_labels[index.0].as_ref().unwrap()
     }
+}
+
+#[derive(Debug)]
+struct BackedgeInfo {
+    target_label: DestLabel,
+    target_ctx: MergeContext,
+    unused: Vec<SlotId>,
 }
 
 ///
@@ -182,7 +193,7 @@ impl JitContext {
             asm_labels: vec![],
             bb_scan,
             loop_backedges: HashMap::default(),
-            loop_exit: HashMap::default(),
+            loop_info: HashMap::default(),
             loop_count: 0,
             is_loop,
             branch_map: HashMap::default(),
@@ -259,14 +270,20 @@ impl JitContext {
         func: &ISeqInfo,
         bb: &mut BBContext,
         bb_pos: BcIndex,
-        dest_label: DestLabel,
+        target_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
         bb.sp = func.get_sp(bb_pos);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:[{:?}] {bb_pos}", bb.sp);
-        self.backedge_map
-            .insert(bb_pos, (dest_label, MergeContext::new(bb), unused));
+        self.backedge_map.insert(
+            bb_pos,
+            BackedgeInfo {
+                target_label,
+                target_ctx: MergeContext::new(bb),
+                unused,
+            },
+        );
     }
 
     fn compile_bb(
@@ -657,7 +674,7 @@ impl JitContext {
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                 if let Some(fid) = pc.cached_fid()
-                    && self.class_version == (pc + 1).cached_version()
+                //&& self.class_version == (pc + 1).cached_version()
                 {
                     if self.ir.gen_call(store, bb, fid, callid, pc).is_none() {
                         return CompileResult::Recompile;
@@ -670,7 +687,6 @@ impl JitContext {
                 inline_id, callid, ..
             } => {
                 let inline_gen = store.get_inline_info(inline_id).0;
-                //self.ir.writeback_acc(bb);
                 let recv = store[callid].recv;
                 self.ir.fetch_to_reg(bb, recv, GP::Rdi);
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);
@@ -941,11 +957,7 @@ impl BBContext {
         }
     }
 
-    /*fn reg_num(&self) -> usize {
-        self.slot_state.len()
-    }*/
-
-    fn merge_entries(entries: &[BranchEntry]) -> MergeContext {
+    fn union(entries: &[BranchEntry]) -> MergeContext {
         let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bb);
         for BranchEntry {
             src_idx: _src_idx,
@@ -959,7 +971,7 @@ impl BBContext {
             merge_ctx.union(bb);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("  merged_entries: {:?}", &merge_ctx);
+        eprintln!("  union_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 
@@ -1063,7 +1075,7 @@ impl Codegen {
         for (loop_start, loop_end) in func.bb_info.loops() {
             let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
             ctx.loop_backedges.insert(*loop_start, backedge);
-            ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
+            ctx.loop_info.insert(*loop_start, (*loop_end, exit));
         }
 
         let bb = BBContext::new(&ctx);

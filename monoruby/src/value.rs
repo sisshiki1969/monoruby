@@ -206,7 +206,7 @@ impl Value {
     }
 
     fn is_i63(num: i64) -> bool {
-        let top = (num as u64) >> 62 ^ (num as u64) >> 63;
+        let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }
 
@@ -435,56 +435,181 @@ pub struct F2 {
 }
 
 impl Value {
+    ///
+    /// Check if `self` is a packed value.
+    ///
     pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
     }
 
+    ///
+    /// Get a reference to RValue from `self`.
+    ///
+    /// return None if `self` was a packed value.
+    ///
+    pub(crate) fn try_rvalue(&self) -> Option<&RValue> {
+        if self.is_packed_value() {
+            None
+        } else {
+            Some(unsafe { &*(self.id() as *const RValue) })
+        }
+    }
+
+    ///
+    /// Get a mutable reference to RValue from `self`.
+    ///
+    /// return None if `self` was a packed value.
+    ///
+    pub(crate) fn try_rvalue_mut(&mut self) -> Option<&mut RValue> {
+        if self.is_packed_value() {
+            None
+        } else {
+            Some(unsafe { &mut *(self.id() as *mut RValue) })
+        }
+    }
+
+    ///
+    /// Get a reference to RValue from `self`.
+    ///
+    /// ### Panics
+    /// Panics if `self` was a packed value.
+    ///
+    pub(crate) fn rvalue(&self) -> &RValue {
+        self.try_rvalue().unwrap()
+    }
+
+    ///
+    /// Get a mutable reference to RValue from `self`.
+    ///
+    /// ### Panics
+    /// Panics if `self` was a packed value.
+    ///
+    pub(crate) fn rvalue_mut(&mut self) -> &mut RValue {
+        self.try_rvalue_mut().unwrap()
+    }
+
+    ///
+    /// Check if `self` is a fixnum.
+    ///
     pub(crate) fn is_fixnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 
-    pub(crate) fn as_fixnum(&self) -> i64 {
-        (self.0.get() as i64) >> 1
-    }
-
+    ///
+    /// Check if `self` is a fixnum.
+    ///
+    /// If `self` is a fixnum, return it as i64.
+    /// Otherwise, return None.
+    ///
     pub fn try_fixnum(&self) -> Option<i64> {
         if self.is_fixnum() {
-            Some(self.as_fixnum())
+            Some((self.0.get() as i64) >> 1)
         } else {
             None
         }
     }
 
-    pub(crate) fn is_float(&self) -> bool {
-        self.class() == FLOAT_CLASS
+    ///
+    /// Get `self` as i64.
+    ///
+    /// ### Panics
+    /// Panics if `self` is not a fixnum.
+    ///
+    pub(crate) fn as_fixnum(&self) -> i64 {
+        self.try_fixnum().unwrap()
     }
 
+    ///
+    /// Check if `self` is a flonum.
+    ///
     fn is_flonum(&self) -> bool {
         self.0.get() & 0b11 == 2
     }
 
-    fn as_flonum(&self) -> f64 {
-        let u = self.0.get();
-        if u == FLOAT_ZERO {
-            return 0.0;
+    ///
+    /// Check if `self` is a Float.
+    ///
+    pub(crate) fn is_float(&self) -> bool {
+        if self.is_flonum() {
+            true
+        } else if let Some(rv) = self.try_rvalue() {
+            rv.class() == FLOAT_CLASS
+        } else {
+            false
         }
-        let bit = 0b10 - ((u >> 63) & 0b1);
-        let num = ((u & !3) | bit).rotate_right(3);
-        f64::from_bits(num)
     }
 
     fn try_flonum(&self) -> Option<f64> {
+        fn as_flonum(v: &Value) -> f64 {
+            let u = v.0.get();
+            if u == FLOAT_ZERO {
+                return 0.0;
+            }
+            let bit = 0b10 - ((u >> 63) & 0b1);
+            let num = ((u & !3) | bit).rotate_right(3);
+            f64::from_bits(num)
+        }
         if self.is_flonum() {
-            Some(self.as_flonum())
+            Some(as_flonum(self))
         } else {
             None
         }
     }
 
     pub fn try_float(&self) -> Option<f64> {
-        match self.unpack() {
-            RV::Float(f) => Some(f),
+        if let Some(f) = self.try_flonum() {
+            return Some(f);
+        } else {
+            if let Some(rv) = self.try_rvalue() {
+                if rv.ty() == ObjKind::FLOAT {
+                    return Some(rv.as_float());
+                }
+            }
+        }
+        None
+    }
+
+    fn is_symbol(&self) -> bool {
+        self.id() & 0xff == TAG_SYMBOL
+    }
+    fn as_symbol(&self) -> IdentId {
+        self.try_symbol().unwrap()
+    }
+
+    pub fn try_symbol(&self) -> Option<IdentId> {
+        if self.is_symbol() {
+            Some(IdentId::from((self.id() >> 32) as u32))
+        } else {
+            None
+        }
+    }
+
+    ///
+    /// Get a reference of underlying array from `self`.
+    /// If `self` is not an array, return None.
+    ///
+    pub(crate) fn as_array(&self) -> &ArrayInner {
+        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
+        self.rvalue().as_array()
+    }
+
+    pub(crate) fn as_array_mut(&mut self) -> &mut ArrayInner {
+        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
+        self.rvalue_mut().as_array_mut()
+    }
+
+    pub(crate) fn is_array(&self) -> Option<Array> {
+        let rv = self.try_rvalue()?;
+        match rv.ty() {
+            ObjKind::ARRAY => Some((*self).into()),
             _ => None,
+        }
+    }
+
+    pub(crate) fn is_array_ty(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.ty() == ObjKind::ARRAY,
+            None => false,
         }
     }
 
@@ -513,77 +638,6 @@ impl Value {
                 *self,
                 INTEGER_CLASS,
             )),
-        }
-    }
-
-    fn is_symbol(&self) -> bool {
-        self.id() & 0xff == TAG_SYMBOL
-    }
-
-    fn as_symbol(&self) -> IdentId {
-        IdentId::from((self.id() >> 32) as u32)
-    }
-
-    pub fn try_symbol(&self) -> Option<IdentId> {
-        if self.is_symbol() {
-            Some(self.as_symbol())
-        } else {
-            None
-        }
-    }
-
-    /// Get reference of RValue from `self`.
-    ///
-    /// return None if `self` was a packed value.
-    pub(crate) fn try_rvalue(&self) -> Option<&RValue> {
-        if self.is_packed_value() {
-            None
-        } else {
-            Some(self.rvalue())
-        }
-    }
-
-    /// Get mutable reference of RValue from `self`.
-    ///
-    /// return None if `self` was a packed value.
-    pub(crate) fn try_rvalue_mut(&mut self) -> Option<&mut RValue> {
-        if self.is_packed_value() {
-            None
-        } else {
-            Some(self.rvalue_mut())
-        }
-    }
-
-    pub(crate) fn rvalue(&self) -> &RValue {
-        unsafe { &*(self.id() as *const RValue) }
-    }
-
-    pub(crate) fn rvalue_mut(&mut self) -> &mut RValue {
-        unsafe { &mut *(self.id() as *mut RValue) }
-    }
-
-    pub(crate) fn as_array(&self) -> &ArrayInner {
-        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
-        self.rvalue().as_array()
-    }
-
-    pub(crate) fn as_array_mut(&mut self) -> &mut ArrayInner {
-        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
-        self.rvalue_mut().as_array_mut()
-    }
-
-    pub(crate) fn is_array(&self) -> Option<Array> {
-        let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjKind::ARRAY => Some((*self).into()),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn is_array_ty(&self) -> bool {
-        match self.try_rvalue() {
-            Some(rv) => rv.ty() == ObjKind::ARRAY,
-            None => false,
         }
     }
 

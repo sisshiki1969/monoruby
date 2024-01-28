@@ -83,7 +83,7 @@ impl JitContext {
             }
             let mut slots = slots.0.unwrap();
             if i != 0 {
-                if let Some((bb_end, loop_exit)) = self.loop_exit.get(&bb_id) {
+                if let Some((bb_end, loop_exit)) = self.loop_info.get(&bb_id) {
                     // if reached another loop's beginning, use shortcut.
                     slots.concat(loop_exit);
                     nest_loop = Some(*bb_end);
@@ -106,7 +106,7 @@ impl JitContext {
                         } else if *dst < loop_start {
                             // backedge of an outer loop
                             // unreachable in "loop mode"
-                            let (end, exit) = self.loop_exit.get(dst).unwrap();
+                            let (end, exit) = self.loop_info.get(dst).unwrap();
                             let mut slots = slots.clone();
                             let next = *end + 1;
                             slots.concat(exit);

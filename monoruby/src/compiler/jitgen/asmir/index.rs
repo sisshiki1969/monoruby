@@ -87,20 +87,26 @@ impl Codegen {
     /// - rax: result Value
     ///
     pub(super) fn gen_array_index(&mut self) {
-        let out_range = self.jit.label();
+        let generic = self.jit.label();
         let checked = self.jit.label();
+        let negative = self.jit.label();
         monoasm! { &mut self.jit,
             sarq  rsi, 1;
             testq rsi, rsi;
-            jns  checked;
+            js  negative;
+        checked:
         }
+        self.array_index(generic);
+
+        self.jit.select_page(1);
+        self.jit.bind_label(negative);
         self.get_array_length();
         monoasm! { &mut self.jit,
             addq rsi, rax;
-            js   out_range;
-        checked:
+            jns  checked;
+            jmp  generic;
         }
-        self.array_index(out_range);
+        self.jit.select_page(0);
     }
 
     pub(super) fn generic_index_assign(
@@ -148,12 +154,25 @@ impl Codegen {
     ///
     pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: DestLabel) {
         let generic = self.jit.label();
+        let checked = self.jit.label();
+        let negative = self.jit.label();
         monoasm! { &mut self.jit,
             sarq  rsi, 1;
             testq rsi, rsi;
-            js   generic;
+            js   negative;
+        checked:
         };
         self.array_index_assign(using_xmm, generic, error);
+
+        self.jit.select_page(1);
+        self.jit.bind_label(negative);
+        self.get_array_length();
+        monoasm! { &mut self.jit,
+            addq rsi, rax;
+            jns  checked;
+            jmp  generic;
+        }
+        self.jit.select_page(0);
     }
 }
 

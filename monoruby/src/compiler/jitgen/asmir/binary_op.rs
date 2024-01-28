@@ -352,8 +352,8 @@ impl Codegen {
             sarq rcx, 1;
             js shr;
             lzcntq rax, rdi;
-            cmpq rcx, rax;
-            jgt deopt;
+            cmpq rax, rcx;
+            jle deopt;
             subq rdi, 1;
             salq rdi, rcx;
         after:
