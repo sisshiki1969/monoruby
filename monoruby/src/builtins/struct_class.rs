@@ -27,8 +27,20 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
     globals.define_builtin_func(class_id, "initialize", initialize);
     globals.define_builtin_func(class_id, "inspect", inspect);
     globals.define_builtin_func(class_id, "to_s", inspect);
-    globals.define_builtin_class_func(class_id, "[]", new);
-    globals.define_builtin_class_func(class_id, "new", new);
+    globals.define_builtin_class_inline_func(
+        class_id,
+        "[]",
+        new,
+        super::class::inline_class_new,
+        analysis::v_v_vv,
+    );
+    globals.define_builtin_class_inline_func(
+        class_id,
+        "new",
+        new,
+        super::class::inline_class_new,
+        analysis::v_v_vv,
+    );
 
     for arg in &arg_vec {
         let name = arg.expect_symbol_or_string(globals)?;

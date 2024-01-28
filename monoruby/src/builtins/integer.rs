@@ -156,12 +156,12 @@ fn integer_tof(
     callsite: &CallSiteInfo,
     pc: BcPc,
 ) {
-    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
+    let CallSiteInfo { recv, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
     if !recv.is_self() {
         ir.guard_class(GP::Rdi, INTEGER_CLASS, deopt);
     }
-    if let Some(ret) = ret {
+    if let Some(ret) = dst {
         let fret = ir.xmm_write_enc(bb, ret);
         ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
