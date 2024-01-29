@@ -4,7 +4,11 @@ impl JitContext {
     pub(in crate::compiler::jitgen) fn backedge_branches(&mut self, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
-            let (target_label, mut target_ctx, unused) = self.backedge_map.remove(&bb_pos).unwrap();
+            let BackedgeInfo {
+                target_label,
+                mut target_ctx,
+                unused,
+            } = self.backedge_map.remove(&bb_pos).unwrap();
             let pc = func.get_pc(bb_pos);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
