@@ -154,24 +154,6 @@ impl SlotState {
         self.set_slot(slot, LinkMode::Both(xmm), guarded)
     }
 
-    fn set_stack_from_literal(&mut self, slot: SlotId, v: Value) {
-        self.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v))
-    }
-
-    fn set_literal(&mut self, slot: SlotId, v: Value) {
-        let guarded = Guarded::from_literal(v);
-        self.set_slot(slot, LinkMode::Literal(v), guarded);
-    }
-
-    fn set_alias(&mut self, slot: SlotId, origin: SlotId) {
-        let guarded = self.guarded(origin);
-        self.set_slot(slot, LinkMode::Alias(origin), guarded);
-    }
-
-    fn set_acc(&mut self, slot: SlotId, guarded: Guarded) {
-        self.set_slot(slot, LinkMode::R15, guarded);
-    }
-
     pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::Literal(v) = self.slots[slot] {
             let i = v.try_fixnum()?;
@@ -507,7 +489,8 @@ impl AsmIr {
         if bb.slots[origin] != LinkMode::Stack {
             unreachable!("origin:{:?} reg:{:?} {:?}", origin, slot, bb);
         };
-        bb.set_alias(slot, origin);
+        let guarded = bb.guarded(origin);
+        bb.set_slot(slot, LinkMode::Alias(origin), guarded);
         bb.alias_mut(origin).push(slot);
     }
 
@@ -583,7 +566,8 @@ impl AsmIr {
         v: Value,
     ) {
         self.unlink(bb, slot);
-        bb.set_literal(slot, v);
+        let guarded = Guarded::from_literal(v);
+        bb.set_slot(slot, LinkMode::Literal(v), guarded);
     }
 
     ///
@@ -601,7 +585,7 @@ impl AsmIr {
         if let Some(slot) = slot.into() {
             assert!(bb.r15.is_none());
             self.unlink(bb, slot);
-            bb.set_acc(slot, guarded);
+            bb.set_slot(slot, LinkMode::R15, guarded);
             bb.r15 = Some(slot);
         }
     }
@@ -616,7 +600,7 @@ impl AsmIr {
     /// - rax
     ///
     fn lit2stack(&mut self, bb: &mut BBContext, v: Value, slot: SlotId) {
-        bb.set_stack_from_literal(slot, v);
+        bb.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v));
         self.inst.push(AsmInst::LitToStack(v, slot));
     }
 

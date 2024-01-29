@@ -940,11 +940,7 @@ impl BBContext {
         }
     }
 
-    /*fn reg_num(&self) -> usize {
-        self.slot_state.len()
-    }*/
-
-    fn merge_entries(entries: &[BranchEntry]) -> MergeContext {
+    fn union(entries: &[BranchEntry]) -> MergeContext {
         let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bb);
         for BranchEntry {
             src_idx: _src_idx,
@@ -958,7 +954,7 @@ impl BBContext {
             merge_ctx.union(bb);
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("  merged_entries: {:?}", &merge_ctx);
+        eprintln!("  union_entries: {:?}", &merge_ctx);
         merge_ctx
     }
 

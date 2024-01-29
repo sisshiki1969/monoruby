@@ -48,16 +48,21 @@ impl JitContext {
     ///
     ///
     /// ```text
-    ///                     +------------+
-    ///      entries        |     bb     |
-    ///                     +------------+
-    ///     \   |   /              |
-    ///      \  |  / +-------------+
-    ///       v v v v
-    ///  +------------+
-    ///  |   target   |
-    ///  +------------+
-    ///         |
+    ///                    
+    ///      entries       
+    ///                    
+    ///     \   |   /              
+    ///      \  |  /               
+    ///       v v v                
+    ///       union                
+    ///  +------------+      +------------+
+    ///  |   target   |      |   new bb   |
+    ///  +------------+      +-----+------+
+    ///          \                 |
+    ///           \--------------  |
+    ///                          \ |
+    ///                           v+
+    ///                            |
     /// ```
     ///
     fn incoming_context_loop(&mut self, func: &ISeqInfo, bb_pos: BcIndex) -> Option<BBContext> {
@@ -74,29 +79,25 @@ impl JitContext {
             eprintln!("  not used: {:?}", unused);
         }
 
-        let target = BBContext::merge_entries(&entries);
+        let target = BBContext::union(&entries);
 
         let mut bb = BBContext::new(&self);
-        let mut const_vec = vec![];
-        for (reg, coerced) in use_set {
-            match target.slot(reg) {
+        for (slot, coerced) in use_set {
+            match target.slot(slot) {
                 LinkMode::Stack => {}
                 LinkMode::Literal(v) => {
                     if v.is_float() {
-                        const_vec.push(reg);
+                        self.ir.store_new_xmm(&mut bb, slot);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    self.ir.store_xmm(&mut bb, reg, r);
+                    self.ir.store_xmm(&mut bb, slot, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    self.ir.store_both(&mut bb, reg, r, Guarded::Value);
+                    self.ir.store_both(&mut bb, slot, r, Guarded::Value);
                 }
                 LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
             };
-        }
-        for r in const_vec {
-            self.ir.store_new_xmm(&mut bb, r);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bb.sp, bb.slot_state);
@@ -126,7 +127,7 @@ impl JitContext {
             return Some(entry.bb);
         }
 
-        let target_ctx = BBContext::merge_entries(&entries);
+        let target_ctx = BBContext::union(&entries);
         let cur_label = self.inst_labels[&bb_pos];
 
         self.write_back_branches(&target_ctx, entries, cur_label, pc, bb_pos, &[]);
@@ -197,8 +198,6 @@ impl AsmIr {
             };
         }
 
-        //let mut conv_list = vec![];
-        //let mut guard_list = vec![];
         for i in 0..len {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
@@ -226,7 +225,6 @@ impl AsmIr {
                     } else {
                         self.xmm_swap(&mut bb, l, r);
                     }
-                    //guard_list.push(slot);
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
@@ -268,17 +266,5 @@ impl AsmIr {
                 (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
             }
         }
-
-        //let deopt = self.new_deopt(&bb, pc + 1);
-
-        /*for (r, x) in conv_list {
-            self.stack2reg(r, GP::Rax);
-            self.inst.push(AsmInst::NumToXmm(GP::Rax, x, deopt));
-        }*/
-
-        /*for r in guard_list {
-            self.stack2reg(r, GP::Rax);
-            self.guard_float(GP::Rax, deopt);
-        }*/
     }
 }

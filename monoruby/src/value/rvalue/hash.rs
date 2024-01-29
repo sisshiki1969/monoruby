@@ -51,8 +51,8 @@ impl PartialEq for HashInner {
 impl HashInner {
     pub fn remove(&mut self, k: Value) -> Option<Value> {
         match self {
-            HashInner::Map(map) => map.remove(&HashKey(k)),
-            HashInner::IdentMap(map) => map.remove(&IdentKey(k)),
+            HashInner::Map(map) => map.shift_remove(&HashKey(k)),
+            HashInner::IdentMap(map) => map.shift_remove(&IdentKey(k)),
         }
     }
 }
