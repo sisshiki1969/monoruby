@@ -109,6 +109,7 @@ struct JitContext {
     ///
     /// Class version at compile time.
     ///
+    #[allow(dead_code)]
     class_version: u32,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
