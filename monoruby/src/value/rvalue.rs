@@ -755,7 +755,7 @@ impl RValue {
         unsafe { &mut self.kind.class }
     }
 
-    fn as_float(&self) -> f64 {
+    pub(super) fn as_float(&self) -> f64 {
         unsafe { self.kind.float }
     }
 
