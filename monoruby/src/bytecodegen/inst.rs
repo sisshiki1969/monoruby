@@ -168,8 +168,8 @@ pub(super) enum BcIr {
     EnsureEnd,
     MethodCall(Box<CallSite>),
     MethodCallBlock(Box<CallSite>),
-    InlineCache,
     Yield(Box<CallSite>),
+    InlineCache(Box<CallSite>),
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
     MethodDef {
