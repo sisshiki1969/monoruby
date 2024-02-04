@@ -533,8 +533,10 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<Value> {
-        let ord = self.compare_values(globals, lhs, rhs)?;
-        Ok(Value::from_ord(ord))
+        let res = self
+            .compare_values_inner(globals, lhs, rhs)?
+            .map_or(Value::nil(), |ord| Value::from_ord(ord));
+        Ok(res)
     }
 
     pub(crate) fn compare_values(
@@ -543,6 +545,20 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<std::cmp::Ordering> {
+        self.compare_values_inner(globals, lhs, rhs)?
+            .ok_or_else(|| {
+                let lhs = lhs.get_real_class_name(globals);
+                let rhs = globals.to_s(rhs);
+                MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
+            })
+    }
+
+    pub(crate) fn compare_values_inner(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Option<std::cmp::Ordering>> {
         use std::cmp::Ordering;
         let res = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => Some(Ordering::Equal),
@@ -575,12 +591,7 @@ impl Executor {
                     None
                 }
             }
-        }
-        .ok_or_else(|| {
-            let lhs = lhs.get_real_class_name(globals);
-            let rhs = globals.to_s(rhs);
-            MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
-        })?;
+        };
         Ok(res)
     }
 }

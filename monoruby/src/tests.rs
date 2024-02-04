@@ -61,8 +61,12 @@ pub fn run_test_once(code: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
-pub fn run_tests(code: &[String]) {
-    let code = format!("[{}]", code.join(", "));
+pub fn run_tests(codes: &[String]) {
+    let mut code = "__a = [];".to_string();
+    for c in codes {
+        code += &format!("__a << ({c});");
+    }
+    code += "__a";
     let wrapped = format!(
         r##"
       __res = ({0})
@@ -88,6 +92,7 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
             for op in op {
                 test.extend_from_slice(&[
                     format!("{lhs} {op} {rhs}"),
+                    format!("{lhs}.{op}({rhs})"),
                     format!("{lhs} {op} (-{rhs})"),
                     format!("-{lhs} {op} {rhs}"),
                     format!("-{lhs} {op} (-{rhs})"),
@@ -104,6 +109,7 @@ pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
         for rhs in rhs {
             for op in op {
                 test.extend_from_slice(&[format!("{lhs} {op} {rhs}")]);
+                test.extend_from_slice(&[format!("{lhs}.{op}({rhs})")]);
             }
         }
     }
@@ -405,7 +411,7 @@ mod test {
     }
 
     #[test]
-    fn binop_numeric() {
+    fn binop_integer() {
         let lhs_integer = [
             "0",
             "5375",
@@ -439,26 +445,46 @@ mod test {
     }
 
     #[test]
-    fn cmp_numeric() {
+    fn binop_numeric() {
         let lhs = [
             "0",
-            "5375",
+            "0.0",
+            "1.2e-13",
             "690426",
+            "690426.0",
             "24829482958347598570210950349530597028472983429873",
-            "234.2345",
-            "234234645.0",
+            "1.5e21",
         ];
         let rhs = [
+            "1.2e-10",
+            "25084",
+            "234234645",
+            "2352354645657876868978696835652452546462456245646",
+            "1.9e24",
+        ];
+        run_binop_tests(&lhs, &["+", "-", "*", "/"], &rhs);
+    }
+
+    #[test]
+    fn cmp_numeric() {
+        let rhs = [
+            "0",
+            "0.0",
             "17",
             "5375",
             "25084",
             "234234645",
+            "24829482958347598570210950349530597028472983429873",
             "2352354645657876868978696835652452546462456245646",
             "234.2345",
             "690426.0",
+            "234234645.0",
+            "0.34e-17",
+            "0.34e-18",
+            "Float::NAN",
         ];
         run_binop_tests(
-            &lhs,
+            &rhs,
             &["==", "!=", "<", "<=", ">", ">=", "===", "<=>"],
             &rhs,
         );

@@ -572,7 +572,8 @@ impl Value {
     fn is_symbol(&self) -> bool {
         self.id() & 0xff == TAG_SYMBOL
     }
-    fn as_symbol(&self) -> IdentId {
+
+    pub fn as_symbol(&self) -> IdentId {
         self.try_symbol().unwrap()
     }
 
