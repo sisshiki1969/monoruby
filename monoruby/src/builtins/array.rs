@@ -733,9 +733,7 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
     }
     let mut min = ary[0];
     for v in &ary[1..] {
-        if vm.cmp_cmp_values_inner(globals, min, *v)?
-            == Value::from_ord(std::cmp::Ordering::Greater)
-        {
+        if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
             min = *v;
         }
     }
@@ -761,7 +759,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
     }
     let mut max = ary[0];
     for v in &ary[1..] {
-        if vm.cmp_cmp_values_inner(globals, max, *v)? == Value::from_ord(std::cmp::Ordering::Less) {
+        if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
             max = *v;
         }
     }

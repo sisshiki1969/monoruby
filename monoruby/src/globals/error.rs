@@ -399,6 +399,34 @@ impl MonorubyErr {
         ))
     }
 
+    ///
+    /// Set TypeError with message "{op}: *class of val* can't be coerced into Integer".
+    ///
+    pub(crate) fn cant_coerced_into_integer(
+        globals: &Globals,
+        op: IdentId,
+        val: Value,
+    ) -> MonorubyErr {
+        MonorubyErr::typeerr(format!(
+            "{op}: {} can't be coerced into Integer",
+            val.get_real_class_name(globals)
+        ))
+    }
+
+    ///
+    /// Set TypeError with message "{op}: *class of val* can't be coerced into Float".
+    ///
+    pub(crate) fn cant_coerced_into_float(
+        globals: &Globals,
+        op: IdentId,
+        val: Value,
+    ) -> MonorubyErr {
+        MonorubyErr::typeerr(format!(
+            "{op}: {} can't be coerced into Float",
+            val.get_real_class_name(globals)
+        ))
+    }
+
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Arguments, msg)
     }

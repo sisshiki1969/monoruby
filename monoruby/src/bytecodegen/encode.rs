@@ -382,13 +382,7 @@ impl BytecodeGen {
                 let opcode = if has_splat { 32 } else { 33 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BcIr::InlineCache => {
-                Bc::from_with_class_and_version(
-                    enc_wl(130, 0 /* dummy */, 0 /* FuncId */),
-                    None,
-                    -1i32 as u32,
-                )
-            }
+            BcIr::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
             BcIr::Yield(box callsite) => self.encode_call(store, 34, callsite, loc)?,
             BcIr::Array(ret, box callsite) => {
                 // 35
@@ -570,24 +564,31 @@ impl BytecodeGen {
         callsite: CallSite,
         loc: Loc,
     ) -> Result<Bc> {
-        let CallSite {
-            dst,
-            args,
-            pos_num,
-            recv,
-            ..
-        } = callsite;
+        let CallSite { dst, .. } = callsite;
         let ret = match dst {
             None => 0,
             Some(ret) => self.slot_id(&ret).0,
         };
         let callid = self.new_callsite(store, callsite, loc)?;
-        Ok(Bc::from_with_num(
-            enc_wl(opcode, ret, callid.get()),
-            pos_num as u16,
-            self.slot_id(&args).0,
-            self.slot_id(&recv).0,
-            0,
+        Ok(Bc::from(enc_wl(opcode, ret, callid.get())))
+    }
+
+    fn encode_cache(&self, opcode: u16, callsite: CallSite) -> Result<Bc> {
+        let CallSite {
+            args,
+            pos_num,
+            recv,
+            ..
+        } = callsite;
+        Ok(Bc::from_with_class_and_version(
+            enc_www(
+                opcode,
+                self.slot_id(&recv).0,
+                self.slot_id(&args).0,
+                pos_num as _,
+            ),
+            None,
+            -1i32 as u32,
         ))
     }
 

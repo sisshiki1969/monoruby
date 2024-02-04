@@ -68,5 +68,28 @@ mod test {
         end
         "##,
         );
+        run_test_with_prelude(
+            r##"
+        $res = []
+        class C
+        	def f
+        		100
+        	end
+        end
+        c = C.new
+        m = c.method(:f)
+        $res <<  m.call
+        class C
+        	def f
+        		42
+        	end
+        end
+        $res << m.call
+        $res << c.method(:f).call
+        $res
+            "##,
+            r##"
+        "##,
+        );
     }
 }

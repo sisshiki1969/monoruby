@@ -92,11 +92,11 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 #### optcarrot benchmark
 
-![optcarrot_benchmark](optcarrot_benchmark.png)
+![optcarrot_benchmark](./doc/optcarrot_benchmark.png)
 
 #### optcarrot fps history (0-3000 frames)
 
-![optcarrot_fps_history](optcarrot_fps_history.png)
+![optcarrot_fps_history](./doc/optcarrot_fps_history.png)
 
 #### machine spec
 
@@ -119,14 +119,18 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 |               |  3.3.0 | 3.3.0 --yjit | truffleruby-23.1.1 | monoruby | monoruby --no-jit |
 | :------------ | -----: | -----------: | -----------------: | -------: | ----------------: |
-| app_fib       |  6.002 |       43.535 |             32.699 |   40.039 |             5.838 |
-| so_mandelbrot |  1.009 |        2.140 |              3.397 |   31.814 |             1.258 |
-| so_nbody      |  1.896 |        3.959 |             13.364 |   13.585 |             1.408 |
-| app_aobench   |  0.051 |        0.093 |              0.627 |    0.260 |             0.048 |
-| quick_sort\*  | 1.773k |       7.005k |            31.249k |  13.332k |            3.024k |
-| tarai\*       |  4.918 |       37.935 |             16.687 |   30.698 |             4.554 |
-| binarytrees\* |  5.668 |       10.884 |              6.996 |    8.217 |             4.140 |
+| app_fib       |  5.793 |       41.915 |             27.680 |   40.864 |             5.786 |
+| so_mandelbrot |  0.956 |        2.037 |              2.296 |   30.801 |             1.179 |
+| so_nbody      |  1.814 |        3.808 |             10.283 |   15.704 |             1.309 |
+| app_aobench   |  0.051 |        0.090 |              0.426 |    0.285 |             0.047 |
+| nqueen        |  0.016 |        0.016 |              0.193 |    0.151 |             0.020 |
+| sudoku        |  0.018 |        0.071 |              0.236 |    0.121 |             0.022 |
+| matmul        |  0.009 |        0.023 |              0.331 |    0.064 |             0.008 |
+| bedcov        |  0.032 |        0.034 |              0.269 |    0.046 |             0.029 |
+| tarai\*       |  4.646 |       35.527 |             14.583 |   29.046 |             4.594 |
+| quick_sort\*  | 1.716k |       6.874k |            28.201k |  15.020k |            2.745k |
+| binarytrees\* |  5.385 |       10.613 |              4.835 |    7.740 |             4.056 |
 
 ratio to Ruby 3.3.0 were shown in the graph below.
 
-![micro_bench](benchmark.png)
+![micro_bench](./doc/benchmark.png)

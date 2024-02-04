@@ -1,21 +1,22 @@
 use super::*;
 
 // ~~~text
-/// MethodCall
-///  0   2   4   6    8  10  12  14
-/// +---+---+---+---++---+---+---+---+
-/// |callid |ret| op||pos|arg|rcv| - |
-/// +---+---+---+---++---+---+---+---+
-/// 16  18  20  22   24  26  28  30
-/// +---+---+---+---++---+---+---+---+
-/// |  fid  |   | op|| class |version|
-/// +---+---+---+---++---+---+---+---+
+// MethodCall
+//  0   2   4   6    8  10  12  14
+// +---+---+---+---++---+---+---+---+
+// |callid |ret| op||  fid  |   -   |
+// +---+---+---+---++---+---+---+---+
+// InlineCache
+// 16  18  20  22   24  26  28  30
+// +---+---+---+---++---+---+---+---+
+// |pos|arg|rcv| op|| class |version|
+// +---+---+---+---++---+---+---+---+
 // ~~~
 
 const CALLSITE_ID: usize = 0;
 const CACHED_CLASS: usize = 24;
 const CACHED_VERSION: usize = 28;
-const CACHED_FUNCID: usize = 16;
+const CACHED_FUNCID: usize = 8;
 
 impl Codegen {
     ///

@@ -661,12 +661,12 @@ impl Globals {
     }
 }
 
-#[cfg(any(feature = "log-jit", feature = "profile"))]
+#[cfg(any(feature = "jit-log", feature = "profile"))]
 pub(crate) extern "C" fn log_deoptimize(
     vm: &mut Executor,
     globals: &mut Globals,
     pc: BcPc,
-    #[cfg(feature = "log-jit")] v: Option<Value>,
+    #[cfg(feature = "jit-log")] v: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
@@ -675,7 +675,7 @@ pub(crate) extern "C" fn log_deoptimize(
 
     if let TraceIr::LoopEnd = pc.trace_ir() {
         // normal exit from jit'ed loop
-        #[cfg(feature = "log-jit")]
+        #[cfg(feature = "jit-log")]
         {
             let name = globals.store.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
@@ -692,7 +692,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 }
             }
         }
-        #[cfg(feature = "log-jit")]
+        #[cfg(feature = "jit-log")]
         {
             let trace_ir = pc.trace_ir();
             let name = globals.store.func_description(func_id);

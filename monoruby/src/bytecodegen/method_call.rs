@@ -3,15 +3,16 @@ use super::*;
 impl BytecodeGen {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
         if callsite.block_fid.is_some() {
-            self.emit(BcIr::MethodCallBlock(Box::new(callsite)), loc)
+            self.emit(BcIr::MethodCallBlock(Box::new(callsite.clone())), loc)
         } else {
-            self.emit(BcIr::MethodCall(Box::new(callsite)), loc);
+            self.emit(BcIr::MethodCall(Box::new(callsite.clone())), loc);
         };
-        self.emit(BcIr::InlineCache, loc);
+        self.emit(BcIr::InlineCache(Box::new(callsite)), loc);
     }
 
     pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
-        self.emit(BcIr::Yield(Box::new(callsite)), loc);
+        self.emit(BcIr::Yield(Box::new(callsite.clone())), loc);
+        self.emit(BcIr::InlineCache(Box::new(callsite)), loc);
     }
 
     pub(super) fn emit_binary_op(

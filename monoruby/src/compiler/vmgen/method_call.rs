@@ -3,12 +3,12 @@ use super::*;
 const CALLSITE_ID: i64 = 0 - 16;
 const CACHED_CLASS: i64 = 24 - 16;
 const CACHED_VERSION: i64 = 28 - 16;
-const CACHED_FUNCID: i64 = 16 - 16;
+const CACHED_FUNCID: i64 = 8 - 16;
 const RET_REG: i64 = 4 - 16;
 const OPCODE_SUB: i64 = 7 - 16;
-const POS_NUM: i64 = 8 - 16;
-const ARG_REG: i64 = 10 - 16;
-const RECV_REG: i64 = 12 - 16;
+const POS_NUM: i64 = 16 - 16;
+const ARG_REG: i64 = 18 - 16;
+const RECV_REG: i64 = 20 - 16;
 
 impl Codegen {
     ///
@@ -16,14 +16,14 @@ impl Codegen {
     ///
     /// ~~~text
     /// MethodCall
-    ///  0   2   4   6    8  10  12  14
+    /// 0   2   4   6    8   10  12  14
     /// +---+---+---+---++---+---+---+---+
-    /// |callid |ret| op||pos|arg|rcv| - |
+    /// |callid |ret| op||  fid  |   -   |
     /// +---+---+---+---++---+---+---+---+
     /// InlineCache
     /// 16  18  20  22   24  26  28  30
     /// +---+---+---+---++---+---+---+---+
-    /// |  fid  |   | op|| class |version|
+    /// |pos|arg|rcv| op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -69,17 +69,8 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-
         self.set_arguments(has_splat);
         self.call();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
-            addq r13, 16;
-        };
-        self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
 
         self.slow_path(exec, slow_path1, slow_path2);
@@ -91,9 +82,14 @@ impl Codegen {
     ///
     /// ~~~text
     /// Yield
-    ///  0   2   4   6    8  10  12  14
+    /// 0   2   4   6    8   10  12  14
     /// +---+---+---+---++---+---+---+---+
-    /// |callid |ret| op||pos|arg| - | - |
+    /// |callid |ret| op||  fid  |   -   |
+    /// +---+---+---+---++---+---+---+---+
+    /// InlineCache
+    /// 16  18  20  22   24  26  28  30
+    /// +---+---+---+---++---+---+---+---+
+    /// |pos|arg|rcv| op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     pub(super) fn vm_yield(&mut self) -> CodePtr {
@@ -108,16 +104,8 @@ impl Codegen {
             subq rsp, 8;
         };
         self.set_block_self_outer();
-
         self.set_arguments(true);
         self.call();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            popq r13;   // pop pc
-            movzxw r15, [r13 + (RET_REG)]; // r15 <- %ret
-        };
-        self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -158,6 +146,14 @@ impl Codegen {
             call [r15 + (FUNCDATA_CODEPTR)];
         }
         self.pop_frame();
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            popq r13;   // pop pc
+            movzxw r15, [r13 + (RET_REG)];  // r15 <- :1
+            addq r13, 16;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15_if_nonzero();
     }
 
     ///

@@ -1166,7 +1166,7 @@ impl Bc {
     }
 
     fn fid(&self) -> Option<FuncId> {
-        let op = self.op1 as u32;
+        let op = self.op2.0 as u32;
         if op == 0 {
             None
         } else {
@@ -1334,7 +1334,7 @@ impl BcPc {
     }
 
     pub(crate) fn cached_fid(self) -> Option<FuncId> {
-        (*(self + 1)).fid()
+        (*self).fid()
     }
 
     pub(crate) fn cached_class1(self) -> Option<ClassId> {

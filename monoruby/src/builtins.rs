@@ -22,6 +22,7 @@ mod range;
 mod regexp;
 mod string;
 mod struct_class;
+mod symbol;
 mod time;
 
 pub(self) use crate::compiler::jitgen::BBContext;
@@ -52,7 +53,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("NilClass", NIL_CLASS);
     globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS);
     globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS);
-    globals.define_builtin_class_under_obj("Symbol", SYMBOL_CLASS);
     proc::init(globals);
     method::init(globals);
     fiber::init(globals);
@@ -64,6 +64,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     math::init(globals);
     process::init(globals);
     random::init(globals);
+    symbol::init(globals);
 }
 
 #[derive(Debug, Clone, Copy)]

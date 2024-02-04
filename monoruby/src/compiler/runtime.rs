@@ -356,7 +356,7 @@ pub(super) extern "C" fn get_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
-    match base_classid {
+    /*match base_classid {
         ARRAY_CLASS => {
             return match base.as_array().get_elem1(globals, index) {
                 Ok(val) => Some(val),
@@ -383,7 +383,7 @@ pub(super) extern "C" fn get_index(
             return vm.invoke_func(globals, func_id, receiver, &[index], None);
         }
         _ => {}
-    }
+    }*/
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
 }
 

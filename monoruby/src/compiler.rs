@@ -1071,7 +1071,7 @@ impl Globals {
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) {
-        #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "jit-debug"))]
+        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
