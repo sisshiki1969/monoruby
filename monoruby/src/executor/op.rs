@@ -28,18 +28,22 @@ macro_rules! binop_values {
                         Some(res) => Value::integer(res),
                         None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
                     }
-                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
-
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
-
                     (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
+                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
+                    (RV::Fixnum(_) | RV::BigInt(_), _) => {
+                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        vm.set_error(err);
+                        return None;
+                    }
+
+                    (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
+                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
-                    (RV::Fixnum(_), _) | (RV::BigInt(_), _) | (RV::Float(_), _) => {
-                        let err = MonorubyErr::no_implicit_conversion(&globals, rhs, INTEGER_CLASS);
+                    (RV::Float(_), _) => {
+                        let err = MonorubyErr::cant_coerced_into_float(&globals, $op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -113,6 +117,12 @@ pub(crate) extern "C" fn pow_values(
             }
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_POW, rhs);
+            vm.set_error(err);
+            return None;
+        }
+
         (RV::Float(lhs), RV::Fixnum(rhs)) => {
             //if let Ok(rhs) = i32::try_from(rhs) {
             pow_ff(lhs, rhs as f64)
@@ -122,6 +132,11 @@ pub(crate) extern "C" fn pow_values(
         }
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
+        (RV::Float(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_float(&globals, IdentId::_POW, rhs);
+            vm.set_error(err);
+            return None;
+        }
         _ => {
             return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs], None);
         }
@@ -173,9 +188,20 @@ pub(crate) extern "C" fn div_values(
             Value::bigint(lhs.div_floor(rhs))
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_DIV, rhs);
+            vm.set_error(err);
+            return None;
+        }
+
         (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.div(&(rhs as f64))),
         (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
+        (RV::Float(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_float(&globals, IdentId::_DIV, rhs);
+            vm.set_error(err);
+            return None;
+        }
         _ => {
             return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs], None);
         }
@@ -197,6 +223,11 @@ macro_rules! int_binop_values {
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
+                    (RV::Fixnum(_) | RV::BigInt(_), _) => {
+                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        vm.set_error(err);
+                        return None;
+                    }
                     _ => {
                         return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
                     }
@@ -238,6 +269,11 @@ pub(crate) extern "C" fn shr_values(
                 bigint_shl(lhs, -rhs as u64 as u32)
             }
         }
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_SHR, rhs);
+            vm.set_error(err);
+            return None;
+        }
         _ => {
             return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs], None);
         }
@@ -265,6 +301,11 @@ pub(crate) extern "C" fn shl_values(
             } else {
                 bigint_shr(lhs, -rhs as u64 as u32)
             }
+        }
+        (RV::Fixnum(_) | RV::BigInt(_), _) => {
+            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_SHL, rhs);
+            vm.set_error(err);
+            return None;
         }
         _ => {
             return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs], None);
@@ -312,9 +353,20 @@ macro_rules! cmp_values {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.$op(&BigInt::from(rhs)),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                     (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
+                    (RV::Fixnum(_)| RV::BigInt(_) , _) => {
+                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        vm.set_error(err);
+                        return None;
+                    }
+
                     (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.$op(&(rhs as f64)),
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
+                    (RV::Float(_) , _) => {
+                        let err = MonorubyErr::cant_coerced_into_float(&globals, $op_str, rhs);
+                        vm.set_error(err);
+                        return None;
+                    }
                     _ => {
                         return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
                     }
@@ -467,12 +519,15 @@ pub(crate) extern "C" fn cmp_teq_values(
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::Fixnum(_), _) => false,
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::BigInt(_), _) => false,
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        (RV::Float(_), _) => false,
         _ => {
             return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs], None);
         }
@@ -496,12 +551,15 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::Fixnum(_), _) => false,
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::BigInt(_), _) => false,
         (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        (RV::Float(_), _) => false,
         _ => {
             return vm
                 .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None)
@@ -570,12 +628,15 @@ impl Executor {
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Some(lhs.cmp(&rhs)),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => Some(BigInt::from(lhs).cmp(rhs)),
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(&rhs)),
             (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
+            (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
             (RV::Float(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&(rhs.to_f64().unwrap())),
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
+            (RV::Float(_), _) => None,
             _ => {
                 if let Some(i) = self
                     .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None)?
@@ -606,8 +667,8 @@ pub(crate) extern "C" fn neg_value(
             Some(lhs) => Value::integer(lhs),
             None => Value::bigint(-BigInt::from(lhs)),
         },
-        RV::Float(lhs) => Value::float(-lhs),
         RV::BigInt(lhs) => Value::bigint(-lhs),
+        RV::Float(lhs) => Value::float(-lhs),
         _ => {
             return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[], None);
         }
@@ -622,8 +683,8 @@ pub(crate) extern "C" fn pos_value(
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(lhs),
-        RV::Float(lhs) => Value::float(lhs),
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
+        RV::Float(lhs) => Value::float(lhs),
         _ => {
             return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[], None);
         }

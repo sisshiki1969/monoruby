@@ -442,6 +442,14 @@ mod test {
             &["+", "-", "*", "/", "&", "|", "^"],
             &rhs_integer,
         );
+        run_test_error("3 + :aaa");
+        run_test_error("3 - :aaa");
+        run_test_error("3 * :aaa");
+        run_test_error("3 / :aaa");
+        run_test_error("3 % :aaa");
+        run_test_error("3 & :aaa");
+        run_test_error("3 | :aaa");
+        run_test_error("3 ^ :aaa");
     }
 
     #[test]
@@ -463,11 +471,19 @@ mod test {
             "1.9e24",
         ];
         run_binop_tests(&lhs, &["+", "-", "*", "/"], &rhs);
+        run_test_error("3.1 + :aaa");
+        run_test_error("3.1 - :aaa");
+        run_test_error("3.1 * :aaa");
+        run_test_error("3.1 / :aaa");
+        run_test_error("3.1 % :aaa");
+        run_test_error("3.1 & :aaa");
+        run_test_error("3.1 | :aaa");
+        run_test_error("3.1 ^ :aaa");
     }
 
     #[test]
     fn cmp_numeric() {
-        let rhs = [
+        let lhs = [
             "0",
             "0.0",
             "17",
@@ -483,11 +499,17 @@ mod test {
             "0.34e-18",
             "Float::NAN",
         ];
+        let rhs = [":aaa", "nil", "false"];
         run_binop_tests(
-            &rhs,
+            &lhs,
             &["==", "!=", "<", "<=", ">", ">=", "===", "<=>"],
-            &rhs,
+            &lhs,
         );
+        run_binop_tests2(&lhs, &["==", "!=", "===", "<=>"], &rhs);
+        run_test_error("3 < :aaa");
+        run_test_error("3 <= :aaa");
+        run_test_error("3 > :aaa");
+        run_test_error("3 >= :aaa");
     }
 
     #[test]
