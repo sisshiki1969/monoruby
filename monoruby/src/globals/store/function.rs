@@ -168,6 +168,10 @@ impl Meta {
         (self.kind & 0b1000) != 0
     }
 
+    pub fn is_block_style(&self) -> bool {
+        (self.kind & 0b100) != 0
+    }
+
     pub fn is_native(&self) -> bool {
         (self.kind & 0b10) != 0
     }

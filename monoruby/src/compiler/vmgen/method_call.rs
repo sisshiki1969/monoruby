@@ -69,8 +69,7 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-        self.set_arguments(has_splat);
-        self.call();
+        self.call(has_splat);
         self.fetch_and_dispatch();
 
         self.slow_path(exec, slow_path1, slow_path2);
@@ -104,8 +103,7 @@ impl Codegen {
             subq rsp, 8;
         };
         self.set_block_self_outer();
-        self.set_arguments(true);
-        self.call();
+        self.call(true);
         self.fetch_and_dispatch();
         label
     }
@@ -118,21 +116,32 @@ impl Codegen {
     /// - r13: pc
     /// - r15: &FuncData
     ///
-    fn call(&mut self) {
+    fn call(&mut self, _: bool) {
         monoasm! { &mut self.jit,
+            // rsi <- callee LFP
+            lea  rsi, [rsp - 16];
+            // rdx <- len
+            movsxw rdx, [r13 + (POS_NUM)]; // rdi <- pos_num
+            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movq rsi, [r15 + (FUNCDATA_PC)];
+            movzxw r9, [r13 + (ARG_REG)]; // rcx <- %args
         }
-        self.block_arg_expand();
+        self.vm_get_slot_addr(GP::R9); // rdi <- *args
         monoasm! { &mut self.jit,
-            movl rdx, [r13 + (CALLSITE_ID)];    // CallSiteId
-        }
-        self.handle_arguments();
+            // TODO: this possibly cause problem.
+            subq rsp, 4096;
+            movq rcx, r12;
+            movq rdi, rbx;
+            movq rax, (vm_expand_splat);
+            call rax;
+            addq rsp, 4096;
+        };
         self.vm_handle_error();
         monoasm! { &mut self.jit,
-            movq rdx, rdi;
+            sarq rax, 1;
+            movq rdx, rax;
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
             // push cfp
@@ -209,64 +218,98 @@ impl Codegen {
             jmp exec;
         );
     }
+}
 
-    /// Set arguments
-    ///
-    /// ### in
-    ///
-    /// - r13: pc
-    ///
-    /// ### out
-    ///
-    /// - rdi: arg len
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    fn set_arguments(&mut self, has_splat: bool) {
-        monoasm! { &mut self.jit,
-            movsxw rdi, [r13 + (POS_NUM)]; // rdi <- pos_num
-            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- %args
-            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
+extern "C" fn vm_expand_splat(
+    vm: &mut Executor,
+    callee_lfp: LFP,
+    len: usize,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    src: *const Value,
+) -> Option<Value> {
+    let mut dst_len = 0;
+    unsafe {
+        let mut dst = callee_lfp.register_ptr(1) as _;
+        let splat_pos = &globals.store[callid].splat_pos;
+        for i in 0..len {
+            let v = *src.sub(i);
+            if splat_pos.contains(&i) {
+                let ofs = expand_splat_inner(v, dst);
+                dst_len += ofs;
+                dst = dst.sub(ofs);
+            } else {
+                *dst = v;
+                dst = dst.sub(1);
+                dst_len += 1;
+            }
         }
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
-        self.vm_get_slot_addr(GP::Rcx); // rcx <- *args
-        monoasm! { &mut self.jit,
-            testq rdi, rdi;
-            jeq  loop_exit;
-            // rdx <- len
-            movl rdx, rdi;
-            // rsi <- destination address
-            lea  rsi, [rsp - (16 + LBP_ARG0)];
+        let meta = callee_lfp.meta();
+        if dst_len == 1
+            && meta.is_block_style()
+            && !meta.is_native()
+            && globals.store[meta.func_id()]
+                .as_ruby_func()
+                .args
+                .reqopt_num()
+                > 1
+        {
+            dst = dst.add(1);
+            let v = *dst;
+            if let Some(ary) = v.is_array() {
+                let len = ary.len();
+                for i in 0..len {
+                    *dst.sub(i) = ary[i];
+                }
+                dst_len = len
+            }
         }
-        if has_splat {
-            monoasm! { &mut self.jit,
-                // TODO: this possibly cause problem.
-                subq rsp, 4096;
-                // rdi <- source address
-                movq rdi, rcx;
-                // rsi <- destination address
-                // rdx <- len
-                movq rcx, r12;
-                movq rax, (vm_expand_splat);
-                call rax;
-                // rax <- length
-                movq rdi, rax;
-                addq rsp, 4096;
-            };
-        } else {
-            monoasm! { &mut self.jit,
-            loop_:
-                // rax <- source value
-                movq rax, [rcx];
-                movq [rsi], rax;
-                subq rsi, 8;
-                subq rcx, 8;
-                subl rdx, 1;
-                jne  loop_;
-            };
-        }
-        self.jit.bind_label(loop_exit);
     }
+    handle_arguments(vm, globals, callid, dst_len, callee_lfp)?;
+    Some(Value::integer(dst_len as i64))
+}
+
+fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
+    if let Some(ary) = src.is_array() {
+        let len = ary.len();
+        for i in 0..len {
+            unsafe { *dst.sub(i) = ary[i] };
+        }
+        len
+    } else if let Some(_range) = src.is_range() {
+        unimplemented!()
+    } else if let Some(_hash) = src.is_hash() {
+        unimplemented!()
+    } else {
+        unsafe { *dst = src };
+        1
+    }
+}
+
+fn handle_arguments(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    arg_num: usize,
+    callee_lfp: LFP,
+) -> Option<Value> {
+    let meta = *callee_lfp.meta();
+    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)?;
+
+    let CallSiteInfo {
+        block_fid,
+        block_arg,
+        ..
+    } = globals.store[callid];
+
+    let bh = if let Some(block_fid) = block_fid {
+        let bh = BlockHandler::from(block_fid);
+        Some(bh)
+    } else if let Some(block_arg) = block_arg {
+        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
+    } else {
+        None
+    };
+    callee_lfp.set_block(bh);
+    Some(Value::nil())
 }

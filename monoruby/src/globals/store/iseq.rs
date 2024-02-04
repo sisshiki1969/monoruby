@@ -399,4 +399,8 @@ impl ParamsInfo {
     pub fn pos_num(&self) -> usize {
         self.pos_num
     }
+
+    pub fn reqopt_num(&self) -> usize {
+        self.reqopt_num
+    }
 }

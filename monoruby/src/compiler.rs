@@ -58,12 +58,13 @@ type FiberInvoker = extern "C" fn(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
-    Rcx = 1,
+    //Rcx = 1,
     Rdx = 2,
     Rsp = 4,
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
+    R9 = 9,
     R13 = 13,
     R15 = 15,
 }

@@ -748,32 +748,6 @@ pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
     expand_splat_inner(src, dst)
 }
 
-pub extern "C" fn vm_expand_splat(
-    src: *const Value,
-    mut dst: *mut Value,
-    len: usize,
-    globals: &Globals,
-    callid: CallSiteId,
-) -> usize {
-    let mut dst_len = 0;
-    unsafe {
-        let splat_pos = &globals.store[callid].splat_pos;
-        for i in 0..len {
-            let v = *src.sub(i);
-            if splat_pos.contains(&i) {
-                let ofs = expand_splat_inner(v, dst);
-                dst_len += ofs;
-                dst = dst.sub(ofs);
-            } else {
-                *dst = v;
-                dst = dst.sub(1);
-                dst_len += 1;
-            }
-        }
-    }
-    dst_len
-}
-
 fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
     if let Some(ary) = src.is_array() {
         let len = ary.len();
