@@ -112,46 +112,42 @@ impl Codegen {
     /// Call
     ///
     /// ### in
-    /// - rdi: args len
     /// - r13: pc
     /// - r15: &FuncData
     ///
     fn call(&mut self, _: bool) {
         monoasm! { &mut self.jit,
-            // rsi <- callee LFP
-            lea  rsi, [rsp - 16];
+            // rcx <- callee LFP
+            lea  rcx, [rsp - 16];
             // rdx <- len
             movsxw rdx, [r13 + (POS_NUM)]; // rdi <- pos_num
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movzxw r9, [r13 + (ARG_REG)]; // rcx <- %args
+            movzxw r9, [r13 + (ARG_REG)]; // r9 <- %args
         }
-        self.vm_get_slot_addr(GP::R9); // rdi <- *args
+        self.vm_get_slot_addr(GP::R9); // r9 <- *args
         monoasm! { &mut self.jit,
             // TODO: this possibly cause problem.
             subq rsp, 4096;
-            movq rcx, r12;
+            movq rsi, r12;
             movq rdi, rbx;
-            movq rax, (vm_expand_splat);
+            movq rax, (vm_handle_arguments);
             call rax;
+            // rax <- arg_num: Value
             addq rsp, 4096;
         };
         self.vm_handle_error();
         monoasm! { &mut self.jit,
-            sarq rax, 1;
-            movq rdx, rax;
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
-            // push cfp
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rsi], rdi;
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-            // set lfp
-            lea  r14, [rsp - 16];
-            movq [r14 - (BP_LFP)], r14;
+            sarq rax, 1;
+            movq rdx, rax;
+        }
+        self.push_frame();
+        self.set_lfp();
+        monoasm! { &mut self.jit,
             call [r15 + (FUNCDATA_CODEPTR)];
         }
         self.pop_frame();
@@ -220,52 +216,76 @@ impl Codegen {
     }
 }
 
-extern "C" fn vm_expand_splat(
+extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
-    callee_lfp: LFP,
-    len: usize,
     globals: &mut Globals,
+    len: usize,
+    callee_lfp: LFP,
     callid: CallSiteId,
     src: *const Value,
 ) -> Option<Value> {
-    let mut arg_num = len;
+    fn push(
+        arg_num: &mut usize,
+        rest: &mut Vec<Value>,
+        max_pos: usize,
+        dst: *mut Value,
+        v: Value,
+        no_push: bool,
+    ) {
+        if *arg_num >= max_pos {
+            if !no_push {
+                rest.push(v);
+            }
+        } else {
+            unsafe { *dst.sub(*arg_num) = v };
+            *arg_num += 1;
+        }
+    }
+
+    let mut arg_num = 0;
     let meta = *callee_lfp.meta();
+    let is_block_style = meta.is_block_style();
+    let callee_func_id = meta.func_id();
+    let (max_pos, no_push) = match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => (info.reqopt_num(), is_block_style && !info.is_rest()),
+        FuncKind::AttrReader { .. } => (0, false),
+        FuncKind::AttrWriter { .. } => (1, false),
+        FuncKind::Builtin { .. } => (usize::MAX, false),
+    };
+    let mut rest = vec![];
+    let splat_pos = &globals.store[callid].splat_pos;
     unsafe {
-        let mut dst = callee_lfp.register_ptr(1) as _;
-        let splat_pos = &globals.store[callid].splat_pos;
+        let dst = callee_lfp.register_ptr(1) as *mut Value;
         for i in 0..len {
             let v = *src.sub(i);
             if splat_pos.contains(&i) {
-                let ofs = expand_splat_inner(v, dst);
-                arg_num += ofs - 1;
-                dst = dst.sub(ofs);
+                if let Some(ary) = v.is_array() {
+                    for v in ary.iter() {
+                        push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
+                    }
+                } else if let Some(_range) = v.is_range() {
+                    unimplemented!()
+                } else if let Some(_hash) = v.is_hash() {
+                    unimplemented!()
+                } else {
+                    push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
+                };
             } else {
-                *dst = v;
-                dst = dst.sub(1);
+                push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
             }
         }
-        if arg_num == 1
-            && meta.is_block_style()
-            && !meta.is_native()
-            && globals.store[meta.func_id()]
-                .as_ruby_func()
-                .args
-                .reqopt_num()
-                > 1
-        {
-            dst = dst.add(1);
+        // single array argument expansion for blocks
+        if arg_num == 1 && is_block_style && max_pos > 1 {
             let v = *dst;
             if let Some(ary) = v.is_array() {
-                let len = ary.len();
-                for i in 0..len {
-                    *dst.sub(i) = ary[i];
+                arg_num = 0;
+                for v in ary.iter() {
+                    push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
                 }
-                arg_num = len
             }
         }
     }
 
-    let callee_func_id = meta.func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             let caller = &globals.store[callid];
@@ -277,9 +297,9 @@ extern "C" fn vm_expand_splat(
                     h.insert(HashKey(Value::symbol(*k)), v);
                 }
                 let ex: Value = Value::hash(h);
-                vm.handle_positional(&info, arg_num, callee_lfp, Some(ex))?;
+                vm.handle_positional2(&info, arg_num, callee_lfp, Some(ex), rest)?;
             } else {
-                vm.handle_positional(&info, arg_num, callee_lfp, None)?;
+                vm.handle_positional2(&info, arg_num, callee_lfp, None, rest)?;
                 vm.handle_keyword(&info, caller, callee_lfp);
             }
         }
@@ -303,21 +323,4 @@ extern "C" fn vm_expand_splat(
     callee_lfp.set_block(bh);
 
     Some(Value::integer(arg_num as i64))
-}
-
-fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
-    if let Some(ary) = src.is_array() {
-        let len = ary.len();
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] };
-        }
-        len
-    } else if let Some(_range) = src.is_range() {
-        unimplemented!()
-    } else if let Some(_hash) = src.is_hash() {
-        unimplemented!()
-    } else {
-        unsafe { *dst = src };
-        1
-    }
 }

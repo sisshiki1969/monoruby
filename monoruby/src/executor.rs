@@ -971,6 +971,62 @@ impl Executor {
         }
     }
 
+    ///
+    /// if argument mismatch occurs, return None.
+    ///
+    pub(crate) fn handle_positional2(
+        &mut self,
+        info: &ISeqInfo,
+        arg_num: usize,
+        mut callee_lfp: LFP,
+        ex: Option<Value>,
+        mut rest_arg: Vec<Value>,
+    ) -> Option<Value> {
+        let req_num = info.required_num();
+        let reqopt_num = info.reqopt_num();
+        let pos_num = info.pos_num();
+        let is_rest = pos_num != reqopt_num;
+        let is_block_style = info.is_block_style();
+        let ex_num = ex.is_some() as usize;
+        let total_pos_num = arg_num + rest_arg.len() + ex_num;
+        unsafe {
+            if total_pos_num > reqopt_num {
+                if is_rest {
+                    if let Some(h) = ex {
+                        rest_arg.push(h);
+                    }
+                    callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(rest_arg)));
+                } else if !is_block_style {
+                    self.err_wrong_number_of_arg_range(total_pos_num, req_num..=reqopt_num);
+                    return None;
+                }
+                return Some(Value::nil());
+            }
+
+            if total_pos_num >= req_num {
+                let len = reqopt_num - arg_num;
+                Self::fill(callee_lfp, reqopt_num, len, None);
+            } else {
+                if !is_block_style {
+                    self.err_wrong_number_of_arg_range(total_pos_num, req_num..=reqopt_num);
+                    return None;
+                }
+                let len = req_num - (arg_num + ex_num);
+                Self::fill(callee_lfp, req_num, len, Some(Value::nil()));
+                let len = reqopt_num - req_num;
+                Self::fill(callee_lfp, reqopt_num, len, None);
+            }
+            if let Some(ex) = ex {
+                callee_lfp.set_register(1 + arg_num, Some(ex));
+            }
+
+            if is_rest {
+                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
+            }
+        }
+        Some(Value::nil())
+    }
+
     unsafe fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
         let ptr = lfp.register_ptr(start_pos);
         std::slice::from_raw_parts_mut(ptr, len).fill(val);

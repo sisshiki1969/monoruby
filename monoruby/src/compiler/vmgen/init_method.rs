@@ -1,6 +1,6 @@
 use super::*;
 
-const INIT_METHOD_OFS: i32 = -16;
+pub(crate) const INIT_METHOD_OFS: i32 = -16;
 pub(in crate::compiler) const INIT_METHOD_ROP: i32 = -14;
 const INIT_METHOD_REG: i32 = -12;
 pub(in crate::compiler) const INIT_METHOD_OP: i32 = -10;
