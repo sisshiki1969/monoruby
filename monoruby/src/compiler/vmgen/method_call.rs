@@ -228,7 +228,8 @@ extern "C" fn vm_expand_splat(
     callid: CallSiteId,
     src: *const Value,
 ) -> Option<Value> {
-    let mut dst_len = 0;
+    let mut arg_num = len;
+    let meta = *callee_lfp.meta();
     unsafe {
         let mut dst = callee_lfp.register_ptr(1) as _;
         let splat_pos = &globals.store[callid].splat_pos;
@@ -236,16 +237,14 @@ extern "C" fn vm_expand_splat(
             let v = *src.sub(i);
             if splat_pos.contains(&i) {
                 let ofs = expand_splat_inner(v, dst);
-                dst_len += ofs;
+                arg_num += ofs - 1;
                 dst = dst.sub(ofs);
             } else {
                 *dst = v;
                 dst = dst.sub(1);
-                dst_len += 1;
             }
         }
-        let meta = callee_lfp.meta();
-        if dst_len == 1
+        if arg_num == 1
             && meta.is_block_style()
             && !meta.is_native()
             && globals.store[meta.func_id()]
@@ -261,12 +260,49 @@ extern "C" fn vm_expand_splat(
                 for i in 0..len {
                     *dst.sub(i) = ary[i];
                 }
-                dst_len = len
+                arg_num = len
             }
         }
     }
-    handle_arguments(vm, globals, callid, dst_len, callee_lfp)?;
-    Some(Value::integer(dst_len as i64))
+
+    let callee_func_id = meta.func_id();
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => {
+            let caller = &globals.store[callid];
+            if info.no_keyword() && caller.kw_num() != 0 {
+                // handle excessive keyword arguments
+                let mut h = IndexMap::default();
+                for (k, id) in caller.kw_args.iter() {
+                    let v = unsafe { vm.get_slot(caller.kw_pos + *id as u16).unwrap() };
+                    h.insert(HashKey(Value::symbol(*k)), v);
+                }
+                let ex: Value = Value::hash(h);
+                vm.handle_positional(&info, arg_num, callee_lfp, Some(ex))?;
+            } else {
+                vm.handle_positional(&info, arg_num, callee_lfp, None)?;
+                vm.handle_keyword(&info, caller, callee_lfp);
+            }
+        }
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+    }
+
+    let CallSiteInfo {
+        block_fid,
+        block_arg,
+        ..
+    } = globals.store[callid];
+
+    let bh = if let Some(block_fid) = block_fid {
+        let bh = BlockHandler::from(block_fid);
+        Some(bh)
+    } else if let Some(block_arg) = block_arg {
+        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
+    } else {
+        None
+    };
+    callee_lfp.set_block(bh);
+
+    Some(Value::integer(arg_num as i64))
 }
 
 fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
@@ -284,32 +320,4 @@ fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
         unsafe { *dst = src };
         1
     }
-}
-
-fn handle_arguments(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-    arg_num: usize,
-    callee_lfp: LFP,
-) -> Option<Value> {
-    let meta = *callee_lfp.meta();
-    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)?;
-
-    let CallSiteInfo {
-        block_fid,
-        block_arg,
-        ..
-    } = globals.store[callid];
-
-    let bh = if let Some(block_fid) = block_fid {
-        let bh = BlockHandler::from(block_fid);
-        Some(bh)
-    } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
-    } else {
-        None
-    };
-    callee_lfp.set_block(bh);
-    Some(Value::nil())
 }
