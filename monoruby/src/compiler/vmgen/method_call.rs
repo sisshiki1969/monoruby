@@ -120,7 +120,7 @@ impl Codegen {
             // rcx <- callee LFP
             lea  rcx, [rsp - 16];
             // rdx <- len
-            movsxw rdx, [r13 + (POS_NUM)]; // rdi <- pos_num
+            movzxw rdx, [r13 + (POS_NUM)]; // rdi <- pos_num
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
@@ -128,15 +128,34 @@ impl Codegen {
             movzxw r9, [r13 + (ARG_REG)]; // r9 <- %args
         }
         self.vm_get_slot_addr(GP::R9); // r9 <- *args
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
         monoasm! { &mut self.jit,
-            // TODO: this possibly cause problem.
-            subq rsp, 4096;
+            movq rdi, [r15 + (FUNCDATA_PC)];
+            testq rdi, rdi;
+            jeq  l1;
+            movzxw rdi, [rdi + (INIT_METHOD_OFS + 16)];
+            shlq rdi, 4;
+            addq rdi, 16;
+            jmp  l2;
+        l1:
+            movq rdi, rdx;
+            // TODO: We must support rest argument in native methods.
+            addq rdi, (LBP_ARG0 / 8 + 64 + 1);
+            andq rdi, (-2);
+            shlq rdi, 3;
+        l2:
+            subq rsp, rdi;
+            subq rsp, 8;
+            pushq rdi;
             movq rsi, r12;
             movq rdi, rbx;
             movq rax, (vm_handle_arguments);
             call rax;
             // rax <- arg_num: Value
-            addq rsp, 4096;
+            popq rdi;
+            addq rsp, 8;
+            addq rsp, rdi;
         };
         self.vm_handle_error();
         monoasm! { &mut self.jit,
