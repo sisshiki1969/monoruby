@@ -151,7 +151,7 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
         path: &mut String,
         val: Value,
     ) -> Result<()> {
-        match val.is_array() {
+        match val.try_array_ty() {
             Some(ainfo) => {
                 for v in ainfo.iter().cloned() {
                     flatten(vm, globals, path, v)?;

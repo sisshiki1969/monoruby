@@ -479,6 +479,22 @@ mod test {
     }
 
     #[test]
+    fn test_block_array_expand3() {
+        run_test_with_prelude(
+            r#"
+            f { |a, *b|
+                [a, b]
+            }
+            "#,
+            r#"
+            def f
+            	yield [1,2,3]
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn test_block_optional() {
         run_test_with_prelude(
             r#"

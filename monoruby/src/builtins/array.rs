@@ -97,7 +97,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
         return Ok(self_val.into());
     }
     if len == 1 {
-        if let Some(ary) = lfp.arg(0).is_array() {
+        if let Some(ary) = lfp.arg(0).try_array_ty() {
             *self_val = (*ary).clone();
             return Ok(self_val.into());
         }
@@ -176,7 +176,7 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let mut lhs = Array::dup(lfp.self_val().as_array());
-    let rhs = match lfp.arg(0).is_array() {
+    let rhs = match lfp.arg(0).try_array_ty() {
         Some(v) => v,
         None => {
             return Err(MonorubyErr::no_implicit_conversion(
@@ -200,7 +200,7 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let lhs_v = lfp.self_val();
-    let rhs = match lfp.arg(0).is_array() {
+    let rhs = match lfp.arg(0).try_array_ty() {
         Some(ary) => ary,
         None => {
             return Err(MonorubyErr::no_implicit_conversion(
@@ -312,7 +312,7 @@ fn concat(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
     let mut self_ary: Array = lfp.self_val().into();
     let mut ary: Array = Array::new();
     for a in lfp.iter() {
-        if let Some(a) = a.is_array() {
+        if let Some(a) = a.try_array_ty() {
             ary.extend_from_slice(&a);
         } else {
             return Err(MonorubyErr::no_implicit_conversion(globals, a, ARRAY_CLASS));
@@ -397,7 +397,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let lhs: Array = lfp.self_val().into();
-    let rhs = if let Some(rhs) = lfp.arg(0).is_array() {
+    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
         rhs
     } else {
         return Ok(Value::nil());
@@ -1043,14 +1043,14 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
         return Ok(Value::array_empty());
     }
     let len = ary[0]
-        .is_array()
+        .try_array_ty()
         .ok_or_else(|| MonorubyErr::argumenterr("Each element of receiver must be an array."))?
         .len();
     let mut trans = Array::new();
     for i in 0..len {
         let mut temp = Array::new();
         for v in ary.iter().cloned() {
-            let a = v.is_array().ok_or_else(|| {
+            let a = v.try_array_ty().ok_or_else(|| {
                 MonorubyErr::argumenterr("Each element of receiver must be an array.")
             })?;
             if a.len() != len {

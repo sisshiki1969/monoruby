@@ -630,7 +630,7 @@ impl Executor {
     ) -> Result<Vec<Value>> {
         let mut v = vec![];
         for elem in self.invoke_block_map1(globals, bh, iter)? {
-            match elem.is_array() {
+            match elem.try_array_ty() {
                 Some(ary) => v.extend(ary.iter()),
                 None => v.push(elem),
             }
@@ -836,7 +836,6 @@ impl Executor {
 
         let mut arg_num = 0;
         let meta = *callee_lfp.meta();
-        let is_block_style = meta.is_block_style();
         let callee_func_id = meta.func_id();
         let callee_info = &globals[callee_func_id];
         let max_pos = callee_info.max_positional_args();
@@ -849,7 +848,7 @@ impl Executor {
         for i in 0..len {
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
-                if let Some(ary) = v.is_array() {
+                if let Some(ary) = v.try_array_ty() {
                     for v in ary.iter() {
                         push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
                     }
@@ -865,9 +864,9 @@ impl Executor {
             }
         }
         // single array argument expansion for blocks
-        if arg_num == 1 && is_block_style && max_pos > 1 {
+        if arg_num == 1 && callee_info.single_arg_expand() {
             let v = unsafe { *dst };
-            if let Some(ary) = v.is_array() {
+            if let Some(ary) = v.try_array_ty() {
                 arg_num = 0;
                 for v in ary.iter() {
                     push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);

@@ -248,14 +248,15 @@ impl Codegen {
         error: DestLabel,
     ) {
         let callsite = &store[callid];
-        let (meta, codeptr, pc) = store[callee_fid].get_data();
+        let callee = &store[callee_fid];
+        let (meta, codeptr, pc) = callee.get_data();
         self.setup_frame(meta, callsite);
         //   rdi: args len
-        match &store[callee_fid].kind {
+        if callsite.pos_num == 1 && callee.single_arg_expand() {
+            self.single_arg_expand();
+        }
+        match &callee.kind {
             FuncKind::ISeq(info) => {
-                if info.is_block_style() && info.reqopt_num() > 1 && callsite.pos_num == 1 {
-                    self.single_arg_expand();
-                }
                 let kw_expansion = info.no_keyword() && callsite.kw_num() != 0;
                 if info.optional_num() == 0
                     && info.kw_rest().is_none()

@@ -339,7 +339,7 @@ macro_rules! next_char {
 #[monoruby_builtin]
 fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    let arguments = match lfp.arg(0).is_array() {
+    let arguments = match lfp.arg(0).try_array_ty() {
         Some(ary) => ary.to_vec(),
         None => vec![lfp.arg(0)],
     };
@@ -976,7 +976,7 @@ fn scan_inner(
 ) -> Result<()> {
     let data = globals.get_block_data(vm.cfp(), block);
     for arg in vec {
-        match arg.is_array() {
+        match arg.try_array_ty() {
             Some(ary) => {
                 vm.invoke_block(globals, &data, &ary)?;
             }

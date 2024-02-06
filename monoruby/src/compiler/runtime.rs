@@ -174,7 +174,7 @@ pub(super) extern "C" fn gen_array(
                 if globals.store[callid].splat_pos.contains(&i) {
                     if let Some(fid) = globals.check_method(v, to_a) {
                         let a = vm.invoke_func(globals, fid, v, &[], None)?;
-                        if let Some(a) = a.is_array() {
+                        if let Some(a) = a.try_array_ty() {
                             ary.extend_from_slice(&a);
                         } else {
                             vm.set_error(MonorubyErr::typeerr(
@@ -259,7 +259,7 @@ pub(super) extern "C" fn concatenate_regexp(
 }
 
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
-    match src.is_array() {
+    match src.try_array_ty() {
         Some(ary) => {
             if len <= ary.len() {
                 for i in 0..len {

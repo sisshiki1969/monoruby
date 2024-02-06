@@ -516,6 +516,7 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 #[derive(Debug, Clone, Default)]
 pub struct ParamInfo {
     max_positional_args: usize,
+    single_arg_expand: bool,
     ignore_excess_positional_args: bool,
 }
 
@@ -543,12 +544,14 @@ impl FuncInfo {
         meta: Meta,
         max_positional_args: usize,
     ) -> Self {
-        let ignore_excess_positional_args = meta.is_block_style()
-            && if let FuncKind::ISeq(info) = &kind {
-                !info.is_rest()
-            } else {
-                false
-            };
+        let is_rest = if let FuncKind::ISeq(info) = &kind {
+            info.is_rest()
+        } else {
+            false
+        };
+        let ignore_excess_positional_args = meta.is_block_style() && !is_rest;
+        let single_arg_expand = meta.is_block_style() && (max_positional_args > 1 || is_rest);
+
         let name = name.into();
         Self {
             name,
@@ -561,6 +564,7 @@ impl FuncInfo {
             jit_entry: Default::default(),
             params: Box::new(ParamInfo {
                 max_positional_args,
+                single_arg_expand,
                 ignore_excess_positional_args,
             }),
         }
@@ -687,6 +691,10 @@ impl FuncInfo {
     ///
     pub(crate) fn max_positional_args(&self) -> usize {
         self.params.max_positional_args
+    }
+
+    pub(crate) fn single_arg_expand(&self) -> bool {
+        self.params.single_arg_expand
     }
 
     pub(crate) fn ignore_excess_positional_args(&self) -> bool {

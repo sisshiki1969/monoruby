@@ -176,7 +176,7 @@ impl ArrayInner {
 
     pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
         let len = self.len();
-        match val.is_array() {
+        match val.try_array_ty() {
             Some(ary) => {
                 // if self = ary, something wrong happens..
                 let ary_len = ary.len();

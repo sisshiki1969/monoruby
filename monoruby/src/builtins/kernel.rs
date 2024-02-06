@@ -86,7 +86,7 @@ fn object_nil(
 #[monoruby_builtin]
 fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
-        match val.is_array() {
+        match val.try_array_ty() {
             Some(ary) => {
                 ary.iter().for_each(|v| decompose(collector, *v));
             }

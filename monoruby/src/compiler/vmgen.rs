@@ -1637,11 +1637,10 @@ extern "C" fn handle_invoker_arguments(
 /// deconstruct array for block
 fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
     let req_num = info.required_num();
-    let reqopt_num = info.reqopt_num();
-    if info.is_block_style() && arg_num == 1 && reqopt_num > 1 {
+    if info.is_block_style() && arg_num == 1 && (info.reqopt_num() > 1 || info.is_rest()) {
         unsafe {
             let v = callee_lfp.register(1).unwrap();
-            if v.is_array().is_some() {
+            if v.try_array_ty().is_some() {
                 let ptr = callee_lfp.register_ptr(1);
                 return block_expand_array(v, ptr as _, req_num);
             }

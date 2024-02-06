@@ -599,7 +599,7 @@ impl Value {
         self.rvalue_mut().as_array_mut()
     }
 
-    pub(crate) fn is_array(&self) -> Option<Array> {
+    pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
             ObjKind::ARRAY => Some((*self).into()),
@@ -825,7 +825,7 @@ impl Value {
     }
 
     pub(crate) fn expect_array(&self, globals: &mut Globals) -> Result<Array> {
-        if let Some(ary) = self.is_array() {
+        if let Some(ary) = self.try_array_ty() {
             Ok(ary)
         } else {
             Err(MonorubyErr::no_implicit_conversion(

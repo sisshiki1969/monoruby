@@ -261,7 +261,7 @@ fn change_visi(
     }
     let class_id = self_val.as_class_id();
     let mut names = vec![];
-    if let Some(ary) = lfp.arg(0).is_array() {
+    if let Some(ary) = lfp.arg(0).try_array_ty() {
         if len == 1 {
             for v in ary.iter() {
                 names.push(v.expect_symbol_or_string(globals)?);
