@@ -651,11 +651,9 @@ impl Codegen {
         self.set_lfp();
         monoasm! { &mut self.jit,
             // r15 : &FuncData
-            // set codeptr
-            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
-            call rax;
+            call [r15 + (FUNCDATA_CODEPTR)];
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };

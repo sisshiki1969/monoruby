@@ -715,65 +715,6 @@ impl Codegen {
     }
 
     ///
-    /// Handle req/opt/rest arguments
-    ///
-    /// #### in
-    /// - rdi: arg len
-    /// - rdx: CallSiteId
-    ///
-    /// #### out
-    /// - rdi: arg len
-    /// - rax: Option<Value>
-    ///  
-    fn handle_arguments(&mut self) {
-        monoasm! { &mut self.jit,
-            lea  r8, [rsp - 16];   // callee_lfp
-            movq rcx, rdi;
-            subq rsp, 4088;
-            pushq rdi;
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::vm_handle_arguments);
-            call rax;
-            popq rdi;
-            addq rsp, 4088;
-        }
-    }
-
-    ///
-    /// block args expansion
-    ///
-    /// #### in
-    /// - rdi: arg_num
-    /// - rsi: pc
-    ///
-    /// #### out
-    /// - rdi: arg_num
-    ///
-    /// #### destroy
-    /// - caller save registers (except rdx)
-    ///
-    fn block_arg_expand(&mut self) {
-        let l1 = self.jit.label();
-        monoasm! { &mut self.jit,
-            testq rsi, rsi;
-            je   l1;
-            // rax <- op
-            movzxb rax, [rsi + (INIT_METHOD_OP + 16)];
-            // block-style?
-            cmpb rax, (172u8 as i8);
-            jne  l1;
-            // reqopt > 1?
-            cmpw [rsi + (INIT_METHOD_ROP + 16)], 1;
-            jle  l1;
-        }
-        self.single_arg_expand();
-        monoasm! { &mut self.jit,
-        l1:
-        }
-    }
-
-    ///
     /// Expand single Array argument.
     ///
     /// #### in/out
@@ -826,6 +767,63 @@ impl Codegen {
             sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
+    }
+
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    /// - rdx: arg_num
+    /// - r8: CallsiteId
+    /// - r9: src: *const Value
+    ///
+    /// ### out
+    /// - rax: arg_num: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn generic_handle_arguments(
+        &mut self,
+        f: extern "C" fn(
+            &mut Executor,
+            &mut Globals,
+            usize,
+            LFP,
+            CallSiteId,
+            *const Value,
+        ) -> Option<Value>,
+    ) {
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
+        monoasm! { &mut self.jit,
+            // rcx <- callee LFP
+            lea  rcx, [rsp - 16];
+            movq rdi, [r15 + (FUNCDATA_PC)];
+            testq rdi, rdi;
+            jeq  l1;
+            movzxw rdi, [rdi + (INIT_METHOD_OFS + 16)];
+            shlq rdi, 4;
+            addq rdi, 16;
+            jmp  l2;
+        l1:
+            movq rdi, rdx;
+            // TODO: We must support rest argument in native methods.
+            addq rdi, (LBP_ARG0 / 8 + 64 + 1);
+            andq rdi, (-2);
+            shlq rdi, 3;
+        l2:
+            subq rsp, rdi;
+            subq rsp, 8;
+            pushq rdi;
+            movq rsi, r12;
+            movq rdi, rbx;
+            movq rax, (f);
+            call rax;
+            // rax <- arg_num: Value
+            popq rdi;
+            addq rsp, 8;
+            addq rsp, rdi;
+        };
     }
 }
 

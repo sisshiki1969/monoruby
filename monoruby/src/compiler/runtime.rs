@@ -283,35 +283,29 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
-///
-/// Handle arguments.
-///
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
-    callid: CallSiteId,
-    arg_num: usize,
+    len: usize,
     callee_lfp: LFP,
+    callid: CallSiteId,
+    src: *const Value,
 ) -> Option<Value> {
-    let meta = *callee_lfp.meta();
-    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)?;
+    let arg_num = vm.set_frame_arguments(globals, len, callee_lfp, callid, src)?;
+    vm.set_frame_block(&globals.store[callid], callee_lfp);
+    Some(Value::integer(arg_num as i64))
+}
 
-    let CallSiteInfo {
-        block_fid,
-        block_arg,
-        ..
-    } = globals.store[callid];
-
-    let bh = if let Some(block_fid) = block_fid {
-        let bh = BlockHandler::from(block_fid);
-        Some(bh)
-    } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
-    } else {
-        None
-    };
-    callee_lfp.set_block(bh);
-    Some(Value::nil())
+pub(super) extern "C" fn jit_handle_arguments_no_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    len: usize,
+    callee_lfp: LFP,
+    callid: CallSiteId,
+    src: *const Value,
+) -> Option<Value> {
+    let arg_num = vm.set_frame_arguments(globals, len, callee_lfp, callid, src)?;
+    Some(Value::integer(arg_num as i64))
 }
 
 ///

@@ -24,13 +24,14 @@ impl Codegen {
     ///
     pub(super) fn send_not_cached(
         &mut self,
+        store: &Store,
+        callid: CallSiteId,
         self_class: ClassId,
-        callsite: &CallSiteInfo,
         pc: BcPc,
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
-        let CallSiteInfo { id, recv, .. } = *callsite;
+        let callsite = &store[callid];
         // argument registers:
         //   rdi: args len
         //
@@ -40,13 +41,13 @@ impl Codegen {
 
         self.xmm_save(using_xmm);
         // r15 <- recv's class
-        if recv.is_self() {
+        if callsite.recv.is_self() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             monoasm!( &mut self.jit,
                 movl r15, (self_class.u32());
             );
         } else {
-            self.load_rdi(recv);
+            self.load_rdi(callsite.recv);
             let get_class = self.get_class;
             monoasm!( &mut self.jit,
                 call get_class;
@@ -90,21 +91,8 @@ impl Codegen {
             pushq [r14 - (conv(callsite.recv))];
             addq  rsp, 64;
         );
-        self.jit_set_arguments(callsite);
 
-        monoasm! { &mut self.jit,
-            movq rsi, [r15 + (FUNCDATA_PC)];
-        }
-        self.block_arg_expand();
-
-        monoasm! { &mut self.jit,
-            movl rdx, (id.get()); // CallSiteId
-        }
-        self.handle_arguments();
-        self.handle_error(error);
-
-        self.call_funcdata();
-
+        self.generic_call(callid, callsite, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
 
@@ -115,7 +103,7 @@ impl Codegen {
         slow_path:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, (id.get()); // CallSiteId
+            movq rdx, (callid.get()); // CallSiteId
             movq rax, (runtime::find_method);
             call rax;
         }
@@ -272,18 +260,14 @@ impl Codegen {
                 if info.optional_num() == 0
                     && info.kw_rest().is_none()
                     && !kw_expansion
-                    //&& info.no_keyword()
                     && callsite.hash_splat_pos.is_empty()
                 {
                     // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
                     if !info.no_keyword() {
                         self.handle_keyword_args(callsite, info)
                     }
-                    /*if !callsite.hash_splat_pos.is_empty() {
-                        self.handle_hash_splat(callid, callee_fid)
-                    }*/
                 } else {
-                    self.gen_handle_arguments(callid, meta, runtime::jit_handle_arguments as _);
+                    self.gen_handle_arguments(callid, meta);
                     self.handle_error(error);
                 }
             }
@@ -329,7 +313,7 @@ impl Codegen {
         self.handle_error(error);
     }
 
-    fn gen_handle_arguments(&mut self, callid: CallSiteId, meta: Meta, func: u64) {
+    fn gen_handle_arguments(&mut self, callid: CallSiteId, meta: Meta) {
         monoasm! { &mut self.jit,
             movl rdx, (callid.get());
             lea  r8, [rsp - 16];   // callee_lfp
@@ -339,7 +323,7 @@ impl Codegen {
             pushq rdi;
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
-            movq rax, (func);
+            movq rax, (runtime::jit_handle_arguments);
             call rax;
             popq rdi;
             addq rsp, 4088;
@@ -399,6 +383,7 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
+        let callsite = &store[callid];
         self.xmm_save(using_xmm);
         self.get_proc_data();
         // rax: outer, rdx: FuncId
@@ -429,22 +414,8 @@ impl Codegen {
             pushq [rdi - (LBP_SELF)];
             addq  rsp, 64;
         };
-        // set arguments
-        self.jit_set_arguments(&store[callid]);
 
-        monoasm! { &mut self.jit,
-            movq rsi, [r15 + (FUNCDATA_PC)];
-        }
-        self.block_arg_expand();
-
-        monoasm! { &mut self.jit,
-            movl rdx, (callid.get()); // CallSiteId
-        }
-        self.handle_arguments();
-        self.handle_error(error);
-
-        self.call_funcdata();
-
+        self.generic_call(callid, callsite, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
     }
@@ -481,6 +452,11 @@ impl Codegen {
         }
     }
 
+    ///
+    /// ### in
+    /// - rdi: arg_num
+    /// - r15: &FuncData
+    ///
     pub(super) fn call_funcdata(&mut self) {
         monoasm! { &mut self.jit,
             movq rdx, rdi;
@@ -489,9 +465,9 @@ impl Codegen {
             // push cfp
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rsi;
-            // set lfp
-            lea  r14, [rsp - 16];
-            movq [r14 - (BP_LFP)], r14;
+        }
+        self.set_lfp();
+        monoasm! { &mut self.jit,
             call [r15 + (FUNCDATA_CODEPTR)];
         }
         self.pop_frame();
@@ -525,6 +501,22 @@ impl Codegen {
             }
             callee_ofs += 8;
         }
+    }
+
+    fn generic_call(&mut self, callid: CallSiteId, callsite: &CallSiteInfo, error: DestLabel) {
+        monoasm! { &mut self.jit,
+            movl r8, (callid.get()); // CallSiteId
+            lea  r9, [r14 - (conv(callsite.args))];
+            movl rdx, (callsite.pos_num);
+        }
+        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            sarq rax, 1;
+            movq rdi, rax;
+        }
+
+        self.call_funcdata();
     }
 }
 
@@ -602,40 +594,6 @@ impl Codegen {
             jmp  deopt;
         }
         self.jit.select_page(0);
-    }
-
-    /// Set arguments.
-    ///
-    /// ### out
-    ///
-    /// - rdi: the number of arguments
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    ///
-    pub(super) fn jit_set_arguments(&mut self, callsite: &CallSiteInfo) {
-        let CallSiteInfo { args, pos_num, .. } = *callsite;
-        let pos_num = pos_num as u16;
-        // set arguments
-        if callsite.has_splat() {
-            self.jit_set_arguments_splat(&callsite.splat_pos, args, pos_num);
-        } else {
-            self.jit_set_arguments_nosplat(args, pos_num);
-        }
-    }
-
-    pub(super) fn jit_set_arguments_nosplat(&mut self, args: SlotId, pos_num: u16) {
-        for i in 0..pos_num {
-            let reg = args + i;
-            self.load_rax(reg);
-            monoasm! { &mut self.jit,
-                movq [rsp - ((16 + LBP_ARG0 + 8 * (i as i64)) as i32)], rax;
-            }
-        }
-        monoasm!( &mut self.jit,
-            movq rdi, (pos_num);
-        );
     }
 
     ///

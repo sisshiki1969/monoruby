@@ -1691,13 +1691,13 @@ impl Codegen {
             }
             AsmInst::SendNotCached {
                 self_class,
-                callid: callsite,
+                callid,
                 pc,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
-                self.send_not_cached(self_class, &store[callsite], pc, using_xmm, error);
+                self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
             }
             AsmInst::Yield {
                 callid,

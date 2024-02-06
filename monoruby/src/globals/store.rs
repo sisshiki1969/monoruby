@@ -278,7 +278,6 @@ impl Store {
             );
         }*/
         self.callsite_info.push(CallSiteInfo {
-            id,
             name,
             pos_num,
             kw_pos,
@@ -378,8 +377,6 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub(crate) struct CallSiteInfo {
-    /// ID
-    pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Position of the receiver.
