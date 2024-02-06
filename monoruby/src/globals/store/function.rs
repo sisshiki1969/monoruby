@@ -514,6 +514,12 @@ impl std::default::Default for FuncKind {
 pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
 #[derive(Debug, Clone, Default)]
+pub struct ParamInfo {
+    max_positional_args: usize,
+    ignore_excess_positional_args: bool,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// name of this function.
     name: Option<IdentId>,
@@ -521,7 +527,7 @@ pub struct FuncInfo {
     pub(crate) kind: FuncKind,
     /// JIT code entries for each class of *self*.
     jit_entry: Box<HashMap<ClassId, DestLabel>>,
-    _padding: usize,
+    params: Box<ParamInfo>,
 }
 
 impl alloc::GC<RValue> for FuncInfo {
@@ -531,7 +537,18 @@ impl alloc::GC<RValue> for FuncInfo {
 }
 
 impl FuncInfo {
-    fn new(name: impl Into<Option<IdentId>>, kind: FuncKind, meta: Meta) -> Self {
+    fn new(
+        name: impl Into<Option<IdentId>>,
+        kind: FuncKind,
+        meta: Meta,
+        max_positional_args: usize,
+    ) -> Self {
+        let ignore_excess_positional_args = meta.is_block_style()
+            && if let FuncKind::ISeq(info) = &kind {
+                !info.is_rest()
+            } else {
+                false
+            };
         let name = name.into();
         Self {
             name,
@@ -542,7 +559,10 @@ impl FuncInfo {
             },
             kind,
             jit_entry: Default::default(),
-            _padding: 0,
+            params: Box::new(ParamInfo {
+                max_positional_args,
+                ignore_excess_positional_args,
+            }),
         }
     }
 
@@ -554,11 +574,13 @@ impl FuncInfo {
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
+        let max_positional_args = args.max_positional_args();
         let info = ISeqInfo::new_method(func_id, name, args, loc, sourceinfo);
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_method(func_id, 0, false),
+            max_positional_args,
         )
     }
 
@@ -570,11 +592,13 @@ impl FuncInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
+        let max_positional_args = args.max_positional_args();
         let info = ISeqInfo::new_block(func_id, mother, outer, args, loc, sourceinfo);
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_method(func_id, 0, true),
+            max_positional_args,
         )
     }
 
@@ -589,6 +613,7 @@ impl FuncInfo {
             name,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_classdef(func_id, 0),
+            0,
         )
     }
 
@@ -599,6 +624,7 @@ impl FuncInfo {
                 abs_address: address as *const u8 as u64,
             },
             Meta::native(func_id),
+            usize::MAX,
         )
     }
 
@@ -609,6 +635,7 @@ impl FuncInfo {
                 abs_address: address as *const u8 as u64,
             },
             Meta::native_eval(func_id),
+            usize::MAX,
         )
     }
 
@@ -617,6 +644,7 @@ impl FuncInfo {
             name,
             FuncKind::AttrReader { ivar_name },
             Meta::native(func_id),
+            0,
         )
     }
 
@@ -625,6 +653,7 @@ impl FuncInfo {
             name,
             FuncKind::AttrWriter { ivar_name },
             Meta::native(func_id),
+            1,
         )
     }
 
@@ -651,6 +680,17 @@ impl FuncInfo {
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
         self.data.codeptr()
+    }
+
+    ///
+    /// Get the max number of positional arguments (= required + optional) of this function.
+    ///
+    pub(crate) fn max_positional_args(&self) -> usize {
+        self.params.max_positional_args
+    }
+
+    pub(crate) fn ignore_excess_positional_args(&self) -> bool {
+        self.params.ignore_excess_positional_args
     }
 
     ///

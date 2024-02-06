@@ -43,8 +43,13 @@ pub(crate) struct ISeqInfo {
         Option<BcPc>,          // ensure destination pc
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
-    /// the name of arguments.
+    ///
+    /// Information of parameters..
+    ///
     pub args: ParamsInfo,
+    ///
+    /// Name of local variabl
+    ///
     pub locals: HashMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
@@ -402,6 +407,10 @@ impl ParamsInfo {
 
     pub fn pos_num(&self) -> usize {
         self.pos_num
+    }
+
+    pub fn max_positional_args(&self) -> usize {
+        self.reqopt_num
     }
 
     pub fn is_rest(&self) -> bool {

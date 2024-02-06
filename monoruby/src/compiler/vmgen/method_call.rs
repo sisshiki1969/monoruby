@@ -265,12 +265,9 @@ extern "C" fn vm_handle_arguments(
     let meta = *callee_lfp.meta();
     let is_block_style = meta.is_block_style();
     let callee_func_id = meta.func_id();
-    let (max_pos, no_push) = match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => (info.reqopt_num(), is_block_style && !info.is_rest()),
-        FuncKind::AttrReader { .. } => (0, false),
-        FuncKind::AttrWriter { .. } => (1, false),
-        FuncKind::Builtin { .. } => (usize::MAX, false),
-    };
+    let callee_info = &globals[callee_func_id];
+    let max_pos = callee_info.max_positional_args();
+    let no_push = callee_info.ignore_excess_positional_args();
     let mut rest = vec![];
     let splat_pos = &globals.store[callid].splat_pos;
     unsafe {
@@ -305,7 +302,7 @@ extern "C" fn vm_handle_arguments(
         }
     }
 
-    match &globals[callee_func_id].kind {
+    match &callee_info.kind {
         FuncKind::ISeq(info) => {
             let caller = &globals.store[callid];
             if info.no_keyword() && caller.kw_num() != 0 {
