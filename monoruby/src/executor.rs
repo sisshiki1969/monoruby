@@ -807,44 +807,65 @@ impl Executor {
     }
 }
 
-impl Executor {
-    pub(crate) fn set_frame_arguments(
-        &mut self,
-        globals: &mut Globals,
-        len: usize,
-        callee_lfp: LFP,
-        callid: CallSiteId,
-        src: *const Value,
-    ) -> Option<usize> {
-        fn push(
-            arg_num: &mut usize,
-            rest: &mut Vec<Value>,
-            max_pos: usize,
-            dst: *mut Value,
-            v: Value,
-            no_push: bool,
-        ) {
-            if *arg_num >= max_pos {
-                if !no_push {
-                    rest.push(v);
-                }
-            } else {
-                unsafe { *dst.sub(*arg_num) = v };
-                *arg_num += 1;
-            }
+fn push(
+    arg_num: &mut usize,
+    rest: &mut Vec<Value>,
+    max_pos: usize,
+    dst: *mut Value,
+    v: Value,
+    no_push: bool,
+) {
+    if *arg_num >= max_pos {
+        if !no_push {
+            rest.push(v);
         }
+    } else {
+        unsafe { *dst.sub(*arg_num) = v };
+        *arg_num += 1;
+    }
+}
 
+fn memcpy(src: *const Value, dst: *mut Value, len: usize) {
+    if len != 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(src.sub(len - 1), dst.sub(len - 1), len);
+        }
+    }
+}
+
+fn positional_and_rest(
+    caller: &CallSiteInfo,
+    callee_info: &FuncInfo,
+    src: *const Value,
+    len: usize,
+    callee_lfp: LFP,
+) -> (usize, Vec<Value>) {
+    let max_pos = callee_info.max_positional_args();
+    let no_push = callee_info.discard_excess_positional_args();
+    let splat_pos = &caller.splat_pos;
+
+    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+    if splat_pos.is_empty() {
+        if len <= max_pos {
+            memcpy(src, dst, len);
+            (len, vec![])
+        } else {
+            memcpy(src, dst, max_pos);
+            // handle the rest arguments.
+            let rest = if !no_push {
+                unsafe { std::slice::from_raw_parts(src.sub(len - 1), len - max_pos) }
+                    .iter()
+                    .cloned()
+                    .rev()
+                    .collect()
+            } else {
+                vec![]
+            };
+            (max_pos, rest)
+        }
+    } else {
         let mut arg_num = 0;
-        let meta = *callee_lfp.meta();
-        let callee_func_id = meta.func_id();
-        let callee_info = &globals[callee_func_id];
-        let max_pos = callee_info.max_positional_args();
-        let no_push = callee_info.ignore_excess_positional_args();
         let mut rest = vec![];
-        let caller = &globals.store[callid];
-        let splat_pos = &caller.splat_pos;
-
-        let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
         for i in 0..len {
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
@@ -863,6 +884,29 @@ impl Executor {
                 push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
             }
         }
+        (arg_num, rest)
+    }
+}
+
+impl Executor {
+    pub(crate) fn set_frame_arguments(
+        &mut self,
+        globals: &mut Globals,
+        callee_lfp: LFP,
+        callid: CallSiteId,
+        src: *const Value,
+    ) -> Option<usize> {
+        let callee_func_id = callee_lfp.meta().func_id();
+        let callee_info = &globals[callee_func_id];
+        let max_pos = callee_info.max_positional_args();
+        let no_push = callee_info.discard_excess_positional_args();
+        let caller = &globals.store[callid];
+        let len = caller.pos_num;
+
+        let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+
+        let (mut arg_num, mut rest) =
+            positional_and_rest(caller, callee_info, src, len, callee_lfp);
         // single array argument expansion for blocks
         if arg_num == 1 && callee_info.single_arg_expand() {
             let v = unsafe { *dst };
@@ -1090,8 +1134,7 @@ impl Executor {
     ) -> Option<Value> {
         let req_num = info.required_num();
         let reqopt_num = info.reqopt_num();
-        let pos_num = info.pos_num();
-        let is_rest = pos_num != reqopt_num;
+        let is_rest = info.is_rest();
         let is_block_style = info.is_block_style();
         let ex_num = ex.is_some() as usize;
         let total_pos_num = arg_num + rest_arg.len() + ex_num;

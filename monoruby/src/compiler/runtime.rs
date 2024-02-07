@@ -291,7 +291,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     callid: CallSiteId,
     src: *const Value,
 ) -> Option<Value> {
-    let arg_num = vm.set_frame_arguments(globals, len, callee_lfp, callid, src)?;
+    let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
     vm.set_frame_block(&globals.store[callid], callee_lfp);
     Some(Value::integer(arg_num as i64))
 }
@@ -304,7 +304,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callid: CallSiteId,
     src: *const Value,
 ) -> Option<Value> {
-    let arg_num = vm.set_frame_arguments(globals, len, callee_lfp, callid, src)?;
+    let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
     Some(Value::integer(arg_num as i64))
 }
 
