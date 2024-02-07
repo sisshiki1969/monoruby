@@ -405,6 +405,42 @@ impl ParamsInfo {
         }
     }
 
+    pub fn new_attr_reader() -> Self {
+        ParamsInfo::default()
+    }
+
+    pub fn new_attr_writer() -> Self {
+        ParamsInfo {
+            required_num: 1,
+            reqopt_num: 1,
+            pos_num: 1,
+            args_names: vec![],
+            kw_names: vec![],
+            kw_rest: None,
+            block_param: None,
+        }
+    }
+
+    pub fn new_native(min: usize, max: usize, rest: bool) -> Self {
+        ParamsInfo {
+            required_num: min,
+            reqopt_num: max,
+            pos_num: max + rest as usize,
+            args_names: vec![],
+            kw_names: vec![],
+            kw_rest: None,
+            block_param: None,
+        }
+    }
+
+    pub(crate) fn req_num(&self) -> usize {
+        self.required_num
+    }
+
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.reqopt_num
+    }
+
     pub fn pos_num(&self) -> usize {
         self.pos_num
     }

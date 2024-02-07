@@ -518,6 +518,7 @@ pub struct ParamInfo {
     max_positional_args: usize,
     single_arg_expand: bool,
     discard_excess_positional_args: bool,
+    params: ParamsInfo,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -542,13 +543,14 @@ impl FuncInfo {
         name: impl Into<Option<IdentId>>,
         kind: FuncKind,
         meta: Meta,
-        max_positional_args: usize,
+        params: ParamsInfo,
     ) -> Self {
         let is_rest = if let FuncKind::ISeq(info) = &kind {
             info.is_rest()
         } else {
             false
         };
+        let max_positional_args = params.max_positional_args();
         let discard_excess_positional_args = meta.is_block_style() && !is_rest;
         let single_arg_expand = meta.is_block_style() && (max_positional_args > 1 || is_rest);
 
@@ -566,6 +568,7 @@ impl FuncInfo {
                 max_positional_args,
                 single_arg_expand,
                 discard_excess_positional_args,
+                params,
             }),
         }
     }
@@ -573,18 +576,17 @@ impl FuncInfo {
     fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
-        args: ParamsInfo,
+        params: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let max_positional_args = args.max_positional_args();
-        let info = ISeqInfo::new_method(func_id, name, args, loc, sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_method(func_id, 0, false),
-            max_positional_args,
+            params,
         )
     }
 
@@ -592,17 +594,16 @@ impl FuncInfo {
         func_id: FuncId,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        args: ParamsInfo,
+        params: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let max_positional_args = args.max_positional_args();
-        let info = ISeqInfo::new_block(func_id, mother, outer, args, loc, sourceinfo);
+        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_method(func_id, 0, true),
-            max_positional_args,
+            params,
         )
     }
 
@@ -617,7 +618,7 @@ impl FuncInfo {
             name,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_classdef(func_id, 0),
-            0,
+            ParamsInfo::default(),
         )
     }
 
@@ -628,7 +629,7 @@ impl FuncInfo {
                 abs_address: address as *const u8 as u64,
             },
             Meta::native(func_id),
-            usize::MAX,
+            ParamsInfo::new_native(0, usize::MAX, false),
         )
     }
 
@@ -639,7 +640,7 @@ impl FuncInfo {
                 abs_address: address as *const u8 as u64,
             },
             Meta::native_eval(func_id),
-            usize::MAX,
+            ParamsInfo::new_native(0, usize::MAX, false),
         )
     }
 
@@ -648,7 +649,7 @@ impl FuncInfo {
             name,
             FuncKind::AttrReader { ivar_name },
             Meta::native(func_id),
-            0,
+            ParamsInfo::new_attr_reader(),
         )
     }
 
@@ -657,7 +658,7 @@ impl FuncInfo {
             name,
             FuncKind::AttrWriter { ivar_name },
             Meta::native(func_id),
-            1,
+            ParamsInfo::new_attr_writer(),
         )
     }
 
@@ -684,6 +685,38 @@ impl FuncInfo {
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
         self.data.codeptr()
+    }
+
+    pub(crate) fn req_num(&self) -> usize {
+        self.params.params.req_num()
+    }
+
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.params.params.reqopt_num()
+    }
+
+    pub(crate) fn pos_num(&self) -> usize {
+        self.params.params.pos_num()
+    }
+
+    pub(crate) fn kw_names(&self) -> &[IdentId] {
+        &self.params.params.kw_names
+    }
+
+    pub(crate) fn kw_rest(&self) -> Option<SlotId> {
+        self.params.params.kw_rest
+    }
+
+    pub(crate) fn no_keyword(&self) -> bool {
+        self.kw_names().is_empty() && self.kw_rest().is_none()
+    }
+
+    pub(crate) fn is_rest(&self) -> bool {
+        self.params.params.is_rest()
+    }
+
+    pub(crate) fn is_block_style(&self) -> bool {
+        self.meta().is_block_style()
     }
 
     ///
