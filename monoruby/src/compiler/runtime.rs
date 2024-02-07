@@ -286,10 +286,9 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
-    len: usize,
+    src: *const Value,
     callee_lfp: LFP,
     callid: CallSiteId,
-    src: *const Value,
 ) -> Option<Value> {
     let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
     vm.set_frame_block(&globals.store[callid], callee_lfp);
@@ -299,10 +298,9 @@ pub(super) extern "C" fn vm_handle_arguments(
 pub(super) extern "C" fn jit_handle_arguments_no_block(
     vm: &mut Executor,
     globals: &mut Globals,
-    len: usize,
+    src: *const Value,
     callee_lfp: LFP,
     callid: CallSiteId,
-    src: *const Value,
 ) -> Option<Value> {
     let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
     Some(Value::integer(arg_num as i64))

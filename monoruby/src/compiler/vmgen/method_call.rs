@@ -118,14 +118,14 @@ impl Codegen {
     fn call(&mut self, _: bool) {
         monoasm! { &mut self.jit,
             // rdx <- len
-            movzxw rdx, [r13 + (POS_NUM)]; // rdi <- pos_num
+            movzxw r9, [r13 + (POS_NUM)]; // rdi <- pos_num
             movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movzxw r9, [r13 + (ARG_REG)]; // r9 <- %args
+            movzxw rdx, [r13 + (ARG_REG)]; // r9 <- %args
         }
-        self.vm_get_slot_addr(GP::R9); // r9 <- *args
+        self.vm_get_slot_addr(GP::Rdx); // r9 <- *args
         self.generic_handle_arguments(runtime::vm_handle_arguments);
         self.vm_handle_error();
         monoasm! { &mut self.jit,

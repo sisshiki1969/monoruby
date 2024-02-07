@@ -507,8 +507,8 @@ impl Codegen {
     fn generic_call(&mut self, callid: CallSiteId, callsite: &CallSiteInfo, error: DestLabel) {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
-            lea  r9, [r14 - (conv(callsite.args))];
-            movl rdx, (callsite.pos_num);
+            lea  rdx, [r14 - (conv(callsite.args))];
+            movl r9, (callsite.pos_num);
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);

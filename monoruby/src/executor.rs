@@ -837,12 +837,12 @@ fn positional_and_rest(
     caller: &CallSiteInfo,
     callee_info: &FuncInfo,
     src: *const Value,
-    len: usize,
     callee_lfp: LFP,
 ) -> (usize, Vec<Value>) {
     let max_pos = callee_info.max_positional_args();
     let no_push = callee_info.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
+    let len = caller.pos_num;
 
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
     if splat_pos.is_empty() {
@@ -901,12 +901,10 @@ impl Executor {
         let max_pos = callee_info.max_positional_args();
         let no_push = callee_info.discard_excess_positional_args();
         let caller = &globals.store[callid];
-        let len = caller.pos_num;
 
         let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
-        let (mut arg_num, mut rest) =
-            positional_and_rest(caller, callee_info, src, len, callee_lfp);
+        let (mut arg_num, mut rest) = positional_and_rest(caller, callee_info, src, callee_lfp);
         // single array argument expansion for blocks
         if arg_num == 1 && callee_info.single_arg_expand() {
             let v = unsafe { *dst };

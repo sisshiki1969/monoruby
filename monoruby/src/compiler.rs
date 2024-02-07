@@ -64,7 +64,7 @@ pub(crate) enum GP {
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
-    R9 = 9,
+    //R9 = 9,
     R13 = 13,
     R15 = 15,
 }
@@ -772,9 +772,9 @@ impl Codegen {
     ///
     /// ### in
     /// - r15: &FuncData
-    /// - rdx: arg_num
+    /// - rdx: src: *const Value
     /// - r8: CallsiteId
-    /// - r9: src: *const Value
+    /// - r9: arg_num
     ///
     /// ### out
     /// - rax: arg_num: Value
@@ -787,10 +787,9 @@ impl Codegen {
         f: extern "C" fn(
             &mut Executor,
             &mut Globals,
-            usize,
+            *const Value,
             LFP,
             CallSiteId,
-            *const Value,
         ) -> Option<Value>,
     ) {
         let l1 = self.jit.label();
@@ -806,7 +805,7 @@ impl Codegen {
             addq rdi, 16;
             jmp  l2;
         l1:
-            movq rdi, rdx;
+            movq rdi, r9;
             // TODO: We must support rest argument in native methods.
             addq rdi, (LBP_ARG0 / 8 + 64 + 1);
             andq rdi, (-2);
