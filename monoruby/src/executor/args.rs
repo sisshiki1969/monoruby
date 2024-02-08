@@ -49,7 +49,7 @@ fn positional(
     let splat_pos = &caller.splat_pos;
     let len = caller.pos_num;
 
-    if splat_pos.is_empty() {
+    let (mut arg_num, mut rest) = if splat_pos.is_empty() {
         if len <= max_pos {
             memcpy(src, dst, len);
             (len, vec![])
@@ -89,7 +89,18 @@ fn positional(
             }
         }
         (arg_num, rest)
+    };
+    // single array argument expansion for blocks
+    if arg_num == 1 && callee_info.single_arg_expand() {
+        let v = unsafe { *dst };
+        if let Some(ary) = v.try_array_ty() {
+            arg_num = 0;
+            for v in ary.iter() {
+                push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
+            }
+        }
     }
+    (arg_num, rest)
 }
 
 impl Executor {
@@ -105,24 +116,12 @@ impl Executor {
     ) -> Option<usize> {
         let callee_func_id = callee_lfp.meta().func_id();
         let callee_info = &globals[callee_func_id];
-        let max_pos = callee_info.max_positional_args();
-        let no_push = callee_info.discard_excess_positional_args();
         let caller = &globals.store[callid];
 
         // TODO: if caller is simple (no splat, no keywords), and callee is also simple (no optional, no rest, no keywords), we can optimize this.
 
         let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
-        let (mut arg_num, mut rest) = positional(caller, callee_info, src, dst);
-        // single array argument expansion for blocks
-        if arg_num == 1 && callee_info.single_arg_expand() {
-            let v = unsafe { *dst };
-            if let Some(ary) = v.try_array_ty() {
-                arg_num = 0;
-                for v in ary.iter() {
-                    push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-                }
-            }
-        }
+        let (arg_num, rest) = positional(caller, callee_info, src, dst);
 
         match &callee_info.kind {
             FuncKind::Builtin { .. } => {} // no keyword param and rest param for native func, attr_accessor, etc.

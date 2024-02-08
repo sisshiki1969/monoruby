@@ -392,9 +392,10 @@ impl AsmIr {
         self.exec_gc(bb.get_register());
         let using_xmm = bb.get_using_xmm();
         self.xmm_save(using_xmm);
-        let callsite = &store[callid];
-        self.set_arguments(bb, callsite);
-        self.unlink(bb, callsite.dst);
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
+        self.set_arguments(bb, caller, callee);
+        self.unlink(bb, caller.dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
@@ -408,19 +409,25 @@ impl AsmIr {
         });
     }
 
-    fn set_arguments(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let args = callsite.args;
-        let pos_num = callsite.pos_num as u16;
-        if callsite.has_splat() {
-            self.write_back_args(bb, callsite);
-            let splat_pos = callsite.splat_pos.clone();
-            self.inst.push(AsmInst::SetArgumentsWithSplat {
+    fn set_arguments(&mut self, bb: &mut BBContext, caller: &CallSiteInfo, callee: &FuncInfo) {
+        let args = caller.args;
+        let pos_num = caller.pos_num;
+        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
+        if caller.has_splat()
+            || single_arg_expand
+            || callee.is_rest()
+            || pos_num > callee.max_positional_args()
+        {
+            self.write_back_args(bb, caller);
+            let splat_pos = caller.splat_pos.clone();
+            self.inst.push(AsmInst::SetArguments {
                 splat_pos,
                 args,
-                pos_num,
+                pos_num: pos_num as u16,
             });
         } else {
-            for i in pos_num..callsite.len as u16 {
+            // write back keyword arguments.
+            for i in pos_num as u16..caller.len as u16 {
                 self.write_back_slot(bb, args + i);
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
@@ -963,7 +970,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - caller save registers
     ///
-    SetArgumentsWithSplat {
+    SetArguments {
         splat_pos: Vec<usize>,
         args: SlotId,
         pos_num: u16,
@@ -1569,7 +1576,7 @@ impl Codegen {
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
-            AsmInst::SetArgumentsWithSplat {
+            AsmInst::SetArguments {
                 splat_pos,
                 args,
                 pos_num,
