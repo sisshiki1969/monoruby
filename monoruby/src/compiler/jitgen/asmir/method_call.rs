@@ -247,25 +247,25 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
-        let callsite = &store[callid];
+        let caller = &store[callid];
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
-        self.setup_frame(meta, callsite);
+        self.setup_frame(meta, caller);
         //   rdi: args len
-        if callsite.pos_num == 1 && callee.single_arg_expand() {
+        if caller.pos_num == 1 && callee.single_arg_expand() {
             self.single_arg_expand();
         }
         match &callee.kind {
-            FuncKind::ISeq(info) => {
-                let kw_expansion = info.no_keyword() && callsite.kw_num() != 0;
-                if info.optional_num() == 0
-                    && info.kw_rest().is_none()
+            FuncKind::ISeq(_) => {
+                let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
+                if callee.opt_rest_num() == 0
+                    && callee.kw_rest().is_none()
                     && !kw_expansion
-                    && callsite.hash_splat_pos.is_empty()
+                    && caller.hash_splat_pos.is_empty()
                 {
                     // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
-                    if !info.no_keyword() {
-                        self.handle_keyword_args(callsite, info)
+                    if !callee.no_keyword() {
+                        self.handle_keyword_args(caller, callee)
                     }
                 } else {
                     self.gen_handle_arguments(callid, meta);
@@ -480,12 +480,12 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn handle_keyword_args(&mut self, callsite: &CallSiteInfo, info: &ISeqInfo) {
+    fn handle_keyword_args(&mut self, callsite: &CallSiteInfo, info: &FuncInfo) {
         let CallSiteInfo {
             kw_pos, kw_args, ..
         } = callsite;
         let mut callee_ofs = (info.pos_num() as i64 + 1) * 8 + LBP_SELF;
-        for param_name in &info.args.kw_names {
+        for param_name in info.kw_names() {
             match kw_args.get(param_name) {
                 Some(caller) => {
                     let caller_ofs = (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;

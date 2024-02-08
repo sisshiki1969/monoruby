@@ -206,12 +206,12 @@ impl ISeqInfo {
         self.args.is_rest()
     }
 
-    ///
+    /*///
     /// Get a number of optional and rest parameters.
     ///
     pub(crate) fn optional_num(&self) -> usize {
         self.args.pos_num - self.args.required_num
-    }
+    }*/
 
     ///
     /// Get a number of required parameters.
@@ -439,6 +439,13 @@ impl ParamsInfo {
 
     pub(crate) fn reqopt_num(&self) -> usize {
         self.reqopt_num
+    }
+
+    ///
+    /// The number of optional + rest arguments.
+    ///
+    pub(crate) fn opt_rest_num(&self) -> usize {
+        self.pos_num - self.required_num
     }
 
     pub fn pos_num(&self) -> usize {
