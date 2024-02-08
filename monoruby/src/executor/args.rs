@@ -33,7 +33,12 @@ fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
     }
 }
 
-fn positional_and_rest(
+///
+/// Set positional arguments.
+///
+/// returns (the number of arguments which is set in this function, the rest arguments).
+///
+fn positional(
     caller: &CallSiteInfo,
     callee_info: &FuncInfo,
     src: *const Value,
@@ -89,6 +94,9 @@ fn positional_and_rest(
 }
 
 impl Executor {
+    ///
+    /// Set positional arguments (req, opt, rest) and keyword arguments (kw, kw_rest) to the callee frame.
+    ///
     pub(crate) fn set_frame_arguments(
         &mut self,
         globals: &mut Globals,
@@ -104,7 +112,7 @@ impl Executor {
 
         let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
-        let (mut arg_num, mut rest) = positional_and_rest(caller, callee_info, src, callee_lfp);
+        let (mut arg_num, mut rest) = positional(caller, callee_info, src, callee_lfp);
         // single array argument expansion for blocks
         if arg_num == 1 && callee_info.single_arg_expand() {
             let v = unsafe { *dst };
@@ -116,7 +124,7 @@ impl Executor {
             }
         }
 
-        match &globals[callee_func_id].kind {
+        match &callee_info.kind {
             FuncKind::Builtin { .. } => {} // no keyword param and rest param for native func, attr_accessor, etc.
             FuncKind::AttrReader { .. } => {} // no keyword param and rest param for native func, attr_accessor, etc.
             FuncKind::AttrWriter { .. } => {} // no keyword param and rest param for native func, attr_accessor, etc.
@@ -140,6 +148,9 @@ impl Executor {
         Some(arg_num)
     }
 
+    ///
+    /// Set block argument to the callee frame.
+    ///
     pub(crate) fn set_frame_block(&mut self, caller: &CallSiteInfo, callee_lfp: LFP) {
         let CallSiteInfo {
             block_fid,
