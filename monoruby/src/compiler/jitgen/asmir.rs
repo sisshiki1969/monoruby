@@ -1581,7 +1581,7 @@ impl Codegen {
                 args,
                 pos_num,
             } => {
-                self.jit_set_arguments_splat(&splat_pos, args, pos_num);
+                self.jit_generic_set_arguments(&splat_pos, args, pos_num);
             }
 
             AsmInst::Ret => {

@@ -169,6 +169,8 @@ impl Executor {
     }
 
     ///
+    /// Handle a rest arg, and fill optinal args.
+    ///
     /// if argument mismatch occurs, return None.
     ///
     fn handle_positional2(
@@ -363,7 +365,7 @@ impl Executor {
         }
     }
 
-    pub(crate) fn handle_arguments(
+    pub(crate) fn jit_geneirc_handle_arguments(
         &mut self,
         globals: &mut Globals,
         callid: CallSiteId,

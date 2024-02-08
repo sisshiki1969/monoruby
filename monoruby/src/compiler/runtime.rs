@@ -309,7 +309,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 ///
 /// Handle arguments.
 ///
-pub(super) extern "C" fn jit_handle_arguments(
+pub(super) extern "C" fn jit_generic_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
@@ -317,7 +317,7 @@ pub(super) extern "C" fn jit_handle_arguments(
     callee_lfp: LFP,
     meta: Meta,
 ) -> Option<Value> {
-    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)
+    vm.jit_geneirc_handle_arguments(globals, callid, arg_num, callee_lfp, meta)
 }
 
 #[repr(C)]

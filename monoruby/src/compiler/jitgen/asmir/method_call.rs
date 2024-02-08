@@ -268,7 +268,20 @@ impl Codegen {
                         self.handle_keyword_args(caller, callee)
                     }
                 } else {
-                    self.gen_handle_arguments(callid, meta);
+                    monoasm! { &mut self.jit,
+                        movl rdx, (callid.get());
+                        lea  r8, [rsp - 16];   // callee_lfp
+                        movq r9, (meta.get());
+                        movq rcx, rdi;
+                        subq rsp, 4088;
+                        pushq rdi;
+                        movq rdi, rbx; // &mut Executor
+                        movq rsi, r12; // &mut Globals
+                        movq rax, (runtime::jit_generic_handle_arguments);
+                        call rax;
+                        popq rdi;
+                        addq rsp, 4088;
+                    }
                     self.handle_error(error);
                 }
             }
@@ -312,23 +325,6 @@ impl Codegen {
 
         self.xmm_restore(using_xmm);
         self.handle_error(error);
-    }
-
-    fn gen_handle_arguments(&mut self, callid: CallSiteId, meta: Meta) {
-        monoasm! { &mut self.jit,
-            movl rdx, (callid.get());
-            lea  r8, [rsp - 16];   // callee_lfp
-            movq r9, (meta.get());
-            movq rcx, rdi;
-            subq rsp, 4088;
-            pushq rdi;
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::jit_handle_arguments);
-            call rax;
-            popq rdi;
-            addq rsp, 4088;
-        }
     }
 
     ///
@@ -598,7 +594,7 @@ impl Codegen {
     }
 
     ///
-    /// Set arguments.
+    /// Set req, opt and rest arguments.
     ///
     /// ### out
     /// - rdi: the number of arguments
@@ -606,7 +602,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn jit_set_arguments_splat(
+    pub(super) fn jit_generic_set_arguments(
         &mut self,
         splat_pos: &[usize],
         args: SlotId,
