@@ -2,6 +2,9 @@ use indexmap::IndexMap;
 
 use super::*;
 
+mod args;
+pub(crate) use args::*;
+
 //
 // Runtime functions.
 //
@@ -291,9 +294,10 @@ pub(super) extern "C" fn vm_handle_arguments(
     callee_lfp: LFP,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match vm.set_frame_arguments(globals, callee_lfp, callid, src) {
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
         Ok(arg_num) => {
-            vm.set_frame_block(&globals.store[callid], callee_lfp);
+            set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::integer(arg_num as i64))
         }
         Err(err) => {
@@ -310,7 +314,8 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callee_lfp: LFP,
     callid: CallSiteId,
 ) -> Option<Value> {
-    match vm.set_frame_arguments(globals, callee_lfp, callid, src) {
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
         Ok(arg_num) => Some(Value::integer(arg_num as i64)),
         Err(err) => {
             vm.set_error(err);
@@ -330,7 +335,13 @@ pub(super) extern "C" fn jit_generic_handle_arguments(
     callee_lfp: LFP,
     meta: Meta,
 ) -> Option<Value> {
-    vm.jit_geneirc_handle_arguments(globals, callid, arg_num, callee_lfp, meta)
+    match jit_geneirc_handle_arguments(globals, callid, arg_num, callee_lfp, vm.cfp().lfp(), meta) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 #[repr(C)]

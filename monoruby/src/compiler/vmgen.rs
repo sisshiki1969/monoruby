@@ -1609,7 +1609,7 @@ impl Codegen {
 }
 
 extern "C" fn handle_invoker_arguments(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &Globals,
     callee_lfp: LFP,
     mut arg_num: usize,
@@ -1621,7 +1621,7 @@ extern "C" fn handle_invoker_arguments(
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
             // required + optional + rest
-            vm.handle_positional(info, arg_num, callee_lfp, None);
+            super::runtime::handle_positional(info, arg_num, callee_lfp, None).unwrap();
             // keyword
             let params = &info.args.kw_names;
             let callee_kw_pos = info.pos_num() + 1;

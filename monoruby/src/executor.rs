@@ -1,7 +1,6 @@
 use super::*;
 use crate::{builtins::Arg, bytecodegen::*};
 
-pub mod args;
 pub mod frame;
 pub mod inline;
 pub mod op;
@@ -287,14 +286,6 @@ impl Executor {
 
     pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
-    }
-
-    pub(crate) fn err_wrong_number_of_arg_range(
-        &mut self,
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) {
-        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
     }
 
     ///

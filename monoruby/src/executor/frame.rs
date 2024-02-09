@@ -333,7 +333,7 @@ impl LFP {
     ///
     /// Set block.
     ///
-    pub(super) fn set_block(&self, bh: Option<BlockHandler>) {
+    pub fn set_block(&self, bh: Option<BlockHandler>) {
         unsafe { *(self.sub(LBP_BLOCK) as *mut _) = bh }
     }
 
