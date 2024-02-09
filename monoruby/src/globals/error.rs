@@ -77,18 +77,23 @@ impl MonorubyErr {
         }
     }
 
-    pub fn show_error_message_and_all_loc(&self) {
-        eprintln!("{}", self.get_error_message());
+    pub fn show_error_message_and_all_loc(&self, globals: &Globals) {
+        eprintln!("{}", self.get_error_message(globals));
         self.show_all_loc();
     }
 
-    pub fn show_error_message_and_loc(&self) {
-        eprintln!("{}", self.get_error_message());
+    pub fn show_error_message_and_loc(&self, globals: &Globals) {
+        eprintln!("{}", self.get_error_message(globals));
         self.show_loc();
     }
 
-    pub fn get_error_message(&self) -> String {
-        format!("{} ({})", self.msg, self.get_class_name())
+    pub fn get_error_message(&self, globals: &Globals) -> String {
+        format!(
+            "{} {} ({})",
+            self.msg,
+            self.kind.show(globals),
+            self.get_class_name()
+        )
     }
 
     pub fn get_class_name(&self) -> &str {
@@ -530,6 +535,15 @@ pub enum MonorubyErrKind {
     Fiber,
     StopIteration,
     Exception,
+}
+
+impl MonorubyErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            MonorubyErrKind::Type(kind) => kind.show(globals),
+            _ => String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

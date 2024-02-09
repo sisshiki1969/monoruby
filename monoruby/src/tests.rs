@@ -178,7 +178,7 @@ pub fn run_test_error(code: &str) {
     let mut globals = Globals::new(1, false);
     match globals.run(code, std::path::Path::new("")) {
         Ok(_) => panic!(),
-        Err(err) => err.show_error_message_and_all_loc(),
+        Err(err) => err.show_error_message_and_all_loc(&globals),
     }
 }
 
@@ -190,7 +190,7 @@ fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
     let res = match globals.run(code, std::path::Path::new("")) {
         Ok(res) => res,
         Err(err) => {
-            err.show_error_message_and_all_loc();
+            err.show_error_message_and_all_loc(&globals);
             panic!();
         }
     };

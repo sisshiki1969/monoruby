@@ -104,7 +104,7 @@ impl Executor {
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../startup/startup.rb").to_string();
         if let Err(err) = executor.exec_script(globals, code, path) {
-            err.show_error_message_and_all_loc();
+            err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
         };
         #[cfg(feature = "emit-bc")]
