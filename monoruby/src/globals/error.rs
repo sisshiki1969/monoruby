@@ -63,6 +63,10 @@ impl MonorubyErr {
         &self.trace
     }
 
+    pub fn take_trace(&mut self) -> Vec<(Loc, SourceInfoRef)> {
+        std::mem::take(&mut self.trace)
+    }
+
     pub fn show_all_loc(&self) {
         for (loc, sourceinfo) in &self.trace {
             sourceinfo.show_loc(loc);
@@ -88,18 +92,17 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self, globals: &Globals) -> String {
-        format!(
-            "{} {} ({})",
-            self.msg,
-            self.kind.show(globals),
-            self.get_class_name()
-        )
+        format!("{} ({})", self.show(globals), self.get_class_name())
+    }
+
+    pub fn show(&self, globals: &Globals) -> String {
+        format!("{}{}", self.msg, self.kind.show(globals),)
     }
 
     pub fn get_class_name(&self) -> &str {
         match &self.kind {
             MonorubyErrKind::Exception => "Exception",
-            MonorubyErrKind::NotMethod => "NoMethodError",
+            MonorubyErrKind::NotMethod(_) => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
@@ -231,43 +234,24 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn method_not_found(globals: &Globals, name: IdentId, obj: Value) -> MonorubyErr {
+    pub(crate) fn method_not_found(name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "undefined method `{name}' for {}:{}",
-                globals.inspect(obj),
-                obj.get_real_class_name(globals)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFound { name, obj }),
+            "",
         )
     }
 
-    pub(crate) fn method_not_found_for_class(
-        globals: &Globals,
-        name: IdentId,
-        class: ClassId,
-    ) -> MonorubyErr {
+    pub(crate) fn method_not_found_for_class(name: IdentId, class: ClassId) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "undefined method `{name}' for {}",
-                globals.get_class_name(class)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFoundForClass { name, class }),
+            "",
         )
     }
 
-    pub(crate) fn private_method_called(
-        globals: &Globals,
-        name: IdentId,
-        obj: Value,
-    ) -> MonorubyErr {
+    pub(crate) fn private_method_called(name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "private method `{name}' called for {}:{}",
-                globals.to_s(obj),
-                obj.get_real_class_name(globals)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::PrivateMethodCalled { name, obj }),
+            "",
         )
     }
 
@@ -516,7 +500,7 @@ impl MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     MethodReturn(Value, LFP),
-    NotMethod,
+    NotMethod(NoMethodErrKind),
     Arguments,
     Syntax,
     Unimplemented,
@@ -541,7 +525,36 @@ impl MonorubyErrKind {
     pub fn show(&self, globals: &Globals) -> String {
         match self {
             MonorubyErrKind::Type(kind) => kind.show(globals),
+            MonorubyErrKind::NotMethod(kind) => kind.show(globals),
             _ => String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoMethodErrKind {
+    MethodNotFound { name: IdentId, obj: Value },
+    MethodNotFoundForClass { name: IdentId, class: ClassId },
+    PrivateMethodCalled { name: IdentId, obj: Value },
+}
+
+impl NoMethodErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            NoMethodErrKind::MethodNotFound { name, obj } => format!(
+                "undefined method `{name}' for {}:{}",
+                globals.inspect(*obj),
+                obj.get_real_class_name(globals)
+            ),
+            NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
+                "undefined method `{name}' for {}",
+                globals.get_class_name(*class)
+            ),
+            NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
+                "private method `{name}' called for {}:{}",
+                globals.to_s(*obj),
+                obj.get_real_class_name(globals)
+            ),
         }
     }
 }

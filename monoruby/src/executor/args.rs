@@ -113,7 +113,7 @@ impl Executor {
         callee_lfp: LFP,
         callid: CallSiteId,
         src: *const Value,
-    ) -> Option<usize> {
+    ) -> Result<usize> {
         let callee_func_id = callee_lfp.meta().func_id();
         let callee_info = &globals[callee_func_id];
         let caller = &globals.store[callid];
@@ -139,12 +139,12 @@ impl Executor {
                     self.handle_positional2(&callee_info, arg_num, callee_lfp, Some(ex), rest)?;
                 } else {
                     self.handle_positional2(&callee_info, arg_num, callee_lfp, None, rest)?;
-                    self.handle_keyword2(&callee_info, caller, callee_lfp);
+                    self.handle_keyword(&callee_info, caller, callee_lfp)?;
                 }
             }
         }
 
-        Some(arg_num)
+        Ok(arg_num)
     }
 
     ///
@@ -180,7 +180,7 @@ impl Executor {
         mut callee_lfp: LFP,
         ex: Option<Value>,
         mut rest_arg: Vec<Value>,
-    ) -> Option<Value> {
+    ) -> Result<()> {
         let req_num = info.req_num();
         let reqopt_num = info.reqopt_num();
         let is_rest = info.is_rest();
@@ -195,10 +195,12 @@ impl Executor {
                     }
                     callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(rest_arg)));
                 } else if !is_block_style {
-                    self.err_wrong_number_of_arg_range(total_pos_num, req_num..=reqopt_num);
-                    return None;
+                    return Err(MonorubyErr::wrong_number_of_arg_range(
+                        total_pos_num,
+                        req_num..=reqopt_num,
+                    ));
                 }
-                return Some(Value::nil());
+                return Ok(());
             }
 
             if total_pos_num >= req_num {
@@ -206,8 +208,10 @@ impl Executor {
                 fill(callee_lfp, reqopt_num, len, None);
             } else {
                 if !is_block_style {
-                    self.err_wrong_number_of_arg_range(total_pos_num, req_num..=reqopt_num);
-                    return None;
+                    return Err(MonorubyErr::wrong_number_of_arg_range(
+                        total_pos_num,
+                        req_num..=reqopt_num,
+                    ));
                 }
                 let len = req_num - (arg_num + ex_num);
                 fill(callee_lfp, req_num, len, Some(Value::nil()));
@@ -222,13 +226,18 @@ impl Executor {
                 callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
             }
         }
-        Some(Value::nil())
+        Ok(())
     }
 
     ///
     /// Handle keyword arguments.
     ///
-    fn handle_keyword2(&mut self, info: &FuncInfo, callsite: &CallSiteInfo, mut callee_lfp: LFP) {
+    fn handle_keyword(
+        &mut self,
+        info: &FuncInfo,
+        callsite: &CallSiteInfo,
+        mut callee_lfp: LFP,
+    ) -> Result<()> {
         let CallSiteInfo {
             kw_pos,
             kw_args,
@@ -238,12 +247,23 @@ impl Executor {
 
         let caller_lfp = self.cfp().lfp();
         let callee_kw_pos = info.pos_num() + 1;
+        let mut used = 0;
         for (id, param_name) in info.kw_names().iter().enumerate() {
             unsafe {
                 let v = kw_args
                     .get(param_name)
                     .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
+                if v.is_some() {
+                    used += 1;
+                }
                 callee_lfp.set_register(callee_kw_pos + id, v);
+            }
+        }
+        if used < kw_args.len() && info.kw_rest().is_none() {
+            for (k, _) in kw_args.iter() {
+                if !info.kw_names().contains(k) {
+                    return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{k}")));
+                }
             }
         }
 
@@ -251,11 +271,13 @@ impl Executor {
             .iter()
             .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
         {
+            let mut used = 0;
             for (id, param_name) in info.kw_names().iter().enumerate() {
+                let h = h.expect_hash()?;
                 unsafe {
                     let sym = Value::symbol(*param_name);
-                    // TODO: We must fix as_hash() -> expect_hash() but it needs &mut Globals...
-                    if let Some(v) = h.as_hash().get(sym) {
+                    if let Some(v) = h.get(sym) {
+                        used += 1;
                         let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                         if (*ptr).is_some() {
                             eprintln!(
@@ -264,6 +286,16 @@ impl Executor {
                             );
                         }
                         *ptr = Some(v);
+                    }
+                }
+                if used < h.len() && info.kw_rest().is_none() {
+                    for (k, _) in h.iter() {
+                        let sym = k.as_symbol();
+                        if !info.kw_names().contains(&sym) {
+                            return Err(MonorubyErr::argumenterr(format!(
+                                "unknown keyword: :{sym}"
+                            )));
+                        }
                     }
                 }
             }
@@ -294,76 +326,7 @@ impl Executor {
 
             unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
         }
-    }
-
-    ///
-    /// Handle keyword arguments.
-    ///
-    fn handle_keyword(&mut self, info: &ISeqInfo, callsite: &CallSiteInfo, mut callee_lfp: LFP) {
-        let CallSiteInfo {
-            kw_pos,
-            kw_args,
-            hash_splat_pos,
-            ..
-        } = callsite;
-
-        let caller_lfp = self.cfp().lfp();
-        let callee_kw_pos = info.pos_num() + 1;
-        for (id, param_name) in info.args.kw_names.iter().enumerate() {
-            unsafe {
-                let v = kw_args
-                    .get(param_name)
-                    .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
-                callee_lfp.set_register(callee_kw_pos + id, v);
-            }
-        }
-
-        for h in hash_splat_pos
-            .iter()
-            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
-        {
-            for (id, param_name) in info.args.kw_names.iter().enumerate() {
-                unsafe {
-                    let sym = Value::symbol(*param_name);
-                    if let Some(v) = h.as_hash().get(sym) {
-                        let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
-                        if (*ptr).is_some() {
-                            eprintln!(
-                                " warning: key :{} is duplicated and overwritten",
-                                param_name
-                            );
-                        }
-                        *ptr = Some(v);
-                    }
-                }
-            }
-        }
-
-        if let Some(rest) = info.kw_rest() {
-            let mut kw_rest = IndexMap::default();
-            for (name, i) in kw_args.iter() {
-                if info.args.kw_names.contains(name) {
-                    continue;
-                }
-                let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
-                kw_rest.insert(HashKey(Value::symbol(*name)), v);
-            }
-            for h in hash_splat_pos
-                .iter()
-                .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
-            {
-                let mut h = h.as_hash().clone();
-                for name in info.args.kw_names.iter() {
-                    let sym = Value::symbol(*name);
-                    h.remove(sym);
-                }
-                for (k, v) in h {
-                    kw_rest.insert(HashKey(k), v);
-                }
-            }
-
-            unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
-        }
+        Ok(())
     }
 
     pub(crate) fn jit_geneirc_handle_arguments(
@@ -375,7 +338,8 @@ impl Executor {
         meta: Meta,
     ) -> Option<Value> {
         let callee_func_id = meta.func_id();
-        match &globals[callee_func_id].kind {
+        let callee = &globals[callee_func_id];
+        match &callee.kind {
             FuncKind::ISeq(info) => {
                 let caller = &globals.store[callid];
                 if info.no_keyword() && caller.kw_num() != 0 {
@@ -389,7 +353,10 @@ impl Executor {
                     self.handle_positional(&info, arg_num, callee_lfp, Some(ex))?;
                 } else {
                     self.handle_positional(&info, arg_num, callee_lfp, None)?;
-                    self.handle_keyword(&info, caller, callee_lfp);
+                    if let Err(err) = self.handle_keyword(callee, caller, callee_lfp) {
+                        self.set_error(err);
+                        return None;
+                    };
                 }
             }
             _ => {} // no keyword param and rest param for native func, attr_accessor, etc.

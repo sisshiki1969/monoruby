@@ -139,6 +139,20 @@ mod test {
         end
         "#,
         );
+        run_test_error(
+            r#"
+        def f(a:1)
+        end
+        f(b:1)
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f(a:1)
+        end
+        f(**{b:1})
+        "#,
+        );
     }
 
     #[test]

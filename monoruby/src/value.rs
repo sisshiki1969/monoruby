@@ -372,8 +372,8 @@ impl Value {
         RValue::new_exception(kind, msg, trace, class_id).pack()
     }
 
-    pub fn new_exception_from_err(err: MonorubyErr, class_id: ClassId) -> Self {
-        RValue::new_exception_from_err(err, class_id).pack()
+    pub fn new_exception_from_err(globals: &Globals, err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue::new_exception_from_err(globals, err, class_id).pack()
     }
 
     pub fn new_time(time: TimeInner) -> Self {

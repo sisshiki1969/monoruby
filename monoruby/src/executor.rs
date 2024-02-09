@@ -315,7 +315,7 @@ impl Executor {
 
     fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
         let class_id = globals.get_error_class(&err);
-        Value::new_exception_from_err(err, class_id)
+        Value::new_exception_from_err(globals, err, class_id)
     }
 }
 

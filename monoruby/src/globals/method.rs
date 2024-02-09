@@ -184,7 +184,7 @@ impl Globals {
         let class_id = obj.class();
         let entry = match self.check_method_for_class(class_id, old_name) {
             Some(func) => func,
-            None => return Err(MonorubyErr::method_not_found(self, old_name, obj)),
+            None => return Err(MonorubyErr::method_not_found(old_name, obj)),
         };
         self.add_method(obj.class(), new_name, entry.func_id(), entry.visibility);
         Ok(())

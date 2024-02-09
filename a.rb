@@ -1,9 +1,4 @@
-def f
-	yield [1,2,3]
+def fu(a:1)
 end
 
-10.times do
-	f do |a, *b|
-		puts "a:#{a} b:#{b}"
-	end
-end
+fu(b:1)

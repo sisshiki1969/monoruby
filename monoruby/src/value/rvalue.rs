@@ -602,10 +602,14 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_exception_from_err(err: MonorubyErr, class_id: ClassId) -> Self {
+    pub(super) fn new_exception_from_err(
+        globals: &Globals,
+        err: MonorubyErr,
+        class_id: ClassId,
+    ) -> Self {
         RValue {
             header: Header::new(class_id, ObjKind::EXCEPTION),
-            kind: ObjKind::exception_from(err),
+            kind: ObjKind::exception_from(err, globals),
             var_table: None,
         }
     }
@@ -1075,13 +1079,14 @@ impl ObjKind {
         }
     }
 
-    fn exception_from(err: MonorubyErr) -> Self {
+    fn exception_from(mut err: MonorubyErr, globals: &Globals) -> Self {
         let kind = IdentId::get_id(err.get_class_name());
+        let msg = err.show(globals);
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
                 class_name: kind,
-                msg: err.msg().to_string(),
-                trace: err.trace().to_vec(),
+                msg,
+                trace: err.take_trace(),
             })),
         }
     }

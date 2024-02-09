@@ -34,7 +34,7 @@ pub(super) extern "C" fn find_method(
         match globals.check_super(self_val, func_name) {
             Some(entry) => Some(entry.func_id()),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 None
             }
         }
@@ -63,7 +63,7 @@ pub(super) extern "C" fn find_method2(
         match globals.check_super(self_val, func_name) {
             Some(entry) => Some(entry.func_id()),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 None
             }
         }
@@ -93,7 +93,7 @@ pub(super) extern "C" fn vm_find_method(
         match globals.check_super(self_val, func_name) {
             Some(entry) => entry.func_id(),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 return None;
             }
         }
@@ -291,9 +291,16 @@ pub(super) extern "C" fn vm_handle_arguments(
     callee_lfp: LFP,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
-    vm.set_frame_block(&globals.store[callid], callee_lfp);
-    Some(Value::integer(arg_num as i64))
+    match vm.set_frame_arguments(globals, callee_lfp, callid, src) {
+        Ok(arg_num) => {
+            vm.set_frame_block(&globals.store[callid], callee_lfp);
+            Some(Value::integer(arg_num as i64))
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(super) extern "C" fn jit_handle_arguments_no_block(
@@ -303,8 +310,13 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callee_lfp: LFP,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let arg_num = vm.set_frame_arguments(globals, callee_lfp, callid, src)?;
-    Some(Value::integer(arg_num as i64))
+    match vm.set_frame_arguments(globals, callee_lfp, callid, src) {
+        Ok(arg_num) => Some(Value::integer(arg_num as i64)),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 ///
