@@ -85,6 +85,7 @@ pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
     /// bit 3:  0:no eval 1:eval(which possibly manipulates stack slots in outer frames)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
@@ -115,6 +116,7 @@ impl Meta {
     pub fn new(
         func_id: Option<FuncId>,
         reg_num: u16,
+        is_simple: bool,
         is_eval: bool,
         is_native: bool,
         is_class_def: bool,
@@ -123,7 +125,8 @@ impl Meta {
         Self {
             func_id,
             reg_num,
-            kind: (is_eval as u8) << 3
+            kind: (is_simple as u8) << 4
+                | (is_eval as u8) << 3
                 | (is_block_style as u8) << 2
                 | (is_native as u8) << 1
                 | is_class_def as u8,
@@ -135,22 +138,35 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
-    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64, is_block_style: bool) -> Self {
+    fn vm_method(
+        func_id: impl Into<Option<FuncId>>,
+        reg_num: i64,
+        is_block_style: bool,
+        is_simple: bool,
+    ) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false, false, is_block_style)
+        Self::new(
+            func_id.into(),
+            reg_num,
+            is_simple,
+            false,
+            false,
+            false,
+            is_block_style,
+        )
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false, true, false)
+        Self::new(func_id.into(), reg_num, true, false, false, true, false)
     }
 
-    fn native(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, false, true, false, false)
+    fn native(func_id: FuncId, is_simple: bool) -> Self {
+        Self::new(Some(func_id), 1, is_simple, false, true, false, false)
     }
 
-    fn native_eval(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, true, true, false, false)
+    fn native_eval(func_id: FuncId, is_simple: bool) -> Self {
+        Self::new(Some(func_id), 1, is_simple, true, true, false, false)
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -203,11 +219,11 @@ mod test {
 
     #[test]
     fn meta_test() {
-        let meta = Meta::vm_method(FuncId::new(12), 42, false);
+        let meta = Meta::vm_method(FuncId::new(12), 42, false, false);
         assert_eq!(FuncId::new(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
         assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId::new(42), -1, false);
+        let mut meta = Meta::vm_method(FuncId::new(42), -1, false, false);
         assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
         meta.set_reg_num(12);
@@ -300,12 +316,13 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
+        Ok(self.add_method_iseq(name, args, is_block_style, loc, sourceinfo))
     }
 
     pub(super) fn add_block(
@@ -370,11 +387,12 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         args: ParamsInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, args, is_block_style, loc, sourceinfo);
         self.info.push(info);
         func_id
     }
@@ -577,6 +595,7 @@ impl FuncInfo {
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
         params: ParamsInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -585,7 +604,12 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, false),
+            Meta::vm_method(
+                func_id,
+                0,
+                is_block_style,
+                params.is_simple() && !is_block_style,
+            ),
             params,
         )
     }
@@ -602,7 +626,7 @@ impl FuncInfo {
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, true),
+            Meta::vm_method(func_id, 0, true, false),
             params,
         )
     }
@@ -623,24 +647,26 @@ impl FuncInfo {
     }
 
     fn new_native(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
+        let params = ParamsInfo::new_native(0, usize::MAX, false);
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native(func_id),
-            ParamsInfo::new_native(0, usize::MAX, false),
+            Meta::native(func_id, params.is_simple()),
+            params,
         )
     }
 
     fn new_native_eval(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
+        let params = ParamsInfo::new_native(0, usize::MAX, false);
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native_eval(func_id),
-            ParamsInfo::new_native(0, usize::MAX, false),
+            Meta::native_eval(func_id, params.is_simple()),
+            params,
         )
     }
 
@@ -648,7 +674,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::AttrReader { ivar_name },
-            Meta::native(func_id),
+            Meta::native(func_id, true),
             ParamsInfo::new_attr_reader(),
         )
     }
@@ -657,7 +683,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::AttrWriter { ivar_name },
-            Meta::native(func_id),
+            Meta::native(func_id, true),
             ParamsInfo::new_attr_writer(),
         )
     }

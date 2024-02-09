@@ -301,6 +301,13 @@ impl CallSite {
     fn has_splat(&self) -> bool {
         !self.splat_pos.is_empty()
     }
+
+    ///
+    /// This call site has no keyword arguments, no splat arguments, and no block argument.
+    ///
+    fn is_simple(&self) -> bool {
+        self.kw.is_none() && !self.has_splat() && self.block_arg.is_none()
+    }
 }
 
 ///
@@ -327,6 +334,7 @@ enum Functions {
     Method {
         name: Option<IdentId>,
         info: BlockInfo,
+        is_block_style: bool,
     },
     ClassDef {
         name: Option<IdentId>,
@@ -527,7 +535,11 @@ impl BytecodeGen {
     }
 
     fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::Method { name, info }
+        Functions::Method {
+            name,
+            info,
+            is_block_style: false,
+        }
     }
 
     fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {

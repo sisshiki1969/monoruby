@@ -180,6 +180,7 @@ impl Store {
                 lvar: LvarCollector::new(),
                 loc: Loc::default(),
             },
+            false,
             Loc::default(),
             sourceinfo,
         )
@@ -189,10 +190,12 @@ impl Store {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_method(name, info, loc, sourceinfo)
+        self.functions
+            .add_method(name, info, is_block_style, loc, sourceinfo)
     }
 
     pub fn add_classdef(

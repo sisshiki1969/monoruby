@@ -38,7 +38,7 @@ impl Codegen {
     /// version:  class version
     /// fid:      FuncId
     /// ~~~
-    pub(super) fn vm_call(&mut self, has_splat: bool) -> CodePtr {
+    pub(super) fn vm_call(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
         let slow_path1 = self.jit.label();
@@ -69,7 +69,7 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-        self.call(has_splat);
+        self.call(is_simple);
         self.fetch_and_dispatch();
 
         self.slow_path(exec, slow_path1, slow_path2);
@@ -117,15 +117,14 @@ impl Codegen {
     ///
     fn call(&mut self, _: bool) {
         monoasm! { &mut self.jit,
-            // rdx <- len
-            movzxw r9, [r13 + (POS_NUM)]; // rdi <- pos_num
-            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movzxw rdx, [r13 + (ARG_REG)]; // r9 <- %args
+            movl r8, [r13 + (CALLSITE_ID)]; // r8 <- CallSiteId
+            movzxw r9, [r13 + (POS_NUM)]; // r9 <- pos_num
+            movzxw rdx, [r13 + (ARG_REG)]; // rdx <- %args
         }
-        self.vm_get_slot_addr(GP::Rdx); // r9 <- *args
+        self.vm_get_slot_addr(GP::Rdx);
         self.generic_handle_arguments(runtime::vm_handle_arguments);
         self.vm_handle_error();
         monoasm! { &mut self.jit,

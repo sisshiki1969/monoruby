@@ -372,14 +372,12 @@ impl BytecodeGen {
             }
             BcIr::MethodCall(box callsite) => {
                 // 30, 31
-                let has_splat = callsite.has_splat();
-                let opcode = if has_splat { 30 } else { 31 };
+                let opcode = if callsite.is_simple() { 30 } else { 31 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
             BcIr::MethodCallBlock(box callsite) => {
                 // 32, 33
-                let has_splat = callsite.has_splat();
-                let opcode = if has_splat { 32 } else { 33 };
+                let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
             BcIr::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
@@ -650,7 +648,11 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
+            Functions::Method {
+                name,
+                info,
+                is_block_style,
+            } => store.add_method(name, info, is_block_style, loc, sourceinfo),
             Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,

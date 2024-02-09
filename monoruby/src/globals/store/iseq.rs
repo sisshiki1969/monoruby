@@ -459,4 +459,11 @@ impl ParamsInfo {
     pub fn is_rest(&self) -> bool {
         self.pos_num != self.reqopt_num
     }
+
+    pub fn is_simple(&self) -> bool {
+        self.opt_rest_num() == 0
+            && self.kw_names.is_empty()
+            && self.kw_rest.is_none()
+            && self.block_param.is_none()
+    }
 }

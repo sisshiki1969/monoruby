@@ -207,7 +207,7 @@ impl Codegen {
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values);
         let (rem_rr, rem_ri, rem_ir) = self.vm_binops(rem_values);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values);
-        let vm_call_splat = self.vm_call(true);
+        let vm_call_simple = self.vm_call(true);
         let vm_call = self.vm_call(false);
 
         self.dispatch[1] = self.vm_singleton_method_def();
@@ -236,9 +236,9 @@ impl Codegen {
         self.dispatch[27] = self.vm_load_cvar();
         self.dispatch[28] = self.vm_load_svar();
         self.dispatch[29] = self.vm_store_cvar();
-        self.dispatch[30] = vm_call_splat;
+        self.dispatch[30] = vm_call_simple;
         self.dispatch[31] = vm_call;
-        self.dispatch[32] = vm_call_splat;
+        self.dispatch[32] = vm_call_simple;
         self.dispatch[33] = vm_call;
         self.dispatch[34] = self.vm_yield();
         self.dispatch[35] = self.vm_array();

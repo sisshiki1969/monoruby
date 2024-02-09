@@ -1250,10 +1250,10 @@ impl BcPc {
                 },
                 30..=31 => {
                     let cached_fid = self.cached_fid();
-                    let has_splat = opcode == 30;
+                    let is_simple = opcode == 30;
 
                     if let Some(fid) = cached_fid {
-                        if !has_splat {
+                        if is_simple {
                             if let Some(inline_id) =
                                 crate::executor::inline::InlineTable::get_inline(fid)
                             {
