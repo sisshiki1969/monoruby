@@ -85,7 +85,7 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(1..=2)?;
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
     let v = if len == 1 || lfp.arg(1).as_bool() {
         globals
@@ -133,7 +133,7 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
@@ -150,7 +150,7 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
@@ -167,7 +167,7 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> 
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
@@ -190,7 +190,7 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
         let class_id = lfp.self_val().as_class_id();
         let visi = vm.context_visibility();
         for v in lfp.iter() {
-            let name = v.expect_symbol_or_string(globals)?;
+            let name = v.expect_symbol_or_string()?;
             let func_id = globals
                 .find_method_entry_for_class(class_id, name)?
                 .func_id();
@@ -264,14 +264,14 @@ fn change_visi(
     if let Some(ary) = lfp.arg(0).try_array_ty() {
         if len == 1 {
             for v in ary.iter() {
-                names.push(v.expect_symbol_or_string(globals)?);
+                names.push(v.expect_symbol_or_string()?);
             }
             globals.change_method_visibility_for_class(class_id, &names, visi);
             return Ok(lfp.arg(0));
         }
     }
     for v in lfp.iter() {
-        names.push(v.expect_symbol_or_string(globals)?);
+        names.push(v.expect_symbol_or_string()?);
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
     let res = Value::array_from_iter(lfp.iter());
@@ -286,7 +286,7 @@ fn change_visi(
 fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let func_name = lfp.arg(0).expect_symbol_or_string()?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))
 }
 
@@ -297,8 +297,8 @@ fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
 #[monoruby_builtin]
 fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
+    let new_name = lfp.arg(0).expect_symbol_or_string()?;
+    let old_name = lfp.arg(1).expect_symbol_or_string()?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
     Ok(Value::symbol(new_name))
 }

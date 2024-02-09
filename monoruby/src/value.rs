@@ -621,7 +621,7 @@ impl Value {
     /// - if `self` is a Float, return it as i64.
     /// - if `self` is a Bignum, return RangeError.
     ///
-    pub fn coerce_to_i64(&self, globals: &mut Globals) -> Result<i64> {
+    pub fn coerce_to_i64(&self) -> Result<i64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i),
             RV::Float(f) => {
@@ -634,11 +634,7 @@ impl Value {
             RV::BigInt(_) => Err(MonorubyErr::rangeerr(
                 "bignum too big to convert into `long'",
             )),
-            _ => Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *self,
-                INTEGER_CLASS,
-            )),
+            _ => Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS)),
         }
     }
 
@@ -778,7 +774,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_symbol_or_string(&self, globals: &mut Globals) -> Result<IdentId> {
+    pub(crate) fn expect_symbol_or_string(&self) -> Result<IdentId> {
         match self.unpack() {
             RV::Symbol(sym) => return Ok(sym),
             RV::String(s) => {
@@ -786,19 +782,15 @@ impl Value {
             }
             _ => {}
         }
-        Err(MonorubyErr::is_not_symbol_nor_string(globals, *self))
+        Err(MonorubyErr::is_not_symbol_nor_string(*self))
     }
 
-    pub(crate) fn expect_string(&self, globals: &mut Globals) -> Result<String> {
+    pub(crate) fn expect_string(&self) -> Result<String> {
         if let RV::String(s) = self.unpack() {
             let s = String::from_utf8_lossy(s).into_owned();
             Ok(s)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *self,
-                STRING_CLASS,
-            ))
+            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
         }
     }
 
@@ -808,41 +800,31 @@ impl Value {
         } else if let Some(s) = self.is_str() {
             RegexpInner::from_string(globals, s)
         } else {
-            Err(MonorubyErr::is_not_regexp_nor_string(globals, *self))
+            Err(MonorubyErr::is_not_regexp_nor_string(*self))
         }
     }
 
-    pub(crate) fn expect_integer(&self, globals: &mut Globals) -> Result<i64> {
+    pub(crate) fn expect_integer(&self) -> Result<i64> {
         if let RV::Fixnum(i) = self.unpack() {
             Ok(i)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *self,
-                INTEGER_CLASS,
-            ))
+            Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS))
         }
     }
 
-    pub(crate) fn expect_array(&self, globals: &mut Globals) -> Result<Array> {
+    pub(crate) fn expect_array(&self) -> Result<Array> {
         if let Some(ary) = self.try_array_ty() {
             Ok(ary)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                *self,
-                ARRAY_CLASS,
-            ))
+            Err(MonorubyErr::no_implicit_conversion(*self, ARRAY_CLASS))
         }
     }
 
-    pub(crate) fn expect_hash(&self, globals: &mut Globals) -> Result<&HashInner> {
+    pub(crate) fn expect_hash(&self) -> Result<&HashInner> {
         if let Some(h) = self.is_hash() {
             Ok(h)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(
-                globals, *self, HASH_CLASS,
-            ))
+            Err(MonorubyErr::no_implicit_conversion(*self, HASH_CLASS))
         }
     }
 

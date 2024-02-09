@@ -230,16 +230,11 @@ impl ArrayInner {
         }
     }
 
-    pub(crate) fn get_elem2(
-        &self,
-        globals: &mut Globals,
-        arg0: Value,
-        arg1: Value,
-    ) -> Result<Value> {
-        let index = arg0.coerce_to_i64(globals)?;
+    pub(crate) fn get_elem2(&self, arg0: Value, arg1: Value) -> Result<Value> {
+        let index = arg0.coerce_to_i64()?;
         let self_len = self.len();
         let index = self.get_array_index(index).unwrap_or(self_len);
-        let len = arg1.coerce_to_i64(globals)?;
+        let len = arg1.coerce_to_i64()?;
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
@@ -253,10 +248,10 @@ impl ArrayInner {
         Ok(val)
     }
 
-    pub(crate) fn get_elem1(&self, globals: &mut Globals, idx: Value) -> Result<Value> {
+    pub(crate) fn get_elem1(&self, idx: Value) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start.coerce_to_i64(globals)? {
+            let i_start = match range.start.coerce_to_i64()? {
                 i if i < 0 => len + i,
                 i => i,
             };
@@ -267,7 +262,7 @@ impl ArrayInner {
             } else {
                 i_start as usize
             };
-            let i_end = range.end.coerce_to_i64(globals)?;
+            let i_end = range.end.coerce_to_i64()?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
                 if self.len() < end {
@@ -283,7 +278,7 @@ impl ArrayInner {
             }
             Ok(Value::array_from_iter(self[start..end].iter().cloned()))
         } else {
-            let index = idx.coerce_to_i64(globals)?;
+            let index = idx.coerce_to_i64()?;
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();

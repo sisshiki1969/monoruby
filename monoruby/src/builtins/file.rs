@@ -39,7 +39,6 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
             return Err(MonorubyErr::no_implicit_conversion(
-                globals,
                 lfp.arg(0),
                 STRING_CLASS,
             ));
@@ -99,12 +98,12 @@ fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
     let length = if len == 1 {
         None
     } else {
-        Some(lfp.arg(1).coerce_to_i64(globals)?)
+        Some(lfp.arg(1).coerce_to_i64()?)
     };
     let offset = if len <= 2 {
         None
     } else {
-        Some(lfp.arg(2).coerce_to_i64(globals)?)
+        Some(lfp.arg(2).coerce_to_i64()?)
     };
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut file = match File::open(&filename) {
@@ -161,7 +160,7 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
                 if !path.is_empty() && !path.ends_with('/') {
                     path.push('/');
                 }
-                let s = val.expect_string(globals)?;
+                let s = val.expect_string()?;
                 path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
                     &s[1..]
                 } else if path.is_empty() && s.is_empty() {
@@ -324,8 +323,8 @@ fn string_to_canonicalized_path(
 }
 
 /// Convert `file` to PathBuf.
-fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathBuf> {
-    let file = file.expect_string(globals)?;
+fn string_to_path(file: Value, _globals: &mut Globals) -> Result<std::path::PathBuf> {
+    let file = file.expect_string()?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {

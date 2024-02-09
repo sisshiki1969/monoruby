@@ -264,9 +264,7 @@ impl Codegen {
                     && caller.hash_splat_pos.is_empty()
                 {
                     // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
-                    if !callee.no_keyword() {
-                        self.handle_keyword_args(caller, callee)
-                    }
+                    self.jit_handle_keyword_args(caller, callee)
                 } else {
                     monoasm! { &mut self.jit,
                         movl rdx, (callid.get());
@@ -476,12 +474,12 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn handle_keyword_args(&mut self, callsite: &CallSiteInfo, info: &FuncInfo) {
+    fn jit_handle_keyword_args(&mut self, caller: &CallSiteInfo, callee: &FuncInfo) {
         let CallSiteInfo {
             kw_pos, kw_args, ..
-        } = callsite;
-        let mut callee_ofs = (info.pos_num() as i64 + 1) * 8 + LBP_SELF;
-        for param_name in info.kw_names() {
+        } = caller;
+        let mut callee_ofs = (callee.pos_num() as i64 + 1) * 8 + LBP_SELF;
+        for param_name in callee.kw_names() {
             match kw_args.get(param_name) {
                 Some(caller) => {
                     let caller_ofs = (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;

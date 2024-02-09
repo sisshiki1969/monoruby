@@ -53,7 +53,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) ->
     let msg = if len == 0 {
         globals.get_class_name(class_id)
     } else {
-        lfp.arg(0).expect_string(globals)?
+        lfp.arg(0).expect_string()?
     };
     let kind = class_id.get_name_id(globals).unwrap();
     Ok(Value::new_exception(kind, msg, vec![], class_id))

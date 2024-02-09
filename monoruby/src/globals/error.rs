@@ -102,7 +102,7 @@ impl MonorubyErr {
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",
             MonorubyErrKind::Range => "RangeError",
-            MonorubyErrKind::Type => "TypeError",
+            MonorubyErrKind::Type(_) => "TypeError",
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
             MonorubyErrKind::Load => "LoadError",
@@ -337,24 +337,19 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Type, msg)
+    pub(crate) fn typeerr(msg: impl ToString, kind: TypeErrKind) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Type(kind), msg)
     }
 
-    pub(crate) fn no_implicit_conversion(
-        globals: &Globals,
-        val: Value,
-        target_class: ClassId,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into {}",
-            val.get_real_class_name(globals),
-            globals.get_class_name(target_class),
-        ))
+    pub(crate) fn no_implicit_conversion(val: Value, target_class: ClassId) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NoImpricitConversion { val, target_class })
     }
 
     pub(crate) fn is_not_class_nor_module(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a class nor a module",))
+        MonorubyErr::typeerr(
+            format!("{name} is not a class nor a module"),
+            TypeErrKind::Other,
+        )
     }
 
     /*pub(crate) fn is_not_class_nor_module_rescue() -> MonorubyErr {
@@ -362,69 +357,49 @@ impl MonorubyErr {
     }*/
 
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a class"))
+        MonorubyErr::typeerr(format!("{name} is not a class"), TypeErrKind::Other)
     }
 
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("superclass mismatch for class {name}"))
+        MonorubyErr::typeerr(
+            format!("superclass mismatch for class {name}"),
+            TypeErrKind::Other,
+        )
     }
 
     ///
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
-    pub(crate) fn is_not_symbol_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{} is not a symbol nor a string",
-            globals.to_s(val)
-        ))
+    pub(crate) fn is_not_symbol_nor_string(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NotSymbolNorString { val })
     }
 
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
-    pub(crate) fn is_not_regexp_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{} is not a regexp nor a string",
-            globals.to_s(val)
-        ))
+    pub(crate) fn is_not_regexp_nor_string(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NotRegexpNorString { val })
     }
 
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
-    pub(crate) fn cant_convert_into_float(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "can't convert {} into Float",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_convert_into_float(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantConverFloat { val })
     }
 
     ///
     /// Set TypeError with message "{op}: *class of val* can't be coerced into Integer".
     ///
-    pub(crate) fn cant_coerced_into_integer(
-        globals: &Globals,
-        op: IdentId,
-        val: Value,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into Integer",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_coerced_into_integer(op: IdentId, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantCoercedInteger { op, val })
     }
 
     ///
     /// Set TypeError with message "{op}: *class of val* can't be coerced into Float".
     ///
-    pub(crate) fn cant_coerced_into_float(
-        globals: &Globals,
-        op: IdentId,
-        val: Value,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into Float",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_coerced_into_float(op: IdentId, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantCoercedFloat { op, val })
     }
 
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
@@ -544,7 +519,7 @@ pub enum MonorubyErrKind {
     DivideByZero,
     LocalJump,
     Range,
-    Type,
+    Type(TypeErrKind),
     Index,
     Frozen,
     Load,
@@ -555,6 +530,54 @@ pub enum MonorubyErrKind {
     Fiber,
     StopIteration,
     Exception,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeErrKind {
+    NoImpricitConversion { val: Value, target_class: ClassId },
+    NotSymbolNorString { val: Value },
+    NotRegexpNorString { val: Value },
+    CantConverFloat { val: Value },
+    CantCoercedInteger { op: IdentId, val: Value },
+    CantCoercedFloat { op: IdentId, val: Value },
+    Other,
+}
+
+impl TypeErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            TypeErrKind::NoImpricitConversion { val, target_class } => format!(
+                "no implicit conversion of {} into {}",
+                val.get_real_class_name(globals),
+                globals.get_class_name(*target_class)
+            ),
+            TypeErrKind::NotSymbolNorString { val } => {
+                format!("{} is not a symbol nor a string", globals.to_s(*val))
+            }
+            TypeErrKind::NotRegexpNorString { val } => {
+                format!("{} is not a regexp nor a string", globals.to_s(*val))
+            }
+            TypeErrKind::CantConverFloat { val } => {
+                format!(
+                    "can't convert {} into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::CantCoercedInteger { op, val } => {
+                format!(
+                    "{op}: {} can't be coerced into Integer",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::CantCoercedFloat { op, val } => {
+                format!(
+                    "{op}: {} can't be coerced into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::Other => "type error".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -114,9 +114,9 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
         Some(block) => block,
     };
     let cur = lfp.self_val().as_fixnum();
-    let limit = args[0].coerce_to_i64(globals)?;
+    let limit = args[0].coerce_to_i64()?;
     let step = if len == 2 {
-        let step = args[1].coerce_to_i64(globals)?;
+        let step = args[1].coerce_to_i64()?;
         if step == 0 {
             return Err(MonorubyErr::argumenterr("Step can not be 0."));
         }
@@ -293,7 +293,7 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=26.html]
 #[monoruby_builtin]
-fn band(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn band(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
@@ -303,7 +303,7 @@ fn band(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs & BigInt::from(rhs))),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs & rhs)),
         _ => {
-            lfp.arg(0).coerce_to_i64(globals)?;
+            lfp.arg(0).coerce_to_i64()?;
             unreachable!();
         }
     }
@@ -316,7 +316,7 @@ fn band(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=7c.html]
 #[monoruby_builtin]
-fn bor(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn bor(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
@@ -326,7 +326,7 @@ fn bor(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs | BigInt::from(rhs))),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs | rhs)),
         _ => {
-            lfp.arg(0).coerce_to_i64(globals)?;
+            lfp.arg(0).coerce_to_i64()?;
             unreachable!();
         }
     }
@@ -339,7 +339,7 @@ fn bor(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5e.html]
 #[monoruby_builtin]
-fn bxor(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn bxor(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
@@ -349,7 +349,7 @@ fn bxor(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs ^ BigInt::from(rhs))),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs ^ rhs)),
         _ => {
-            lfp.arg(0).coerce_to_i64(globals)?;
+            lfp.arg(0).coerce_to_i64()?;
             unreachable!();
         }
     }
@@ -577,10 +577,10 @@ fn integer_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let self_val = lfp.self_val();
-    op::integer_index1(globals, self_val, lfp.arg(0))
+    op::integer_index1(self_val, lfp.arg(0))
 }
 
 ///

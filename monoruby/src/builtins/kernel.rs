@@ -159,7 +159,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if len == 2 {
-            err.set_msg(lfp.arg(1).expect_string(globals)?);
+            err.set_msg(lfp.arg(1).expect_string()?);
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
@@ -168,12 +168,15 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.get_obj(globals), &[], None)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             if len == 2 {
-                err.set_msg(lfp.arg(1).expect_string(globals)?);
+                err.set_msg(lfp.arg(1).expect_string()?);
             }
             return Err(err);
         }
     }
-    Err(MonorubyErr::typeerr("exception class/object expected"))
+    Err(MonorubyErr::typeerr(
+        "exception class/object expected",
+        TypeErrKind::Other,
+    ))
 }
 
 ///
@@ -297,12 +300,12 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn rand(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     let i = match len {
         0 => 0i64,
-        1 => lfp.arg(0).coerce_to_i64(globals)?,
+        1 => lfp.arg(0).coerce_to_i64()?,
         _ => unreachable!(),
     };
     if !i.is_zero() {
@@ -324,7 +327,7 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).expect_symbol_or_string()?;
     let func_id = globals.find_method(receiver, method_name, false)?;
     Ok(Value::new_method(receiver, func_id))
 }
@@ -353,7 +356,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -368,7 +371,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 #[monoruby_builtin]
 fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(2)?;
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let val = lfp.arg(1);
     globals.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -383,7 +386,7 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 #[monoruby_builtin]
 fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Ok(v)
 }
@@ -418,11 +421,7 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
         }
         _ => {}
     };
-    Err(MonorubyErr::no_implicit_conversion(
-        globals,
-        arg0,
-        INTEGER_CLASS,
-    ))
+    Err(MonorubyErr::no_implicit_conversion(arg0, INTEGER_CLASS))
 }
 
 fn load(
@@ -451,7 +450,7 @@ fn load(
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
-    let feature = lfp.arg(0).expect_string(globals)?;
+    let feature = lfp.arg(0).expect_string()?;
     let file_name = std::path::PathBuf::from(feature);
     load(vm, globals, file_name, false)
 }
@@ -467,7 +466,7 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) 
     lfp.check_number_of_arguments(1)?;
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
+    let feature = std::path::PathBuf::from(lfp.arg(0).expect_string()?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     load(vm, globals, file_name, true)
@@ -483,7 +482,7 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) 
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_min_number_of_arguments(1)?;
-    let expr = lfp.arg(0).expect_string(globals)?;
+    let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let path = globals.store[cfp.get_source_pos()]
@@ -534,7 +533,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     use std::process::Command;
     let len = lfp.arg_len();
     lfp.check_min_number_of_arguments(1)?;
@@ -544,7 +543,7 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
         let iter = lfp.iter();
         //iter.take(1);
         for v in iter.take(1) {
-            args.push(v.expect_string(globals)?);
+            args.push(v.expect_string()?);
         }
     }
     Ok(match Command::new(program).args(&args).status() {
@@ -582,7 +581,7 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
 #[monoruby_builtin]
-fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn abort(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     if len == 1 {
@@ -590,7 +589,6 @@ fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
             Some(s) => eprintln!("{}", s),
             None => {
                 return Err(MonorubyErr::no_implicit_conversion(
-                    globals,
                     lfp.arg(0),
                     STRING_CLASS,
                 ));

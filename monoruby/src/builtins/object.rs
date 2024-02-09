@@ -212,7 +212,7 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
 fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).expect_symbol_or_string()?;
     let func_id = globals.find_method(receiver, method_name, false)?;
     Ok(Value::new_method(receiver, func_id))
 }
@@ -239,7 +239,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -253,7 +253,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
 fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let val = lfp.arg(1);
     globals.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -267,7 +267,7 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
 fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Ok(v)
 }
@@ -323,7 +323,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     use std::process::Command;
     let len = lfp.arg_len();
     lfp.check_min_number_of_arguments(1)?;
@@ -332,7 +332,7 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
         let iter = lfp.iter();
         //iter.take(1);
         for v in iter.take(1) {
-            args.push(v.expect_string(globals)?);
+            args.push(v.expect_string()?);
         }
     }
     Ok(match Command::new(program).args(&args).status() {
@@ -371,7 +371,7 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_min_number_of_arguments(1)?;
-    let method = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method = lfp.arg(0).expect_symbol_or_string()?;
     vm.invoke_method_inner2(
         globals,
         method,
@@ -453,7 +453,7 @@ extern "C" fn call_send_wrapper(
         cache: &mut [Cache; CACHE_SIZE],
     ) -> Result<FuncId> {
         MonorubyErr::check_min_number_of_arguments(len, 1)?;
-        let method = args[0].expect_symbol_or_string(globals)?;
+        let method = args[0].expect_symbol_or_string()?;
         let mut min_i = usize::MAX;
         let mut min_count = u32::MAX;
         for i in 0..CACHE_SIZE {

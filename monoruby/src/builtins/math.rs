@@ -23,14 +23,14 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
 #[monoruby_builtin]
-fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sqrt(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.sqrt()))
@@ -41,14 +41,14 @@ fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sin.html]
 #[monoruby_builtin]
-fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.sin()))
@@ -59,14 +59,14 @@ fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cos.html]
 #[monoruby_builtin]
-fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn cos(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.cos()))

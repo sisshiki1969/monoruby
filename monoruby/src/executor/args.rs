@@ -254,6 +254,7 @@ impl Executor {
             for (id, param_name) in info.kw_names().iter().enumerate() {
                 unsafe {
                     let sym = Value::symbol(*param_name);
+                    // TODO: We must fix as_hash() -> expect_hash() but it needs &mut Globals...
                     if let Some(v) = h.as_hash().get(sym) {
                         let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
                         if (*ptr).is_some() {

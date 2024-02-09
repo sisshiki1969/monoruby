@@ -60,8 +60,8 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
-fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut fmt = lfp.arg(0).expect_string(globals)?;
+fn strftime(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    let mut fmt = lfp.arg(0).expect_string()?;
     fmt = fmt.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format(&fmt).to_string(),

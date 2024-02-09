@@ -43,7 +43,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
     );
 
     for arg in &arg_vec {
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_string()?;
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }

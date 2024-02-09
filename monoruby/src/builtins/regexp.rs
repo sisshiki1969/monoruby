@@ -26,7 +26,7 @@ pub(crate) fn init(globals: &mut Globals) {
 fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let arg0 = lfp.arg(0);
-    let string = arg0.expect_string(globals)?;
+    let string = arg0.expect_string()?;
     let regexp = RegexpInner::from_string(globals, string)?;
     let val = Value::regexp(regexp);
     Ok(val)
@@ -38,10 +38,10 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let arg0 = lfp.arg(0);
-    let string = arg0.expect_string(globals)?;
+    let string = arg0.expect_string()?;
     let val = Value::string(regex::escape(&string));
     Ok(val)
 }
@@ -52,13 +52,13 @@ fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
-fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_last_match(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     if len == 0 {
         Ok(vm.get_last_matchdata())
     } else {
-        let nth = lfp.arg(0).coerce_to_i64(globals)?;
+        let nth = lfp.arg(0).coerce_to_i64()?;
         Ok(vm.get_special_matches(nth))
     }
 }
@@ -68,11 +68,11 @@ fn regexp_last_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = match lfp.arg(0).expect_symbol_or_string(globals) {
+    let given = match lfp.arg(0).expect_symbol_or_string() {
         Ok(s) => s.to_string(),
         Err(_) => return Ok(Value::bool(false)),
     };
@@ -85,14 +85,14 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
 #[monoruby_builtin]
-fn regexp_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     if lfp.arg(0).is_nil() {
         return Ok(Value::nil());
     }
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
+    let given = lfp.arg(0).expect_symbol_or_string()?.to_string();
     let res = match RegexpInner::find_one(vm, regex, &given)? {
         Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
