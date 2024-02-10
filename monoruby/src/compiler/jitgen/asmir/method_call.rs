@@ -251,39 +251,31 @@ impl Codegen {
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_frame(meta, caller);
-        //   rdi: args len
-        if caller.pos_num == 1 && callee.single_arg_expand() {
-            self.single_arg_expand();
-        }
-        match &callee.kind {
-            FuncKind::ISeq(_) => {
-                let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
-                if callee.opt_rest_num() == 0
-                    && callee.kw_rest().is_none()
-                    && !kw_expansion
-                    && caller.hash_splat_pos.is_empty()
-                {
-                    // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
-                    self.jit_handle_keyword_args(caller, callee)
-                } else {
-                    monoasm! { &mut self.jit,
-                        movl rdx, (callid.get());
-                        lea  r8, [rsp - 16];   // callee_lfp
-                        movq r9, (meta.get());
-                        movq rcx, rdi;
-                        subq rsp, 4088;
-                        pushq rdi;
-                        movq rdi, rbx; // &mut Executor
-                        movq rsi, r12; // &mut Globals
-                        movq rax, (runtime::jit_generic_handle_arguments);
-                        call rax;
-                        popq rdi;
-                        addq rsp, 4088;
-                    }
-                    self.handle_error(error);
+
+        if matches!(&callee.kind, FuncKind::ISeq(_)) {
+            let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
+            if callee.opt_rest_num() == 0
+                && callee.kw_rest().is_none()
+                && !kw_expansion
+                && caller.hash_splat_pos.is_empty()
+            {
+                // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
+                self.jit_handle_keyword_args(caller, callee)
+            } else {
+                self.jit_handle_keyword_args(caller, callee);
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx; // &mut Executor
+                    movq rsi, r12; // &mut Globals
+                    movl rdx, (callid.get());
+                    movq rcx, (meta.get());
+                    lea  r8, [rsp - 16];   // callee_lfp
+                    subq rsp, 4096;
+                    movq rax, (runtime::jit_generic_handle_arguments);
+                    call rax;
+                    addq rsp, 4096;
                 }
+                self.handle_error(error);
             }
-            _ => {}
         }
 
         if native {
@@ -595,6 +587,7 @@ impl Codegen {
     /// Set req, opt and rest arguments.
     ///
     /// ### out
+    /// - rax: Some(Value)
     /// - rdi: the number of arguments
     ///
     /// ### destroy
@@ -602,42 +595,24 @@ impl Codegen {
     ///
     pub(super) fn jit_generic_set_arguments(
         &mut self,
-        splat_pos: &[usize],
+        callid: CallSiteId,
         args: SlotId,
-        pos_num: u16,
+        meta: Meta,
     ) {
-        monoasm!( &mut self.jit,
-            lea rsi, [rsp - (16 + LBP_ARG0)];
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            lea  rcx, [r14 - (conv(args))];
+            lea  r8, [rsp - 16];   // callee_lfp
+            movq r9, (meta.get());
             subq rsp, 4096;
-            movq rdx, (pos_num);
-        );
-        for i in 0..pos_num {
-            let reg = args + i;
-            if splat_pos.contains(&(i as usize)) {
-                self.load_rdi(reg);
-                monoasm! { &mut self.jit,
-                    pushq rsi;
-                    pushq rdx;
-                    movq rax, (expand_splat);
-                    call rax;
-                    popq rdx;
-                    popq rsi;
-                    lea  rdx, [rdx + rax * 1 - 1];
-                    shlq rax, 3;
-                    subq rsi, rax;
-                }
-            } else {
-                self.load_rax(reg);
-                monoasm! { &mut self.jit,
-                    movq [rsi], rax;
-                    subq rsi, 8;
-                }
-            }
-        }
-        monoasm!( &mut self.jit,
+            movq rax, (crate::runtime::jit_generic_set_arguments);
+            call rax;
             addq rsp, 4096;
-            movq rdi, rdx;
-        );
+            movq rdi, rax;
+            sarq rdi, 1;
+        }
     }
 }
 

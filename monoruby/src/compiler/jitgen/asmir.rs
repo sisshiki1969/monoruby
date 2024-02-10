@@ -394,7 +394,7 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         let caller = &store[callid];
         let callee = &store[callee_fid];
-        self.set_arguments(bb, caller, callee);
+        self.set_arguments(bb, caller, callid, callee, pc);
         self.unlink(bb, caller.dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
@@ -409,23 +409,28 @@ impl AsmIr {
         });
     }
 
-    fn set_arguments(&mut self, bb: &mut BBContext, caller: &CallSiteInfo, callee: &FuncInfo) {
+    ///
+    /// ### out
+    /// - rdi: arg_num
+    ///
+    fn set_arguments(
+        &mut self,
+        bb: &mut BBContext,
+        caller: &CallSiteInfo,
+        callid: CallSiteId,
+        callee: &FuncInfo,
+        pc: BcPc,
+    ) {
         let args = caller.args;
         let pos_num = caller.pos_num;
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
-        if caller.has_splat()
-            || single_arg_expand
-            || callee.is_rest()
-            || pos_num > callee.max_positional_args()
+        if !caller.has_splat()
+            && caller.kw_num() == 0
+            && !single_arg_expand
+            && !callee.is_rest()
+            && pos_num == callee.max_positional_args()
+            && pos_num == callee.req_num()
         {
-            self.write_back_args(bb, caller);
-            let splat_pos = caller.splat_pos.clone();
-            self.inst.push(AsmInst::SetArguments {
-                splat_pos,
-                args,
-                pos_num: pos_num as u16,
-            });
-        } else {
             // write back keyword arguments.
             for i in pos_num as u16..caller.len as u16 {
                 self.write_back_slot(bb, args + i);
@@ -445,6 +450,16 @@ impl AsmIr {
             }
             self.reg_add(GP::Rsp, ofs);
             self.inst.push(AsmInst::I32ToReg(pos_num as _, GP::Rdi));
+        } else {
+            self.write_back_args(bb, caller);
+            let meta = callee.meta();
+            let error = self.new_error(bb, pc);
+            self.inst.push(AsmInst::SetArguments {
+                callid,
+                args,
+                meta,
+                error,
+            });
         }
     }
 
@@ -971,9 +986,10 @@ pub(super) enum AsmInst {
     /// - caller save registers
     ///
     SetArguments {
-        splat_pos: Vec<usize>,
+        callid: CallSiteId,
         args: SlotId,
-        pos_num: u16,
+        meta: Meta,
+        error: AsmError,
     },
 
     ///
@@ -1577,11 +1593,13 @@ impl Codegen {
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
             AsmInst::SetArguments {
-                splat_pos,
+                callid,
                 args,
-                pos_num,
+                meta,
+                error,
             } => {
-                self.jit_generic_set_arguments(&splat_pos, args, pos_num);
+                self.jit_generic_set_arguments(callid, args, meta);
+                self.handle_error(labels[error]);
             }
 
             AsmInst::Ret => {

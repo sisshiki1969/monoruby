@@ -715,39 +715,6 @@ impl Codegen {
     }
 
     ///
-    /// Expand single Array argument.
-    ///
-    /// #### in/out
-    /// - rdi: arg_num
-    ///
-    /// #### destroy
-    /// - caller save registers
-    ///
-    fn single_arg_expand(&mut self) {
-        let l1 = self.jit.label();
-        monoasm! { &mut self.jit,
-            // arg_num == 1?
-            cmpl rdi, 1;
-            jne  l1;
-            // is val Array?
-            movq rax, [rsp - (16 + LBP_ARG0)];
-            testq rax, 0b111;
-            jnz  l1;
-            cmpl [rax + 4], (ARRAY_CLASS.u32());
-            jne  l1;
-            movq rdi, rax;
-            movzxw rdx, [rsi + 8];  // rdx <- req
-            lea  rsi, [rsp - (16 + LBP_ARG0)]; // rsi <- dst
-            subq rsp, 4096;
-            movq rax, (block_expand_array); // extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize
-            call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
-        l1:
-        }
-    }
-
-    ///
     /// Assume the Value is Integer, and convert to f64.
     ///
     /// side-exit if not Integer.

@@ -331,11 +331,11 @@ pub(super) extern "C" fn jit_generic_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
-    arg_num: usize,
-    callee_lfp: LFP,
     meta: Meta,
+    callee_lfp: LFP,
 ) -> Option<Value> {
-    match jit_geneirc_handle_arguments(globals, callid, arg_num, callee_lfp, vm.cfp().lfp(), meta) {
+    let caller_lfp = vm.cfp().lfp();
+    match jit_keyword_arguments(globals, callid, callee_lfp, caller_lfp, meta) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

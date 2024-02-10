@@ -190,14 +190,6 @@ impl ISeqInfo {
         self.non_temp_num as usize
     }
 
-    pub(crate) fn no_keyword(&self) -> bool {
-        self.args.kw_names.is_empty() && self.kw_rest().is_none()
-    }
-
-    pub(crate) fn kw_rest(&self) -> Option<SlotId> {
-        self.args.kw_rest
-    }
-
     pub(crate) fn required_num(&self) -> usize {
         self.args.required_num
     }
