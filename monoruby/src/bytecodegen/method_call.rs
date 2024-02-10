@@ -111,7 +111,7 @@ impl BytecodeGen {
                 args
             };
             let kw_list = &mother_args.kw_names;
-            let kw = if kw_list.len() == 0 {
+            let kw = if kw_list.is_empty() {
                 None
             } else {
                 let mut kw_args = IndexMap::default();
@@ -319,7 +319,7 @@ impl BytecodeGen {
     fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let hash_splat = std::mem::take(&mut arglist.hash_splat);
-        if kw_args_list.len() == 0 && hash_splat.is_empty() {
+        if kw_args_list.is_empty() && hash_splat.is_empty() {
             Ok(None)
         } else {
             let mut kw_args = IndexMap::default();
@@ -446,7 +446,7 @@ impl BytecodeGen {
             | NodeKind::InterporatedString(nodes)
             | NodeKind::Array(nodes, ..)
             | NodeKind::RegExp(nodes, ..) => {
-                nodes.into_iter().for_each(|n| self.level_down(n, level));
+                nodes.iter_mut().for_each(|n| self.level_down(n, level));
             }
             NodeKind::Command(n)
             | NodeKind::UnOp(_, n)
@@ -535,7 +535,7 @@ impl BytecodeGen {
                 }
                 self.level_down(else_, level);
                 for CaseBranch { when, body } in when_ {
-                    when.into_iter().for_each(|n| self.level_down(n, level));
+                    when.iter_mut().for_each(|n| self.level_down(n, level));
                     self.level_down(body, level);
                 }
             }
@@ -558,7 +558,7 @@ impl BytecodeGen {
                 } in rescue
                 {
                     exception_list
-                        .into_iter()
+                        .iter_mut()
                         .for_each(|n| self.level_down(n, level));
                     if let Some(n) = assign {
                         self.level_down(n, level);

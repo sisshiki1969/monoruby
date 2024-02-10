@@ -559,11 +559,9 @@ impl Value {
     pub fn try_float(&self) -> Option<f64> {
         if let Some(f) = self.try_flonum() {
             return Some(f);
-        } else {
-            if let Some(rv) = self.try_rvalue() {
-                if rv.ty() == ObjKind::FLOAT {
-                    return Some(rv.as_float());
-                }
+        } else if let Some(rv) = self.try_rvalue() {
+            if rv.ty() == ObjKind::FLOAT {
+                return Some(rv.as_float());
             }
         }
         None

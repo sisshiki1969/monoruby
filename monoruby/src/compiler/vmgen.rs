@@ -1615,8 +1615,8 @@ extern "C" fn handle_invoker_arguments(
     mut arg_num: usize,
 ) -> usize {
     let callee_func_id = callee_lfp.meta().func_id();
-    match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => unsafe {
+    if let FuncKind::ISeq(info) = &globals[callee_func_id].kind {
+        unsafe {
             // expand array for block
             arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
@@ -1628,8 +1628,7 @@ extern "C" fn handle_invoker_arguments(
             for (id, _) in params.iter().enumerate() {
                 *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
             }
-        },
-        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+        }
     }
     arg_num
 }

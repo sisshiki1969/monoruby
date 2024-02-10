@@ -118,11 +118,9 @@ impl Fiber {
                 self.invoke_fiber(vm, globals, arg, 1)
             }
             FiberState::Suspended => self.resume_fiber(vm, globals, yielder),
-            FiberState::Terminated => {
-                return Err(MonorubyErr::stopiterationerr(
-                    "iteration reached an end".to_string(),
-                ))
-            }
+            FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
+                "iteration reached an end".to_string(),
+            )),
         }
     }
 

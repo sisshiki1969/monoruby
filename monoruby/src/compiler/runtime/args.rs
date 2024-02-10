@@ -98,10 +98,8 @@ pub(crate) fn set_frame_arguments(
 
     let arg_num = positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
-    if matches!(&callee.kind, FuncKind::ISeq(_)) {
-        if !callee.no_keyword() || caller.kw_num() == 0 {
-            handle_keyword(&callee, caller, callee_lfp, caller_lfp)?;
-        }
+    if matches!(&callee.kind, FuncKind::ISeq(_)) && (!callee.no_keyword() || caller.kw_num() == 0) {
+        handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
     }
 
     Ok(arg_num)
@@ -120,14 +118,10 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: LFP, caller_lfp
     let bh = if let Some(block_fid) = block_fid {
         let bh = BlockHandler::from(block_fid);
         Some(bh)
-    } else if let Some(block_arg) = block_arg {
-        unsafe {
-            Some(BlockHandler(
-                caller_lfp.register(block_arg.0 as usize).unwrap(),
-            ))
-        }
     } else {
-        None
+        block_arg.map(|block_arg| unsafe {
+            BlockHandler(caller_lfp.register(block_arg.0 as usize).unwrap())
+        })
     };
     callee_lfp.set_block(bh);
 }
@@ -244,7 +238,7 @@ fn positional(
     }
 
     if matches!(&callee.kind, FuncKind::ISeq(_)) {
-        positional_post(&callee, arg_num, callee_lfp, ex, rest)?;
+        positional_post(callee, arg_num, callee_lfp, ex, rest)?;
     }
 
     Ok(arg_num)

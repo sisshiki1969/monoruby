@@ -88,7 +88,7 @@ fn main() {
     let mut code = String::new();
     let mut iter = args.file.into_iter();
     let path = if let Some(file_name) = iter.next() {
-        let argv = Value::array_from_iter(iter.map(|s| Value::string(s)));
+        let argv = Value::array_from_iter(iter.map(Value::string));
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
         let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
         File::open(&file_name)
@@ -109,10 +109,8 @@ fn main() {
             err.show_error_message_and_all_loc(&globals);
             std::process::exit(1);
         }
-    } else {
-        if let Err(err) = globals.run(code, &path) {
-            err.show_error_message_and_all_loc(&globals);
-            std::process::exit(1);
-        };
+    } else if let Err(err) = globals.run(code, &path) {
+        err.show_error_message_and_all_loc(&globals);
+        std::process::exit(1);
     }
 }

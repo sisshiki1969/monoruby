@@ -8,6 +8,12 @@ pub const ARRAY_INLINE_CAPA: usize = 5;
 #[monoruby_object]
 pub struct Array(Value);
 
+impl Default for Array {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Array {
     pub fn id(self) -> u64 {
         self.0.id()
@@ -39,6 +45,12 @@ impl Array {
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct ArrayInner(SmallVec<[Value; ARRAY_INLINE_CAPA]>);
+
+impl Default for ArrayInner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl std::ops::Deref for ArrayInner {
     type Target = [Value];
@@ -255,13 +267,12 @@ impl ArrayInner {
                 i if i < 0 => len + i,
                 i => i,
             };
-            let start = if len < i_start {
-                return Ok(Value::nil());
-            } else if len == i_start {
-                return Ok(Value::array_empty());
-            } else {
-                i_start as usize
+            let start = match len {
+                i if i == i_start => return Ok(Value::array_empty()),
+                i if i < i_start => return Ok(Value::nil()),
+                _ => i_start as usize,
             };
+
             let i_end = range.end.coerce_to_i64()?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };

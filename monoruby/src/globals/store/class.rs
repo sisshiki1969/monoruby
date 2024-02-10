@@ -399,7 +399,7 @@ impl Globals {
     pub(crate) fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
         let name = err.get_class_name();
         self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .expect(&format!("{name}"))
+            .expect(name)
             .as_class_id()
     }
 

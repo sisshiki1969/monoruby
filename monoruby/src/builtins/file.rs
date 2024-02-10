@@ -143,17 +143,12 @@ fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
-fn join(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    fn flatten(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        path: &mut String,
-        val: Value,
-    ) -> Result<()> {
+fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    fn flatten(path: &mut String, val: Value) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
                 for v in ainfo.iter().cloned() {
-                    flatten(vm, globals, path, v)?;
+                    flatten(path, v)?;
                 }
             }
             None => {
@@ -175,7 +170,7 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     let len = lfp.arg_len();
     let mut path = String::new();
     for i in 0..len {
-        flatten(vm, globals, &mut path, lfp.arg(i))?;
+        flatten(&mut path, lfp.arg(i))?;
     }
     Ok(Value::string(path))
 }
@@ -252,7 +247,7 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
     lfp.check_number_of_arguments(1)?;
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut dirname = match filename.parent() {
-        Some(ostr) => conv_pathbuf(&ostr.to_path_buf()),
+        Some(ostr) => conv_pathbuf(ostr),
         None => "".to_string(),
     };
     if dirname.is_empty() {
@@ -337,7 +332,7 @@ fn string_to_path(file: Value, _globals: &mut Globals) -> Result<std::path::Path
 }
 
 #[cfg(not(windows))]
-fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
+fn conv_pathbuf(dir: &std::path::Path) -> String {
     dir.to_string_lossy().to_string()
 }
 

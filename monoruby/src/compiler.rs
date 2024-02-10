@@ -1068,7 +1068,7 @@ impl Globals {
             let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
             self.codegen.perf_info(codeptr, &desc);
         }
-        #[cfg(any(feature = "emit-asm"))]
+        #[cfg(feature = "emit-asm")]
         self.dump_disas(_sourcemap, func_id);
     }
 

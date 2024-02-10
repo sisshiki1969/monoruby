@@ -450,7 +450,7 @@ impl Funcs {
                     optional_info.push(OptionalInfo::new(local, initializer));
                 }
                 ParamKind::Rest(name) => {
-                    args_names.push(name.map(|n| IdentId::get_id_from_string(n)));
+                    args_names.push(name.map(IdentId::get_id_from_string));
                     assert_eq!(0, rest);
                     rest = 1;
                 }

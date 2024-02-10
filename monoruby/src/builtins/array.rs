@@ -111,7 +111,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
             if len == 2 {
                 eprintln!("warning: block supersedes default value argument");
             }
-            let iter = (0..size).map(|i| Value::integer(i as i64)).into_iter();
+            let iter = (0..size).map(|i| Value::integer(i as i64));
             let vec = vm.invoke_block_map1(globals, bh, iter)?;
             *self_val = ArrayInner::from_vec(vec);
         } else {
@@ -442,7 +442,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) ->
         let i = lfp.arg(0);
         let val = lfp.arg(1);
         if let Some(idx) = i.try_fixnum() {
-            return ary.set_index(idx, val);
+            ary.set_index(idx, val)
         } else {
             unimplemented!()
         }
@@ -610,7 +610,7 @@ fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
     ary.iter()
         .map(|v| globals.to_s(*v))
         .collect::<Vec<_>>()
-        .join(&sep)
+        .join(sep)
 }
 
 ///
@@ -1037,7 +1037,7 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
     let mut trans = Array::new();
     for i in 0..len {
         let mut temp = Array::new();
-        for v in ary.iter().cloned() {
+        for v in ary.iter() {
             let a = v.try_array_ty().ok_or_else(|| {
                 MonorubyErr::argumenterr("Each element of receiver must be an array.")
             })?;

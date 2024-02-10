@@ -111,7 +111,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let internal = Fiber::new(self_val.proc);
     let len = vm.temp_len();
     vm.temp_push(internal.into());
-    let res = each_inner(vm, globals, internal, &data, self_val.into());
+    let res = each_inner(vm, globals, internal, &data, self_val);
     vm.temp_clear(len);
     res
 }

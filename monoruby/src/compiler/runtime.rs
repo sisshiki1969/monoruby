@@ -414,20 +414,17 @@ pub(super) extern "C" fn set_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
-    match base_classid {
-        ARRAY_CLASS => {
-            if let Some(idx) = index.try_fixnum() {
-                class_slot.idx = INTEGER_CLASS;
-                return match base.as_array_mut().set_index(idx, src) {
-                    Ok(val) => Some(val),
-                    Err(err) => {
-                        vm.set_error(err);
-                        None
-                    }
-                };
+    if base_classid == ARRAY_CLASS
+        && let Some(idx) = index.try_fixnum()
+    {
+        class_slot.idx = INTEGER_CLASS;
+        return match base.as_array_mut().set_index(idx, src) {
+            Ok(val) => Some(val),
+            Err(err) => {
+                vm.set_error(err);
+                None
             }
-        }
-        _ => {}
+        };
     }
     vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
 }
@@ -768,13 +765,11 @@ pub(super) extern "C" fn handle_error(
             {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(ensure)
+                } else if lfp == target_lfp {
+                    vm.take_error();
+                    ErrorReturn::return_normal(val)
                 } else {
-                    if lfp == target_lfp {
-                        vm.take_error();
-                        ErrorReturn::return_normal(val)
-                    } else {
-                        ErrorReturn::return_err()
-                    }
+                    ErrorReturn::return_err()
                 };
             }
             let bc_base = func_info.pc();

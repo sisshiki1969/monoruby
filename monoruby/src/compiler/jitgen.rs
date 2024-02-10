@@ -5,7 +5,7 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::BasicBlockInfo;
-pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
+use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 use self::slot::Guarded;
 
 use super::*;
@@ -352,7 +352,7 @@ impl JitContext {
                 }
                 CompileResult::Recompile => {
                     let pc = func.get_pc(bb_pos);
-                    self.ir.recompile_and_deopt(&bb, pc, position);
+                    self.ir.recompile_and_deopt(bb, pc, position);
                     return true;
                 }
                 CompileResult::Break => break,
@@ -384,7 +384,7 @@ impl JitContext {
                 assert_ne!(0, self.loop_count);
                 self.loop_count -= 1;
                 if self.is_loop && self.loop_count == 0 {
-                    self.ir.deopt(&bb, pc);
+                    self.ir.deopt(bb, pc);
                     return CompileResult::Break;
                 }
             }
@@ -402,7 +402,7 @@ impl JitContext {
                 if val.is_packed_value() || val.is_float() {
                     self.ir.store_literal(bb, dst, val);
                 } else {
-                    self.ir.deep_copy_lit(&bb, val);
+                    self.ir.deep_copy_lit(bb, val);
                     self.ir
                         .reg2acc_guarded(bb, GP::Rax, dst, Guarded::from_literal(val));
                 }
@@ -411,13 +411,13 @@ impl JitContext {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 self.ir.write_back_range(bb, args, pos_num as u16);
                 self.ir.unlink(bb, dst);
-                self.ir.new_array(&bb, callid);
+                self.ir.new_array(bb, callid);
                 self.ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
             }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
                 self.ir.unlink(bb, dst);
-                self.ir.new_hash(&bb, args, len as _);
+                self.ir.new_hash(bb, args, len as _);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Range {
@@ -525,7 +525,7 @@ impl JitContext {
             }
             TraceIr::LoadSvar { dst, id } => {
                 self.ir.unlink(bb, dst);
-                self.ir.load_svar(&bb, id);
+                self.ir.load_svar(bb, id);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
@@ -546,7 +546,7 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                self.ir.generic_unop(&bb, pc, bitnot_value);
+                self.ir.generic_unop(bb, pc, bitnot_value);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Not { dst, src } => {
@@ -566,7 +566,7 @@ impl JitContext {
                     self.ir.inst.push(AsmInst::XmmUnOp { kind, dst });
                 } else {
                     self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                    self.ir.generic_unop(&bb, pc, kind.generic_func());
+                    self.ir.generic_unop(bb, pc, kind.generic_func());
                     self.ir.rax2acc(bb, dst);
                 }
             }
@@ -589,7 +589,7 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
                 self.ir.fetch_binary(bb, mode);
-                self.ir.generic_binop(&bb, pc, kind);
+                self.ir.generic_binop(bb, pc, kind);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::Cmp(kind, ret, mode, false) => {
@@ -607,7 +607,7 @@ impl JitContext {
                     self.ir.inst.push(AsmInst::IntegerCmp { kind, mode });
                 } else {
                     self.ir.fetch_binary(bb, mode);
-                    self.ir.generic_cmp(&bb, pc, kind);
+                    self.ir.generic_cmp(bb, pc, kind);
                 }
                 self.ir.rax2acc(bb, ret);
             }
@@ -624,22 +624,20 @@ impl JitContext {
                             self.ir.unlink(bb, ret);
                             self.ir.clear(bb);
                             self.ir.float_cmp_br(mode, kind, brkind, branch_dest);
+                        } else if mode.is_integer_op(&pc) {
+                            self.ir.fetch_fixnum_binary(bb, pc, &mode);
+                            self.ir.unlink(bb, ret);
+                            self.ir.clear(bb);
+                            self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                         } else {
-                            if mode.is_integer_op(&pc) {
-                                self.ir.fetch_fixnum_binary(bb, pc, &mode);
-                                self.ir.unlink(bb, ret);
-                                self.ir.clear(bb);
-                                self.ir.integer_cmp_br(mode, kind, brkind, branch_dest);
-                            } else {
-                                self.ir.fetch_binary(bb, mode);
-                                self.ir.unlink(bb, ret);
-                                self.ir.clear(bb);
-                                self.ir.generic_cmp(&bb, pc, kind);
-                                self.ir.inst.push(AsmInst::GenericCondBr {
-                                    brkind,
-                                    branch_dest,
-                                });
-                            }
+                            self.ir.fetch_binary(bb, mode);
+                            self.ir.unlink(bb, ret);
+                            self.ir.clear(bb);
+                            self.ir.generic_cmp(bb, pc, kind);
+                            self.ir.inst.push(AsmInst::GenericCondBr {
+                                brkind,
+                                branch_dest,
+                            });
                         }
                         self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
                     }
@@ -652,13 +650,13 @@ impl JitContext {
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
-                self.ir.concat_str(&bb, arg, len);
+                self.ir.concat_str(bb, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
-                self.ir.concat_regexp(&bb, pc, arg, len);
+                self.ir.concat_regexp(bb, pc, arg, len);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {
@@ -666,11 +664,11 @@ impl JitContext {
                 for reg in dst.0..dst.0 + len {
                     self.ir.unlink(bb, SlotId(reg));
                 }
-                self.ir.expand_array(&bb, dst, len);
+                self.ir.expand_array(bb, dst, len);
             }
             TraceIr::AliasMethod { new, old } => {
                 self.ir.write_back_slots(bb, &[new, old]);
-                self.ir.alias_method(&bb, pc, new, old);
+                self.ir.alias_method(bb, pc, new, old);
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
                 if let Some(fid) = pc.cached_fid()

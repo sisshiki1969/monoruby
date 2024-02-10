@@ -644,7 +644,7 @@ impl BytecodeGen {
 //
 impl BytecodeGen {
     fn get_locals(&self) -> ExternalContext {
-        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param.clone());
+        let mut locals = ExternalContext::one(self.locals.clone(), self.block_param);
         locals.extend_from_slice(&self.outer_locals);
         locals
     }

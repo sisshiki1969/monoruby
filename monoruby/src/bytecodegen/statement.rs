@@ -181,7 +181,7 @@ impl BytecodeGen {
             let b = when_.iter().all(|cb| {
                 cb.when.iter().all(|node| {
                     if let NodeKind::Integer(i) = node.kind {
-                        if 0 <= i && i < 2048 {
+                        if (0..2048).contains(&i) {
                             min = min.min(i);
                             max = max.max(i);
                             return true;

@@ -422,7 +422,7 @@ impl Executor {
             let err = MonorubyErr::internalerr(format!(
                 "define func: {:?} {:016x}",
                 name,
-                (func.get() as u64) + (name.get() as u64) << 32
+                (func.get() as u64) + ((name.get() as u64) << 32)
             ));
             runtime::_dump_stacktrace(self, globals);
             self.set_error(err);
@@ -1171,7 +1171,7 @@ impl BcPc {
 impl BcPc {
     pub(crate) fn trace_ir(&self) -> TraceIr {
         let op = self.op1;
-        let opcode = self.opcode() as u8;
+        let opcode = self.opcode();
         if opcode & 0xc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
@@ -1518,7 +1518,7 @@ impl std::iter::Step for SlotId {
     }
 
     fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.0 + count as u16 <= std::u16::MAX {
+        if start.0 as usize + count <= std::u16::MAX as usize {
             Some(Self(start.0 + count as u16))
         } else {
             None

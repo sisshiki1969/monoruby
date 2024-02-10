@@ -76,7 +76,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
             end += 1
         }
 
-        let iter = (start..end).map(|i| Value::fixnum(i));
+        let iter = (start..end).map(Value::fixnum);
         vm.invoke_block_iter1(globals, bh, iter)?;
         Ok(self_)
     } else {
@@ -105,7 +105,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
                 end += 1
             }
 
-            let iter = (start..end).map(|i| Value::fixnum(i));
+            let iter = (start..end).map(Value::fixnum);
             let data = globals.get_block_data(vm.cfp(), bh);
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
@@ -142,7 +142,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
             end += 1
         }
 
-        let iter = (start..end).map(|i| Value::fixnum(i));
+        let iter = (start..end).map(Value::fixnum);
         let vec = vm.invoke_block_map1(globals, bh, iter)?;
         Ok(Value::array_from_vec(vec))
     } else {
@@ -170,7 +170,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
         if !range.exclude_end() {
             end += 1
         }
-        let iter = (start..end).map(|i| Value::fixnum(i));
+        let iter = (start..end).map(Value::fixnum);
 
         let v = vm.flat_map(globals, bh, iter)?;
         Ok(Value::array_from_vec(v))
@@ -197,7 +197,7 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
             end += 1
         }
 
-        let vec = (start..end).map(|i| Value::fixnum(i)).collect();
+        let vec = (start..end).map(Value::fixnum).collect();
         Ok(Value::array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))

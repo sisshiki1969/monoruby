@@ -399,11 +399,11 @@ impl Executor {
             (RV::Nil, RV::Nil) => true,
             (RV::Nil, _) => false,
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
-            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(&rhs),
+            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
             (RV::Fixnum(_), _) => false,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
-            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(&rhs),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
             (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
             (RV::BigInt(_), _) => false,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
@@ -593,7 +593,7 @@ impl Executor {
     ) -> Result<Value> {
         let res = self
             .compare_values_inner(globals, lhs, rhs)?
-            .map_or(Value::nil(), |ord| Value::from_ord(ord));
+            .map_or(Value::nil(), Value::from_ord);
         Ok(res)
     }
 
@@ -630,7 +630,7 @@ impl Executor {
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).partial_cmp(&rhs),
             (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
-            (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(&rhs)),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
             (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
             (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),

@@ -6,7 +6,7 @@ const CACHED_VERSION: i64 = 28 - 16;
 const CACHED_FUNCID: i64 = 8 - 16;
 const RET_REG: i64 = 4 - 16;
 const OPCODE_SUB: i64 = 7 - 16;
-const POS_NUM: i64 = 16 - 16;
+const POS_NUM: i64 = 0;
 const ARG_REG: i64 = 18 - 16;
 const RECV_REG: i64 = 20 - 16;
 

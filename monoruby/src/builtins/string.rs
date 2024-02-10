@@ -127,10 +127,7 @@ fn string_cmp(lfp: LFP) -> Result<Option<std::cmp::Ordering>> {
     lfp.check_number_of_arguments(1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_bytes();
-    let res = match lfp.arg(0).is_bytes() {
-        Some(rhs) => Some(lhs.string_cmp(rhs)),
-        None => None,
-    };
+    let res = lfp.arg(0).is_bytes().map(|rhs| lhs.string_cmp(rhs));
     Ok(res)
 }
 
@@ -360,7 +357,7 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
             continue;
         }
         match chars.next() {
-            Some(c) if c == '%' => {
+            Some('%') => {
                 format_str.push('%');
                 next_char!(ch, chars);
                 continue;
@@ -567,7 +564,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
         } else {
             let len = 1usize;
             let ch: String = lhs.chars().skip(index).take(len).collect();
-            if ch.len() != 0 {
+            if !ch.is_empty() {
                 Ok(Value::string_from_vec(ch.into_bytes()))
             } else {
                 Ok(Value::nil())
@@ -677,33 +674,35 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
             0
         };
         let v: Vec<Value> = if sep == " " {
-            if lim < 0 {
-                let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
-                let mut v: Vec<_> = string
-                    .split_ascii_whitespace()
-                    .map(Value::string_from_str)
-                    .collect();
-                if end_with {
-                    v.push(Value::string_from_str(""))
-                }
-                v
-            } else if lim == 0 {
-                let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
-                while let Some(s) = vec.last() {
-                    if s.is_empty() {
-                        vec.pop().unwrap();
-                    } else {
-                        break;
+            match lim {
+                lim if lim < 0 => {
+                    let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
+                    let mut v: Vec<_> = string
+                        .split_ascii_whitespace()
+                        .map(Value::string_from_str)
+                        .collect();
+                    if end_with {
+                        v.push(Value::string_from_str(""))
                     }
+                    v
                 }
-                vec.into_iter().map(Value::string_from_str).collect()
-            } else {
-                string
+                0 => {
+                    let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
+                    while let Some(s) = vec.last() {
+                        if s.is_empty() {
+                            vec.pop().unwrap();
+                        } else {
+                            break;
+                        }
+                    }
+                    vec.into_iter().map(Value::string_from_str).collect()
+                }
+                _ => string
                     .trim_start()
                     .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
                     .map(|s| s.trim_start())
                     .map(Value::string_from_str)
-                    .collect()
+                    .collect(),
             }
         } else if lim < 0 {
             string.split(&*sep).map(Value::string_from_str).collect()
@@ -749,12 +748,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
             count += 1;
             if count == lim {
                 break 'l;
-            } else {
-                if cursor != 0 || cursor != m.start() || m.range().len() != 0 {
-                    res.push(&string[cursor..m.start()]);
-                }
+            } else if cursor != 0 || cursor != m.start() || !m.range().is_empty() {
+                res.push(&string[cursor..m.start()]);
             }
-            while let Some(m) = iter.next() {
+            for m in iter {
                 count += 1;
                 if count == lim {
                     cursor = m.unwrap().start();
@@ -778,7 +775,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
                 }
             }
         }
-        let iter = res.into_iter().map(|s| Value::string_from_str(s));
+        let iter = res.into_iter().map(Value::string_from_str);
         match lfp.block() {
             Some(bh) => {
                 vm.invoke_block_iter1(globals, bh, iter)?;
@@ -1127,9 +1124,7 @@ fn lines(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
     }
     let receiver = lfp.self_val();
     let string = receiver.expect_string()?;
-    let iter = string
-        .split_inclusive('\n')
-        .map(|line| Value::string_from_str(line));
+    let iter = string.split_inclusive('\n').map(Value::string_from_str);
     Ok(Value::array_from_iter(iter))
 }
 
@@ -1175,7 +1170,7 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
     //if len < 2 || !lfp.arg(1).as_bool() {
     let iter = string
         .split_inclusive(rs.as_ref())
-        .map(|s| Value::string_from_str(s));
+        .map(Value::string_from_str);
     vm.invoke_block_iter1(globals, bh, iter)?;
     /* } else {
         let iter = string.split(&rs).map(|s| Value::string_from_str(s));

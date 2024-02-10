@@ -402,7 +402,7 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
             }
         },
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.cmp(&BigInt::from(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.cmp(&rhs),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.cmp(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => match lhs.to_f64().unwrap().partial_cmp(&rhs) {
             Some(ord) => ord,
             None => {

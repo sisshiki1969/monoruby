@@ -72,14 +72,12 @@ impl JitContext {
                 for info in src {
                     slots.merge(info);
                 }
+            } else if i == 0 {
+                // entry edge.
+                slots.merge(SlotInfo::new(func.total_reg_num()));
             } else {
-                if i == 0 {
-                    // entry edge.
-                    slots.merge(SlotInfo::new(func.total_reg_num()));
-                } else {
-                    // no incoming edge.
-                    continue;
-                }
+                // no incoming edge.
+                continue;
             }
             let mut slots = slots.0.unwrap();
             if i != 0 {
@@ -111,22 +109,20 @@ impl JitContext {
                             let next = *end + 1;
                             slots.concat(exit);
                             assert!(func.bb_info[*end].succ.contains(&next));
-                            assert!(func.bb_info[next].pred.contains(&end));
+                            assert!(func.bb_info[next].pred.contains(end));
                             edges.insert(next, slots);
                         } else if bb_id < *dst {
                             // forward edge
                             edges.insert(*dst, slots.clone());
+                        } else if *dst == loop_start {
+                            // backedge of a current loop
+                            back_edge = Some((bb_id, slots.clone()));
                         } else {
-                            if *dst == loop_start {
-                                // backedge of a current loop
-                                back_edge = Some((bb_id, slots.clone()));
-                            } else {
-                                // backedge of an inner loop
-                                unreachable!(
-                                    "backedge of a inner loop detected. {:?}->{:?}",
-                                    bb_id, dst
-                                )
-                            };
+                            // backedge of an inner loop
+                            unreachable!(
+                                "backedge of a inner loop detected. {:?}->{:?}",
+                                bb_id, dst
+                            )
                         }
                     }
                 }

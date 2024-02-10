@@ -16,7 +16,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
     match lfp.arg(0).is_str() {
         None => {}
         Some(s) => {
-            match s.chars().nth(0) {
+            match s.chars().next() {
                 Some(c) if c.is_ascii_uppercase() => {}
                 _ => return Err(MonorubyErr::identifier_must_be_constant(&s)),
             };

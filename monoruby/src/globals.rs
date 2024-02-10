@@ -465,7 +465,7 @@ impl Globals {
                 },
             }
         } else {
-            return "<INVALID>".to_string();
+            "<INVALID>".to_string()
         }
     }
 

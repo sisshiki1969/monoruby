@@ -25,12 +25,12 @@ mod struct_class;
 mod symbol;
 mod time;
 
-pub(self) use crate::compiler::jitgen::BBContext;
+use crate::compiler::jitgen::BBContext;
 use compiler::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;
-pub(self) use monoruby_attr::monoruby_builtin;
+use monoruby_attr::monoruby_builtin;
 pub use time::TimeInner;
 
 //
