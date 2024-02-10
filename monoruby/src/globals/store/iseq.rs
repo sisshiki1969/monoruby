@@ -437,10 +437,6 @@ impl ParamsInfo {
         self.required_num
     }
 
-    pub(crate) fn reqopt_num(&self) -> usize {
-        self.reqopt_num
-    }
-
     ///
     /// The number of optional + rest arguments.
     ///

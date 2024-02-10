@@ -717,10 +717,6 @@ impl FuncInfo {
         self.params.params.req_num()
     }
 
-    pub(crate) fn reqopt_num(&self) -> usize {
-        self.params.params.reqopt_num()
-    }
-
     ///
     /// The number of optional + rest arguments.
     ///
