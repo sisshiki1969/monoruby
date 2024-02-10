@@ -748,6 +748,10 @@ impl FuncInfo {
         self.meta().is_block_style()
     }
 
+    pub(crate) fn total_args(&self) -> usize {
+        self.params.params.total_args()
+    }
+
     ///
     /// Get the max number of positional arguments (= required + optional) of this function.
     ///

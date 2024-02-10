@@ -444,6 +444,13 @@ impl ParamsInfo {
         self.reqopt_num
     }
 
+    pub fn total_args(&self) -> usize {
+        self.pos_num
+            + self.kw_names.len()
+            + self.kw_rest.is_some() as usize
+            + self.block_param.is_some() as usize
+    }
+
     pub fn is_rest(&self) -> bool {
         self.pos_num != self.reqopt_num
     }

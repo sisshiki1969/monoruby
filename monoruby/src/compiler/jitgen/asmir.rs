@@ -399,11 +399,17 @@ impl AsmIr {
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
+        let offset = if matches!(&callee.kind, FuncKind::ISeq(_)) {
+            (16 + (LBP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16
+        } else {
+            4096
+        };
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
             recv_class,
             native,
+            offset,
             using_xmm,
             error,
         });
@@ -453,11 +459,17 @@ impl AsmIr {
         } else {
             self.write_back_args(bb, caller);
             let meta = callee.meta();
+            let offset = if matches!(&callee.kind, FuncKind::ISeq(_)) {
+                (16 + (LBP_ARG0 as usize) + 8 * callee.max_positional_args() + 8) / 16 * 16
+            } else {
+                4096
+            };
             let error = self.new_error(bb, pc);
             self.inst.push(AsmInst::SetArguments {
                 callid,
                 args,
                 meta,
+                offset,
                 error,
             });
         }
@@ -989,6 +1001,7 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         args: SlotId,
         meta: Meta,
+        offset: usize,
         error: AsmError,
     },
 
@@ -1022,6 +1035,7 @@ pub(super) enum AsmInst {
         recv_class: ClassId,
         callee_fid: FuncId,
         native: bool,
+        offset: usize,
         using_xmm: UsingXmm,
         error: AsmError,
     },
@@ -1596,9 +1610,10 @@ impl Codegen {
                 callid,
                 args,
                 meta,
+                offset,
                 error,
             } => {
-                self.jit_generic_set_arguments(callid, args, meta);
+                self.jit_set_arguments(callid, args, offset, meta);
                 self.handle_error(labels[error]);
             }
 
@@ -1706,12 +1721,13 @@ impl Codegen {
                 callee_fid,
                 recv_class,
                 native,
+                offset,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
                 self.send_cached(
-                    store, callid, callee_fid, recv_class, native, using_xmm, error,
+                    store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
                 );
             }
             AsmInst::SendNotCached {
