@@ -31,7 +31,7 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
-fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.check_number_of_arguments(1)?;
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string()?;
@@ -47,7 +47,7 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string()?;
     let val = Value::string(regex::escape(&string));
@@ -61,7 +61,7 @@ fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
-fn regexp_last_match(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_last_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     if len == 0 {
         Ok(vm.get_last_matchdata())
@@ -76,7 +76,7 @@ fn regexp_last_match(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given = match lfp.arg(0).expect_symbol_or_string() {
@@ -93,7 +93,7 @@ fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
 #[monoruby_builtin]
-fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if lfp.arg(0).is_nil() {
         return Ok(Value::nil());
     }

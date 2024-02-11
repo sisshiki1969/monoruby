@@ -27,7 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.check_number_of_arguments_range(2..=3)?;
     globals.generate_range(lfp.arg(0), lfp.arg(1), false)
 }
@@ -39,7 +39,7 @@ fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
 #[monoruby_builtin]
-fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().as_range().start)
 }
 
@@ -50,7 +50,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
 #[monoruby_builtin]
-fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().as_range().end)
 }
 
@@ -59,7 +59,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
 #[monoruby_builtin]
-fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
@@ -71,7 +71,7 @@ fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -99,7 +99,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
 #[monoruby_builtin]
-fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
@@ -136,7 +136,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
 #[monoruby_builtin]
-fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -164,7 +164,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -191,7 +191,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/entries.html]
 #[monoruby_builtin]
-fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {

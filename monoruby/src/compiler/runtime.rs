@@ -291,7 +291,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
     src: *const Value,
-    callee_lfp: LFP,
+    callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
@@ -311,7 +311,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     vm: &mut Executor,
     globals: &mut Globals,
     src: *const Value,
-    callee_lfp: LFP,
+    callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
@@ -332,7 +332,7 @@ pub(super) extern "C" fn jit_generic_handle_arguments(
     globals: &mut Globals,
     callid: CallSiteId,
     meta: Meta,
-    callee_lfp: LFP,
+    callee_lfp: Lfp,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
     match jit_keyword_arguments(globals, callid, callee_lfp, caller_lfp, meta) {

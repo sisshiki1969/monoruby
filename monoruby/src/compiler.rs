@@ -755,7 +755,7 @@ impl Codegen {
             &mut Executor,
             &mut Globals,
             *const Value,
-            LFP,
+            Lfp,
             CallSiteId,
         ) -> Option<Value>,
     ) {

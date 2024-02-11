@@ -455,11 +455,7 @@ impl AsmIr {
         } else {
             self.write_back_args(bb, caller);
             let meta = callee.meta();
-            let offset = if matches!(&callee.kind, FuncKind::ISeq(_)) {
-                (16 + (LBP_ARG0 as usize) + 8 * callee.max_positional_args() + 8) / 16 * 16
-            } else {
-                4096
-            };
+            let offset = (16 + (LBP_ARG0 as usize) + 8 * callee.max_positional_args() + 8) & !0xf;
             let error = self.new_error(bb, pc);
             self.inst.push(AsmInst::SetArguments {
                 callid,

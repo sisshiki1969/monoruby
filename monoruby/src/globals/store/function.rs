@@ -285,10 +285,8 @@ impl std::default::Default for Funcs {
     }
 }
 
-use crate::builtins::Arg;
-
 #[monoruby_builtin]
-fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let e: Enumerator = lfp.self_val().into();
     let receiver = e.obj;
     let method = e.method;
@@ -303,7 +301,7 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -
 }
 
 #[monoruby_builtin]
-fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     vm.yield_fiber(globals, lfp.arg(0))
 }
 

@@ -26,7 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
 #[monoruby_builtin]
-fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let tms_class = globals
         .get_qualified_constant(OBJECT_CLASS, &["Process", "Tms"])?
         .as_class();
@@ -65,7 +65,7 @@ fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/pid.html]
 #[monoruby_builtin]
-fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     Ok(Value::integer(std::process::id() as i64))
 }
 
@@ -76,7 +76,7 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let unit = if lfp.arg_len() == 1 {
         IdentId::FLOAT_SECOND
     } else {

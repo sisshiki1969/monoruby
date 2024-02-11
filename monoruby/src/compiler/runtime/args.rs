@@ -3,17 +3,15 @@ use super::*;
 pub(crate) fn jit_keyword_arguments(
     globals: &mut Globals,
     callid: CallSiteId,
-    callee_lfp: LFP,
-    caller_lfp: LFP,
+    callee_lfp: Lfp,
+    caller_lfp: Lfp,
     meta: Meta,
 ) -> Result<()> {
     let callee_func_id = meta.func_id();
     let callee = &globals[callee_func_id];
-    if matches!(&callee.kind, FuncKind::ISeq(_)) {
-        let caller = &globals.store[callid];
-        if !callee.no_keyword() || caller.kw_num() == 0 {
-            hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
-        }
+    let caller = &globals.store[callid];
+    if !callee.no_keyword() || caller.kw_num() == 0 {
+        hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
@@ -25,7 +23,7 @@ pub(crate) fn jit_keyword_arguments(
 pub(crate) fn handle_positional(
     info: &FuncInfo,
     arg_num: usize,
-    mut callee_lfp: LFP,
+    mut callee_lfp: Lfp,
     ex: Option<Value>,
 ) -> Result<()> {
     let req_num = info.req_num();
@@ -85,8 +83,8 @@ pub(crate) fn handle_positional(
 ///
 pub(crate) fn set_frame_arguments(
     globals: &mut Globals,
-    callee_lfp: LFP,
-    caller_lfp: LFP,
+    callee_lfp: Lfp,
+    caller_lfp: Lfp,
     callid: CallSiteId,
     src: *const Value,
 ) -> Result<usize> {
@@ -98,7 +96,7 @@ pub(crate) fn set_frame_arguments(
 
     let arg_num = positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
-    if matches!(&callee.kind, FuncKind::ISeq(_)) && (!callee.no_keyword() || caller.kw_num() == 0) {
+    if !callee.no_keyword() || caller.kw_num() == 0 {
         handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
     }
 
@@ -108,7 +106,7 @@ pub(crate) fn set_frame_arguments(
 ///
 /// Set block argument to the callee frame.
 ///
-pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: LFP, caller_lfp: LFP) {
+pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp: Lfp) {
     let CallSiteInfo {
         block_fid,
         block_arg,
@@ -131,7 +129,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     globals: &Globals,
     caller: CallSiteId,
     src: *const Value,
-    callee_lfp: LFP,
+    callee_lfp: Lfp,
     meta: Meta,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
@@ -156,8 +154,8 @@ fn positional(
     caller: &CallSiteInfo,
     callee: &FuncInfo,
     src: *const Value,
-    callee_lfp: LFP,
-    caller_lfp: LFP,
+    callee_lfp: Lfp,
+    caller_lfp: Lfp,
 ) -> Result<usize> {
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
@@ -166,21 +164,16 @@ fn positional(
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
     // ex is always none when caller.kw_num() == 0.
-    let ex = match &callee.kind {
-        FuncKind::ISeq(_) => {
-            if callee.no_keyword() && caller.kw_num() != 0 {
-                // handle excessive keyword arguments
-                let mut h = IndexMap::default();
-                for (k, id) in caller.kw_args.iter() {
-                    let v = unsafe { caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap() };
-                    h.insert(HashKey(Value::symbol(*k)), v);
-                }
-                Some(Value::hash(h))
-            } else {
-                None
-            }
+    let ex = if callee.no_keyword() && caller.kw_num() != 0 {
+        // handle excessive keyword arguments
+        let mut h = IndexMap::default();
+        for (k, id) in caller.kw_args.iter() {
+            let v = unsafe { caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap() };
+            h.insert(HashKey(Value::symbol(*k)), v);
         }
-        _ => None,
+        Some(Value::hash(h))
+    } else {
+        None
     };
 
     // rest is always empty when splat_pos.is_empty() and no_push.
@@ -250,7 +243,7 @@ fn positional(
 fn positional_post(
     callee: &FuncInfo,
     arg_num: usize,
-    mut callee_lfp: LFP,
+    mut callee_lfp: Lfp,
     ex: Option<Value>,
     mut rest: Vec<Value>,
 ) -> Result<()> {
@@ -308,8 +301,8 @@ fn positional_post(
 fn handle_keyword(
     callee: &FuncInfo,
     caller: &CallSiteInfo,
-    callee_lfp: LFP,
-    caller_lfp: LFP,
+    callee_lfp: Lfp,
+    caller_lfp: Lfp,
 ) -> Result<()> {
     ordinary_keyword(callee, caller, callee_lfp, caller_lfp)?;
     hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
@@ -318,8 +311,8 @@ fn handle_keyword(
 fn ordinary_keyword(
     info: &FuncInfo,
     callsite: &CallSiteInfo,
-    mut callee_lfp: LFP,
-    caller_lfp: LFP,
+    mut callee_lfp: Lfp,
+    caller_lfp: Lfp,
 ) -> Result<()> {
     let CallSiteInfo {
         kw_pos, kw_args, ..
@@ -351,8 +344,8 @@ fn ordinary_keyword(
 fn hash_splat_and_kw_rest(
     info: &FuncInfo,
     callsite: &CallSiteInfo,
-    mut callee_lfp: LFP,
-    caller_lfp: LFP,
+    mut callee_lfp: Lfp,
+    caller_lfp: Lfp,
 ) -> Result<()> {
     let CallSiteInfo {
         kw_pos,
@@ -451,7 +444,7 @@ fn memcpy(src: *const Value, dst: *mut Value, len: usize) {
     }
 }
 
-fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
+fn fill(lfp: Lfp, start_pos: usize, len: usize, val: Option<Value>) {
     unsafe {
         let ptr = lfp.register_ptr(start_pos);
         std::slice::from_raw_parts_mut(ptr, len).fill(val);

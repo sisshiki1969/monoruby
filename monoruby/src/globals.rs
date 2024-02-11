@@ -38,7 +38,7 @@ impl MethodTableEntry {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct ProcData {
-    outer: Option<LFP>,
+    outer: Option<Lfp>,
     func_id: Option<FuncId>,
 }
 
@@ -235,7 +235,7 @@ impl Globals {
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        caller_cfp: CFP,
+        caller_cfp: Cfp,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
@@ -265,7 +265,7 @@ impl Globals {
         info.data_ref()
     }
 
-    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> ProcData {
+    pub(crate) fn get_yield_data(&mut self, cfp: Cfp) -> ProcData {
         match cfp.get_block() {
             Some(bh) => {
                 let info = self.get_block_data(cfp, bh);
@@ -281,7 +281,7 @@ impl Globals {
         }
     }
 
-    pub(crate) fn get_block_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> ProcInner {
+    pub(crate) fn get_block_data(&mut self, mut cfp: Cfp, bh: BlockHandler) -> ProcInner {
         if let Some((func_id, idx)) = bh.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();

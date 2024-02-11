@@ -21,7 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     let func_id = method.func_id();

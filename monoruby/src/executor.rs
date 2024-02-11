@@ -1,5 +1,5 @@
 use super::*;
-use crate::{builtins::Arg, bytecodegen::*};
+use crate::bytecodegen::*;
 
 pub mod frame;
 pub mod inline;
@@ -13,7 +13,7 @@ pub use op::*;
 use ruruby_parse::{CmpKind, Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
@@ -42,7 +42,7 @@ pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, par
 #[repr(C)]
 pub struct Executor {
     /// control frame pointer.
-    cfp: Option<CFP>,
+    cfp: Option<Cfp>,
     /// rsp save area.
     ///
     /// - 0: created
@@ -113,7 +113,7 @@ impl Executor {
         executor
     }
 
-    pub fn cfp(&self) -> CFP {
+    pub fn cfp(&self) -> Cfp {
         self.cfp.unwrap()
     }
 
@@ -750,7 +750,7 @@ impl Executor {
         obj: Value,
         args: Vec<Value>,
     ) -> Result<Value> {
-        let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
+        let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from(outer_lfp, FuncId::new(1));
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
@@ -1201,17 +1201,15 @@ impl BcPc {
                     let cached_fid = self.cached_fid();
                     let is_simple = opcode == 30;
 
-                    if let Some(fid) = cached_fid {
-                        if is_simple {
-                            if let Some(inline_id) =
-                                crate::executor::inline::InlineTable::get_inline(fid)
-                            {
-                                return TraceIr::InlineCall {
-                                    inline_id,
-                                    callid: op2.into(),
-                                };
-                            }
-                        }
+                    if is_simple
+                        && let Some(fid) = cached_fid
+                        && let Some(inline_id) =
+                            crate::executor::inline::InlineTable::get_inline(fid)
+                    {
+                        return TraceIr::InlineCall {
+                            inline_id,
+                            callid: op2.into(),
+                        };
                     }
                     TraceIr::MethodCall { callid: op2.into() }
                 }

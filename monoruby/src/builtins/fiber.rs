@@ -18,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
-fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh)?;
     Ok(Value::new_fiber(proc))
@@ -31,7 +31,7 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
-fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if vm.parent_fiber().is_none() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
@@ -55,7 +55,7 @@ fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/resume.html]
 #[monoruby_builtin]
-fn resume(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_val: Fiber = lfp.self_val().into();
     self_val.resume(vm, globals, lfp)
 }

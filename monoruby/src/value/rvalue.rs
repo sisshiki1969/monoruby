@@ -1160,7 +1160,7 @@ impl Proc {
         Proc(Value::new_proc(block))
     }
 
-    pub(crate) fn from(outer_lfp: LFP, func_id: FuncId) -> Self {
+    pub(crate) fn from(outer_lfp: Lfp, func_id: FuncId) -> Self {
         Proc(Value::new_proc(ProcInner::from(outer_lfp, func_id)))
     }
 }
@@ -1168,7 +1168,7 @@ impl Proc {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ProcInner {
-    outer_lfp: LFP,
+    outer_lfp: Lfp,
     func_id: FuncId,
 }
 
@@ -1179,7 +1179,7 @@ impl alloc::GC<RValue> for ProcInner {
 }
 
 impl ProcInner {
-    pub(crate) fn from(outer_lfp: LFP, func_id: FuncId) -> Self {
+    pub(crate) fn from(outer_lfp: Lfp, func_id: FuncId) -> Self {
         Self { outer_lfp, func_id }
     }
 
@@ -1187,7 +1187,7 @@ impl ProcInner {
         self.func_id
     }
 
-    pub fn outer_lfp(&self) -> LFP {
+    pub fn outer_lfp(&self) -> Lfp {
         self.outer_lfp
     }
 

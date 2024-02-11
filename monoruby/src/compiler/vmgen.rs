@@ -1611,7 +1611,7 @@ impl Codegen {
 extern "C" fn handle_invoker_arguments(
     _vm: &mut Executor,
     globals: &Globals,
-    callee_lfp: LFP,
+    callee_lfp: Lfp,
     mut arg_num: usize,
 ) -> usize {
     let callee_func_id = callee_lfp.meta().func_id();
@@ -1634,7 +1634,7 @@ extern "C" fn handle_invoker_arguments(
 }
 
 /// deconstruct array for block
-fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: LFP) -> usize {
+fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
     let req_num = info.req_num();
     if info.is_block_style() && arg_num == 1 && (info.reqopt_num() > 1 || info.is_rest()) {
         unsafe {

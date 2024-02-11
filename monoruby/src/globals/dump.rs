@@ -1,7 +1,7 @@
 use super::*;
 
 impl Globals {
-    pub(crate) unsafe fn dump_frame_info(&mut self, lfp: LFP) {
+    pub(crate) unsafe fn dump_frame_info(&mut self, lfp: Lfp) {
         let meta = lfp.meta();
         let outer = lfp.outer();
         let func_id = meta.func_id();

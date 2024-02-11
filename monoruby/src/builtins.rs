@@ -84,13 +84,3 @@ impl std::ops::Add<usize> for Arg {
         Arg(unsafe { self.0.sub(rhs) })
     }
 }
-
-impl Arg {
-    pub fn from(val: &Value) -> Arg {
-        Arg(val as _)
-    }
-
-    pub fn as_ptr(&self) -> *const Value {
-        self.0
-    }
-}

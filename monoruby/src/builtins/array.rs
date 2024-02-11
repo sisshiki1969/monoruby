@@ -72,7 +72,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_with_class(vec![], class);
     let args = lfp.to_vec();
@@ -89,7 +89,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 #[monoruby_builtin]
-fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let mut self_val: Array = lfp.self_val().into();
     if len == 0 {
@@ -134,7 +134,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
 #[monoruby_builtin]
-fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.self_val().as_array().len();
     Ok(Value::integer(len as i64))
 }
@@ -146,7 +146,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/empty=3f.html]
 #[monoruby_builtin]
-fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let b = lfp.self_val().as_array().is_empty();
     Ok(Value::bool(b))
 }
@@ -158,7 +158,7 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_a.html]
 #[monoruby_builtin]
-fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -169,7 +169,7 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 #[monoruby_builtin]
-fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut lhs = Array::dup(lfp.self_val().as_array());
     let rhs = match lfp.arg(0).try_array_ty() {
         Some(v) => v,
@@ -188,7 +188,7 @@ fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2d.html]
 #[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs_v = lfp.self_val();
     let rhs = match lfp.arg(0).try_array_ty() {
         Some(ary) => ary,
@@ -218,7 +218,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
 #[monoruby_builtin]
-fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let lhs: Array = self_val.into();
     if let Some(v) = lfp.arg(0).try_fixnum() {
@@ -246,7 +246,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shift.html]
 #[monoruby_builtin]
-fn shift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn shift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let mut ary: Array = lfp.self_val().into();
     if len == 0 {
@@ -275,7 +275,7 @@ fn shift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/prepend.html]
 #[monoruby_builtin]
-fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary: Array = lfp.self_val().into();
     ary.insert_many(0, lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
@@ -289,7 +289,7 @@ fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/concat.html]
 #[monoruby_builtin]
-fn concat(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn concat(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ary: Array = lfp.self_val().into();
     let mut ary: Array = Array::new();
     for a in lfp.arg(0).as_array().iter().cloned() {
@@ -310,7 +310,7 @@ fn concat(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
 #[monoruby_builtin]
-fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn shl(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary: Array = lfp.self_val().into();
     ary.push(lfp.arg(0));
     Ok(ary.into())
@@ -353,7 +353,7 @@ fn array_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs: Array = lfp.self_val().into();
     let rhs: Array = lfp.arg(0).into();
     if lhs.len() != rhs.len() {
@@ -374,7 +374,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/3.2/method/Array/i/=3c=3d=3e.html]
 #[monoruby_builtin]
-fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs: Array = lfp.self_val().into();
     let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
         rhs
@@ -406,7 +406,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let ary: Array = lfp.self_val().into();
     if len == 1 {
@@ -424,7 +424,7 @@ fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
 #[monoruby_builtin]
-fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let mut ary: Array = lfp.self_val().into();
     if len == 2 {
@@ -458,7 +458,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().into();
     ary.clear();
@@ -477,7 +477,7 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
 #[monoruby_builtin]
-fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().into();
     ary.fill(lfp.arg(0));
@@ -491,7 +491,7 @@ fn fill(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/drop.html]
 #[monoruby_builtin]
-fn drop(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn drop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let aref = self_.as_array();
     let num = lfp.arg(0).coerce_to_i64()?;
@@ -517,11 +517,11 @@ fn drop(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/zip.html]
 #[monoruby_builtin]
-fn zip(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let self_ary = self_.as_array();
     let mut args_ary = vec![];
-    for a in lfp.arg(0).as_array().iter().cloned() {
+    for a in lfp.arg(0).as_array().iter() {
         args_ary.push(a.expect_array()?.to_vec());
     }
     let mut ary = vec![];
@@ -557,7 +557,7 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
 #[monoruby_builtin]
-fn inject(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
@@ -578,7 +578,7 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
-fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let sep = if len == 0 {
         "".to_string()
@@ -605,7 +605,7 @@ fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/first.html]
 #[monoruby_builtin]
-fn first(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn first(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let ary: Array = lfp.self_val().into();
     if len == 0 {
@@ -632,7 +632,7 @@ fn first(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/last.html]
 #[monoruby_builtin]
-fn last(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn last(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let ary: Array = lfp.self_val().into();
     if len == 0 {
@@ -659,7 +659,7 @@ fn last(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
 #[monoruby_builtin]
-fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let mut sum = if len == 0 { Value::i32(0) } else { lfp.arg(0) };
     let self_ = lfp.self_val();
@@ -693,7 +693,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
-fn min(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let ary: Array = lfp.self_val().into();
     if ary.len() == 0 {
@@ -718,7 +718,7 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
-fn max(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let ary: Array = lfp.self_val().into();
     if ary.len() == 0 {
@@ -741,7 +741,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
-fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().into();
     vm.sort_by(globals, &mut ary, Executor::compare_values)?;
@@ -756,7 +756,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
-fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let mut ary: Array = lfp.self_val().dup().into();
     vm.sort_by(globals, &mut ary, Executor::compare_values)?;
@@ -771,7 +771,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort_by=21.html]
 #[monoruby_builtin]
-fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let data = globals.get_block_data(vm.cfp(), bh);
     let f = |vm: &mut Executor,
@@ -801,7 +801,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if let Some(bh) = lfp.block() {
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
@@ -819,7 +819,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/each_with_index.html]
 #[monoruby_builtin]
-fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if let Some(bh) = lfp.block() {
         vm.invoke_block_iter_with_index1(globals, bh, ary.iter().cloned())?;
@@ -836,7 +836,7 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
 #[monoruby_builtin]
-fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let iter = ary.iter().cloned();
     if let Some(bh) = lfp.block() {
@@ -858,7 +858,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let ary: Array = lfp.self_val().into();
     let iter = ary.iter().cloned();
@@ -876,7 +876,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/all=3f.html]
 #[monoruby_builtin]
-fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if let Some(bh) = lfp.block() {
         let data = globals.get_block_data(vm.cfp(), bh);
@@ -903,7 +903,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
-fn detect(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let bh = lfp.expect_block()?;
     let data = globals.get_block_data(vm.cfp(), bh);
@@ -923,7 +923,7 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
 #[monoruby_builtin]
-fn grep(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let ary: Vec<_> = match lfp.block() {
         None => {
@@ -947,7 +947,7 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
-fn include_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let rhs = lfp.arg(0);
     for lhs in ary.iter().cloned() {
@@ -965,7 +965,7 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let iter = ary.iter().rev().cloned();
     Ok(Value::array_from_iter(iter))
@@ -978,7 +978,7 @@ fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary: Array = lfp.self_val().into();
     ary.reverse();
     Ok(ary.into())
@@ -991,7 +991,7 @@ fn reverse_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
-fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if ary.len() == 0 {
         return Ok(Value::array_empty());
@@ -1024,7 +1024,7 @@ fn transpose(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate=21.html]
 #[monoruby_builtin]
-fn rotate_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn rotate_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let i = if lfp.arg_len() == 0 {
         1
     } else {
@@ -1050,7 +1050,7 @@ fn rotate_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/rotate.html]
 #[monoruby_builtin]
-fn rotate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn rotate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let i = if lfp.arg_len() == 0 {
         1
     } else {
@@ -1079,7 +1079,7 @@ fn rotate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html
 #[monoruby_builtin]
-fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = Array::dup(lfp.self_val().as_array());
     match lfp.block() {
         None => uniq_noblock(ary)?,
@@ -1089,7 +1089,7 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 }
 
 #[monoruby_builtin]
-fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let deleted = match lfp.block() {
         None => uniq_noblock(ary)?,
@@ -1157,7 +1157,7 @@ fn uniq_inner(
 ///
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/slice=21.html
 #[monoruby_builtin]
-fn slice_(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn slice_(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     let aref: Array = lfp.self_val().into();
     if len == 2 {
@@ -1215,7 +1215,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 /// - [NOT SUPPORTED] pack(template, buffer: String.new) -> String
 ///
 #[monoruby_builtin]
-fn pack(_: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if lfp.arg_len() == 1 && lfp.arg(0).expect_string()? != "C*" {
         unimplemented!()

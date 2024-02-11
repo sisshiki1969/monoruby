@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
-fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg_len();
     lfp.expect_no_block()?;
     let superclass = if len == 0 {
@@ -48,8 +48,8 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// TODO: We must call Object#initialize.
 #[monoruby_builtin]
-pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let obj = __allocate(vm, globals, lfp, arg)?;
+pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let obj = __allocate(vm, globals, lfp)?;
     let args = lfp.arg(0).as_array().to_vec();
     vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
     Ok(obj)
@@ -60,7 +60,7 @@ pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 #[monoruby_builtin]
-fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class();
     Ok(class.superclass_value().unwrap_or_default())
 }
@@ -70,7 +70,7 @@ fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let obj = Value::object(class_id);
     Ok(obj)

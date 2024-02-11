@@ -12,7 +12,7 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
-fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let mut arg_vec = lfp.arg(0).as_array().to_vec();
 
@@ -64,12 +64,12 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 }
 
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    super::class::__new(vm, globals, lfp, arg)
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    super::class::__new(vm, globals, lfp)
 }
 
 #[monoruby_builtin]
-fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
     let struct_class = self_val.class().get_obj(globals);
@@ -89,7 +89,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 }
 
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();

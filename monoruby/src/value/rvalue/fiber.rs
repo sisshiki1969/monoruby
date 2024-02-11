@@ -1,5 +1,4 @@
 use super::*;
-use crate::builtins::Arg;
 
 #[monoruby_object]
 pub struct Fiber(Value);
@@ -65,18 +64,18 @@ impl Fiber {
         self.proc.func_id()
     }
 
-    pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: LFP) -> Result<Value> {
-        let arg = lfp.arg(0);
-        let len = arg.as_array().len();
+    pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+        let arg0 = lfp.arg(0);
+        let len = arg0.as_array().len();
         match self.state() {
-            FiberState::Created => self.invoke_fiber(vm, globals, lfp.as_arg(), lfp.arg_len()),
+            FiberState::Created => self.invoke_fiber(vm, globals, &[arg0]),
             FiberState::Suspended => {
                 let val = if len == 0 {
                     Value::nil()
                 } else if len == 1 {
-                    arg.as_array()[0]
+                    arg0.as_array()[0]
                 } else {
-                    arg
+                    arg0
                 };
                 self.resume_fiber(vm, globals, val)
             }
@@ -94,8 +93,7 @@ impl Fiber {
     ) -> Result<Value> {
         let v = match self.state() {
             FiberState::Created => {
-                let arg = Arg::from(&Value::nil());
-                self.invoke_fiber_with_self(vm, globals, arg, 0, self_val.into())?
+                self.invoke_fiber_with_self(vm, globals, &[], self_val.into())?
             }
             FiberState::Suspended => self.resume_fiber(vm, globals, Value::nil())?,
             FiberState::Terminated => {
@@ -114,10 +112,7 @@ impl Fiber {
         yielder: Value,
     ) -> Result<Value> {
         match self.state() {
-            FiberState::Created => {
-                let arg = Arg::from(&yielder);
-                self.invoke_fiber(vm, globals, arg, 1)
-            }
+            FiberState::Created => self.invoke_fiber(vm, globals, &[yielder]),
             FiberState::Suspended => self.resume_fiber(vm, globals, yielder),
             FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
@@ -146,8 +141,7 @@ impl Fiber {
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
-        arg: Arg,
-        len: usize,
+        arg: &[Value],
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
         self.initialize();
@@ -159,7 +153,7 @@ impl Fiber {
             &proc,
             Value::nil(),
             arg.as_ptr(),
-            len,
+            arg.len(),
             handle,
         ) {
             Some(val) => Ok(val),
@@ -176,8 +170,7 @@ impl Fiber {
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
-        arg: Arg,
-        len: usize,
+        arg: &[Value],
         self_val: Value,
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
@@ -190,7 +183,7 @@ impl Fiber {
             &proc,
             self_val,
             arg.as_ptr(),
-            len,
+            arg.len(),
             handle,
         ) {
             Some(val) => Ok(val),

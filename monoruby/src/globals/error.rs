@@ -227,7 +227,7 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
-    pub(crate) fn method_return(val: Value, target_lfp: LFP) -> MonorubyErr {
+    pub(crate) fn method_return(val: Value, target_lfp: Lfp) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::MethodReturn(val, target_lfp),
             String::new(),
@@ -499,7 +499,7 @@ impl MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    MethodReturn(Value, LFP),
+    MethodReturn(Value, Lfp),
     NotMethod(NoMethodErrKind),
     Arguments,
     Syntax,

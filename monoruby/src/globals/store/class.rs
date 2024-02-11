@@ -499,10 +499,7 @@ impl Globals {
     ///
     pub(crate) fn method_defined(&mut self, class_id: ClassId, func_name: IdentId) -> bool {
         match self.check_method_for_class(class_id, func_name) {
-            Some(entry) => match entry.visibility {
-                Visibility::Private => false,
-                _ => true,
-            },
+            Some(entry) => !matches!(entry.visibility, Visibility::Private),
             None => false,
         }
     }
