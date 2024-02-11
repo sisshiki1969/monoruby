@@ -7,10 +7,19 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let module = MODULE_CLASS.get_module(globals);
     globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
-    globals.define_builtin_class_func(CLASS_CLASS, "new", class_new);
-    globals.define_builtin_inline_func(CLASS_CLASS, "new", new, inline_class_new, analysis::v_v_vv);
-    globals.define_builtin_func(CLASS_CLASS, "superclass", superclass);
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate);
+    globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
+    globals.define_builtin_inline_func_with(
+        CLASS_CLASS,
+        "new",
+        new,
+        inline_class_new,
+        analysis::v_v_vv,
+        0,
+        0,
+        true,
+    );
+    globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
+    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
 }
 
 /// ### Class.new
@@ -21,7 +30,6 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(0..=1)?;
     lfp.expect_no_block()?;
     let superclass = if len == 0 {
         None
@@ -38,12 +46,12 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 ///
-/// !! We must call Object#initialize.
+/// TODO: We must call Object#initialize.
 #[monoruby_builtin]
 pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
     let obj = __allocate(vm, globals, lfp, arg)?;
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
+    let args = lfp.arg(0).as_array().to_vec();
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
     Ok(obj)
 }
 

@@ -168,13 +168,13 @@ pub fn run_test2(code: &str) {
 
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
-    dbg!(code);
+    eprintln!("{code}");
     run_test_main(code, false).0
 }
 
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
-    dbg!(code);
+    eprintln!("{code}");
     let mut globals = Globals::new(1, false);
     match globals.run(code, std::path::Path::new("")) {
         Ok(_) => panic!(),

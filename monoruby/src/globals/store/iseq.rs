@@ -44,7 +44,7 @@ pub(crate) struct ISeqInfo {
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
     ///
-    /// Information of parameters..
+    /// Information of parameters.
     ///
     pub args: ParamsInfo,
     ///
@@ -188,14 +188,6 @@ impl ISeqInfo {
     ///
     pub(crate) fn local_num(&self) -> usize {
         self.non_temp_num as usize
-    }
-
-    pub(crate) fn required_num(&self) -> usize {
-        self.args.required_num
-    }
-
-    pub(crate) fn is_rest(&self) -> bool {
-        self.args.is_rest()
     }
 
     /*///
@@ -427,6 +419,10 @@ impl ParamsInfo {
 
     pub(crate) fn req_num(&self) -> usize {
         self.required_num
+    }
+
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.reqopt_num
     }
 
     ///

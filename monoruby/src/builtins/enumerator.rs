@@ -11,19 +11,19 @@ static YIELDER_INIT: Once = Once::new();
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
-    globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "next", next);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind);
+    globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
+    globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
-    globals.define_builtin_func(yielder.id(), "<<", yielder_push);
-    globals.define_builtin_func(yielder.id(), "yield", yielder_yield);
+    globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
+    globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
 
     globals.define_builtin_class_by_str(
         "Generator",
@@ -31,14 +31,14 @@ pub(super) fn init(globals: &mut Globals) {
         OBJECT_CLASS.get_module(globals),
         ENUMERATOR_CLASS,
     );
-    globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new);
-    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each);
+    globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new, 0);
+    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);
 }
 
 ///
 /// ### Enumerator.new
 ///
-/// - new(size=nil) {|y| ... } -> Enumerator
+/// - new([NOT SUPPORTED] size=nil) {|y| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
@@ -57,7 +57,6 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let mut e: Enumerator = lfp.self_val().into();
     e.next(vm, globals)
 }
@@ -70,7 +69,6 @@ fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next_values.html]
 #[monoruby_builtin]
 fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let mut e: Enumerator = lfp.self_val().into();
     Ok(e.next_values(vm, globals)?.into())
 }
@@ -100,7 +98,6 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    lfp.check_number_of_arguments(0)?;
     let self_val: Enumerator = lfp.self_val().into();
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
@@ -151,7 +148,6 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
         }
     }
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(0..=1)?;
     let count = if len == 0 {
         Value::integer(0)
     } else {
@@ -192,7 +188,6 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let mut e: Enumerator = lfp.self_val().into();
     e.peek(vm, globals)
 }
@@ -205,7 +200,6 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
 fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let mut e: Enumerator = lfp.self_val().into();
     e.rewind();
     Ok(e.into())
@@ -231,7 +225,7 @@ fn yielder_push(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/yield.html]
 #[monoruby_builtin]
 fn yielder_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    vm.yield_fiber(globals, Value::array_from_iter(lfp.iter()))
+    vm.yield_fiber(globals, lfp.arg(0))
 }
 
 ///
@@ -269,7 +263,6 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) ->
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    lfp.check_number_of_arguments(0)?;
     let self_val: Generator = lfp.self_val().into();
     let data = globals.get_block_data(vm.cfp(), lfp.expect_block()?);
     let internal = self_val.create_internal();
@@ -362,7 +355,7 @@ mod test {
             r##"
             fib = Enumerator.new do |y|
                 a = b = 1
-                loop do 
+                loop do
                     y << a
                     a, b = a + b, a
                 end
@@ -383,7 +376,7 @@ mod test {
             r##"
             fib = Enumerator.new do |y|
                 a = b = 1
-                loop do 
+                loop do
                     y << a
                     a, b = a + b, a
                     if a > 30 then break end
@@ -477,7 +470,7 @@ mod test {
             r##"
             fib = Enumerator::Generator.new do |y|
                 a = b = 1
-                loop do 
+                loop do
                     y << a
                     a, b = a + b, a
                 end

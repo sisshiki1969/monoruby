@@ -6,21 +6,23 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS);
-    globals.define_builtin_class_func(RANGE_CLASS, "new", range_new);
-    globals.define_builtin_func(RANGE_CLASS, "begin", begin);
-    globals.define_builtin_func(RANGE_CLASS, "end", end);
-    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end);
-    globals.define_builtin_func(RANGE_CLASS, "each", each);
-    globals.define_builtin_func(RANGE_CLASS, "all?", all_);
-    globals.define_builtin_func(RANGE_CLASS, "collect", map);
-    globals.define_builtin_func(RANGE_CLASS, "map", map);
-    globals.define_builtin_func(RANGE_CLASS, "collect_concat", flat_map);
-    globals.define_builtin_func(RANGE_CLASS, "flat_map", flat_map);
-    globals.define_builtin_func(RANGE_CLASS, "entries", toa);
-    globals.define_builtin_func(RANGE_CLASS, "to_a", toa);
+    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
+    globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
+    globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
+    globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
+    globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
+    globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
+    globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "collect_concat", flat_map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "flat_map", flat_map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "entries", toa, 0);
+    globals.define_builtin_func(RANGE_CLASS, "to_a", toa, 0);
 }
 
+///
 /// ### Range.new
+///
 /// - new(first, last, exclude_end = false) -> Range
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
@@ -30,7 +32,9 @@ fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
     globals.generate_range(lfp.arg(0), lfp.arg(1), false)
 }
 
+///
 /// ### Range#begin
+///
 /// - begin -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
@@ -39,7 +43,9 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
     Ok(lfp.self_val().as_range().start)
 }
 
+///
 /// Range#end
+///
 /// - end -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
@@ -94,7 +100,6 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/all=3f.html]
 #[monoruby_builtin]
 fn all_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
@@ -160,7 +165,6 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();

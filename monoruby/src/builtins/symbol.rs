@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Symbol", SYMBOL_CLASS);
-    globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp);
+    globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
 }
 
 ///
@@ -17,7 +17,6 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn cmp(_: &mut Executor, _: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     match (lhs.as_symbol(), rhs.try_symbol()) {

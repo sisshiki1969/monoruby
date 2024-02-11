@@ -7,8 +7,8 @@ use num::BigInt;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Random").id();
-    globals.define_builtin_class_func(klass, "srand", srand);
-    globals.define_builtin_class_func(klass, "rand", rand);
+    globals.define_builtin_class_func_with(klass, "srand", srand, 0, 1, false);
+    globals.define_builtin_class_func(klass, "rand", rand, 0);
 }
 
 /// ### Random.srand
@@ -19,7 +19,6 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
     let new_seed = if len == 0 {
         None
@@ -35,8 +34,8 @@ fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 
 // ### Random.rand
 /// - rand -> Float
-/// - rand(max) -> Integer | Float
-/// - rand(range) -> Integer | Float
+/// - [NOT SUPPORTED] rand(max) -> Integer | Float
+/// - [NOT SUPPORTED] rand(range) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
 #[monoruby_builtin]

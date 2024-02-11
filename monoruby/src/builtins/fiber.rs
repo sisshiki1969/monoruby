@@ -6,9 +6,9 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Fiber", FIBER_CLASS);
-    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new);
-    globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield);
-    globals.define_builtin_func(FIBER_CLASS, "resume", resume);
+    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
+    globals.define_builtin_class_func_rest(FIBER_CLASS, "yield", fiber_yield);
+    globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
 }
 
 ///
@@ -32,18 +32,18 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
 fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
     if vm.parent_fiber().is_none() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
         ));
     }
+    let len = lfp.arg(0).as_array().len();
     let val = if len == 0 {
         Value::nil()
     } else if len == 1 {
-        lfp.arg(0)
+        lfp.arg(0).as_array()[0]
     } else {
-        Value::array_from_iter(lfp.iter())
+        lfp.arg(0)
     };
     vm.yield_fiber(globals, val)
 }
@@ -120,12 +120,12 @@ mod test {
             r##"
             fib = Fiber.new do
                 a = b = 1
-                loop do 
+                loop do
                     Fiber.yield a
                     a, b = a + b, a
                 end
             end
-            
+
             30.times do fib.resume end
             fib.resume
         "##,

@@ -253,34 +253,40 @@ impl Codegen {
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_frame(meta, caller);
 
-        if matches!(&callee.kind, FuncKind::ISeq(_)) {
-            let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
-            self.jit_copy_keyword_args(caller, callee);
-            if callee.opt_rest_num() == 0
-                && callee.kw_rest().is_none()
-                && !kw_expansion
-                && caller.hash_splat_pos.is_empty()
-            {
-                // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
-            } else {
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx; // &mut Executor
-                    movq rsi, r12; // &mut Globals
-                    movl rdx, (callid.get());
-                    movq rcx, (meta.get());
-                    lea  r8, [rsp - 16];   // callee_lfp
-                    subq rsp, (offset);
-                    movq rax, (runtime::jit_generic_handle_arguments);
-                    call rax;
-                    addq rsp, (offset);
-                }
-                self.handle_error(error);
-            }
-        }
+        //if matches!(&callee.kind, FuncKind::ISeq(_)) {
+        let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
+        self.jit_copy_keyword_args(caller, callee);
 
         if native {
             monoasm! { &mut self.jit,
-                movq rdx, rdi;
+                movq r14, rdi;
+            }
+        }
+        if callee.opt_rest_num() == 0
+            && callee.kw_rest().is_none()
+            && !kw_expansion
+            && caller.hash_splat_pos.is_empty()
+        {
+            // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
+        } else {
+            monoasm! { &mut self.jit,
+                movq rdi, rbx; // &mut Executor
+                movq rsi, r12; // &mut Globals
+                movl rdx, (callid.get());
+                movq rcx, (meta.get());
+                lea  r8, [rsp - 16];   // callee_lfp
+                subq rsp, (offset);
+                movq rax, (runtime::jit_generic_handle_arguments);
+                call rax;
+                addq rsp, (offset);
+            }
+            self.handle_error(error);
+        }
+        //}
+
+        if native {
+            monoasm! { &mut self.jit,
+                movq rdx, r14;
             }
         }
 

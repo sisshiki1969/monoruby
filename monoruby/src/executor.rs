@@ -490,33 +490,6 @@ impl Executor {
     }
 
     ///
-    /// Invoke method for *receiver* and *method*.
-    ///
-    pub(crate) fn invoke_method_inner2(
-        &mut self,
-        globals: &mut Globals,
-        method: IdentId,
-        receiver: Value,
-        args: Arg,
-        len: usize,
-        block_handler: Option<BlockHandler>,
-    ) -> Result<Value> {
-        let func_id = globals.find_method(receiver, method, false)?;
-        match (globals.codegen.method_invoker2)(
-            self,
-            globals,
-            func_id,
-            receiver,
-            args,
-            len,
-            block_handler,
-        ) {
-            Some(res) => Ok(res),
-            None => Err(self.take_error()),
-        }
-    }
-
-    ///
     /// Invoke block for *block_handler*.
     ///
     /// To get BlockData, use get_block_data().
@@ -669,32 +642,17 @@ impl Executor {
         globals: &mut Globals,
         method: IdentId,
         receiver: Value,
-        args: Arg,
-        len: usize,
+        args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func2(globals, func_id, receiver, args, len, bh)
+            match self.invoke_func(globals, func_id, receiver, args, bh) {
+                Some(val) => Ok(val),
+                None => Err(self.take_error()),
+            }
         } else {
             Ok(Value::nil())
         }
-    }
-
-    ///
-    /// Invoke func with *args*: Args.
-    ///
-    pub(crate) fn invoke_func2(
-        &mut self,
-        globals: &mut Globals,
-        func_id: FuncId,
-        receiver: Value,
-        args: Arg,
-        len: usize,
-        bh: Option<BlockHandler>,
-    ) -> Result<Value> {
-        let bh = bh.map(|bh| bh.delegate());
-        (globals.codegen.method_invoker2)(self, globals, func_id, receiver, args, len, bh)
-            .ok_or_else(|| self.take_error())
     }
 
     ///

@@ -161,12 +161,28 @@ impl Meta {
         Self::new(func_id.into(), reg_num, true, false, false, true, false)
     }
 
-    fn native(func_id: FuncId, is_simple: bool) -> Self {
-        Self::new(Some(func_id), 1, is_simple, false, true, false, false)
+    fn native(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
+        Self::new(
+            Some(func_id),
+            reg_num as u16,
+            is_simple,
+            false,
+            true,
+            false,
+            false,
+        )
     }
 
-    fn native_eval(func_id: FuncId, is_simple: bool) -> Self {
-        Self::new(Some(func_id), 1, is_simple, true, true, false, false)
+    fn native_eval(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
+        Self::new(
+            Some(func_id),
+            reg_num as u16,
+            is_simple,
+            true,
+            true,
+            false,
+            false,
+        )
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -288,8 +304,7 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -
 
 #[monoruby_builtin]
 fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let v = Value::array_from_iter(lfp.iter());
-    vm.yield_fiber(globals, v)
+    vm.yield_fiber(globals, lfp.arg(0))
 }
 
 impl alloc::GC<RValue> for Funcs {
@@ -357,15 +372,31 @@ impl Funcs {
         Ok(func_id)
     }
 
-    pub(super) fn add_native_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
+    pub(super) fn add_native_func(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native(id, name, address));
+        self.info
+            .push(FuncInfo::new_native(id, name, address, min, max, rest));
         id
     }
 
-    pub(super) fn add_native_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
+    pub(super) fn add_native_func_eval(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native_eval(id, name, address));
+        self.info
+            .push(FuncInfo::new_native_eval(id, name, address, min, max, rest));
         id
     }
 
@@ -563,11 +594,7 @@ impl FuncInfo {
         meta: Meta,
         params: ParamsInfo,
     ) -> Self {
-        let is_rest = if let FuncKind::ISeq(info) = &kind {
-            info.is_rest()
-        } else {
-            false
-        };
+        let is_rest = params.is_rest();
         let max_positional_args = params.max_positional_args();
         let discard_excess_positional_args = meta.is_block_style() && !is_rest;
         let single_arg_expand = meta.is_block_style() && (max_positional_args > 1 || is_rest);
@@ -646,45 +673,65 @@ impl FuncInfo {
         )
     }
 
-    fn new_native(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
-        let params = ParamsInfo::new_native(0, usize::MAX, false);
+    fn new_native(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native(func_id, params.is_simple()),
+            Meta::native(func_id, reg_num, params.is_simple()),
             params,
         )
     }
 
-    fn new_native_eval(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
-        let params = ParamsInfo::new_native(0, usize::MAX, false);
+    fn new_native_eval(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native_eval(func_id, params.is_simple()),
+            Meta::native_eval(func_id, reg_num, params.is_simple()),
             params,
         )
     }
 
     fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        let params = ParamsInfo::new_attr_reader();
+        let reg_num = params.total_args() + 1;
         Self::new(
             name,
             FuncKind::AttrReader { ivar_name },
-            Meta::native(func_id, true),
-            ParamsInfo::new_attr_reader(),
+            Meta::native(func_id, reg_num, true),
+            params,
         )
     }
 
     fn new_attr_writer(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        let params = ParamsInfo::new_attr_writer();
+        let reg_num = params.total_args() + 1;
         Self::new(
             name,
             FuncKind::AttrWriter { ivar_name },
-            Meta::native(func_id, true),
-            ParamsInfo::new_attr_writer(),
+            Meta::native(func_id, reg_num, true),
+            params,
         )
     }
 
@@ -715,6 +762,10 @@ impl FuncInfo {
 
     pub(crate) fn req_num(&self) -> usize {
         self.params.params.req_num()
+    }
+
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.params.params.reqopt_num()
     }
 
     ///

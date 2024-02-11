@@ -16,21 +16,21 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
         .id();
-    globals.define_builtin_class_func(klass, "write", write);
-    globals.define_builtin_class_func(klass, "read", read);
-    globals.define_builtin_class_func(klass, "binread", binread);
-    globals.define_builtin_class_func(klass, "join", join);
-    globals.define_builtin_class_func(klass, "expand_path", expand_path);
-    globals.define_builtin_class_func(klass, "dirname", dirname);
-    globals.define_builtin_class_func(klass, "basename", basename);
-    globals.define_builtin_class_func(klass, "extname", extname);
-    globals.define_builtin_class_func(klass, "exist?", exist);
+    globals.define_builtin_class_func(klass, "write", write, 2);
+    globals.define_builtin_class_func(klass, "read", read, 1);
+    globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
+    globals.define_builtin_class_func_rest(klass, "join", join);
+    globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
+    globals.define_builtin_class_func(klass, "dirname", dirname, 1);
+    globals.define_builtin_class_func(klass, "basename", basename, 1);
+    globals.define_builtin_class_func(klass, "extname", extname, 1);
+    globals.define_builtin_class_func(klass, "exist?", exist, 1);
 }
 
 ///
 /// ### File.write
 /// - write(path, string, opt={}) -> Integer
-/// - write(path, string, offset=nil, opt={}) -> Integer
+/// - [NOT SUPPORTED] write(path, string, offset=nil, opt={}) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
@@ -64,7 +64,6 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
 fn read(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
@@ -94,7 +93,6 @@ fn read(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 #[monoruby_builtin]
 fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=3)?;
     let length = if len == 1 {
         None
     } else {
@@ -167,10 +165,9 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
         }
         Ok(())
     }
-    let len = lfp.arg_len();
     let mut path = String::new();
-    for i in 0..len {
-        flatten(&mut path, lfp.arg(i))?;
+    for v in lfp.arg(0).as_array().iter().cloned() {
+        flatten(&mut path, v)?;
     }
     Ok(Value::string(path))
 }
@@ -184,7 +181,6 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 #[monoruby_builtin]
 fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -244,7 +240,6 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
 #[monoruby_builtin]
 fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(ostr),
@@ -263,7 +258,6 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
 fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let filename = string_to_path(lfp.arg(0), globals)?;
     let basename = match filename.file_name() {
         Some(ostr) => ostr.to_string_lossy().to_string(),
@@ -279,7 +273,6 @@ fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/extname.html]
 #[monoruby_builtin]
 fn extname(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let filename = string_to_path(lfp.arg(0), globals)?;
     let extname = match filename.extension() {
         Some(ostr) => format!(".{}", ostr.to_string_lossy()),

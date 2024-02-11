@@ -1,6 +1,5 @@
 use super::*;
 use crate::jitgen::conv;
-use std::io::Write;
 
 //
 // Object class
@@ -15,28 +14,38 @@ pub(super) fn init(globals: &mut Globals) {
         object_id,
         object_object_id,
         analysis::v_v,
+        0,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect);
-    globals.define_builtin_func(OBJECT_CLASS, "class", class);
-    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class);
-    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of);
-    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a);
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a);
-    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv);
-    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s);
-    globals.define_builtin_func(OBJECT_CLASS, "method", method);
-    globals.define_builtin_func(OBJECT_CLASS, "system", system);
-    globals.define_builtin_func(OBJECT_CLASS, "`", command);
-    globals.define_builtin_inline_func(OBJECT_CLASS, "send", send, object_send, analysis::v_v_vv);
-    globals.define_builtin_func(OBJECT_CLASS, "__send__", send);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
+    //globals.define_builtin_func(OBJECT_CLASS, "method", method,1);
+    //globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
+    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
+    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
+    //globals.define_builtin_func(OBJECT_CLASS, "system", system);
+    //globals.define_builtin_func(OBJECT_CLASS, "`", command);
+    globals.define_builtin_inline_func_with(
+        OBJECT_CLASS,
+        "send",
+        send,
+        object_send,
+        analysis::v_v_vv,
+        1,
+        1,
+        true,
+    );
+    globals.define_builtin_func_with(OBJECT_CLASS, "__send__", send, 1, 1, true);
 }
 
 ///
@@ -78,11 +87,11 @@ fn object_object_id(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
 #[monoruby_builtin]
-fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
+    let args = lfp.arg(0).as_array().to_vec();
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
     Ok(obj)
 }
 
@@ -102,10 +111,10 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// ### Object#enum_for
 ///
-/// - to_enum(method = :each, *args) -> Enumerator
-/// - enum_for(method = :each, *args) -> Enumerator
-/// - to_enum(method = :each, *args) {|*args| ... } -> Enumerator
-/// - enum_for(method = :each, *args) {|*args| ... } -> Enumerator
+/// - to_enum([NOT SUPPORTED] method = :each, *args) -> Enumerator
+/// - enum_for([NOT SUPPORTED] method = :each, *args) -> Enumerator
+/// - to_enum([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
+/// - enum_for([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
@@ -121,7 +130,6 @@ fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/equal=3f.html]
 #[monoruby_builtin]
 fn equal_(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
@@ -151,7 +159,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// ### Object#respond_to?
 ///
-/// - respond_to?(name, include_all = false) -> bool
+/// - respond_to?(name, [NOT SUPPORTED] include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
@@ -280,84 +288,11 @@ fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variables.html]
 #[monoruby_builtin]
 fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let iter = globals
         .get_ivars(lfp.self_val())
         .into_iter()
         .map(|(id, _)| Value::symbol(id));
     Ok(Value::array_from_iter(iter))
-}
-
-fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
-    let mut args = vec![];
-    let include_meta = input.contains([
-        '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
-        '\"', '`', '\n',
-    ]);
-    let program = if include_meta {
-        args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
-        args.push(input.to_string());
-        if cfg!(windows) {
-            "cmd"
-        } else {
-            "sh"
-        }
-    } else {
-        let input: Vec<&str> = input.split(' ').collect();
-        let arg = input[1..].concat();
-        if !arg.is_empty() {
-            args.push(arg)
-        };
-        input[0]
-    }
-    .to_string();
-    (program, args)
-}
-
-///
-/// ### Kernel.#system
-///
-/// - system(command, options={}) -> bool | nil
-/// - system(program, *args, options={}) -> bool | nil
-/// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
-#[monoruby_builtin]
-fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    use std::process::Command;
-    let len = lfp.arg_len();
-    lfp.check_min_number_of_arguments(1)?;
-    let (program, mut args) = prepare_command_arg(&lfp.arg(0).as_str());
-    if len > 1 {
-        let iter = lfp.iter();
-        //iter.take(1);
-        for v in iter.take(1) {
-            args.push(v.expect_string()?);
-        }
-    }
-    Ok(match Command::new(program).args(&args).status() {
-        Ok(status) => Value::bool(status.success()),
-        Err(_) => Value::nil(),
-    })
-}
-
-///
-/// ### Kernel.#`
-///
-/// - `command` -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
-#[monoruby_builtin]
-fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    use std::process::Command;
-    let (program, args) = prepare_command_arg(&lfp.arg(0).as_str());
-    match Command::new(program).args(&args).output() {
-        Ok(output) => {
-            std::io::stderr().write_all(&output.stderr).unwrap();
-            Ok(Value::string_from_vec(output.stdout))
-        }
-        Err(err) => Err(MonorubyErr::runtimeerr(err)),
-    }
 }
 
 ///
@@ -368,18 +303,10 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
-fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_min_number_of_arguments(1)?;
+fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let method = lfp.arg(0).expect_symbol_or_string()?;
-    vm.invoke_method_inner2(
-        globals,
-        method,
-        lfp.self_val(),
-        args + 1,
-        len - 1,
-        lfp.block(),
-    )
+    let args = lfp.arg(1).as_array().to_vec();
+    vm.invoke_method_inner(globals, method, lfp.self_val(), &args, lfp.block())
 }
 
 const CACHE_SIZE: usize = 8;

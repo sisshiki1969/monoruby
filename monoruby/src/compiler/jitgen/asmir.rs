@@ -399,11 +399,7 @@ impl AsmIr {
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
-        let offset = if matches!(&callee.kind, FuncKind::ISeq(_)) {
-            (16 + (LBP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16
-        } else {
-            4096
-        };
+        let offset = (16 + (LBP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16;
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,

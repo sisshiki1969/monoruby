@@ -1615,27 +1615,27 @@ extern "C" fn handle_invoker_arguments(
     mut arg_num: usize,
 ) -> usize {
     let callee_func_id = callee_lfp.meta().func_id();
-    if let FuncKind::ISeq(info) = &globals[callee_func_id].kind {
-        unsafe {
-            // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_lfp);
+    let info = &globals[callee_func_id];
+    // expand array for block
+    arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
-            // required + optional + rest
-            super::runtime::handle_positional(info, arg_num, callee_lfp, None).unwrap();
-            // keyword
-            let params = &info.args.kw_names;
-            let callee_kw_pos = info.pos_num() + 1;
-            for (id, _) in params.iter().enumerate() {
-                *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
-            }
+    // required + optional + rest
+    super::runtime::handle_positional(info, arg_num, callee_lfp, None).unwrap();
+    // keyword
+    let params = info.kw_names();
+    let callee_kw_pos = info.pos_num() + 1;
+    for (id, _) in params.iter().enumerate() {
+        unsafe {
+            *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
         }
     }
+
     arg_num
 }
 
 /// deconstruct array for block
-fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
-    let req_num = info.required_num();
+fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: LFP) -> usize {
+    let req_num = info.req_num();
     if info.is_block_style() && arg_num == 1 && (info.reqopt_num() > 1 || info.is_rest()) {
         unsafe {
             let v = callee_lfp.register(1).unwrap();

@@ -239,12 +239,28 @@ impl Store {
             .add_block(mother, outer, vec![], info, loc, sourceinfo)
     }
 
-    pub(super) fn add_builtin_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
-        self.functions.add_native_func(name, address)
+    pub(super) fn add_builtin_func(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.functions
+            .add_native_func(name, address, min, max, rest)
     }
 
-    pub(super) fn add_builtin_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
-        self.functions.add_native_func_eval(name, address)
+    pub(super) fn add_builtin_func_eval(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.functions
+            .add_native_func_eval(name, address, min, max, rest)
     }
 
     pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {

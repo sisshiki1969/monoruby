@@ -188,11 +188,11 @@ impl Globals {
         };
         assert_eq!(
             FuncId::new(1),
-            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder)
+            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
         );
         assert_eq!(
             FuncId::new(2),
-            globals.define_builtin_func(OBJECT_CLASS, "", yielder)
+            globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
         );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);

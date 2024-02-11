@@ -2,14 +2,19 @@ use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS);
-    globals.define_builtin_class_func(STRUCT_CLASS, "new", struct_new);
+    globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
 }
 
+///
+/// Struct.[]
+/// - new(*args, keyword_init: nil) -> Class
+/// - new(*args, keyword_init: nil) {|subclass| block } -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let self_val = lfp.self_val();
-    lfp.check_min_number_of_arguments(1)?;
-    let mut arg_vec = lfp.to_vec();
+    let mut arg_vec = lfp.arg(0).as_array().to_vec();
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = class.as_class_id();
@@ -24,17 +29,17 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
             globals.store[class_id].set_name(&format!("Struct::{s}"));
         }
     };
-    globals.define_builtin_func(class_id, "initialize", initialize);
-    globals.define_builtin_func(class_id, "inspect", inspect);
-    globals.define_builtin_func(class_id, "to_s", inspect);
-    globals.define_builtin_class_inline_func(
+    globals.define_builtin_func_rest(class_id, "initialize", initialize);
+    globals.define_builtin_func(class_id, "inspect", inspect, 0);
+    globals.define_builtin_func(class_id, "to_s", inspect, 0);
+    globals.define_builtin_class_inline_func_rest(
         class_id,
         "[]",
         new,
         super::class::inline_class_new,
         analysis::v_v_vv,
     );
-    globals.define_builtin_class_inline_func(
+    globals.define_builtin_class_inline_func_rest(
         class_id,
         "new",
         new,
@@ -65,7 +70,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 
 #[monoruby_builtin]
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+    let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
     let struct_class = self_val.class().get_obj(globals);
     let members_val = globals
@@ -75,17 +80,16 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
-    for (i, val) in lfp.iter().enumerate() {
+    for (i, val) in lfp.arg(0).as_array().iter().enumerate() {
         let id = members[i].try_symbol().unwrap();
         let ivar_name = IdentId::add_ivar_prefix(id);
-        globals.set_ivar(self_val, ivar_name, val)?;
+        globals.set_ivar(self_val, ivar_name, *val)?;
     }
     Ok(Value::nil())
 }
 
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();

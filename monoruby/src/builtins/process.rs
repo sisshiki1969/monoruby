@@ -14,9 +14,9 @@ mod rusage;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Process").id();
     globals.define_class_by_str("Tms", globals.object_class(), klass);
-    globals.define_builtin_module_func(klass, "pid", pid);
-    globals.define_builtin_module_func(klass, "times", times);
-    globals.define_builtin_module_func(klass, "clock_gettime", clock_gettime);
+    globals.define_builtin_module_func(klass, "pid", pid, 0);
+    globals.define_builtin_module_func(klass, "times", times, 0);
+    globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
 }
 
 ///
@@ -77,7 +77,6 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
 fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments_range(1..=2)?;
     let unit = if lfp.arg_len() == 1 {
         IdentId::FLOAT_SECOND
     } else {

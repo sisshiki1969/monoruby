@@ -15,23 +15,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_10_EXP", Value::i32(f64::MAX_10_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX_EXP", Value::i32(f64::MAX_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
-    globals.define_builtin_func(FLOAT_CLASS, "to_i", toi);
-    globals.define_builtin_func(FLOAT_CLASS, "to_f", tof);
-    globals.define_builtin_func(FLOAT_CLASS, "+", add);
-    globals.define_builtin_func(FLOAT_CLASS, "-", sub);
-    globals.define_builtin_func(FLOAT_CLASS, "*", mul);
-    globals.define_builtin_func(FLOAT_CLASS, "/", div);
-    globals.define_builtin_func(FLOAT_CLASS, "%", rem);
-    globals.define_builtin_func(FLOAT_CLASS, "modulo", rem);
-    globals.define_builtin_func(FLOAT_CLASS, "==", eq);
-    globals.define_builtin_func(FLOAT_CLASS, "===", eq);
-    globals.define_builtin_func(FLOAT_CLASS, ">=", ge);
-    globals.define_builtin_func(FLOAT_CLASS, ">", gt);
-    globals.define_builtin_func(FLOAT_CLASS, "<=", le);
-    globals.define_builtin_func(FLOAT_CLASS, "<", lt);
-    globals.define_builtin_func(FLOAT_CLASS, "!=", ne);
-    globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp);
-    globals.define_builtin_func(FLOAT_CLASS, "floor", floor);
+    globals.define_builtin_func(FLOAT_CLASS, "to_i", toi, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "+", add, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "-", sub, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "*", mul, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "/", div, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "%", rem, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "===", eq, 1);
+    globals.define_builtin_func(FLOAT_CLASS, ">=", ge, 1);
+    globals.define_builtin_func(FLOAT_CLASS, ">", gt, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "<=", le, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "<", lt, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
 }
 
 ///
@@ -42,7 +42,6 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_f.html]
 #[monoruby_builtin]
 fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     Ok(lfp.self_val())
 }
 
@@ -55,7 +54,6 @@ fn tof(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]
 #[monoruby_builtin]
 fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.trunc() as i64)),
         _ => unreachable!(),
@@ -70,7 +68,6 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2b.html]
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
@@ -88,7 +85,6 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2d.html]
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match super::op::sub_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
@@ -106,7 +102,6 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2a.html]
 #[monoruby_builtin]
 fn mul(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match super::op::mul_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
@@ -124,7 +119,6 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2f.html]
 #[monoruby_builtin]
 fn div(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match super::op::div_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
@@ -143,7 +137,6 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=25.html]
 #[monoruby_builtin]
 fn rem(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(val) => Ok(val),
         None => {
@@ -162,7 +155,6 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let b = vm.eq_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -174,7 +166,6 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 ///
 #[monoruby_builtin]
 fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
@@ -187,7 +178,6 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=3c=3d=3e.html]
 #[monoruby_builtin]
 fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
     let ord = match (lhs.try_float(), rhs.unpack()) {
@@ -211,7 +201,6 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3d.html]
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
@@ -229,7 +218,6 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e.html]
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
@@ -247,7 +235,6 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d.html]
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
@@ -265,7 +252,6 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c.html]
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     match crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
         Some(res) => Ok(res),
         None => {
@@ -283,7 +269,6 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/floor.html]
 #[monoruby_builtin]
 fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     match lfp.self_val().unpack() {
         RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
         _ => unreachable!(),

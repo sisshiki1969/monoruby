@@ -23,12 +23,12 @@ pub(crate) fn jit_keyword_arguments(
 /// if argument mismatch occurs, return None.
 ///
 pub(crate) fn handle_positional(
-    info: &ISeqInfo,
+    info: &FuncInfo,
     arg_num: usize,
     mut callee_lfp: LFP,
     ex: Option<Value>,
 ) -> Result<()> {
-    let req_num = info.required_num();
+    let req_num = info.req_num();
     let reqopt_num = info.reqopt_num();
     let pos_num = info.pos_num();
     let is_rest = pos_num != reqopt_num;
@@ -237,9 +237,7 @@ fn positional(
         }
     }
 
-    if matches!(&callee.kind, FuncKind::ISeq(_)) {
-        positional_post(callee, arg_num, callee_lfp, ex, rest)?;
-    }
+    positional_post(callee, arg_num, callee_lfp, ex, rest)?;
 
     Ok(arg_num)
 }

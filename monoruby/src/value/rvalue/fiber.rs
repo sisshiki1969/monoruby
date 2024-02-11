@@ -66,16 +66,17 @@ impl Fiber {
     }
 
     pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: LFP) -> Result<Value> {
-        let len = lfp.arg_len();
+        let arg = lfp.arg(0);
+        let len = arg.as_array().len();
         match self.state() {
-            FiberState::Created => self.invoke_fiber(vm, globals, lfp.as_arg(), len),
+            FiberState::Created => self.invoke_fiber(vm, globals, lfp.as_arg(), lfp.arg_len()),
             FiberState::Suspended => {
                 let val = if len == 0 {
                     Value::nil()
                 } else if len == 1 {
-                    lfp.arg(0)
+                    arg.as_array()[0]
                 } else {
-                    Value::array_from_iter(lfp.iter())
+                    arg
                 };
                 self.resume_fiber(vm, globals, val)
             }

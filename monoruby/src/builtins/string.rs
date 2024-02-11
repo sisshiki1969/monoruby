@@ -10,47 +10,47 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("String", STRING_CLASS);
-    globals.define_builtin_func(STRING_CLASS, "+", add);
-    globals.define_builtin_func(STRING_CLASS, "*", mul);
-    globals.define_builtin_func(STRING_CLASS, "==", eq);
-    globals.define_builtin_func(STRING_CLASS, "===", eq);
-    globals.define_builtin_func(STRING_CLASS, "<=>", cmp);
-    globals.define_builtin_func(STRING_CLASS, "!=", ne);
-    globals.define_builtin_func(STRING_CLASS, ">=", ge);
-    globals.define_builtin_func(STRING_CLASS, ">", gt);
-    globals.define_builtin_func(STRING_CLASS, "<=", le);
-    globals.define_builtin_func(STRING_CLASS, "<", lt);
-    globals.define_builtin_func(STRING_CLASS, "<<", shl);
-    globals.define_builtin_func(STRING_CLASS, "%", rem);
-    globals.define_builtin_func(STRING_CLASS, "=~", match_);
-    globals.define_builtin_func(STRING_CLASS, "[]", index);
-    globals.define_builtin_func(STRING_CLASS, "start_with?", start_with);
-    globals.define_builtin_func(STRING_CLASS, "end_with?", end_with);
-    globals.define_builtin_func(STRING_CLASS, "split", split);
-    globals.define_builtin_func(STRING_CLASS, "chomp", chomp);
-    globals.define_builtin_func(STRING_CLASS, "gsub", gsub);
-    globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_);
-    globals.define_builtin_func(STRING_CLASS, "sub", sub);
-    globals.define_builtin_func(STRING_CLASS, "sub!", sub_);
-    globals.define_builtin_func(STRING_CLASS, "scan", scan);
-    globals.define_builtin_func(STRING_CLASS, "match", string_match);
-    globals.define_builtin_func(STRING_CLASS, "to_s", tos);
-    globals.define_builtin_func(STRING_CLASS, "length", length);
-    globals.define_builtin_func(STRING_CLASS, "size", length);
-    globals.define_builtin_func(STRING_CLASS, "ord", ord);
-    globals.define_builtin_func(STRING_CLASS, "ljust", ljust);
-    globals.define_builtin_func(STRING_CLASS, "rjust", rjust);
-    globals.define_builtin_func(STRING_CLASS, "lines", lines);
-    globals.define_builtin_func(STRING_CLASS, "bytes", bytes);
-    globals.define_builtin_func(STRING_CLASS, "each_line", each_line);
-    globals.define_builtin_func(STRING_CLASS, "empty?", empty);
-    globals.define_builtin_func(STRING_CLASS, "to_i", to_i);
-    globals.define_builtin_func(STRING_CLASS, "intern", to_sym);
-    globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym);
-    globals.define_builtin_func(STRING_CLASS, "upcase", upcase);
-    globals.define_builtin_func(STRING_CLASS, "downcase", downcase);
-    globals.define_builtin_func(STRING_CLASS, "tr", tr);
-    globals.define_builtin_func(STRING_CLASS, "sum", sum);
+    globals.define_builtin_func(STRING_CLASS, "+", add, 1);
+    globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
+    globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
+    globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
+    globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
+    globals.define_builtin_func(STRING_CLASS, "!=", ne, 1);
+    globals.define_builtin_func(STRING_CLASS, ">=", ge, 1);
+    globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
+    globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
+    globals.define_builtin_func(STRING_CLASS, "<", lt, 1);
+    globals.define_builtin_func(STRING_CLASS, "<<", shl, 1);
+    globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
+    globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
+    globals.define_builtin_func_with(STRING_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
+    globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
+    globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
+    globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "sub!", sub_, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "gsub", gsub, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "gsub!", gsub_, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
+    globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
+    globals.define_builtin_func(STRING_CLASS, "length", length, 0);
+    globals.define_builtin_func(STRING_CLASS, "size", length, 0);
+    globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "lines", lines, 0);
+    globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
+    globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
+    globals.define_builtin_func(STRING_CLASS, "intern", to_sym, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym, 0);
+    globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
+    globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
 }
 
 ///
@@ -61,7 +61,6 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
 fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let mut b = StringInner::from_slice(lfp.self_val().as_bytes());
     b.extend_from_slice(lfp.arg(0).as_bytes());
     Ok(Value::string_from_inner(b))
@@ -75,7 +74,6 @@ fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
 #[monoruby_builtin]
 fn mul(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let mut lhs = StringInner::from_slice(lfp.self_val().as_bytes());
     let count = match lfp.arg(0).coerce_to_i64()? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
@@ -95,7 +93,6 @@ fn mul(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let b = match lfp.arg(0).is_str() {
@@ -113,7 +110,6 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 /// []
 #[monoruby_builtin]
 fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let b = match lfp.arg(0).is_str() {
@@ -124,7 +120,6 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 }
 
 fn string_cmp(lfp: LFP) -> Result<Option<std::cmp::Ordering>> {
-    lfp.check_number_of_arguments(1)?;
     let self_ = lfp.self_val();
     let lhs = self_.as_bytes();
     let res = lfp.arg(0).is_bytes().map(|rhs| lhs.string_cmp(rhs));
@@ -334,7 +329,6 @@ macro_rules! next_char {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
 #[monoruby_builtin]
 fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let arguments = match lfp.arg(0).try_array_ty() {
         Some(ary) => ary.to_vec(),
         None => vec![lfp.arg(0)],
@@ -507,7 +501,6 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=7e.html]
 #[monoruby_builtin]
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let self_val = lfp.self_val();
     let given = self_val.as_str();
     let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
@@ -545,7 +538,6 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
         }
     }
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let self_ = lfp.self_val();
     let lhs = self_.expect_string()?;
     if let Some(i) = lfp.arg(0).try_fixnum() {
@@ -629,7 +621,6 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
 fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let string = lfp.self_val().expect_string()?;
     let arg0 = lfp.arg(0);
     let arg = arg0.expect_string()?;
@@ -644,7 +635,6 @@ fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
 fn end_with(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let string = lfp.self_val().expect_string()?;
     let arg0 = lfp.arg(0);
     let arg = arg0.expect_string()?;
@@ -940,7 +930,6 @@ fn gsub_main(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/scan.html]
 #[monoruby_builtin]
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let given = lfp.self_val().expect_string()?;
     let vec = if let Some(s) = lfp.arg(0).is_str() {
         let re = RegexpInner::from_escaped(globals, &s)?;
@@ -994,7 +983,6 @@ fn scan_inner(
 #[monoruby_builtin]
 fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let pos = match len {
         1 => 0usize,
         2 => match lfp.arg(1).coerce_to_i64()? {
@@ -1010,10 +998,11 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
     RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)
 }
 
+///
 /// ### String#to_s
+///
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     Ok(lfp.self_val())
 }
 
@@ -1026,7 +1015,6 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let length = lfp.self_val().as_str().chars().count();
     Ok(Value::integer(length as i64))
 }
@@ -1059,7 +1047,6 @@ fn gen_pad(padding: &str, len: usize) -> String {
 #[monoruby_builtin]
 fn ljust(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let padding = if len == 2 {
         let arg = lfp.arg(1);
         arg.expect_string()?
@@ -1089,7 +1076,6 @@ fn ljust(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 #[monoruby_builtin]
 fn rjust(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let padding = if len == 2 {
         let arg = lfp.arg(1);
         arg.expect_string()?
@@ -1113,8 +1099,8 @@ fn rjust(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// ### String#lines
 ///
-/// - lines(rs = $/, chomp: false) -> [String]
-/// [NOT SUPPORTED] - lines(rs = $/, chomp: false) {|line| ... } -> self
+/// - lines([NOT SUPPORTED] rs = $/, [NOT SUPPORTED] chomp: false) -> [String]
+/// - [NOT SUPPORTED] lines(rs = $/, chomp: false) {|line| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lines.html]
 #[monoruby_builtin]
@@ -1132,7 +1118,7 @@ fn lines(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 /// ### String#bytes
 ///
 /// - bytes -> [Integer]
-/// - [NOT SUPPORTED]bytes {|byte| ... } -> self
+/// - [NOT SUPPORTED] bytes {|byte| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytes.html]
 #[monoruby_builtin]
@@ -1232,7 +1218,6 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/intern.html]
 #[monoruby_builtin]
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let self_val = lfp.self_val();
     let sym = Value::symbol(IdentId::get_id(&self_val.as_str()));
     Ok(sym)
@@ -1246,7 +1231,6 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
 fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     Ok(Value::string_from_vec(s.into_bytes()))
@@ -1260,7 +1244,6 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
 fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     Ok(Value::string_from_vec(s.into_bytes()))

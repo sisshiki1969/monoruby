@@ -6,29 +6,29 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
-    globals.define_builtin_class_func(HASH_CLASS, "new", new);
-    globals.define_builtin_func(HASH_CLASS, "size", size);
-    globals.define_builtin_func(HASH_CLASS, "length", size);
-    globals.define_builtin_func(HASH_CLASS, "clear", clear);
-    globals.define_builtin_func(HASH_CLASS, "[]", index);
-    globals.define_builtin_func(HASH_CLASS, "[]=", index_assign);
-    globals.define_builtin_func(HASH_CLASS, "store", index_assign);
-    globals.define_builtin_func(HASH_CLASS, "fetch", fetch);
-    globals.define_builtin_func(HASH_CLASS, "keys", keys);
-    globals.define_builtin_func(HASH_CLASS, "values", values);
-    globals.define_builtin_func(HASH_CLASS, "each", each);
-    globals.define_builtin_func(HASH_CLASS, "each_key", each_key);
-    globals.define_builtin_func(HASH_CLASS, "each_value", each_value);
-    globals.define_builtin_func(HASH_CLASS, "has_key?", include);
-    globals.define_builtin_func(HASH_CLASS, "include?", include);
-    globals.define_builtin_func(HASH_CLASS, "key?", include);
-    globals.define_builtin_func(HASH_CLASS, "member?", include);
-    globals.define_builtin_func(HASH_CLASS, "to_s", inspect);
-    globals.define_builtin_func(HASH_CLASS, "inspect", inspect);
-    globals.define_builtin_func(HASH_CLASS, "sort", sort);
-    globals.define_builtin_func(HASH_CLASS, "invert", invert);
-    globals.define_builtin_func(HASH_CLASS, "merge", merge);
-    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity);
+    globals.define_builtin_class_func(HASH_CLASS, "new", new, 0);
+    globals.define_builtin_func(HASH_CLASS, "size", size, 0);
+    globals.define_builtin_func(HASH_CLASS, "length", size, 0);
+    globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
+    globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
+    globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
+    globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
+    globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
+    globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
+    globals.define_builtin_func(HASH_CLASS, "values", values, 0);
+    globals.define_builtin_func(HASH_CLASS, "each", each, 0);
+    globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
+    globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
+    globals.define_builtin_func(HASH_CLASS, "has_key?", include, 1);
+    globals.define_builtin_func(HASH_CLASS, "include?", include, 1);
+    globals.define_builtin_func(HASH_CLASS, "key?", include, 1);
+    globals.define_builtin_func(HASH_CLASS, "member?", include, 1);
+    globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
+    globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
+    globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
+    globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
+    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -55,11 +55,13 @@ pub(super) fn init(globals: &mut Globals) {
 
     let env = Value::hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
-    globals.define_builtin_singleton_func(env, "fetch", fetch);
-    globals.define_builtin_singleton_func(env, "[]", env_index);
+    globals.define_builtin_singleton_func_with(env, "fetch", fetch, 1, 2, false);
+    globals.define_builtin_singleton_func(env, "[]", env_index, 1);
 }
 
+///
 /// ### Hash.new
+///
 /// - new(ifnone = nil) -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
@@ -71,7 +73,9 @@ fn new(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
     Ok(obj)
 }
 
+///
 /// ### Hash#length
+///
 /// - length -> Integer
 /// - size -> Integer
 ///
@@ -82,7 +86,9 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
     Ok(Value::integer(len as i64))
 }
 
+///
 /// ### Hash#[]=
+///
 /// - self[key] = value
 /// - store(key, value) -> object
 ///
@@ -95,7 +101,9 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) ->
     Ok(val)
 }
 
+///
 /// ### Hash#[]
+///
 /// - self[key] -> object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d.html]
@@ -106,7 +114,9 @@ fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
     Ok(val)
 }
 
+///
 /// ### Hash#clear
+///
 /// - clear -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
@@ -117,7 +127,9 @@ fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
     Ok(self_)
 }
 
+///
 /// ### Hash#keys
+///
 /// - keys -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keys.html]
@@ -129,6 +141,7 @@ fn keys(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 
 ///
 /// ### Hash#values
+///
 /// - values -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/values.html]
@@ -270,7 +283,7 @@ fn merge(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let mut inner = self_val.as_hash().clone();
-    for arg in lfp.iter() {
+    for arg in lfp.arg(0).as_array().iter() {
         let other = arg.expect_hash()?;
         for (k, v) in other.iter() {
             inner.insert(k, v);
@@ -293,7 +306,6 @@ fn compare_by_identity(
     lfp: LFP,
     _arg: Arg,
 ) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let mut self_val = lfp.self_val();
     self_val.as_hash_mut().compare_by_identity();
@@ -346,7 +358,6 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
             }
         }
     } else {
-        lfp.check_number_of_arguments_range(1..=2)?;
         match map.get(lfp.arg(0)) {
             Some(v) => v,
             None => lfp.arg(1),
