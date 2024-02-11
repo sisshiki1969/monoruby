@@ -13,11 +13,6 @@ use super::*;
 // +---+---+---+---++---+---+---+---+
 // ~~~
 
-const CALLSITE_ID: usize = 0;
-const CACHED_CLASS: usize = 24;
-const CACHED_VERSION: usize = 28;
-const CACHED_FUNCID: usize = 8;
-
 impl Codegen {
     ///
     /// generate JIT code for a method call which was not cached.
@@ -57,17 +52,17 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq r13, (pc.u64());
             // check inline cache
-            cmpl [r13 + (CACHED_FUNCID)], 0;
+            cmpl [r13 + (BC_OFFSET_CACHED_FUNCID)], 0;
             jeq  slow_path;
             // class guard
-            cmpl r15, [r13 + (CACHED_CLASS)];
+            cmpl r15, [r13 + (BC_OFFSET_CACHED_CLASS)];
             jne  slow_path;
             // version guard
             movl rax, [rip + global_class_version];
-            cmpl [r13 + (CACHED_VERSION)], rax;
+            cmpl [r13 + (BC_OFFSET_CACHED_VERSION)], rax;
             jne  slow_path;
         resolved:
-            movl rdx, [r13 + (CACHED_FUNCID)];    // FuncId
+            movl rdx, [r13 + (BC_OFFSET_CACHED_FUNCID)];    // FuncId
         }
         self.get_func_data();
 
@@ -110,11 +105,11 @@ impl Codegen {
         self.handle_error(error);
         monoasm! { &mut self.jit,
             // FuncId was returned to rax.
-            movl [r13 + (CACHED_FUNCID)], rax;
+            movl [r13 + (BC_OFFSET_CACHED_FUNCID)], rax;
 
             movl rax, [rip + global_class_version];
-            movl [r13 + (CACHED_VERSION)], rax;
-            movl [r13 + (CACHED_CLASS)], r15;
+            movl [r13 + (BC_OFFSET_CACHED_VERSION)], rax;
+            movl [r13 + (BC_OFFSET_CACHED_CLASS)], r15;
             jmp resolved;
         }
         self.jit.select_page(0);
@@ -514,81 +509,6 @@ impl Codegen {
 }
 
 impl Codegen {
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi
-    /// - stack
-    ///
-    pub(in crate::compiler::jitgen) fn guard_class_version(
-        &mut self,
-        pc: BcPc,
-        using_xmm: UsingXmm,
-        deopt: DestLabel,
-        error: DestLabel,
-    ) {
-        assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
-        let unmatch = self.jit.label();
-        let exit = self.jit.label();
-        let fail = self.jit.label();
-        let cached_version = self.jit.const_i32((pc + 1).cached_version() as i32);
-        let cached_fid = if let Some(fid) = pc.cached_fid() {
-            fid.get()
-        } else {
-            0
-        };
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  unmatch;
-        exit:
-        }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(unmatch);
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            pushq rdi;
-            pushq r13;
-            movq r13, (pc.as_ptr());
-            movq rcx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
-            movq rax, (runtime::find_method2);
-            call rax;   // rax <- Option<FuncId>
-            popq r13;
-            popq rdi;
-            movl rax, rax;
-        }
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        monoasm! { &mut self.jit,
-            cmpl rax, (cached_fid);
-            jne  fail;
-            movl rax, [rip + global_version];
-            movl [rip + cached_version], rax;
-            jmp  exit;
-        fail:
-            movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
-            jmp  deopt;
-        }
-        self.jit.select_page(0);
-    }
-
     ///
     /// Set req, opt and rest arguments.
     ///
