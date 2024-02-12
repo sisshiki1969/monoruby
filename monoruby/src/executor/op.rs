@@ -735,22 +735,3 @@ pub(crate) fn integer_index1(base: Value, index: Value) -> Result<Value> {
         _ => unreachable!(),
     }
 }
-
-pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
-    let ary: Array = src.into();
-    let len = ary.len();
-    if min_len <= len {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
-        len
-    } else {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
-        for i in len..min_len {
-            unsafe { *dst.sub(i) = Value::nil() }
-        }
-        min_len
-    }
-}
