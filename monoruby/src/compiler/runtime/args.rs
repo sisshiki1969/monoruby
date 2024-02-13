@@ -1,6 +1,11 @@
 use super::*;
 
-pub(crate) fn jit_keyword_arguments(
+///
+/// Handle hash splat arguments and keyword rest parameters.
+///
+/// Only works for !caller.hash_splat_pos.is_empty() || callee.kw_rest().is_some().
+///
+pub(crate) fn jit_hash_splat_kw_rest(
     globals: &mut Globals,
     callid: CallSiteId,
     callee_lfp: Lfp,
@@ -10,9 +15,7 @@ pub(crate) fn jit_keyword_arguments(
     let callee_func_id = meta.func_id();
     let callee = &globals[callee_func_id];
     let caller = &globals.store[callid];
-    if !callee.no_keyword() || caller.kw_num() == 0 {
-        hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
-    }
+    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
 
     Ok(())
 }
@@ -341,9 +344,14 @@ fn ordinary_keyword(
     Ok(())
 }
 
+///
+/// Handle hash splat arguments and keyword rest parameters.
+///
+/// Only works for !caller.hash_splat_pos.is_empty() || callee.kw_rest().is_some().
+///
 fn hash_splat_and_kw_rest(
-    info: &FuncInfo,
-    callsite: &CallSiteInfo,
+    callee: &FuncInfo,
+    caller: &CallSiteInfo,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
@@ -352,16 +360,16 @@ fn hash_splat_and_kw_rest(
         kw_args,
         hash_splat_pos,
         ..
-    } = callsite;
+    } = caller;
 
-    let callee_kw_pos = info.pos_num() + 1;
+    let callee_kw_pos = callee.pos_num() + 1;
 
     for h in hash_splat_pos
         .iter()
         .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
     {
         let mut used = 0;
-        for (id, param_name) in info.kw_names().iter().enumerate() {
+        for (id, param_name) in callee.kw_names().iter().enumerate() {
             let h = h.expect_hash()?;
             unsafe {
                 let sym = Value::symbol(*param_name);
@@ -377,10 +385,10 @@ fn hash_splat_and_kw_rest(
                     *ptr = Some(v);
                 }
             }
-            if used < h.len() && info.kw_rest().is_none() {
+            if used < h.len() && callee.kw_rest().is_none() {
                 for (k, _) in h.iter() {
                     let sym = k.as_symbol();
-                    if !info.kw_names().contains(&sym) {
+                    if !callee.kw_names().contains(&sym) {
                         return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
                     }
                 }
@@ -388,10 +396,10 @@ fn hash_splat_and_kw_rest(
         }
     }
 
-    if let Some(rest) = info.kw_rest() {
+    if let Some(rest) = callee.kw_rest() {
         let mut kw_rest = IndexMap::default();
         for (name, i) in kw_args.iter() {
-            if info.kw_names().contains(name) {
+            if callee.kw_names().contains(name) {
                 continue;
             }
             let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
@@ -402,7 +410,7 @@ fn hash_splat_and_kw_rest(
             .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
         {
             let mut h = h.as_hash().clone();
-            for name in info.kw_names().iter() {
+            for name in callee.kw_names().iter() {
                 let sym = Value::symbol(*name);
                 h.remove(sym);
             }

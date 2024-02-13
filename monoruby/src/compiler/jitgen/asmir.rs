@@ -443,12 +443,13 @@ impl AsmIr {
         let args = caller.args;
         let pos_num = caller.pos_num;
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
+        let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
         if !caller.has_splat()
-            && caller.kw_num() == 0
+            && !kw_expansion
             && !single_arg_expand
             && !callee.is_rest()
-            && pos_num == callee.max_positional_args()
-            && pos_num == callee.req_num()
+            && pos_num <= callee.max_positional_args()
+            && callee.req_num() <= pos_num
         {
             // write back keyword arguments.
             for i in pos_num as u16..caller.len as u16 {
@@ -466,6 +467,13 @@ impl AsmIr {
                 let reg = args + i;
                 let offset = ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32);
                 self.fetch_to_rsp_offset(bb, reg, offset);
+            }
+            if pos_num != callee.max_positional_args() {
+                self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
+                for i in pos_num..callee.max_positional_args() {
+                    let offset = ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32);
+                    self.reg2rsp_offset(GP::Rax, offset);
+                }
             }
             self.reg_add(GP::Rsp, ofs);
             self.inst.push(AsmInst::I32ToReg(pos_num as _, GP::Rdi));
