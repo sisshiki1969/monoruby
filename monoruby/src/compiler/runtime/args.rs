@@ -1,9 +1,7 @@
 use super::*;
 
 ///
-/// Handle hash splat arguments and keyword rest parameters.
-///
-/// Only works for !caller.hash_splat_pos.is_empty() || callee.kw_rest().is_some().
+/// Handle hash splat arguments and a keyword rest parameter.
 ///
 pub(crate) fn jit_hash_splat_kw_rest(
     globals: &mut Globals,
@@ -15,11 +13,8 @@ pub(crate) fn jit_hash_splat_kw_rest(
     let callee_func_id = meta.func_id();
     let callee = &globals[callee_func_id];
     let caller = &globals.store[callid];
-    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
-
-    Ok(())
+    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
 }
-
 ///
 /// if argument mismatch occurs, return None.
 ///
@@ -345,9 +340,7 @@ fn ordinary_keyword(
 }
 
 ///
-/// Handle hash splat arguments and keyword rest parameters.
-///
-/// Only works for !caller.hash_splat_pos.is_empty() || callee.kw_rest().is_some().
+/// Handle hash splat arguments and a keyword rest parameter.
 ///
 fn hash_splat_and_kw_rest(
     callee: &FuncInfo,

@@ -92,11 +92,11 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 #### optcarrot benchmark
 
-![optcarrot_benchmark](optcarrot_benchmark.png)
+![optcarrot_benchmark](./doc/optcarrot_benchmark.png)
 
 #### optcarrot fps history (0-3000 frames)
 
-![optcarrot_fps_history](optcarrot_fps_history.png)
+![optcarrot_fps_history](./doc/optcarrot_fps_history.png)
 
 #### machine spec
 
@@ -133,4 +133,4 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 ratio to Ruby 3.3.0 were shown in the graph below.
 
-![micro_bench](benchmark.png)
+![micro_bench](./doc/benchmark.png)

@@ -36,7 +36,7 @@ jobs:
           LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""
       - name: Run tests
         run: |
-          LLVM_PROFILE_FILE="monoruby-tests-%p-%m.profraw" ./test.sh
+          LLVM_PROFILE_FILE="monoruby-tests-%p-%m.profraw" bin/test.sh
       - name: Run grcov
         run: grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
       - name: Upload to codecov.io

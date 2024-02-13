@@ -325,11 +325,9 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 }
 
 ///
-/// Handle hash splat arguments and keyword rest parameters.
+/// Handle hash splat arguments and a keyword rest parameter.
 ///
-/// Only works for !caller.hash_splat_pos.is_empty() || callee.kw_rest().is_some().
-///
-pub(super) extern "C" fn handle_hash_splat_kw_rest(
+pub(super) extern "C" fn jit_handle_hash_splat_kw_rest(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
