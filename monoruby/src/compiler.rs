@@ -440,6 +440,7 @@ impl Codegen {
     fn get_func_data(&mut self) {
         monoasm! { &mut self.jit,
             movl rdx, rdx;
+            // assumes size_of::<FuncInfo>() is 64,
             shlq rdx, 6;
             addq rdx, [r12 + (GLOBALS_FUNCINFO)];
             lea  r15, [rdx + (FUNCINFO_DATA)];

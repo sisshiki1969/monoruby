@@ -158,6 +158,7 @@ impl alloc::GC<RValue> for Globals {
 
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
+        assert_eq!(64, std::mem::size_of::<FuncInfo>());
         let main_object = Value::object(OBJECT_CLASS);
 
         let mut globals = Self {

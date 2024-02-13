@@ -5,6 +5,8 @@ pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr)
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
 pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
 pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
+//pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
+//pub(crate) const FUNCDATA_MAX: u64 = std::mem::offset_of!(FuncData, max) as _;
 
 pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
@@ -41,6 +43,9 @@ pub(crate) struct FuncData {
     meta: Meta,
     /// the address of program counter
     pc: Option<BcPc>,
+    min: u16,
+    max: u16,
+    _padding: [u8; 4],
 }
 
 impl FuncData {
@@ -193,6 +198,7 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
+    /*
     ///
     /// If `self` is "simple", return true.
     ///
@@ -201,6 +207,7 @@ impl Meta {
     pub fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
     }
+    */
 
     ///
     /// Returns true if this function possibly manipulates outer local variables.
@@ -570,10 +577,10 @@ impl std::default::Default for FuncKind {
 pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
 #[derive(Debug, Clone, Default)]
-pub struct ParamInfo {
-    max_positional_args: usize,
-    single_arg_expand: bool,
-    discard_excess_positional_args: bool,
+struct FuncExt {
+    /// JIT code entries for each class of *self*.
+    jit_entry: HashMap<ClassId, DestLabel>,
+    /// parameter information of this function.
     params: ParamsInfo,
 }
 
@@ -581,11 +588,10 @@ pub struct ParamInfo {
 pub struct FuncInfo {
     /// name of this function.
     name: Option<IdentId>,
+    /// function data.
     data: FuncData,
     pub(crate) kind: FuncKind,
-    /// JIT code entries for each class of *self*.
-    jit_entry: Box<HashMap<ClassId, DestLabel>>,
-    params: Box<ParamInfo>,
+    ext: Box<FuncExt>,
 }
 
 impl alloc::GC<RValue> for FuncInfo {
@@ -601,25 +607,22 @@ impl FuncInfo {
         meta: Meta,
         params: ParamsInfo,
     ) -> Self {
-        let is_rest = params.is_rest();
-        let max_positional_args = params.max_positional_args();
-        let discard_excess_positional_args = meta.is_block_style() && !is_rest;
-        let single_arg_expand = meta.is_block_style() && (max_positional_args > 1 || is_rest);
-
         let name = name.into();
+        let min = params.req_num() as u16;
+        let max = params.reqopt_num() as u16;
         Self {
             name,
             data: FuncData {
                 codeptr: None,
                 pc: None,
                 meta,
+                min,
+                max,
+                _padding: Default::default(),
             },
             kind,
-            jit_entry: Default::default(),
-            params: Box::new(ParamInfo {
-                max_positional_args,
-                single_arg_expand,
-                discard_excess_positional_args,
+            ext: Box::new(FuncExt {
+                jit_entry: Default::default(),
                 params,
             }),
         }
@@ -763,23 +766,23 @@ impl FuncInfo {
     }
 
     pub(crate) fn req_num(&self) -> usize {
-        self.params.params.req_num()
+        self.ext.params.req_num()
     }
 
     pub(crate) fn reqopt_num(&self) -> usize {
-        self.params.params.reqopt_num()
+        self.ext.params.reqopt_num()
     }
 
     pub(crate) fn pos_num(&self) -> usize {
-        self.params.params.pos_num()
+        self.ext.params.pos_num()
     }
 
     pub(crate) fn kw_names(&self) -> &[IdentId] {
-        &self.params.params.kw_names
+        &self.ext.params.kw_names
     }
 
     pub(crate) fn kw_rest(&self) -> Option<SlotId> {
-        self.params.params.kw_rest
+        self.ext.params.kw_rest
     }
 
     pub(crate) fn no_keyword(&self) -> bool {
@@ -787,7 +790,7 @@ impl FuncInfo {
     }
 
     pub(crate) fn is_rest(&self) -> bool {
-        self.params.params.is_rest()
+        self.ext.params.is_rest()
     }
 
     pub(crate) fn is_block_style(&self) -> bool {
@@ -795,22 +798,24 @@ impl FuncInfo {
     }
 
     pub(crate) fn total_args(&self) -> usize {
-        self.params.params.total_args()
+        self.ext.params.total_args()
     }
 
     ///
     /// Get the max number of positional arguments (= required + optional) of this function.
     ///
     pub(crate) fn max_positional_args(&self) -> usize {
-        self.params.max_positional_args
+        self.ext.params.max_positional_args()
     }
 
     pub(crate) fn single_arg_expand(&self) -> bool {
-        self.params.single_arg_expand
+        let is_rest = self.ext.params.is_rest();
+        self.meta().is_block_style() && (self.ext.params.max_positional_args() > 1 || is_rest)
     }
 
     pub(crate) fn discard_excess_positional_args(&self) -> bool {
-        self.params.discard_excess_positional_args
+        let is_rest = self.ext.params.is_rest();
+        self.meta().is_block_style() && !is_rest
     }
 
     ///
@@ -862,11 +867,11 @@ impl FuncInfo {
         self_class: ClassId,
         entry: DestLabel,
     ) -> Option<DestLabel> {
-        self.jit_entry.insert(self_class, entry)
+        self.ext.jit_entry.insert(self_class, entry)
     }
 
     pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
-        self.jit_entry.get(&self_class).cloned()
+        self.ext.jit_entry.get(&self_class).cloned()
     }
 }
 
