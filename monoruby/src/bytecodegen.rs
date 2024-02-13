@@ -303,7 +303,7 @@ impl CallSite {
     }
 
     ///
-    /// This call site has no keyword arguments, no splat arguments, and no block argument.
+    /// This call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
     ///
     fn is_simple(&self) -> bool {
         self.kw.is_none() && !self.has_splat() && self.block_arg.is_none()

@@ -481,6 +481,7 @@ impl Globals {
                     ..
                 } = *callsite;
                 let has_splat = callsite.has_splat();
+                // TODO: we must handle hash aplat arguments correctly.
                 let kw_len = callsite.kw_num();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",

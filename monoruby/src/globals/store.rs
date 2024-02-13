@@ -426,6 +426,10 @@ impl CallSiteInfo {
         self.kw_args.len()
     }
 
+    pub fn kw_exists(&self) -> bool {
+        !self.kw_args.is_empty() || !self.hash_splat_pos.is_empty()
+    }
+
     pub fn has_splat(&self) -> bool {
         !self.splat_pos.is_empty()
     }

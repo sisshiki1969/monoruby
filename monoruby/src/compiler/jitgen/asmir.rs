@@ -443,7 +443,7 @@ impl AsmIr {
         let args = caller.args;
         let pos_num = caller.pos_num;
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
-        let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
+        let kw_expansion = callee.no_keyword() && caller.kw_exists();
         if !caller.has_splat()
             && !kw_expansion
             && !single_arg_expand

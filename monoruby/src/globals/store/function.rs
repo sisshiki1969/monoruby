@@ -202,7 +202,7 @@ impl Meta {
     ///
     /// If `self` is "simple", return true.
     ///
-    /// "simple" means that the function has no optional, rest, keyword, keywoed rest, and block parameters.
+    /// "simple" means that the function has no optional, rest, keyword, keyword rest, and block parameters.
     ///
     pub fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
