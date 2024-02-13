@@ -766,13 +766,6 @@ impl FuncInfo {
         self.params.params.reqopt_num()
     }
 
-    ///
-    /// The number of optional + rest arguments.
-    ///
-    pub(crate) fn opt_rest_num(&self) -> usize {
-        self.params.params.opt_rest_num()
-    }
-
     pub(crate) fn pos_num(&self) -> usize {
         self.params.params.pos_num()
     }

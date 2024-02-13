@@ -283,19 +283,12 @@ impl Codegen {
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_frame(meta, caller);
         self.jit_copy_keyword_args(caller, callee);
-        if native {
-            monoasm! { &mut self.jit,
-                movq r14, rdi;
+        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            if native {
+                monoasm! { &mut self.jit,
+                    movq r14, rdi;
+                }
             }
-        }
-        let kw_expansion = callee.no_keyword() && caller.kw_num() != 0;
-        if callee.opt_rest_num() == 0
-            && callee.kw_rest().is_none()
-            && !kw_expansion
-            && caller.hash_splat_pos.is_empty()
-        {
-            // fast path: when no optional param, no rest param, no kw rest param, and no hash splat arguments.
-        } else {
             monoasm! { &mut self.jit,
                 movq rdi, rbx; // &mut Executor
                 movq rsi, r12; // &mut Globals
@@ -308,12 +301,14 @@ impl Codegen {
                 addq rsp, (offset);
             }
             self.handle_error(error);
-        }
-        //}
-
-        if native {
+            if native {
+                monoasm! { &mut self.jit,
+                    movq rdx, r14;
+                }
+            }
+        } else if native {
             monoasm! { &mut self.jit,
-                movq rdx, r14;
+                movq rdx, rdi;
             }
         }
 
