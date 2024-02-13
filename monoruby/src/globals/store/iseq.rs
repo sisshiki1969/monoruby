@@ -451,6 +451,11 @@ impl ParamsInfo {
         self.pos_num != self.reqopt_num
     }
 
+    ///
+    /// If `self` is "simple", return true.
+    ///
+    /// "simple" means that the function has no optional, rest, keyword, keywoed rest, and block parameters.
+    ///
     pub fn is_simple(&self) -> bool {
         self.opt_rest_num() == 0
             && self.kw_names.is_empty()

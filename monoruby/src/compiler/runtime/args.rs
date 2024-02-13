@@ -77,7 +77,7 @@ pub(crate) fn handle_positional(
 ///
 /// Set positional arguments (req, opt, rest) and keyword arguments (kw, kw_rest) to the callee frame.
 ///
-/// This function solves the match of argunments-parameters dynamically.
+/// This function solves the match of arguments-parameters dynamically.
 ///
 pub(crate) fn set_frame_arguments(
     globals: &mut Globals,

@@ -194,6 +194,15 @@ impl Meta {
     }
 
     ///
+    /// If `self` is "simple", return true.
+    ///
+    /// "simple" means that the function has no optional, rest, keyword, keywoed rest, and block parameters.
+    ///
+    pub fn is_simple(&self) -> bool {
+        (self.kind & 0b1_0000) != 0
+    }
+
+    ///
     /// Returns true if this function possibly manipulates outer local variables.
     ///
     pub fn is_eval(&self) -> bool {
@@ -629,12 +638,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(
-                func_id,
-                0,
-                is_block_style,
-                params.is_simple() && !is_block_style,
-            ),
+            Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
             params,
         )
     }
@@ -651,7 +655,7 @@ impl FuncInfo {
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, true, false),
+            Meta::vm_method(func_id, 0, true, params.is_simple()),
             params,
         )
     }

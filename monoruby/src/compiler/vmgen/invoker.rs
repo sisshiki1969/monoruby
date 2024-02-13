@@ -348,7 +348,7 @@ extern "C" fn handle_invoker_arguments(
 /// deconstruct array for block
 fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
     let req_num = info.req_num();
-    if info.is_block_style() && arg_num == 1 && (info.reqopt_num() > 1 || info.is_rest()) {
+    if info.single_arg_expand() && arg_num == 1 {
         unsafe {
             let v = callee_lfp.register(1).unwrap();
             if v.try_array_ty().is_some() {
