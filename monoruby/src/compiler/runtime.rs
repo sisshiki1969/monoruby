@@ -325,9 +325,9 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 }
 
 ///
-/// Handle arguments.
+/// Handle hash splat arguments and a keyword rest parameter.
 ///
-pub(super) extern "C" fn jit_generic_handle_arguments(
+pub(super) extern "C" fn jit_handle_hash_splat_kw_rest(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
@@ -335,7 +335,7 @@ pub(super) extern "C" fn jit_generic_handle_arguments(
     callee_lfp: Lfp,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match jit_keyword_arguments(globals, callid, callee_lfp, caller_lfp, meta) {
+    match jit_hash_splat_kw_rest(globals, callid, callee_lfp, caller_lfp, meta) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

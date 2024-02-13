@@ -5,6 +5,7 @@ mod constants;
 mod defined;
 mod definition;
 mod index;
+mod method_call;
 mod variables;
 
 impl Codegen {

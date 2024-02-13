@@ -1,6 +1,9 @@
 use super::*;
 
-pub(crate) fn jit_keyword_arguments(
+///
+/// Handle hash splat arguments and a keyword rest parameter.
+///
+pub(crate) fn jit_hash_splat_kw_rest(
     globals: &mut Globals,
     callid: CallSiteId,
     callee_lfp: Lfp,
@@ -10,13 +13,8 @@ pub(crate) fn jit_keyword_arguments(
     let callee_func_id = meta.func_id();
     let callee = &globals[callee_func_id];
     let caller = &globals.store[callid];
-    if !callee.no_keyword() || caller.kw_num() == 0 {
-        hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)?;
-    }
-
-    Ok(())
+    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
 }
-
 ///
 /// if argument mismatch occurs, return None.
 ///
@@ -341,6 +339,9 @@ fn ordinary_keyword(
     Ok(())
 }
 
+///
+/// Handle hash splat arguments and a keyword rest parameter.
+///
 fn hash_splat_and_kw_rest(
     info: &FuncInfo,
     callsite: &CallSiteInfo,
