@@ -3,5 +3,5 @@ def f(x)
 end
 
 15.times do
-  f(**{})
+  f(**{a:1})
 end

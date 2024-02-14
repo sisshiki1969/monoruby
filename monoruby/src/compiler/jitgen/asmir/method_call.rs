@@ -58,7 +58,7 @@ impl AsmIr {
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                assert!(!store[callid].kw_exists());
+                assert!(!store[callid].kw_may_exists());
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 if recv_class.is_always_frozen() {
@@ -72,7 +72,7 @@ impl AsmIr {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                assert!(!store[callid].kw_exists());
+                assert!(!store[callid].kw_may_exists());
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 let ivar_id = store[recv_class].get_ivarid(ivar_name)?;

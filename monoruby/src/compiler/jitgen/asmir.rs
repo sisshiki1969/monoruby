@@ -443,9 +443,9 @@ impl AsmIr {
         let args = caller.args;
         let pos_num = caller.pos_num;
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
-        let kw_expansion = callee.no_keyword() && caller.kw_exists();
+        let ex_positional = callee.no_keyword() && caller.kw_may_exists();
         if !caller.has_splat()
-            && !kw_expansion
+            && !ex_positional
             && !single_arg_expand
             && !callee.is_rest()
             && pos_num <= callee.max_positional_args()

@@ -422,11 +422,7 @@ pub(crate) struct CallSiteInfo {
 }
 
 impl CallSiteInfo {
-    pub fn kw_num(&self) -> usize {
-        self.kw_args.len()
-    }
-
-    pub fn kw_exists(&self) -> bool {
+    pub fn kw_may_exists(&self) -> bool {
         !self.kw_args.is_empty() || !self.hash_splat_pos.is_empty()
     }
 
