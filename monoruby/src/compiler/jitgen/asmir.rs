@@ -429,8 +429,7 @@ impl AsmIr {
     }
 
     ///
-    /// ### out
-    /// - rdi: arg_num
+    /// Set positional arguments for callee.
     ///
     fn set_arguments(
         &mut self,
@@ -476,8 +475,6 @@ impl AsmIr {
                 }
             }
             self.reg_add(GP::Rsp, ofs);
-            self.inst
-                .push(AsmInst::I32ToReg(callee.pos_num() as _, GP::Rdi));
         } else {
             self.write_back_args(bb, caller);
             let meta = callee.meta();

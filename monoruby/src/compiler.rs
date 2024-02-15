@@ -777,7 +777,6 @@ impl Codegen {
             // r8: CallsiteId
             movq rax, (f);
             call rax;
-            // rax <- arg_num: Value
             popq rdi;
             addq rsp, rdi;
         };

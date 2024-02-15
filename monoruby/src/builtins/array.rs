@@ -106,7 +106,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         }
         let size = size as usize;
         if let Some(bh) = lfp.block() {
-            if lfp.try_arg(2).is_none() {
+            if lfp.try_arg(1).is_some() {
                 eprintln!("warning: block supersedes default value argument");
             }
             let iter = (0..size).map(|i| Value::integer(i as i64));

@@ -112,14 +112,11 @@ impl Codegen {
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movq rax, rdx;
+            movzxw rax, [r14 - (LBP_META_REGNUM)];
             addq rax, (LBP_ARG0 / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
             subq rsp, rax;
-            // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            addl rdx, 1;
-            movw [r14 - (LBP_META_REGNUM)], rdx;
 
             movq rdi, rbx;
             movq rsi, r12;

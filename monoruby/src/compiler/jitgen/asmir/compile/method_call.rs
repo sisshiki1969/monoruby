@@ -42,8 +42,6 @@ impl Codegen {
             movq rax, (crate::runtime::jit_generic_set_arguments);
             call rax;
             addq rsp, (offset);
-            movq rdi, rax;
-            sarq rdi, 1;
         }
     }
 }
@@ -266,7 +264,7 @@ impl Codegen {
 
     ///
     /// ### in
-    /// rdi: receiver: Value
+    /// rdi: numer of args.
     ///
     pub(super) fn send_cached(
         &mut self,
@@ -285,15 +283,7 @@ impl Codegen {
         self.setup_frame(meta, caller);
         self.copy_keyword_args(caller, callee);
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
-            if native {
-                monoasm! { &mut self.jit, movq r14, rdi; }
-            }
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
-            if native {
-                monoasm! { &mut self.jit, movq rdx, r14; }
-            }
-        } else if native {
-            monoasm! { &mut self.jit, movq rdx, rdi; }
         }
 
         monoasm!( &mut self.jit,
@@ -452,12 +442,10 @@ impl Codegen {
 
     ///
     /// ### in
-    /// - rdi: arg_num
     /// - r15: &FuncData
     ///
     fn call_funcdata(&mut self) {
         monoasm! { &mut self.jit,
-            movq rdx, rdi;
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
             // push cfp
@@ -530,11 +518,6 @@ impl Codegen {
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);
-        monoasm! { &mut self.jit,
-            sarq rax, 1;
-            movq rdi, rax;
-        }
-
         self.call_funcdata();
     }
 }

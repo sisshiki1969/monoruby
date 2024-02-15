@@ -6,27 +6,23 @@
 
 ex. def f(a,(b,c),d,e=42,f:100) => pos_num = 4
 
-## passed_args
-
-caller から渡される実引数の数。
-
 ## Caller
 
 - 位置引数を callee のフレームにコピー（あふれた引数はメソッド呼び出しの場合は rest に集める）
-- Splat 引数を展開
-- callee がブロックかつ仮引数が複数の場合、もし引数が１個の Array なら展開
-- req, opt, rest引数を処理
+  - splat 引数を展開
+  - callerにkeyword 引数・hash splat引数があり、かつcalleeにkeyword 仮引数・keyword rest仮引数がない場合、渡されるkeyword 引数をHashオブジェクトとし、１個の位置引数として引き渡す。
+  - callee がブロックかつ必須仮引数＋rest仮引数が複数の場合、もし引数が１個の Array なら展開する。
   - 余ったreqは nil 、余ったoptは None で埋める
   - 位置引数の個数をチェックして不正ならエラーを返す
-- keyword 引数の割り当て
-- 余った keyword 引数を kw_rest に集める
+- keyword・hash splat 引数の割り当て
+- 余った keyword 引数を keyword rest 仮引数に集める
 
-## Callee
+## Callee側の処理
 
-### prologue での処理 (InitMethod / InitBlock)
+### prologue での処理 (InitMethod)
 
 - スタックの調整
-- 引数以外のローカル変数・一時変数スロットを nil で初期化。
+- 一時変数スロットを nil で初期化。
 
 ### bytecode での処理 (bytecode.rs/compile_func())
 
