@@ -47,7 +47,7 @@ pub(crate) struct FuncData {
     ofs: u16,
     min: u16,
     max: u16,
-    _padding: [u8; 2],
+    _padding: [u8; 4],
 }
 
 impl FuncData {
@@ -581,6 +581,8 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
 #[derive(Debug, Clone, Default)]
 struct FuncExt {
+    /// name of this function.
+    name: Option<IdentId>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
@@ -589,8 +591,6 @@ struct FuncExt {
 
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
-    /// name of this function.
-    name: Option<IdentId>,
     /// function data.
     data: FuncData,
     pub(crate) kind: FuncKind,
@@ -615,7 +615,6 @@ impl FuncInfo {
         let max = params.reqopt_num() as u16;
         let ofs = ((max as usize * 8 + LBP_ARG0 as usize + 15) >> 4) as u16;
         Self {
-            name,
             data: FuncData {
                 codeptr: None,
                 pc: None,
@@ -623,10 +622,11 @@ impl FuncInfo {
                 ofs,
                 min,
                 max,
-                _padding: Default::default(),
+                _padding: [0; 4],
             },
             kind,
             ext: Box::new(FuncExt {
+                name,
                 jit_entry: Default::default(),
                 params,
             }),
@@ -746,7 +746,7 @@ impl FuncInfo {
     }
 
     pub(crate) fn name(&self) -> Option<IdentId> {
-        self.name
+        self.ext.name
     }
 
     ///
