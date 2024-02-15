@@ -115,7 +115,11 @@ impl Codegen {
     /// - r13: pc
     /// - r15: &FuncData
     ///
-    fn call(&mut self, _: bool) {
+    fn call(
+        &mut self,
+        // The call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
+        is_simple: bool,
+    ) {
         monoasm! { &mut self.jit,
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
@@ -125,7 +129,14 @@ impl Codegen {
             movzxw rdx, [r13 + (ARG_REG)]; // rdx <- %args
         }
         self.vm_get_slot_addr(GP::Rdx);
-        self.generic_handle_arguments(runtime::vm_handle_arguments);
+        if is_simple {
+            // if callee is "simple" (has no optional parameter, no rest parameter, no keyword parameters,
+            // no keyword rest parameter), no single arg expansion, and req <= pos_num <= req_opt,
+            // we can optimize this.
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+        } else {
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+        }
         self.vm_handle_error();
         monoasm! { &mut self.jit,
             // set pc
