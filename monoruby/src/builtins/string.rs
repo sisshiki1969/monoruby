@@ -537,7 +537,6 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
         }
     }
-    let len = lfp.arg_len();
     let self_ = lfp.self_val();
     let lhs = self_.expect_string()?;
     if let Some(i) = lfp.arg(0).try_fixnum() {
@@ -545,8 +544,8 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        if len == 2 {
-            let len = match lfp.arg(1).coerce_to_i64()? {
+        if let Some(arg1) = lfp.try_arg(1) {
+            let len = match arg1.coerce_to_i64()? {
                 0 => return Ok(Value::string_from_str("")),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
@@ -578,7 +577,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
         Ok(Value::string(s))
     } else if let Some(info) = lfp.arg(0).is_regex() {
-        let nth = if len == 1 {
+        let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
             lfp.arg(1).coerce_to_i64()?
@@ -652,17 +651,14 @@ fn end_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/split.html]
 #[monoruby_builtin]
 fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
     let self_ = lfp.self_val();
     let string = self_.expect_string()?;
-    //let arg0 = lfp.arg(0);
+    let lim = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.coerce_to_i64()?
+    } else {
+        0
+    };
     if let Some(sep) = lfp.arg(0).is_str() {
-        let lim = if len > 1 {
-            lfp.arg(1).coerce_to_i64()?
-        } else {
-            0
-        };
         let v: Vec<Value> = if sep == " " {
             match lim {
                 lim if lim < 0 => {
@@ -722,11 +718,6 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => Ok(Value::array_from_vec(v)),
         }
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let lim = if len > 1 {
-            lfp.arg(1).coerce_to_i64()?
-        } else {
-            0
-        };
         let all_cap = re.captures_iter(&string);
         let mut cursor = 0usize;
         let mut res = vec![];
@@ -785,15 +776,13 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
 #[monoruby_builtin]
 fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments_range(0..=1)?;
-    let rs = if lfp.arg_len() == 0 {
-        "\n".to_string()
-    } else {
-        let arg = lfp.arg(0);
-        if arg.is_nil() {
+    let rs = if let Some(arg0) = lfp.try_arg(0) {
+        if arg0.is_nil() {
             return Ok(lfp.self_val());
         }
-        arg.expect_string()?
+        arg0.expect_string()?
+    } else {
+        "\n".to_string()
     };
 
     let self_ = lfp.self_val().expect_string()?;
@@ -854,17 +843,20 @@ fn sub_main(
     self_val: Value,
     lfp: Lfp,
 ) -> Result<(String, bool)> {
-    match lfp.block() {
-        None => {
-            lfp.check_number_of_arguments(2)?;
-            let given = self_val.expect_string()?;
-            let replace = lfp.arg(1).expect_string()?;
-            RegexpInner::replace_one(vm, globals, lfp.arg(0), &given, &replace)
+    if let Some(arg1) = lfp.try_arg(1) {
+        if lfp.block().is_some() {
+            eprintln!("warning: default value argument supersedes block");
         }
-        Some(bh) => {
-            lfp.check_number_of_arguments(1)?;
-            let given = self_val.expect_string()?;
-            RegexpInner::replace_one_block(vm, globals, lfp.arg(0), &given, bh)
+        let given = self_val.expect_string()?;
+        let replace = arg1.expect_string()?;
+        RegexpInner::replace_one(vm, globals, lfp.arg(0), &given, &replace)
+    } else {
+        match lfp.block() {
+            None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
+            Some(bh) => {
+                let given = self_val.expect_string()?;
+                RegexpInner::replace_one_block(vm, globals, lfp.arg(0), &given, bh)
+            }
         }
     }
 }
@@ -906,17 +898,20 @@ fn gsub_main(
     self_val: Value,
     lfp: Lfp,
 ) -> Result<(String, bool)> {
-    match lfp.block() {
-        None => {
-            lfp.check_number_of_arguments(2)?;
-            let given = self_val.expect_string()?;
-            let replace = lfp.arg(1).expect_string()?;
-            RegexpInner::replace_all(vm, globals, lfp.arg(0), &given, &replace)
+    if let Some(arg1) = lfp.try_arg(1) {
+        if lfp.block().is_some() {
+            eprintln!("warning: default value argument supersedes block");
         }
-        Some(bh) => {
-            lfp.check_number_of_arguments(1)?;
-            let given = self_val.expect_string()?;
-            RegexpInner::replace_all_block(vm, globals, lfp.arg(0), &given, bh)
+        let given = self_val.expect_string()?;
+        let replace = arg1.expect_string()?;
+        RegexpInner::replace_all(vm, globals, lfp.arg(0), &given, &replace)
+    } else {
+        match lfp.block() {
+            None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
+            Some(bh) => {
+                let given = self_val.expect_string()?;
+                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), &given, bh)
+            }
         }
     }
 }
@@ -982,14 +977,13 @@ fn scan_inner(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/match.html]
 #[monoruby_builtin]
 fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    let pos = match len {
-        1 => 0usize,
-        2 => match lfp.arg(1).coerce_to_i64()? {
+    let pos = if let Some(arg1) = lfp.try_arg(1) {
+        match arg1.coerce_to_i64()? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
-        },
-        _ => unreachable!(),
+        }
+    } else {
+        0usize
     };
     let self_ = lfp.self_val();
     let given = self_.expect_string()?;
@@ -1027,7 +1021,6 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ord.html]
 #[monoruby_builtin]
 fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     Ok(Value::integer(lfp.self_val().as_bytes().ord()? as _))
 }
 
@@ -1046,10 +1039,8 @@ fn gen_pad(padding: &str, len: usize) -> String {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
 #[monoruby_builtin]
 fn ljust(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    let padding = if len == 2 {
-        let arg = lfp.arg(1);
-        arg.expect_string()?
+    let padding = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.expect_string()?
     } else {
         " ".to_string()
     };
@@ -1075,10 +1066,8 @@ fn ljust(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
 #[monoruby_builtin]
 fn rjust(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    let padding = if len == 2 {
-        let arg = lfp.arg(1);
-        arg.expect_string()?
+    let padding = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.expect_string()?
     } else {
         " ".to_string()
     };
@@ -1143,10 +1132,9 @@ fn bytes(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_line.html]
 #[monoruby_builtin]
 fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(0..=1)?;
-    let rs = if len == 1 {
-        Cow::Owned(lfp.arg(0).expect_string()?)
+    //lfp.check_number_of_arguments_range(0..=1)?;
+    let rs = if let Some(arg0) = lfp.try_arg(0) {
+        Cow::Owned(arg0.expect_string()?)
     } else {
         Cow::Borrowed("\n")
     };
@@ -1185,11 +1173,10 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
 #[monoruby_builtin]
 fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     let self_ = lfp.self_val();
     let s = self_.as_str();
-    let radix = if len == 0 {
+    let radix = if lfp.try_arg(0).is_none() {
         10
     } else {
         match lfp.arg(0).expect_integer()? {
@@ -1257,7 +1244,6 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
 #[monoruby_builtin]
 fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(2)?;
     let rec = lfp.self_val().expect_string()?;
     let from = lfp.arg(0).expect_string()?;
     let to = lfp.arg(1).expect_string()?;
@@ -1275,9 +1261,8 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sum.html]
 #[monoruby_builtin]
 fn sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
-    let bits = if len == 0 {
+    let bits = if lfp.try_arg(0).is_none() {
         16
     } else {
         lfp.arg(0).coerce_to_i64()?

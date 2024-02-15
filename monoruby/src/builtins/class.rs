@@ -29,9 +29,8 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
 fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     lfp.expect_no_block()?;
-    let superclass = if len == 0 {
+    let superclass = if lfp.try_arg(0).is_none() {
         None
     } else {
         lfp.arg(0).expect_class(globals)?;

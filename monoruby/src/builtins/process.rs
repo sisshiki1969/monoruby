@@ -77,18 +77,18 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
 fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let unit = if lfp.arg_len() == 1 {
-        IdentId::FLOAT_SECOND
-    } else {
-        match lfp.arg(1).try_symbol() {
+    let unit = if let Some(arg1) = lfp.try_arg(1) {
+        match arg1.try_symbol() {
             Some(id) => id,
             None => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
-                    globals.to_s(lfp.arg(1))
+                    globals.to_s(arg1)
                 )))
             }
         }
+    } else {
+        IdentId::FLOAT_SECOND
     };
     let mut tp = TimeSpec::default();
     let clk_id = lfp.arg(0).coerce_to_i64()? as i32;

@@ -18,9 +18,8 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
 #[monoruby_builtin]
 fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
-    let new_seed = if len == 0 {
+    let new_seed = if lfp.try_arg(0).is_none() {
         None
     } else {
         match lfp.arg(0).unpack() {

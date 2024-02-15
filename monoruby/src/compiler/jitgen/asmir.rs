@@ -476,7 +476,8 @@ impl AsmIr {
                 }
             }
             self.reg_add(GP::Rsp, ofs);
-            self.inst.push(AsmInst::I32ToReg(pos_num as _, GP::Rdi));
+            self.inst
+                .push(AsmInst::I32ToReg(callee.pos_num() as _, GP::Rdi));
         } else {
             self.write_back_args(bb, caller);
             let meta = callee.meta();

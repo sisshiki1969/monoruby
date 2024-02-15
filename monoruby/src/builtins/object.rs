@@ -45,6 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         true,
     );
+    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func_with(OBJECT_CLASS, "__send__", send, 1, 1, true);
 }
 
@@ -218,7 +219,6 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
 #[monoruby_builtin]
 fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string()?;
     let func_id = globals.find_method(receiver, method_name, false)?;

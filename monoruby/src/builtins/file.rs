@@ -92,18 +92,17 @@ fn read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binread.html]
 #[monoruby_builtin]
 fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    let length = if len == 1 {
-        None
-    } else {
-        Some(lfp.arg(1).coerce_to_i64()?)
-    };
-    let offset = if len <= 2 {
-        None
-    } else {
-        Some(lfp.arg(2).coerce_to_i64()?)
-    };
     let filename = string_to_path(lfp.arg(0), globals)?;
+    let length = if let Some(arg1) = lfp.try_arg(1) {
+        Some(arg1.coerce_to_i64()?)
+    } else {
+        None
+    };
+    let offset = if let Some(arg2) = lfp.try_arg(2) {
+        Some(arg2.coerce_to_i64()?)
+    } else {
+        None
+    };
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(_) => {
@@ -180,7 +179,6 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
 fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -193,7 +191,7 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
             return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
         }
     };
-    let path = if len == 1 {
+    let path = if lfp.try_arg(1).is_none() {
         string_to_path(lfp.arg(0), globals)?
     } else {
         let mut path = string_to_path(lfp.arg(1), globals)?;

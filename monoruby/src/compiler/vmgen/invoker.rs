@@ -332,7 +332,7 @@ extern "C" fn handle_invoker_arguments(
     arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
     // required + optional + rest
-    super::runtime::handle_positional(info, arg_num, callee_lfp, None).unwrap();
+    let _ = super::runtime::handle_positional(info, arg_num, callee_lfp, None);
     // keyword
     let params = info.kw_names();
     let callee_kw_pos = info.pos_num() + 1;

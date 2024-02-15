@@ -230,7 +230,7 @@ fn positional(
 
     positional_post(callee, arg_num, callee_lfp, ex, rest)?;
 
-    Ok(arg_num)
+    Ok(callee.pos_num())
 }
 
 ///

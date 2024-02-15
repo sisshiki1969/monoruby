@@ -9,7 +9,6 @@ mod wrapper;
 use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
-use vmgen::init_method::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
@@ -760,27 +759,14 @@ impl Codegen {
             CallSiteId,
         ) -> Option<Value>,
     ) {
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
             lea  rcx, [rsp - 16];
-            movq rdi, [r15 + (FUNCDATA_PC)];
-            testq rdi, rdi;
-            jeq  l1;
-            movzxw rdi, [rdi + (INIT_METHOD_OFS + 16)];
+            // rdi <- stacck_offset
+            movzxw rdi, [r15 + (FUNCDATA_OFS)];
             shlq rdi, 4;
-            addq rdi, 16;
-            jmp  l2;
-        l1:
-            movq rdi, r9;
-            // TODO: We must support rest argument in native methods.
-            addq rdi, (LBP_ARG0 / 8 + 64 + 1);
-            andq rdi, (-2);
-            shlq rdi, 3;
-        l2:
+            addq rdi, 24;
             subq rsp, rdi;
-            subq rsp, 8;
             pushq rdi;
             movq rsi, r12;
             movq rdi, rbx;
@@ -788,7 +774,6 @@ impl Codegen {
             call rax;
             // rax <- arg_num: Value
             popq rdi;
-            addq rsp, 8;
             addq rsp, rdi;
         };
     }

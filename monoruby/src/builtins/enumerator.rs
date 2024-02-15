@@ -147,8 +147,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             }
         }
     }
-    let len = lfp.arg_len();
-    let count = if len == 0 {
+    let count = if lfp.try_arg(0).is_none() {
         Value::integer(0)
     } else {
         match lfp.arg(0).unpack() {
@@ -213,7 +212,6 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
 fn yielder_push(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     vm.yield_fiber(globals, Value::array1(lfp.arg(0)))
 }
 

@@ -432,24 +432,15 @@ impl Lfp {
     }
 
     pub fn arg(&self, i: usize) -> Value {
-        unsafe { *(self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8) as *mut Value) }
+        self.try_arg(i).unwrap()
     }
 
-    /*pub fn as_arg(&self) -> Arg {
-        unsafe {
-            Arg::from(
-                (self.0.as_ptr().sub(LBP_ARG0 as usize) as *mut Value)
-                    .as_ref()
-                    .unwrap(),
-            )
-        }
-    }*/
-
-    pub fn check_number_of_arguments(&self, expect: usize) -> Result<()> {
-        if self.arg_len() == expect {
-            Ok(())
+    pub fn try_arg(&self, i: usize) -> Option<Value> {
+        let v = unsafe { *((self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8)) as *const u64) };
+        if v == 0 {
+            None
         } else {
-            Err(MonorubyErr::wrong_number_of_arg(expect, self.arg_len()))
+            Some(Value::from(v))
         }
     }
 

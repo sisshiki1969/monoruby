@@ -113,9 +113,9 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
             movq rax, rdx;
-        );
-        self.calc_offset();
-        monoasm!( &mut self.jit,
+            addq rax, (LBP_ARG0 / 8 + 1);
+            andq rax, (-2);
+            shlq rax, 3;
             subq rsp, rax;
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
             addl rdx, 1;
@@ -129,23 +129,6 @@ impl Codegen {
 
             leave;
             ret;
-        );
-    }
-
-    ///
-    /// calculate an offset of stack pointer.
-    ///
-    /// ### in
-    /// - rax: the number of arguments.
-    ///
-    /// ### out
-    /// - rax: stack offset
-    ///
-    fn calc_offset(&mut self) {
-        monoasm!( &mut self.jit,
-            addq rax, (LBP_ARG0 / 8 + 1);
-            andq rax, (-2);
-            shlq rax, 3;
         );
     }
 

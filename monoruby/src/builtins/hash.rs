@@ -239,7 +239,6 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let inner = self_val.as_hash();
@@ -260,7 +259,6 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/3.2/method/Hash/i/invert.html]
 #[monoruby_builtin]
 fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let inner = self_val.as_hash();
@@ -333,16 +331,17 @@ fn env_index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     let self_ = lfp.self_val();
     let map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
-        lfp.check_number_of_arguments(1)?;
+        if lfp.try_arg(1).is_some() {
+            eprintln!("warning: block supersedes default value argument");
+        }
         match map.get(lfp.arg(0)) {
             Some(v) => v,
             None => vm.invoke_block_once(globals, bh, &[lfp.arg(0)])?,
         }
-    } else if len == 1 {
+    } else if lfp.try_arg(1).is_none() {
         match map.get(lfp.arg(0)) {
             Some(v) => v,
             None => {

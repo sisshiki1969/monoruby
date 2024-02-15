@@ -417,10 +417,16 @@ impl ParamsInfo {
         }
     }
 
+    ///
+    /// The number of required arguments.
+    ///
     pub(crate) fn req_num(&self) -> usize {
         self.required_num
     }
 
+    ///
+    /// The number of required + optional arguments.
+    ///
     pub(crate) fn reqopt_num(&self) -> usize {
         self.reqopt_num
     }
@@ -432,6 +438,9 @@ impl ParamsInfo {
         self.pos_num - self.required_num
     }
 
+    ///
+    /// The number of required + optional + rest arguments.
+    ///
     pub fn pos_num(&self) -> usize {
         self.pos_num
     }

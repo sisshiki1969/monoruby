@@ -5,8 +5,9 @@ pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr)
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
 pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
 pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
-//pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
-//pub(crate) const FUNCDATA_MAX: u64 = std::mem::offset_of!(FuncData, max) as _;
+pub(crate) const FUNCDATA_OFS: u64 = std::mem::offset_of!(FuncData, ofs) as _;
+pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
+pub(crate) const FUNCDATA_MAX: u64 = std::mem::offset_of!(FuncData, max) as _;
 
 pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
@@ -43,9 +44,10 @@ pub(crate) struct FuncData {
     meta: Meta,
     /// the address of program counter
     pc: Option<BcPc>,
+    ofs: u16,
     min: u16,
     max: u16,
-    _padding: [u8; 4],
+    _padding: [u8; 2],
 }
 
 impl FuncData {
@@ -57,8 +59,9 @@ impl FuncData {
         self.pc = Some(pc);
     }
 
-    pub(super) fn set_reg_num(&mut self, reg_num: u16) {
+    fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
+        self.ofs = ((reg_num as usize * 8 + LBP_SELF as usize + 15) >> 4) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -610,12 +613,14 @@ impl FuncInfo {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.reqopt_num() as u16;
+        let ofs = ((max as usize * 8 + LBP_ARG0 as usize + 15) >> 4) as u16;
         Self {
             name,
             data: FuncData {
                 codeptr: None,
                 pc: None,
                 meta,
+                ofs,
                 min,
                 max,
                 _padding: Default::default(),

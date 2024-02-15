@@ -32,7 +32,6 @@ pub(crate) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
 fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string()?;
     let regexp = RegexpInner::from_string(globals, string)?;
@@ -62,12 +61,11 @@ fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
 fn regexp_last_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
-    if len == 0 {
-        Ok(vm.get_last_matchdata())
-    } else {
-        let nth = lfp.arg(0).coerce_to_i64()?;
+    if let Some(arg0) = lfp.try_arg(0) {
+        let nth = arg0.coerce_to_i64()?;
         Ok(vm.get_special_matches(nth))
+    } else {
+        Ok(vm.get_last_matchdata())
     }
 }
 

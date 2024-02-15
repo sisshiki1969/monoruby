@@ -104,7 +104,6 @@ impl Iterator for NegStep {
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
 #[monoruby_builtin]
 fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("step");
@@ -114,8 +113,8 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     let cur = lfp.self_val().as_fixnum();
     let limit = lfp.arg(0).coerce_to_i64()?;
-    let step = if len == 2 {
-        let step = lfp.arg(1).coerce_to_i64()?;
+    let step = if let Some(arg1) = lfp.try_arg(1) {
+        let step = arg1.coerce_to_i64()?;
         if step == 0 {
             return Err(MonorubyErr::argumenterr("Step can not be 0."));
         }

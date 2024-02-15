@@ -65,10 +65,9 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
 fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(0..=1)?;
     let class_id = lfp.self_val().as_class_id();
-    let v = if len == 0 || lfp.arg(0).as_bool() {
+    let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
         globals.get_constant_names_inherit(class_id)
     } else {
         globals.get_constant_names(class_id)
@@ -83,11 +82,10 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
 fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let len = lfp.arg_len();
     lfp.check_number_of_arguments_range(1..=2)?;
     let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
-    let v = if len == 1 || lfp.arg(1).as_bool() {
+    let v = if lfp.try_arg(1).is_none() || lfp.arg(1).as_bool() {
         globals
             .search_constant_superclass(module, name)
             .map(|(_, v)| v)
@@ -287,7 +285,6 @@ fn change_visi(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
 fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
     let class_id = lfp.self_val().as_class_id();
     let func_name = lfp.arg(0).expect_symbol_or_string()?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))
