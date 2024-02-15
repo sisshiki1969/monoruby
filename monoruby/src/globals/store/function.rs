@@ -92,6 +92,7 @@ impl FuncData {
 pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
+    mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
     /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
     /// bit 3:  0:no eval 1:eval(which possibly manipulates stack slots in outer frames)
@@ -99,7 +100,6 @@ pub struct Meta {
     /// bit 1:  0:Ruby 1:native
     /// bit 0:  0:method 1:class_def
     kind: u8,
-    mode: u8,
 }
 
 impl std::fmt::Debug for Meta {
@@ -133,12 +133,12 @@ impl Meta {
         Self {
             func_id,
             reg_num,
+            mode: 0,
             kind: (is_simple as u8) << 4
                 | (is_eval as u8) << 3
                 | (is_block_style as u8) << 2
                 | (is_native as u8) << 1
                 | is_class_def as u8,
-            mode: 0,
         }
     }
 

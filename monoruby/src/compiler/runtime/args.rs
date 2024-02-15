@@ -90,8 +90,6 @@ pub(crate) fn set_frame_arguments(
     let callee = &globals[callee_fid];
     let caller = &globals.store[callid];
 
-    // TODO: if caller is simple (no splat, no keywords), and callee is also simple (no optional, no rest, no keywords), we can optimize this.
-
     let arg_num = positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
     if !callee.no_keyword() || !caller.kw_may_exists() {
@@ -161,7 +159,6 @@ fn positional(
     let pos_num = caller.pos_num;
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
-    // ex is always none when !caller.kw_exists().
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = IndexMap::default();
@@ -187,7 +184,6 @@ fn positional(
         None
     };
 
-    // rest is always empty when splat_pos.is_empty() and no_push.
     let (mut arg_num, mut rest) = if splat_pos.is_empty() {
         if pos_num <= max_pos {
             memcpy(src, dst, pos_num);

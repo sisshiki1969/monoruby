@@ -109,6 +109,23 @@ impl Codegen {
     }
 
     ///
+    /// Preparation for call.
+    ///
+    /// ### in
+    /// - r13: pc
+    ///
+    /// ### out
+    /// - r8: CallSiteId
+    /// - r9: pos_num
+    /// - rdx: *const args
+    ///
+    fn call_prep(&mut self) {
+        monoasm! { &mut self.jit,
+            movl r8, [r13 + (CALLSITE_ID)]; // r8 <- CallSiteId
+        }
+    }
+
+    ///
     /// Call
     ///
     /// ### in
@@ -124,20 +141,57 @@ impl Codegen {
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movl r8, [r13 + (CALLSITE_ID)]; // r8 <- CallSiteId
-            movzxw r9, [r13 + (POS_NUM)]; // r9 <- pos_num
-            movzxw rdx, [r13 + (ARG_REG)]; // rdx <- %args
+        }
+        monoasm! { &mut self.jit,
+            movzxw r9, [r13 + (POS_NUM)];
+            movzxw rdx, [r13 + (ARG_REG)];
         }
         self.vm_get_slot_addr(GP::Rdx);
         if is_simple {
             // if callee is "simple" (has no optional parameter, no rest parameter, no keyword parameters,
-            // no keyword rest parameter), no single arg expansion, and req <= pos_num <= req_opt,
+            // no keyword rest parameter), no single arg expansion, and req == pos_num == req_opt,
             // we can optimize this.
+            let generic = self.jit.label();
+            let exit = self.jit.label();
+            let loop_ = self.jit.label();
+            // rax: Meta
+            // r9: POS_NUM
+            // rdx: *const args
+            monoasm! { &mut self.jit,
+                // check Meta. if !is_simple || is_block_style, go to generic.
+                shrq rax, 56;
+                andq rax, 0b1_0100;
+                cmpb rax, 0b1_0000;
+                jne  generic;
+                cmpw r9, [r15 + (FUNCDATA_MIN)];
+                jne  generic;
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+                // rdx : *args
+                // r9 : len
+                testq r9, r9;
+                jeq  exit;
+                negq r9;
+            loop_:
+                movq rax, [rdx + r9 * 8 + 8];
+                movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
+                addq r9, 1;
+                jne  loop_;
+            };
+            self.jit.select_page(1);
+            self.jit.bind_label(generic);
+            self.call_prep();
             self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.vm_handle_error();
+            monoasm! { &mut self.jit,
+                jmp exit;
+            }
+            self.jit.select_page(0);
+            self.jit.bind_label(exit);
         } else {
+            self.call_prep();
             self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.vm_handle_error();
         }
-        self.vm_handle_error();
         monoasm! { &mut self.jit,
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
