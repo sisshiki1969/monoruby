@@ -155,7 +155,7 @@ impl Codegen {
             let exit = self.jit.label();
             let loop_ = self.jit.label();
             // rax: Meta
-            // r9: POS_NUM
+            // r9: number of positional arguments passed to callee
             // rdx: *const args
             monoasm! { &mut self.jit,
                 // check Meta. if !is_simple || is_block_style, go to generic.
