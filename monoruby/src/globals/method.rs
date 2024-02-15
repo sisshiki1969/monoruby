@@ -14,7 +14,9 @@ impl Globals {
         let func_id = self
             .store
             .add_builtin_func(name.to_string(), address, min, max, rest);
-        self.gen_wrapper(func_id);
+        let _codeptr = self.gen_wrapper(func_id);
+        #[cfg(feature = "perf")]
+        self.codegen.perf_info(_codeptr, &format!("#{name}"));
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, visi);
         func_id
@@ -26,7 +28,9 @@ impl Globals {
         name: &str,
         func_id: FuncId,
     ) -> FuncId {
-        self.gen_wrapper(func_id);
+        let _codeptr = self.gen_wrapper(func_id);
+        #[cfg(feature = "perf")]
+        self.codegen.perf_info(_codeptr, &format!("#{name}"));
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Private);
         let class_id = self.get_metaclass(class_id).id();

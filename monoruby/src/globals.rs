@@ -1,4 +1,5 @@
 use fancy_regex::Regex;
+use monoasm::CodePtr;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -411,10 +412,11 @@ impl Globals {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
+    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) -> CodePtr {
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
         self[func_id].set_codeptr(codeptr);
+        codeptr
     }
 
     pub(crate) fn class_version_inc(&mut self) {
