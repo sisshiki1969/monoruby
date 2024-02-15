@@ -94,7 +94,7 @@ pub(crate) fn set_frame_arguments(
 
     let arg_num = positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
-    if !callee.no_keyword() || !caller.kw_exists() {
+    if !callee.no_keyword() || !caller.kw_may_exists() {
         handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
     }
 
@@ -162,14 +162,27 @@ fn positional(
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
     // ex is always none when !caller.kw_exists().
-    let ex = if callee.no_keyword() && caller.kw_exists() {
+    let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = IndexMap::default();
         for (k, id) in caller.kw_args.iter() {
             let v = unsafe { caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap() };
             h.insert(HashKey(Value::symbol(*k)), v);
         }
-        Some(Value::hash(h))
+        for v in caller
+            .hash_splat_pos
+            .iter()
+            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+        {
+            for (k, v) in v.expect_hash()? {
+                h.insert(HashKey(k), v);
+            }
+        }
+        if h.is_empty() {
+            None
+        } else {
+            Some(Value::hash(h))
+        }
     } else {
         None
     };

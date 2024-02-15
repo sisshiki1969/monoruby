@@ -271,6 +271,48 @@ mod test {
     }
 
     #[test]
+    fn hash_splat() {
+        run_test_with_prelude(
+            r##"
+            f(**{a:1})
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
+        "##,
+        )
+    }
+
+    #[test]
+    fn hash_splat2() {
+        run_test_with_prelude(
+            r##"
+            f()
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
+        "##,
+        )
+    }
+
+    #[test]
+    fn hash_splat3() {
+        run_test_with_prelude(
+            r##"
+            f(a:1, **{b:2,c:3})
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
+        "##,
+        )
+    }
+
+    #[test]
     fn destruct() {
         run_test_with_prelude(
             r#"

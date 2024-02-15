@@ -768,8 +768,13 @@ impl Codegen {
             addq rdi, 24;
             subq rsp, rdi;
             pushq rdi;
-            movq rsi, r12;
             movq rdi, rbx;
+            movq rsi, r12;
+            // rdi: &mut Executor
+            // rsi: &mut Globals
+            // rdx: src: *const Value
+            // rcx: callee LFP
+            // r8: CallsiteId
             movq rax, (f);
             call rax;
             // rax <- arg_num: Value

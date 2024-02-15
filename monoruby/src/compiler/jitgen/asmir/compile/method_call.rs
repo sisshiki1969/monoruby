@@ -100,6 +100,7 @@ impl Codegen {
             movl rdx, [r13 + (BC_OFFSET_CACHED_FUNCID)];    // FuncId
         }
         self.get_func_data();
+        // r15 <- &FuncData
 
         monoasm! { &mut self.jit,
             subq  rsp, 16;
@@ -282,34 +283,17 @@ impl Codegen {
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
         self.setup_frame(meta, caller);
-        self.jit_copy_keyword_args(caller, callee);
+        self.copy_keyword_args(caller, callee);
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
             if native {
-                monoasm! { &mut self.jit,
-                    movq r14, rdi;
-                }
+                monoasm! { &mut self.jit, movq r14, rdi; }
             }
-            monoasm! { &mut self.jit,
-                movq rdi, rbx; // &mut Executor
-                movq rsi, r12; // &mut Globals
-                movl rdx, (callid.get());
-                movq rcx, (meta.get());
-                lea  r8, [rsp - 16];   // callee_lfp
-                subq rsp, (offset);
-                movq rax, (runtime::jit_handle_hash_splat_kw_rest);
-                call rax;
-                addq rsp, (offset);
-            }
-            self.handle_error(error);
+            self.handle_hash_splat_kw_rest(callid, meta, offset, error);
             if native {
-                monoasm! { &mut self.jit,
-                    movq rdx, r14;
-                }
+                monoasm! { &mut self.jit, movq rdx, r14; }
             }
         } else if native {
-            monoasm! { &mut self.jit,
-                movq rdx, rdi;
-            }
+            monoasm! { &mut self.jit, movq rdx, rdi; }
         }
 
         monoasm!( &mut self.jit,
@@ -401,14 +385,13 @@ impl Codegen {
         let callsite = &store[callid];
         self.xmm_save(using_xmm);
         self.get_proc_data();
-        // rax: outer, rdx: FuncId
         self.handle_error(error);
-        self.get_func_data();
-        // rax: outer, r15: &FuncData
+        // rax <- outer, rdx <- FuncId
         monoasm! { &mut self.jit,
             movq rdi, rax;
         }
-        // rdi <- outer_cfp, r15 <- &FuncData
+        self.get_func_data();
+        // rdi <- outer, r15 <- &FuncData
 
         monoasm! { &mut self.jit,
             subq  rsp, 16;
@@ -423,7 +406,7 @@ impl Codegen {
             // set meta
             pushq [r15 + (FUNCDATA_META)];
             // set block
-            movq rax, 0;
+            xorq rax, rax;
             pushq rax;
             // set self
             pushq [rdi - (LBP_SELF)];
@@ -494,7 +477,7 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn jit_copy_keyword_args(&mut self, caller: &CallSiteInfo, callee: &FuncInfo) {
+    fn copy_keyword_args(&mut self, caller: &CallSiteInfo, callee: &FuncInfo) {
         let CallSiteInfo {
             kw_pos, kw_args, ..
         } = caller;
@@ -518,6 +501,27 @@ impl Codegen {
         }
     }
 
+    fn handle_hash_splat_kw_rest(
+        &mut self,
+        callid: CallSiteId,
+        meta: Meta,
+        offset: usize,
+        error: DestLabel,
+    ) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movl rdx, (callid.get());
+            movq rcx, (meta.get());
+            lea  r8, [rsp - 16];   // callee_lfp
+            subq rsp, (offset);
+            movq rax, (jit_handle_hash_splat_kw_rest);
+            call rax;
+            addq rsp, (offset);
+        }
+        self.handle_error(error);
+    }
+
     fn generic_call(&mut self, callid: CallSiteId, callsite: &CallSiteInfo, error: DestLabel) {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
@@ -532,5 +536,25 @@ impl Codegen {
         }
 
         self.call_funcdata();
+    }
+}
+
+///
+/// Handle hash splat arguments and a keyword rest parameter.
+///
+extern "C" fn jit_handle_hash_splat_kw_rest(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    meta: Meta,
+    callee_lfp: Lfp,
+) -> Option<Value> {
+    let caller_lfp = vm.cfp().lfp();
+    match runtime::jit_hash_splat_kw_rest(globals, callid, callee_lfp, caller_lfp, meta) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
     }
 }
