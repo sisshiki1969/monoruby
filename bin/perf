@@ -2,5 +2,6 @@
 
 RUSTFLAGS=-Cforce-frame-pointers=yes cargo install --features perf --path monoruby
 perf record -F 500 -g -- monoruby $@
-perf script | ../FlameGraph/stackcollapse-perf.pl | ../FlameGraph/flamegraph.pl > out.svg
+perf script > perf
+../FlameGraph/stackcollapse-perf.pl perf | ../FlameGraph/flamegraph.pl > out.svg
 rm perf.data*
