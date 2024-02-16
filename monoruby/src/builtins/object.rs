@@ -379,7 +379,9 @@ extern "C" fn call_send_wrapper(
         len: usize,
         cache: &mut [Cache; CACHE_SIZE],
     ) -> Result<FuncId> {
-        MonorubyErr::check_min_number_of_arguments(len, 1)?;
+        if len < 1 {
+            return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
+        }
         let method = args[0].expect_symbol_or_string()?;
         let mut min_i = usize::MAX;
         let mut min_count = u32::MAX;

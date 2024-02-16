@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS);
-    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
+    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 2, false);
     globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
@@ -28,7 +28,6 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
 fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments_range(2..=3)?;
     globals.generate_range(lfp.arg(0), lfp.arg(1), false)
 }
 

@@ -411,29 +411,6 @@ impl MonorubyErr {
         MonorubyErr::argumenterr("tried to create Proc object without a block")
     }
 
-    pub(crate) fn check_number_of_arguments_range(
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_number_of_arg(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
-        }
-    }
-
-    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
-    }
-
     pub(crate) fn indexerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index, msg)
     }

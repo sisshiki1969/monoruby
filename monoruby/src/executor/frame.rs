@@ -443,31 +443,6 @@ impl Lfp {
             Some(Value::from(v))
         }
     }
-
-    pub fn check_min_number_of_arguments(&self, min: usize) -> Result<()> {
-        let given = self.arg_len();
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
-    }
-
-    pub fn check_number_of_arguments_range(
-        &self,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        let given = self.arg_len();
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_number_of_arg(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
-        }
-    }
 }
 
 ///

@@ -670,19 +670,6 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }
 
-pub(super) extern "C" fn err_wrong_number_of_arguments_range(
-    vm: &mut Executor,
-    given: usize,
-    min: usize,
-    max: usize,
-) -> Option<Value> {
-    if let Err(err) = MonorubyErr::check_number_of_arguments_range(given, min..=max) {
-        vm.set_error(err);
-        return None;
-    };
-    Some(Value::nil())
-}
-
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));

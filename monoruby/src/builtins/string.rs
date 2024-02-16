@@ -1173,18 +1173,17 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
 #[monoruby_builtin]
 fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments_range(0..=1)?;
     let self_ = lfp.self_val();
     let s = self_.as_str();
-    let radix = if lfp.try_arg(0).is_none() {
-        10
-    } else {
-        match lfp.arg(0).expect_integer()? {
+    let radix = if let Some(arg0) = lfp.try_arg(0) {
+        match arg0.expect_integer()? {
             n if !(2..=36).contains(&n) => {
                 return Err(MonorubyErr::argumenterr(format!("invalid radix {n}")));
             }
             n => n as u32,
         }
+    } else {
+        10
     };
     let num = if let Ok(num) = i64::from_str_radix(&s, radix) {
         Value::integer(num)
@@ -1261,11 +1260,10 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sum.html]
 #[monoruby_builtin]
 fn sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.check_number_of_arguments_range(0..=1)?;
-    let bits = if lfp.try_arg(0).is_none() {
-        16
+    let bits = if let Some(arg0) = lfp.try_arg(0) {
+        arg0.coerce_to_i64()?
     } else {
-        lfp.arg(0).coerce_to_i64()?
+        16
     };
     let self_val = lfp.self_val();
     let bytes = self_val.as_bytes();

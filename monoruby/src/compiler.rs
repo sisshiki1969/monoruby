@@ -125,15 +125,6 @@ pub struct Codegen {
     f64_to_val: DestLabel,
     div_by_zero: DestLabel,
     ///
-    /// Raise "wrong number of arguments" error.
-    ///
-    /// ### in
-    /// - rdx: actual number of arguments
-    /// - r13: pc (InitMethod)
-    ///
-    #[allow(dead_code)]
-    wrong_argument: DestLabel,
-    ///
     /// Get class id.
     ///
     /// ### in
@@ -178,7 +169,6 @@ impl Codegen {
 
         let entry_panic = entry_panic(&mut jit);
         let get_class = get_class(&mut jit);
-        let wrong_argument = wrong_arguments(&mut jit);
         let f64_to_val = f64_to_val(&mut jit);
         let entry_unimpl = unimplemented_inst(&mut jit);
 
@@ -196,7 +186,6 @@ impl Codegen {
             entry_raise: entry_panic,
             f64_to_val,
             div_by_zero: entry_panic,
-            wrong_argument,
             get_class,
             dispatch,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -831,20 +820,6 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
     exit:
         ret;
     );
-    label
-}
-
-fn wrong_arguments(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    monoasm! {jit,
-    label:
-        movq rdi, rbx;
-        movl rsi, rdx;  // given
-        movzxw rdx, [r13 - 8];  // min
-        movzxw rcx, [r13 - 14];  // max
-        movq rax, (runtime::err_wrong_number_of_arguments_range);
-        call rax;
-    }
     label
 }
 
