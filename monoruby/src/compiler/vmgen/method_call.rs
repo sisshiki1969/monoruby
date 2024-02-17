@@ -176,6 +176,7 @@ impl Codegen {
                 movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
                 addq r9, 1;
                 jne  loop_;
+            exit:
             };
             self.jit.select_page(1);
             self.jit.bind_label(generic);
@@ -186,7 +187,6 @@ impl Codegen {
                 jmp exit;
             }
             self.jit.select_page(0);
-            self.jit.bind_label(exit);
         } else {
             self.call_prep();
             self.generic_handle_arguments(runtime::vm_handle_arguments);
@@ -195,8 +195,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
-            sarq rax, 1;
-            movq rdx, rax;
         }
         self.push_frame();
         self.set_lfp();

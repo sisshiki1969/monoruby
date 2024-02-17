@@ -49,8 +49,13 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 #[monoruby_builtin]
 pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let obj = __allocate(vm, globals, lfp)?;
-    let args = lfp.arg(0).as_array().to_vec();
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    )?;
     Ok(obj)
 }
 

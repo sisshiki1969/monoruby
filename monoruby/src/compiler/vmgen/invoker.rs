@@ -292,10 +292,9 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq rax, (handle_invoker_arguments);
             call rax;
-            // set arg len
-            movq rdx, rax;
             addq rsp, 4096;
         }
+        self.vm_handle_error();
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
@@ -321,18 +320,22 @@ impl Codegen {
 }
 
 extern "C" fn handle_invoker_arguments(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &Globals,
     callee_lfp: Lfp,
     mut arg_num: usize,
-) -> usize {
+) -> Option<Value> {
     let callee_func_id = callee_lfp.meta().func_id();
     let info = &globals[callee_func_id];
     // expand array for block
     arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 
     // required + optional + rest
-    let _ = super::runtime::handle_positional(info, arg_num, callee_lfp, None);
+    if let Err(err) = super::runtime::handle_positional(info, arg_num, callee_lfp) {
+        vm.set_error(err);
+        return None;
+    };
+
     // keyword
     let params = info.kw_names();
     let callee_kw_pos = info.pos_num() + 1;
@@ -342,13 +345,13 @@ extern "C" fn handle_invoker_arguments(
         }
     }
 
-    arg_num
+    Some(Value::nil())
 }
 
 /// deconstruct array for block
 fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
-    let req_num = info.req_num();
     if info.single_arg_expand() && arg_num == 1 {
+        let req_num = info.req_num();
         unsafe {
             let v = callee_lfp.register(1).unwrap();
             if v.try_array_ty().is_some() {

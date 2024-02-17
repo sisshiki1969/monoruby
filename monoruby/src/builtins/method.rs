@@ -26,9 +26,14 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let method = self_val.as_method();
     let func_id = method.func_id();
     let receiver = method.receiver();
-    let args = lfp.arg(0).as_array().to_vec();
 
-    match vm.invoke_func(globals, func_id, receiver, &args, lfp.block()) {
+    match vm.invoke_func(
+        globals,
+        func_id,
+        receiver,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    ) {
         Some(v) => Ok(v),
         None => Err(vm.take_error()),
     }

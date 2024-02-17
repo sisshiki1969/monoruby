@@ -22,49 +22,41 @@ pub(crate) fn handle_positional(
     info: &FuncInfo,
     arg_num: usize,
     mut callee_lfp: Lfp,
-    ex: Option<Value>,
 ) -> Result<()> {
     let req_num = info.req_num();
     let reqopt_num = info.reqopt_num();
     let pos_num = info.pos_num();
     let is_rest = pos_num != reqopt_num;
     let is_block_style = info.is_block_style();
-    let ex_num = ex.is_some() as usize;
     unsafe {
-        if (arg_num + ex_num) > reqopt_num {
+        if arg_num > reqopt_num {
             if is_rest {
                 let len = arg_num - reqopt_num;
-                let mut ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
-                if let Some(ex) = ex {
-                    ary.push(ex);
-                }
+                let ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
                 callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
             } else if !is_block_style {
                 return Err(MonorubyErr::wrong_number_of_arg_range(
-                    arg_num + ex_num,
+                    arg_num,
                     req_num..=reqopt_num,
                 ));
             }
             return Ok(());
         }
 
-        if (arg_num + ex_num) >= req_num {
+        if arg_num >= req_num {
             let len = reqopt_num - arg_num;
             fill(callee_lfp, reqopt_num, len, None);
         } else {
             if !is_block_style {
                 return Err(MonorubyErr::wrong_number_of_arg_range(
-                    arg_num + ex_num,
+                    arg_num,
                     req_num..=reqopt_num,
                 ));
             }
-            let len = req_num - (arg_num + ex_num);
+            let len = req_num - arg_num;
             fill(callee_lfp, req_num, len, Some(Value::nil()));
             let len = reqopt_num - req_num;
             fill(callee_lfp, reqopt_num, len, None);
-        }
-        if let Some(ex) = ex {
-            callee_lfp.set_register(1 + arg_num, Some(ex));
         }
 
         if is_rest {
@@ -85,18 +77,18 @@ pub(crate) fn set_frame_arguments(
     caller_lfp: Lfp,
     callid: CallSiteId,
     src: *const Value,
-) -> Result<usize> {
+) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
     let callee = &globals[callee_fid];
     let caller = &globals.store[callid];
 
-    let arg_num = positional(caller, callee, src, callee_lfp, caller_lfp)?;
+    positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
     if !callee.no_keyword() || !caller.kw_may_exists() {
         handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
     }
 
-    Ok(arg_num)
+    Ok(())
 }
 
 ///
@@ -133,7 +125,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let callee_fid = meta.func_id();
     let callee = &globals.store[callee_fid];
     match positional(caller, callee, src, callee_lfp, caller_lfp) {
-        Ok(arg_num) => Some(Value::integer(arg_num as i64)),
+        Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
             None
@@ -144,15 +136,13 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
 ///
 /// Set positional arguments.
 ///
-/// returns (the number of arguments which is set in this function, the rest arguments).
-///
 fn positional(
     caller: &CallSiteInfo,
     callee: &FuncInfo,
     src: *const Value,
-    callee_lfp: Lfp,
+    mut callee_lfp: Lfp,
     caller_lfp: Lfp,
-) -> Result<usize> {
+) -> Result<()> {
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
@@ -237,68 +227,49 @@ fn positional(
         }
     }
 
-    positional_post(callee, arg_num, callee_lfp, ex, rest)?;
-
-    Ok(callee.pos_num())
-}
-
-///
-/// Handle a rest arg, and fill optinal args.
-///
-/// if argument mismatch occurs, return None.
-///
-fn positional_post(
-    callee: &FuncInfo,
-    arg_num: usize,
-    mut callee_lfp: Lfp,
-    ex: Option<Value>,
-    mut rest: Vec<Value>,
-) -> Result<()> {
     let req_num = callee.req_num();
-    let max_pos = callee.max_positional_args();
-    let is_rest = callee.is_rest();
-    let is_block_style = callee.is_block_style();
     let ex_num = ex.is_some() as usize;
+    let is_rest = callee.is_rest();
     let total_pos_args = arg_num + rest.len() + ex_num;
-    unsafe {
-        if total_pos_args > max_pos {
-            if is_rest {
-                if let Some(h) = ex {
-                    rest.push(h);
-                }
-                callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest)));
-            } else if !is_block_style {
-                return Err(MonorubyErr::wrong_number_of_arg_range(
-                    total_pos_args,
-                    req_num..=max_pos,
-                ));
-            }
-            return Ok(());
-        }
-
-        if total_pos_args >= req_num {
-            let len = max_pos - arg_num;
-            fill(callee_lfp, max_pos, len, None);
-        } else {
-            if !is_block_style {
-                return Err(MonorubyErr::wrong_number_of_arg_range(
-                    total_pos_args,
-                    req_num..=max_pos,
-                ));
-            }
-            let len = req_num - (arg_num + ex_num);
-            fill(callee_lfp, req_num, len, Some(Value::nil()));
-            let len = max_pos - req_num;
-            fill(callee_lfp, max_pos, len, None);
-        }
-        if let Some(ex) = ex {
-            callee_lfp.set_register(1 + arg_num, Some(ex));
-        }
-
+    let is_block_style = callee.is_block_style();
+    if total_pos_args > max_pos {
         if is_rest {
-            callee_lfp.set_register(1 + max_pos, Some(Value::array_empty()));
+            if let Some(h) = ex {
+                rest.push(h);
+            }
+            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
+        } else if !is_block_style {
+            return Err(MonorubyErr::wrong_number_of_arg_range(
+                total_pos_args,
+                req_num..=max_pos,
+            ));
         }
+        return Ok(());
     }
+
+    if total_pos_args >= req_num {
+        let len = max_pos - arg_num;
+        fill(callee_lfp, max_pos, len, None);
+    } else {
+        if !is_block_style {
+            return Err(MonorubyErr::wrong_number_of_arg_range(
+                total_pos_args,
+                req_num..=max_pos,
+            ));
+        }
+        let len = req_num - (arg_num + ex_num);
+        fill(callee_lfp, req_num, len, Some(Value::nil()));
+        let len = max_pos - req_num;
+        fill(callee_lfp, max_pos, len, None);
+    }
+    if let Some(ex) = ex {
+        unsafe { callee_lfp.set_register(1 + arg_num, Some(ex)) };
+    }
+
+    if is_rest {
+        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+    }
+
     Ok(())
 }
 

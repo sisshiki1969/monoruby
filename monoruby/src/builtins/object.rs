@@ -91,8 +91,13 @@ fn object_object_id(
 fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
-    let args = lfp.arg(0).as_array().to_vec();
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    )?;
     Ok(obj)
 }
 
@@ -382,7 +387,7 @@ extern "C" fn call_send_wrapper(
         if len < 1 {
             return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
         }
-        let method = args[0].expect_symbol_or_string()?;
+        let method = args[0].unwrap().expect_symbol_or_string()?;
         let mut min_i = usize::MAX;
         let mut min_count = u32::MAX;
         for (i, entry) in cache.iter_mut().enumerate().take(CACHE_SIZE) {

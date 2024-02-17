@@ -296,9 +296,9 @@ pub(super) extern "C" fn vm_handle_arguments(
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
-        Ok(arg_num) => {
+        Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
-            Some(Value::integer(arg_num as i64))
+            Some(Value::nil())
         }
         Err(err) => {
             vm.set_error(err);
@@ -316,7 +316,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
-        Ok(arg_num) => Some(Value::integer(arg_num as i64)),
+        Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
             None

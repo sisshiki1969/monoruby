@@ -69,11 +69,11 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct Arg(*const Value);
+pub struct Arg(*const Option<Value>);
 
 impl std::ops::Index<usize> for Arg {
-    type Output = Value;
-    fn index(&self, index: usize) -> &Value {
+    type Output = Option<Value>;
+    fn index(&self, index: usize) -> &Option<Value> {
         unsafe { &*self.0.sub(index) }
     }
 }
@@ -84,3 +84,9 @@ impl std::ops::Add<usize> for Arg {
         Arg(unsafe { self.0.sub(rhs) })
     }
 }
+
+/*impl Arg {
+    pub fn new(lfp: Lfp) -> Self {
+        Self(unsafe { lfp.register_ptr(1) as _ })
+    }
+}*/

@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS);
-    globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 2, false);
+    globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
@@ -75,8 +75,13 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_with_class(vec![], class);
-    let args = lfp.to_vec();
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, &args, lfp.block())?;
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    )?;
     Ok(obj)
 }
 
