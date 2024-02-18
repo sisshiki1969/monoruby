@@ -63,7 +63,7 @@ pub(crate) enum GP {
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
-    //R9 = 9,
+    R9 = 9,
     R13 = 13,
     R15 = 15,
 }
@@ -263,6 +263,8 @@ impl Codegen {
 
     fn gen_entry_point(&mut self, main_object: Value) {
         // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         let entry = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             pushq rbx;
@@ -328,7 +330,7 @@ impl Codegen {
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
 
         #[cfg(feature = "perf")]
-        self.perf_info(entry, "entry-point");
+        self.perf_info(pair, "entry-point");
     }
 
     ///
@@ -726,6 +728,59 @@ impl Codegen {
     }
 
     ///
+    /// Guard for "simple" method call.
+    ///
+    /// If callee is simple, and min == pos_num == max (thus, no single arg expansion), jump to `opt`.
+    /// Otherwise, jump to `generic`.
+    ///
+    /// ### in
+    /// - R(meta): Meta
+    /// - R(pos_num): number of positional arguments passed by caller
+    /// - R(arg0): *args (*const Value)
+    /// - r15: &FuncData
+    ///
+    /// ### destoroy
+    /// - rax
+    /// - R(meta)
+    ///
+    fn guard_simple_call(
+        &mut self,
+        meta: GP,
+        pos_num: GP,
+        arg0: GP,
+        opt: DestLabel,
+        generic: DestLabel,
+    ) {
+        let meta = meta as u64;
+        let pos_num = pos_num as u64;
+        monoasm!(&mut self.jit,
+            // check Meta.
+            shrq R(meta), 56;
+            // if !callee.is_simple(), go to generic.
+            testq R(meta), 0b1_0000;
+            jz  generic;
+            // check number of arguments
+            cmpw R(pos_num), [r15 + (FUNCDATA_MIN)];
+            jne  generic;
+            //cmpw R(pos_num), [r15 + (FUNCDATA_MAX)];
+            //jne  generic;
+            //testq R(meta), 0b_0100;
+            //jz  opt;   // if !is_block_style, go to opt
+            // if block_style,
+            // if pos_num != 1, go to opt.
+            //cmpw R(pos_num), 1;
+            //jne  opt;
+            //movq rax, [R(arg0 as _)];
+            // if arg0 is not an array_ty, go to exit
+            //testq rax, 0b111;
+            //jnz  opt;
+            //cmpw [rax + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+            //jne  opt;
+            jmp opt;
+        );
+    }
+
+    ///
     /// ### in
     /// - r15: &FuncData
     /// - rdx: src: *const Value
@@ -769,6 +824,16 @@ impl Codegen {
             popq rdi;
             addq rsp, rdi;
         };
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
+        assert_eq!(0, self.jit.get_page());
+        let ptr0 = self.jit.get_current_address();
+        self.jit.select_page(1);
+        let ptr1 = self.jit.get_current_address();
+        self.jit.select_page(0);
+        (ptr0, ptr1)
     }
 }
 
@@ -1022,7 +1087,7 @@ impl Globals {
         }
 
         #[cfg(feature = "perf")]
-        let codeptr = self.codegen.jit.get_current_address();
+        let pair = self.codegen.get_address_pair();
 
         let _sourcemap =
             self.codegen
@@ -1031,7 +1096,7 @@ impl Globals {
         {
             let class_name = self.get_class_name(self_value.class());
             let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
-            self.codegen.perf_info(codeptr, &desc);
+            self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]
         self.dump_disas(_sourcemap, func_id);

@@ -65,7 +65,7 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         #[cfg(feature = "perf")]
-        let vm_start_addr = self.jit.get_current_address();
+        let pair = self.get_address_pair();
         let entry = self.jit.label();
         //
         // VM entry
@@ -345,13 +345,15 @@ impl Codegen {
         self.dispatch[208] = pow_rr;
 
         #[cfg(feature = "perf")]
-        self.perf_info(vm_start_addr, "monoruby-vm");
+        self.perf_info(pair, "monoruby-vm");
 
         self.gen_invoker();
 
         // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
         let codeptr = self.jit.get_current_address();
         self.resume_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -365,11 +367,13 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "resume-fiber");
+        self.perf_info(pair, "resume-fiber");
 
         // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
         let codeptr = self.jit.get_current_address();
         self.yield_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -383,22 +387,37 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "yield-fiber");
+        self.perf_info(pair, "yield-fiber");
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_info(&mut self, start: CodePtr, func_name: &str) {
-        let size = self.jit.get_current_address() - start;
+    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
+        let (ptr0, ptr1) = pair;
+        assert_eq!(0, self.jit.get_page());
+        let size = self.jit.get_current_address() - ptr0;
         self.perf_file
             .write_all(
                 format!(
                     "{:x} {:x} {func_name}\n",
-                    start.as_ptr() as usize,
+                    ptr0.as_ptr() as usize,
                     size as usize
                 )
                 .as_bytes(),
             )
             .unwrap();
+        self.jit.select_page(1);
+        let size = self.jit.get_current_address() - ptr1;
+        self.perf_file
+            .write_all(
+                format!(
+                    "{:x} {:x} {func_name}\n",
+                    ptr1.as_ptr() as usize,
+                    size as usize
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        self.jit.select_page(0);
     }
 
     fn push_callee_save(&mut self) {

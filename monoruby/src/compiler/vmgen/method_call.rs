@@ -154,15 +154,17 @@ impl Codegen {
             let generic = self.jit.label();
             let exit = self.jit.label();
             let loop_ = self.jit.label();
+            //let opt = self.jit.label();
             // rax: Meta
             // r9: number of positional arguments passed to callee
             // rdx: *const args
+            //self.guard_simple_call(GP::Rax, GP::R9, GP::Rdx, opt, generic);
             monoasm! { &mut self.jit,
+            //opt:
                 // check Meta. if !is_simple || is_block_style, go to generic.
                 shrq rax, 56;
-                andq rax, 0b1_0100;
-                cmpb rax, 0b1_0000;
-                jne  generic;
+                testq rax, 0b1_0000;
+                jz  generic;
                 cmpw r9, [r15 + (FUNCDATA_MIN)];
                 jne  generic;
                 movq [rsp - (16 + LBP_BLOCK)], 0;

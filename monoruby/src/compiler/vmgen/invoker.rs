@@ -12,6 +12,8 @@ impl Codegen {
 
     fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: FuncId
@@ -29,13 +31,15 @@ impl Codegen {
         self.invoker_epilogue();
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "method-invoker");
+        self.perf_info(pair, "method-invoker");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
     fn method_invoker2(&mut self) -> MethodInvoker2 {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: FuncId
@@ -53,13 +57,15 @@ impl Codegen {
         self.invoker_epilogue();
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "method-invoker2");
+        self.perf_info(pair, "method-invoker2");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
     fn block_invoker(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -73,13 +79,15 @@ impl Codegen {
         self.invoker_epilogue();
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "block-invoker");
+        self.perf_info(pair, "block-invoker");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
     fn block_invoker_with_self(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -93,13 +101,15 @@ impl Codegen {
         self.invoker_epilogue();
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "block-invoker-with-self");
+        self.perf_info(pair, "block-invoker-with-self");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
     fn fiber_invoker(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -132,13 +142,15 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "fiber-invoker");
+        self.perf_info(pair, "fiber-invoker");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
     fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -171,7 +183,7 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "fiber-invoker-with-self");
+        self.perf_info(pair, "fiber-invoker-with-self");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
@@ -201,10 +213,13 @@ impl Codegen {
     ///
     /// ### out
     /// - r15: &FuncData
+    /// - rsi: Meta
+    /// - rcx: self
     ///
     fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
             monoasm! { &mut self.jit,
+                // set block
                 movq [rsp - (16 + LBP_BLOCK)], 0;
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
                 movl rdx, [rdx + (PROCINNER_FUNCID)];    // rdx <- FuncId
@@ -230,8 +245,8 @@ impl Codegen {
             // set self
             movq [rsp - (16 + LBP_SELF)], rcx;
             // set meta
-            movq rdi, [r15 + (FUNCDATA_META)];
-            movq [rsp - (16 + LBP_META)], rdi;
+            movq rsi, [r15 + (FUNCDATA_META)];
+            movq [rsp - (16 + LBP_META)], rsi;
         };
     }
 
@@ -281,11 +296,30 @@ impl Codegen {
     ///
     /// ### in
     /// - rdi: arg_num
+    /// - rsi: Meta
     /// - r15: &FuncData
+    /// - r8:  args: *const Value
     ///
     fn invoker_call(&mut self) {
+        // In invoker call, CallSiteInfo is not available.
+        // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
+        // So several conditions are met, we can optimize this.
+        // the conditions are:
+        // - is_simple
+        // - no single arg expansion
+        // - req == pos_num == req_opt
+        let generic = self.jit.label();
+        let exit = self.jit.label();
+        //self.guard_simple_call(GP::Rsi, GP::Rdi, GP::R8, exit, generic);
         monoasm! { &mut self.jit,
-            lea  rdx, [rsp - 16];
+            // check Meta. if !is_simple || is_block_style, go to generic.
+            shrq rsi, 56;
+            testq rsi, 0b1_0000;
+            jz  generic;
+            cmpw rdi, [r15 + (FUNCDATA_MIN)];
+            jeq exit;
+        generic:
+            lea  rdx, [rsp - 16]; // callee lfp: Lfp
             subq rsp, 4096;
             movq rcx, rdi; // arg_num
             movq rdi, rbx; // &mut Executor
@@ -295,6 +329,7 @@ impl Codegen {
             addq rsp, 4096;
         }
         self.vm_handle_error();
+        self.jit.bind_label(exit);
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
@@ -325,8 +360,8 @@ extern "C" fn handle_invoker_arguments(
     callee_lfp: Lfp,
     mut arg_num: usize,
 ) -> Option<Value> {
-    let callee_func_id = callee_lfp.meta().func_id();
-    let info = &globals[callee_func_id];
+    let callee_fid = callee_lfp.meta().func_id();
+    let info = &globals[callee_fid];
     // expand array for block
     arg_num = expand_array_for_block(info, arg_num, callee_lfp);
 

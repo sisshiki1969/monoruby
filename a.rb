@@ -1,7 +1,8 @@
-def f(x)
-  puts "#{x}",2,3,4,5
+class C
+  def f(x)
+    puts x
+  end
 end
 
-15.times do
-  f(**{a:1})
-end
+m = C.new.method(:f)
+m[3]
