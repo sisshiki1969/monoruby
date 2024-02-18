@@ -583,6 +583,8 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 struct FuncExt {
     /// name of this function.
     name: Option<IdentId>,
+    /// class id which this function belongs to.
+    class_id: Option<ClassId>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
@@ -627,6 +629,7 @@ impl FuncInfo {
             kind,
             ext: Box::new(FuncExt {
                 name,
+                class_id: None,
                 jit_entry: Default::default(),
                 params,
             }),
@@ -747,6 +750,14 @@ impl FuncInfo {
 
     pub(crate) fn name(&self) -> Option<IdentId> {
         self.ext.name
+    }
+
+    pub(crate) fn class(&self) -> Option<ClassId> {
+        self.ext.class_id
+    }
+
+    pub(super) fn set_class(&mut self, class: ClassId) {
+        self.ext.class_id = Some(class);
     }
 
     ///

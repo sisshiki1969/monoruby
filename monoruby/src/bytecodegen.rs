@@ -44,11 +44,7 @@ fn compile(globals: &mut Globals, main_fid: FuncId) -> Result<()> {
 
     while globals.store.func_len() > fid.get() as usize {
         compile_func(&mut globals.store, fid)?;
-        globals.gen_wrapper(
-            fid,
-            #[cfg(feature = "perf")]
-            IdentId::get_id("main"),
-        );
+        globals.gen_wrapper(fid);
         fid = FuncId::new(fid.get() + 1);
     }
 

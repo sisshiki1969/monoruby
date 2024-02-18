@@ -360,6 +360,7 @@ extern "C" fn handle_invoker_arguments(
     callee_lfp: Lfp,
     mut arg_num: usize,
 ) -> Option<Value> {
+    //eprintln!("handle invloker arguments");
     let callee_fid = callee_lfp.meta().func_id();
     let info = &globals[callee_fid];
     // expand array for block

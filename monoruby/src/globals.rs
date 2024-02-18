@@ -412,18 +412,19 @@ impl Globals {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub(crate) fn gen_wrapper(
-        &mut self,
-        func_id: FuncId,
-        #[cfg(feature = "perf")] method_name: IdentId,
-    ) -> CodePtr {
+    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) -> CodePtr {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
         self[func_id].set_codeptr(codeptr);
         #[cfg(feature = "perf")]
-        self.codegen.perf_info(pair, &format!("#{method_name}"));
+        {
+            let class = self.store[func_id].class();
+            let class_name = self.get_class_name(class);
+            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            self.codegen.perf_info(pair, &desc);
+        }
         codeptr
     }
 

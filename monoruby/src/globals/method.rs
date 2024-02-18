@@ -15,11 +15,7 @@ impl Globals {
             .store
             .add_builtin_func(name.to_string(), address, min, max, rest);
         let method_name = IdentId::get_id(name);
-        self.gen_wrapper(
-            func_id,
-            #[cfg(feature = "perf")]
-            method_name,
-        );
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         func_id
     }
@@ -31,11 +27,7 @@ impl Globals {
         func_id: FuncId,
     ) -> FuncId {
         let method_name = IdentId::get_id(name);
-        self.gen_wrapper(
-            func_id,
-            #[cfg(feature = "perf")]
-            method_name,
-        );
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, Visibility::Private);
         let class_id = self.get_metaclass(class_id).id();
         self.add_method(class_id, method_name, func_id, Visibility::Public);
@@ -337,11 +329,7 @@ impl Globals {
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let func_id = self.store.add_attr_reader(method_name, ivar_name);
-        self.gen_wrapper(
-            func_id,
-            #[cfg(feature = "perf")]
-            method_name,
-        );
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name
@@ -359,11 +347,7 @@ impl Globals {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let method_name = IdentId::add_assign_postfix(method_name);
         let func_id = self.store.add_attr_writer(method_name, ivar_name);
-        self.gen_wrapper(
-            func_id,
-            #[cfg(feature = "perf")]
-            method_name,
-        );
+        self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name

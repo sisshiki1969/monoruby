@@ -413,6 +413,7 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        self.store[func_id].set_class(class_id);
         self.store[class_id].methods.insert(
             name,
             MethodTableEntry {
@@ -450,6 +451,7 @@ impl Globals {
         visibility: Visibility,
     ) {
         let singleton = self.get_metaclass(class_id).id();
+        self.store[func_id].set_class(class_id);
         self.store[singleton].methods.insert(
             name,
             MethodTableEntry {
