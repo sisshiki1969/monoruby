@@ -70,6 +70,10 @@ impl ArrayInner {
         ArrayInner(smallvec!())
     }
 
+    pub fn with_capacity(len: usize) -> Self {
+        ArrayInner(SmallVec::with_capacity(len))
+    }
+
     pub fn from(smallvec: SmallVec<[Value; 5]>) -> Self {
         ArrayInner(smallvec)
     }

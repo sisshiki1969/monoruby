@@ -315,6 +315,10 @@ impl Value {
         Value::array(ArrayInner::new())
     }
 
+    pub fn array_with_capacity(len: usize) -> Self {
+        Value::array(ArrayInner::with_capacity(len))
+    }
+
     pub fn array_from_vec(v: Vec<Value>) -> Self {
         Value::array(ArrayInner::from_vec(v))
     }

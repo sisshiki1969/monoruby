@@ -133,24 +133,33 @@ impl Executor {
         self.temp_stack.push(val);
     }
 
-    pub fn temp_append(&mut self, mut v: Vec<Value>) -> usize {
-        let len = self.temp_stack.len();
-        self.temp_stack.append(&mut v);
-        len
-    }
-
-    pub fn temp_extend_form_slice(&mut self, slice: &[Value]) -> usize {
-        let len = self.temp_stack.len();
-        self.temp_stack.extend_from_slice(slice);
-        len
-    }
-
     pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }
 
-    pub fn temp_tear(&mut self, len: usize) -> Vec<Value> {
-        self.temp_stack.drain(len..).collect()
+    pub fn temp_array_new(&mut self, size_hint: impl Into<Option<usize>>) {
+        let size_hint = size_hint.into();
+        if let Some(size_hint) = size_hint {
+            self.temp_stack.push(Value::array_with_capacity(size_hint));
+        } else {
+            self.temp_stack.push(Value::array_empty());
+        }
+    }
+
+    pub fn temp_pop(&mut self) -> Value {
+        self.temp_stack.pop().unwrap()
+    }
+
+    pub fn temp_array_push(&mut self, v: Value) {
+        self.temp_stack.last_mut().unwrap().as_array_mut().push(v);
+    }
+
+    pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
+        self.temp_stack
+            .last_mut()
+            .unwrap()
+            .as_array_mut()
+            .extend_from_slice(slice);
     }
 
     pub fn parent_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
@@ -576,30 +585,40 @@ impl Executor {
         globals: &mut Globals,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
-    ) -> Result<Vec<Value>> {
+        size_hint: impl Into<Option<usize>>,
+    ) -> Result<Value> {
         let data = globals.get_block_data(self.cfp(), bh);
-        let t = self.temp_len();
+        let old = alloc::Allocator::<RValue>::set_enabled(false);
+        self.temp_array_new(size_hint);
         for v in iter {
             let res = self.invoke_block(globals, &data, &[v])?;
-            self.temp_push(res);
+            self.temp_array_push(res);
         }
-        let vec = self.temp_tear(t);
-        Ok(vec)
+        alloc::Allocator::<RValue>::set_enabled(old);
+        let v = self.temp_pop();
+        Ok(v)
     }
 
-    pub(crate) fn flat_map(
+    pub(crate) fn invoke_block_flat_map1(
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
-    ) -> Result<Vec<Value>> {
-        let mut v = vec![];
-        for elem in self.invoke_block_map1(globals, bh, iter)? {
-            match elem.try_array_ty() {
-                Some(ary) => v.extend(ary.iter()),
-                None => v.push(elem),
+        size_hint: impl Into<Option<usize>>,
+    ) -> Result<Value> {
+        let data = globals.get_block_data(self.cfp(), bh);
+        let old = alloc::Allocator::<RValue>::set_enabled(false);
+        self.temp_array_new(size_hint);
+        for v in iter {
+            let res = self.invoke_block(globals, &data, &[v])?;
+            if let Some(ary) = res.try_array_ty() {
+                self.temp_array_extend_from_slice(&ary);
+            } else {
+                self.temp_array_push(res);
             }
         }
+        alloc::Allocator::<RValue>::set_enabled(old);
+        let v = self.temp_pop();
         Ok(v)
     }
 

@@ -115,8 +115,10 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 eprintln!("warning: block supersedes default value argument");
             }
             let iter = (0..size).map(|i| Value::integer(i as i64));
-            let vec = vm.invoke_block_map1(globals, bh, iter)?;
-            *self_val = ArrayInner::from_vec(vec);
+            *self_val = vm
+                .invoke_block_map1(globals, bh, iter, size)?
+                .as_array()
+                .clone();
         } else {
             let val = if lfp.try_arg(1).is_none() {
                 Value::nil()
@@ -543,9 +545,12 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     match lfp.block() {
         None => Ok(Value::array_from_vec(ary)),
         Some(block) => {
-            let temp_len = vm.temp_extend_form_slice(&ary);
-            let res = vm.invoke_block_map1(globals, block, ary.iter().cloned());
-            vm.temp_clear(temp_len);
+            let size_hint = ary.len();
+            let ary = Value::array_from_vec(ary);
+            vm.temp_push(ary);
+            let res =
+                vm.invoke_block_map1(globals, block, ary.as_array().iter().cloned(), size_hint);
+            vm.temp_pop();
             res?;
             Ok(Value::nil())
         }
@@ -781,13 +786,9 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
              lhs: Value,
              rhs: Value|
      -> Result<std::cmp::Ordering> {
-        let len = vm.temp_len();
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-        vm.temp_push(lhs);
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        vm.temp_push(rhs);
         let res = Executor::compare_values(vm, globals, lhs, rhs);
-        vm.temp_clear(len);
         res
     };
     let mut ary: Array = lfp.self_val().into();
@@ -840,11 +841,10 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 #[monoruby_builtin]
 fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
+    let size_hint = ary.len();
     let iter = ary.iter().cloned();
     if let Some(bh) = lfp.block() {
-        let vec = vm.invoke_block_map1(globals, bh, iter)?;
-        let res = Value::array_from_vec(vec);
-        Ok(res)
+        vm.invoke_block_map1(globals, bh, iter, size_hint)
     } else {
         let id = IdentId::get_id("map");
         vm.generate_enumerator(id, lfp.self_val(), vec![])
@@ -863,10 +863,8 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let ary: Array = lfp.self_val().into();
-    let iter = ary.iter().cloned();
-
-    let v = vm.flat_map(globals, bh, iter)?;
-    Ok(Value::array_from_vec(v))
+    let size_hint = ary.len();
+    vm.invoke_block_flat_map1(globals, bh, ary.iter().cloned(), size_hint)
 }
 
 ///
@@ -1128,10 +1126,9 @@ fn uniq_block(
     ary: Array,
     bh: BlockHandler,
 ) -> Result<bool> {
-    let len = vm.temp_len();
     vm.temp_push(ary.into());
     let res = uniq_inner(vm, globals, ary, bh);
-    vm.temp_clear(len);
+    vm.temp_pop();
     res
 }
 

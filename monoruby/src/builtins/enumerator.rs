@@ -106,10 +106,9 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
 
     let internal = Fiber::new(self_val.proc);
-    let len = vm.temp_len();
     vm.temp_push(internal.into());
     let res = each_inner(vm, globals, internal, &data, self_val);
-    vm.temp_clear(len);
+    vm.temp_pop();
     res
 }
 
@@ -130,16 +129,16 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         mut count: Value,
         self_val: Enumerator,
     ) -> Result<Value> {
-        let len = vm.temp_len();
+        vm.temp_array_new(None);
         loop {
             let v = internal.enum_yield_values(vm, globals, self_val)?;
             if internal.is_terminated() {
-                let res = Value::array_from_vec(vm.temp_tear(len));
+                let res = vm.temp_pop();
                 return Ok(res);
             }
             let a: Array = v.into();
             let res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
-            vm.temp_push(res);
+            vm.temp_array_push(res);
             match count.unpack() {
                 RV::Fixnum(i) => count = Value::integer(i + 1),
                 RV::BigInt(i) => count = Value::bigint(i + 1),
@@ -171,10 +170,9 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     };
 
     let internal = Fiber::new(self_val.proc);
-    let len = vm.temp_len();
     vm.temp_push(internal.into());
     let res = with_index_inner(vm, globals, internal, &data, count, self_val);
-    vm.temp_clear(len);
+    vm.temp_pop();
 
     res
 }
@@ -264,10 +262,9 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     let self_val: Generator = lfp.self_val().into();
     let data = globals.get_block_data(vm.cfp(), lfp.expect_block()?);
     let internal = self_val.create_internal();
-    let len = vm.temp_len();
     vm.temp_push(internal.into());
     let res = each_inner(vm, globals, internal, &data);
-    vm.temp_clear(len);
+    vm.temp_pop();
 
     res
 }

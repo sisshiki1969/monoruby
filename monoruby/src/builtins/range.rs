@@ -146,9 +146,12 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             end += 1
         }
 
+        if end <= start {
+            return Ok(Value::array_from_vec(vec![]));
+        }
+
         let iter = (start..end).map(Value::fixnum);
-        let vec = vm.invoke_block_map1(globals, bh, iter)?;
-        Ok(Value::array_from_vec(vec))
+        vm.invoke_block_map1(globals, bh, iter, (end - start).abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
@@ -173,10 +176,13 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         if !range.exclude_end() {
             end += 1
         }
-        let iter = (start..end).map(Value::fixnum);
 
-        let v = vm.flat_map(globals, bh, iter)?;
-        Ok(Value::array_from_vec(v))
+        if end <= start {
+            return Ok(Value::array_from_vec(vec![]));
+        }
+
+        let iter = (start..end).map(Value::fixnum);
+        vm.invoke_block_flat_map1(globals, bh, iter, (end - start).abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
@@ -258,6 +264,20 @@ mod test {
         run_test(
             r#"
         (1..5).map do |x|
+            x + 100
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        (1..1).map do |x|
+            x + 100
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        (5..1).map do |x|
             x + 100
         end
         "#,

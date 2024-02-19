@@ -710,9 +710,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         };
         match lfp.block() {
             Some(bh) => {
-                let t = vm.temp_append(v.clone());
-                vm.invoke_block_iter1(globals, bh, v.into_iter())?;
-                vm.temp_clear(t);
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
                 Ok(lfp.self_val())
             }
             None => Ok(Value::array_from_vec(v)),
@@ -939,9 +940,10 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     match lfp.block() {
         None => Ok(Value::array_from_vec(vec)),
         Some(block) => {
-            let temp_len = vm.temp_extend_form_slice(&vec);
-            let res = scan_inner(vm, globals, block, vec);
-            vm.temp_clear(temp_len);
+            let ary = Value::array_from_vec(vec);
+            vm.temp_push(ary);
+            let res = scan_inner(vm, globals, block, ary.as_array());
+            vm.temp_pop();
             res?;
             Ok(lfp.self_val())
         }
@@ -952,7 +954,7 @@ fn scan_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     block: BlockHandler,
-    vec: Vec<Value>,
+    vec: &[Value],
 ) -> Result<()> {
     let data = globals.get_block_data(vm.cfp(), block);
     for arg in vec {
@@ -961,7 +963,7 @@ fn scan_inner(
                 vm.invoke_block(globals, &data, &ary)?;
             }
             None => {
-                vm.invoke_block(globals, &data, &[arg])?;
+                vm.invoke_block(globals, &data, &[*arg])?;
             }
         }
     }
