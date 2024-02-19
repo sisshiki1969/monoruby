@@ -1,6 +1,6 @@
 #!/bin/sh
 
-cargo build --release --features perf
+RUSTFLAGS=-Cforce-frame-pointers cargo build --release --features perf
 perf record -F 500 -g -- target/release/monoruby $@
 perf script > perf
 ../FlameGraph/stackcollapse-perf.pl perf | ../FlameGraph/flamegraph.pl > out.svg
