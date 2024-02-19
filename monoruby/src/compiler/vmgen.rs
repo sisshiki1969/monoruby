@@ -391,33 +391,33 @@ impl Codegen {
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
+    pub(crate) fn get_wrapper_info(
+        &mut self,
+        pair: (CodePtr, CodePtr),
+    ) -> (CodePtr, usize, CodePtr, usize) {
         let (ptr0, ptr1) = pair;
         assert_eq!(0, self.jit.get_page());
-        let size = self.jit.get_current_address() - ptr0;
-        self.perf_file
-            .write_all(
-                format!(
-                    "{:x} {:x} {func_name}\n",
-                    ptr0.as_ptr() as usize,
-                    size as usize
-                )
-                .as_bytes(),
-            )
-            .unwrap();
+        let size0 = self.jit.get_current_address() - ptr0;
         self.jit.select_page(1);
-        let size = self.jit.get_current_address() - ptr1;
-        self.perf_file
-            .write_all(
-                format!(
-                    "{:x} {:x} {func_name}\n",
-                    ptr1.as_ptr() as usize,
-                    size as usize
-                )
-                .as_bytes(),
-            )
-            .unwrap();
+        let size1 = self.jit.get_current_address() - ptr1;
         self.jit.select_page(0);
+        (ptr0, size0 as usize, ptr1, size1 as usize)
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
+        let info = self.get_wrapper_info(pair);
+        self.perf_info2(info, func_name);
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_info2(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+        self.perf_file
+            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
+            .unwrap();
+        self.perf_file
+            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
+            .unwrap();
     }
 
     fn push_callee_save(&mut self) {

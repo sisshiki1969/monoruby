@@ -589,6 +589,8 @@ struct FuncExt {
     jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
     params: ParamsInfo,
+    #[cfg(feature = "perf")]
+    wrapper: Option<(CodePtr, usize, CodePtr, usize)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -632,6 +634,8 @@ impl FuncInfo {
                 class_id: None,
                 jit_entry: Default::default(),
                 params,
+                #[cfg(feature = "perf")]
+                wrapper: None,
             }),
         }
     }
@@ -844,6 +848,21 @@ impl FuncInfo {
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
         self.data.set_codeptr(codeptr)
+    }
+
+    #[cfg(feature = "perf")]
+    pub(in crate::globals) fn set_wrapper_info(
+        &mut self,
+        info: (monoasm::CodePtr, usize, monoasm::CodePtr, usize),
+    ) {
+        self.ext.wrapper = Some(info);
+    }
+
+    #[cfg(feature = "perf")]
+    pub(in crate::globals) fn get_wrapper_info(
+        &self,
+    ) -> (monoasm::CodePtr, usize, monoasm::CodePtr, usize) {
+        self.ext.wrapper.clone().unwrap()
     }
 
     pub(crate) fn data_ref(&self) -> &FuncData {

@@ -728,59 +728,6 @@ impl Codegen {
     }
 
     ///
-    /// Guard for "simple" method call.
-    ///
-    /// If callee is simple, and min == pos_num == max (thus, no single arg expansion), jump to `opt`.
-    /// Otherwise, jump to `generic`.
-    ///
-    /// ### in
-    /// - R(meta): Meta
-    /// - R(pos_num): number of positional arguments passed by caller
-    /// - R(arg0): *args (*const Value)
-    /// - r15: &FuncData
-    ///
-    /// ### destoroy
-    /// - rax
-    /// - R(meta)
-    ///
-    fn guard_simple_call(
-        &mut self,
-        meta: GP,
-        pos_num: GP,
-        arg0: GP,
-        opt: DestLabel,
-        generic: DestLabel,
-    ) {
-        let meta = meta as u64;
-        let pos_num = pos_num as u64;
-        monoasm!(&mut self.jit,
-            // check Meta.
-            shrq R(meta), 56;
-            // if !callee.is_simple(), go to generic.
-            testq R(meta), 0b1_0000;
-            jz  generic;
-            // check number of arguments
-            cmpw R(pos_num), [r15 + (FUNCDATA_MIN)];
-            jne  generic;
-            //cmpw R(pos_num), [r15 + (FUNCDATA_MAX)];
-            //jne  generic;
-            //testq R(meta), 0b_0100;
-            //jz  opt;   // if !is_block_style, go to opt
-            // if block_style,
-            // if pos_num != 1, go to opt.
-            //cmpw R(pos_num), 1;
-            //jne  opt;
-            //movq rax, [R(arg0 as _)];
-            // if arg0 is not an array_ty, go to exit
-            //testq rax, 0b111;
-            //jnz  opt;
-            //cmpw [rax + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
-            //jne  opt;
-            jmp opt;
-        );
-    }
-
-    ///
     /// ### in
     /// - r15: &FuncData
     /// - rdx: src: *const Value
@@ -1095,7 +1042,11 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let class_name = self.get_class_name(self_value.class());
-            let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
+            let desc = format!(
+                "JIT:{}#{}",
+                class_name,
+                self.store.func_description(func_id)
+            );
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]

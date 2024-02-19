@@ -708,7 +708,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = v {
                     eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
+                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s2(v));
                 } else {
                     eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", index);

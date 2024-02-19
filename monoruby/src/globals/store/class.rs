@@ -413,6 +413,13 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        #[cfg(feature = "perf")]
+        {
+            let info = self.store[func_id].get_wrapper_info();
+            let class_name = self.get_class_name(class_id);
+            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            self.codegen.perf_info2(info, &desc);
+        }
         self.store[func_id].set_class(class_id);
         self.store[class_id].methods.insert(
             name,
@@ -450,6 +457,13 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        #[cfg(feature = "perf")]
+        {
+            let info = self.store[func_id].get_wrapper_info();
+            let class_name = self.get_class_name(class_id);
+            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            self.codegen.perf_info2(info, &desc);
+        }
         let singleton = self.get_metaclass(class_id).id();
         self.store[func_id].set_class(class_id);
         self.store[singleton].methods.insert(

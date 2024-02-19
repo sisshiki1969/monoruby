@@ -6,7 +6,6 @@ use crate::jitgen::conv;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
     globals.define_builtin_inline_func(
         OBJECT_CLASS,
