@@ -12,7 +12,7 @@ mod error;
 mod method;
 mod prng;
 mod store;
-#[cfg(any(feature = "log-jit", feature = "profile"))]
+#[cfg(any(feature = "jit-log", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
@@ -228,6 +228,20 @@ impl Globals {
         self.flush_stdout();
         #[cfg(feature = "profile")]
         self.show_stats();
+        #[cfg(feature = "gc-log")]
+        {
+            alloc::ALLOC.with(|alloc| {
+                eprintln!("garbage collector profile:");
+                eprintln!(
+                    "total allocated objects: {}",
+                    alloc.borrow().total_allocated()
+                );
+                eprintln!(
+                    "total gc executed count: {}",
+                    alloc.borrow().total_gc_counter()
+                );
+            });
+        }
         res
     }
 
