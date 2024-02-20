@@ -66,7 +66,7 @@ pub struct Allocator<T> {
     /// Allocated number of objects in current page.
     used_in_current: usize,
     /// Total allocated objects.
-    allocated: usize,
+    total_allocated_objects: usize,
     /// Total blocks in free list.
     free_list_count: usize,
     /// Counter of marked objects,
@@ -76,7 +76,7 @@ pub struct Allocator<T> {
     /// Deallocated pages.
     free_pages: VecDeque<PageRef<T>>,
     /// Counter of GC execution.
-    count: usize,
+    total_gc_counter: usize,
     /// Flag for GC timing.
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
@@ -97,12 +97,12 @@ impl<T: GCBox> Allocator<T> {
             head_page: ptr,
             pages: vec![],
             used_in_current: 0,
-            allocated: 0,
+            total_allocated_objects: 0,
             free_list_count: 0,
             mark_counter: 0,
             free: None,
             free_pages: VecDeque::new(),
-            count: 0,
+            total_gc_counter: 0,
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
@@ -162,17 +162,17 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total allocated objects.
     ///
-    #[allow(unused)]
+    #[cfg(feature = "gc-log")]
     pub fn total_allocated(&self) -> usize {
-        self.allocated
+        self.total_allocated_objects
     }
 
     ///
-    /// Returns a total count of GC execution.
+    /// Returns a number of total gc execution count.
     ///
-    #[allow(unused)]
-    pub fn count(&self) -> usize {
-        self.count
+    #[cfg(feature = "gc-log")]
+    pub fn total_gc_counter(&self) -> usize {
+        self.total_gc_counter
     }
 
     ///
@@ -195,7 +195,7 @@ impl<T: GCBox> Allocator<T> {
     /// Allocate object.
     ///
     pub(crate) fn alloc(&mut self, data: T) -> *mut T {
-        self.allocated += 1;
+        self.total_allocated_objects += 1;
 
         if let Some(gcbox) = self.free {
             // Allocate from the free list.
@@ -240,12 +240,13 @@ impl<T: GCBox> Allocator<T> {
         if !self.gc_enabled {
             return;
         }
+        self.total_gc_counter += 1;
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("#### GC start");
             eprintln!(
                 "allocated: {}  used in current page: {}  allocated pages: {}",
-                self.allocated,
+                self.total_allocated_objects,
                 self.used_in_current,
                 self.pages.len()
             );

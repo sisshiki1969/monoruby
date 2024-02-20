@@ -1061,7 +1061,7 @@ impl Codegen {
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
-        #[cfg(feature = "log-jit")]
+        #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
         self.jit.bind_label(entry_label);
@@ -1123,7 +1123,7 @@ impl Codegen {
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
         self.jit.finalize();
-        #[cfg(any(feature = "jit-debug", feature = "log-jit"))]
+        #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
         {
             self.jit.select_page(0);
             eprintln!("    total bytes(0):{:?}", self.jit.get_current());
@@ -1131,7 +1131,7 @@ impl Codegen {
             eprintln!("    total bytes(1):{:?}", self.jit.get_current());
             self.jit.select_page(0);
         }
-        #[cfg(feature = "log-jit")]
+        #[cfg(feature = "jit-log")]
         {
             let elapsed = now.elapsed();
             eprintln!("<== finished compile. elapsed:{:?}", elapsed);
@@ -1401,7 +1401,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.u64());
         );
-        #[cfg(any(feature = "log-jit", feature = "profile"))]
+        #[cfg(any(feature = "jit-log", feature = "profile"))]
         monoasm!( &mut self.jit,
             movq rcx, rdi; // the Value which caused this deopt.
             movq rdi, rbx;
