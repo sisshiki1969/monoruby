@@ -333,12 +333,14 @@ pub(super) struct ClassIdSlot {
 ///
 /// Generic index operation.
 ///
-/// # Arguments
-/// base: Value
-/// index: Value
-/// class_slot: &mut ClassIdSlot
+/// ### in
 ///
-/// # Returns
+/// - base: Value
+/// - index: Value
+/// - class_slot: &mut ClassIdSlot
+///
+/// ### out
+///
 /// Some(Value) if succeeded.
 /// None if failed.
 ///

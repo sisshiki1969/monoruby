@@ -1,6 +1,14 @@
 use super::*;
 
 impl Codegen {
+    ///
+    /// Generic index operation.
+    ///
+    /// Execute `base`[[`idx`]] and store the result to *rax*.
+    ///
+    /// ### out
+    /// - rax: result Option<Value>
+    ///
     pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
         self.xmm_save(using);
         monoasm! { &mut self.jit,
@@ -15,6 +23,17 @@ impl Codegen {
         self.xmm_restore(using);
     }
 
+    ///
+    /// Array index operation with u16 idx.
+    ///
+    /// Execute *rdi*[[`idx`]] and store the result to *rax*.
+    ///
+    /// ### in
+    /// - rdi: base Array
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///
     pub(super) fn gen_array_u16_index(&mut self, idx: u16) {
         let out_range = self.jit.label();
         monoasm! { &mut self.jit,
@@ -24,7 +43,7 @@ impl Codegen {
     }
 
     ///
-    /// Aray index operation.
+    /// Array index operation.
     ///
     /// ### in
     /// - rdi: base Array
@@ -125,7 +144,7 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Array index operation.
+    /// Array index operation with non-negative i64 index.
     ///
     /// ### in
     /// - rdi: base Array
@@ -170,12 +189,12 @@ impl Codegen {
     }
 
     ///
-    /// Array index assign operation.
+    /// Array index assign operation with non-negative i64 index.
     ///
     /// ### in
     /// - rdi: base: Array
-    /// - rsi: index: non-negative i64
-    /// - r15: Value
+    /// - rsi: index non-negative i64
+    /// - r15: result Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -236,7 +255,7 @@ impl Codegen {
     ///
     /// ### out
     /// - rdi: Array.
-    /// - rax: the length.
+    /// - rax: length of the Array.
     ///
     fn get_array_length(&mut self) {
         monoasm! { &mut self.jit,
