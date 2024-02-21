@@ -40,8 +40,8 @@ pub(super) fn init(globals: &mut Globals) {
         send,
         object_send,
         analysis::v_v_vv,
-        1,
-        1,
+        0,
+        0,
         true,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
@@ -308,9 +308,13 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
 fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let method = lfp.arg(0).expect_symbol_or_string()?;
-    let args = lfp.arg(1).as_array().to_vec();
-    vm.invoke_method_inner(globals, method, lfp.self_val(), &args, lfp.block())
+    let arg0 = lfp.arg(0);
+    let ary = arg0.as_array();
+    if ary.len() < 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    }
+    let method = ary[0].expect_symbol_or_string()?;
+    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
 }
 
 const CACHE_SIZE: usize = 8;

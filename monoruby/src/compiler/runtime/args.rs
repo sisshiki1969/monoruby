@@ -81,7 +81,6 @@ pub(crate) fn set_frame_arguments(
     let callee_fid = callee_lfp.meta().func_id();
     let callee = &globals[callee_fid];
     let caller = &globals.store[callid];
-
     positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
     if !callee.no_keyword() || !caller.kw_may_exists() {
@@ -192,6 +191,14 @@ fn positional(
             };
             (max_pos, rest)
         }
+    } else if callee.is_rest()
+        && callee.reqopt_num() == 0
+        && pos_num == 1
+        && unsafe { (*src).is_array_ty() }
+        && ex.is_none()
+    {
+        memcpy(src, dst, 1);
+        return Ok(());
     } else {
         let mut arg_num = 0;
         let mut rest = vec![];
