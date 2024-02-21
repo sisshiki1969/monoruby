@@ -26,14 +26,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
-    //globals.define_builtin_func(OBJECT_CLASS, "method", method,1);
-    //globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
-    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
-    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
-    //globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
-    //globals.define_builtin_func(OBJECT_CLASS, "system", system);
-    //globals.define_builtin_func(OBJECT_CLASS, "`", command);
     globals.define_builtin_inline_func_with(
         OBJECT_CLASS,
         "send",

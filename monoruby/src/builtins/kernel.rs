@@ -18,15 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "block_given?", block_given, 0);
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
-    globals.define_builtin_func(kernel_class, "respond_to?", respond_to, 1);
-    globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
-    globals.define_builtin_func(kernel_class, "class", class, 0);
-    globals.define_builtin_func(kernel_class, "instance_of?", instance_of, 1);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
-    globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined, 1);
-    globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set, 2);
-    globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get, 1);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
     globals.define_builtin_module_func(kernel_class, "require", require, 0);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
@@ -34,6 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
+    globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
@@ -228,60 +221,6 @@ fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 }
 
 ///
-/// ### Object#respond_to?
-///
-/// - respond_to?(name, [NOT SUPPORTED] include_all = false) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
-#[monoruby_builtin]
-fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let name = match lfp.arg(0).unpack() {
-        RV::Symbol(id) => id,
-        RV::String(b) => IdentId::get_id(String::from_utf8_lossy(b).as_ref()),
-        _ => unimplemented!(),
-    };
-    Ok(Value::bool(
-        globals.check_method(lfp.self_val(), name).is_some(),
-    ))
-}
-
-///
-/// ### Object#inspect
-///
-/// - inspect -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
-#[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = globals.inspect(lfp.self_val());
-    Ok(Value::string(s))
-}
-
-///
-/// ### Object#class
-///
-/// - class -> Class
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
-#[monoruby_builtin]
-fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(lfp.self_val().real_class(globals).as_val())
-}
-
-///
-/// ### Object#instance_of?
-///
-/// - instance_of?(klass) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
-#[monoruby_builtin]
-fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let b =
-        lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?;
-    Ok(Value::bool(b))
-}
-
-///
 /// ### Kernel.#rand
 ///
 /// - rand(max = 0) -> Integer | Float
@@ -302,61 +241,6 @@ fn rand(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         Ok(Value::float(rand::random()))
     }
-}
-
-///
-/// ### Object#singleton_class
-///
-/// - singleton_class -> Class
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
-#[monoruby_builtin]
-fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(lfp.self_val().get_singleton(globals))
-}
-
-///
-/// ### Object#instance_variable_defined?
-///
-/// - instance_variable_defined?(var) -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
-#[monoruby_builtin]
-fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let id = match lfp.arg(0).unpack() {
-        RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
-    };
-    let b = globals.get_ivar(lfp.self_val(), id).is_some();
-    Ok(Value::bool(b))
-}
-
-///
-/// ### Object#instance_variable_set
-///
-/// - instance_variable_set(var, value) -> Object
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
-#[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string()?;
-    let val = lfp.arg(1);
-    globals.set_ivar(lfp.self_val(), id, val)?;
-    Ok(val)
-}
-
-///
-/// ### Object#instance_variable_get
-///
-/// - instance_variable_get(var) -> Object | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
-#[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string()?;
-    let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
-    Ok(v)
 }
 
 ///
@@ -553,6 +437,28 @@ fn abort(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         }
     }
     std::process::exit(1);
+}
+
+///
+/// Kernel.#exit
+///
+/// - exit(status = true) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
+#[monoruby_builtin]
+fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if let Some(arg0) = lfp.try_arg(0) {
+        if let Some(i) = arg0.try_fixnum() {
+            std::process::exit(i as i32);
+        } else {
+            match arg0.as_bool() {
+                true => std::process::exit(0),
+                false => std::process::exit(1),
+            }
+        }
+    } else {
+        std::process::exit(0);
+    }
 }
 
 ///
