@@ -20,30 +20,27 @@ impl BytecodeGen {
             NodeKind::MulAssign(lhs, rhs) => {
                 if lhs.len() == 1 && rhs.len() == 1 {
                     let lhs = lhs[0].clone();
-                    match lhs.kind {
-                        NodeKind::Index { base: box b, .. } => {
-                            let name = IdentId::_INDEX_ASSIGN;
-                            if top {
-                                let body_start = self.new_label();
-                                let body_end = self.new_label();
-                                self.apply_label(body_start);
-                                let recv = self.gen_temp_expr(b)?;
-                                self.apply_label(body_end);
-                                self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
-                                self.exception_table.push(ExceptionEntry {
-                                    range: body_start..body_end,
-                                    rescue: Some(nil_label),
-                                    ensure: None,
-                                    err_reg: None,
-                                });
-                            } else {
-                                self.check_defined(b, nil_label, ret, false)?;
-                            }
-                            for n in rhs {
-                                self.check_defined(n, nil_label, ret, false)?
-                            }
+                    if let NodeKind::Index { base: box b, .. } = lhs.kind {
+                        let name = IdentId::_INDEX_ASSIGN;
+                        if top {
+                            let body_start = self.new_label();
+                            let body_end = self.new_label();
+                            self.apply_label(body_start);
+                            let recv = self.gen_temp_expr(b)?;
+                            self.apply_label(body_end);
+                            self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
+                            self.exception_table.push(ExceptionEntry {
+                                range: body_start..body_end,
+                                rescue: Some(nil_label),
+                                ensure: None,
+                                err_reg: None,
+                            });
+                        } else {
+                            self.check_defined(b, nil_label, ret, false)?;
                         }
-                        _ => {}
+                        for n in rhs {
+                            self.check_defined(n, nil_label, ret, false)?
+                        }
                     }
                 }
             }
@@ -195,9 +192,8 @@ impl BytecodeGen {
                 let name = IdentId::get_id_from_string(name);
                 let prefix = prefix
                     .into_iter()
-                    .map(|s| IdentId::get_id_from_string(s))
+                    .map(IdentId::get_id_from_string)
                     .collect();
-                let ret = ret;
                 self.emit(
                     BcIr::DefinedConst {
                         ret,

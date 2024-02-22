@@ -12,10 +12,31 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap()
         .as_class();
     globals.define_class_by_str("DomainError", standarderr, klass);
-    globals.set_constant_by_str(klass, "PI", Value::float(3.141592653589793));
-    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, math_sqrt, analysis::f_v_f);
-    globals.define_builtin_module_inline_func(klass, "cos", cos, math_cos, analysis::f_v_f);
-    globals.define_builtin_module_inline_func(klass, "sin", sin, math_sin, analysis::f_v_f);
+    globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
+    globals.define_builtin_module_inline_func(
+        klass,
+        "sqrt",
+        sqrt,
+        Box::new(math_sqrt),
+        analysis::f_v_f,
+        1,
+    );
+    globals.define_builtin_module_inline_func(
+        klass,
+        "cos",
+        cos,
+        Box::new(math_cos),
+        analysis::f_v_f,
+        1,
+    );
+    globals.define_builtin_module_inline_func(
+        klass,
+        "sin",
+        sin,
+        Box::new(math_sin),
+        analysis::f_v_f,
+        1,
+    );
 }
 
 /// ### Math.#sqrt
@@ -23,14 +44,14 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
 #[monoruby_builtin]
-fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sqrt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.sqrt()))
@@ -41,14 +62,14 @@ fn sqrt(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sin.html]
 #[monoruby_builtin]
-fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.sin()))
@@ -59,14 +80,14 @@ fn sin(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cos.html]
 #[monoruby_builtin]
-fn cos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn cos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let f = match arg0.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
-            return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
         }
     };
     Ok(Value::float(f.cos()))

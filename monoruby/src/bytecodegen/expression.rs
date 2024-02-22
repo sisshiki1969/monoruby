@@ -148,11 +148,17 @@ impl BytecodeGen {
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
-                let ret = dst.into();
                 let name = IdentId::get_id_from_string(ident);
                 if let Some(src) = self.refer_dynamic_local(outer, name) {
                     let src = src.into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    self.emit(
+                        BcIr::LoadDynVar {
+                            ret: dst,
+                            src,
+                            outer,
+                        },
+                        loc,
+                    );
                 } else {
                     assert_eq!(Some(name), self.block_param);
                     self.emit(BcIr::BlockArg(dst, outer), loc);
@@ -186,7 +192,7 @@ impl BytecodeGen {
                 self.emit_load_cvar(dst.into(), name, loc);
             }
             NodeKind::SpecialVar(id) => {
-                self.emit_load_svar(dst.into(), id as u32, loc);
+                self.emit_load_svar(dst.into(), id, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -479,7 +485,7 @@ impl BytecodeGen {
                     }
                     self.temp = old;
                     self.apply_label(else_pos);
-                    self.gen_expr(else_, use_mode.into())?;
+                    self.gen_expr(else_, use_mode)?;
                     self.apply_label(succ_pos);
                 }
                 return Ok(());
@@ -551,7 +557,7 @@ impl BytecodeGen {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.gen_return(val, use_mode.into())?;
+                            self.gen_return(val, use_mode)?;
                             return Ok(());
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
@@ -570,9 +576,9 @@ impl BytecodeGen {
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
-                    self.gen_method_return(val, use_mode.into())?;
+                    self.gen_method_return(val, use_mode)?;
                 } else {
-                    self.gen_return(val, use_mode.into())?;
+                    self.gen_return(val, use_mode)?;
                 }
 
                 return Ok(());
@@ -588,13 +594,13 @@ impl BytecodeGen {
             }
             NodeKind::MethodDef(name, block) => {
                 let name = IdentId::get_id_from_string(name);
-                self.gen_method_def(name, block, use_mode.into(), loc)?;
+                self.gen_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::SingletonMethodDef(box obj, name, block) => {
                 self.gen_expr(obj, UseMode2::Push)?;
                 let name = IdentId::get_id_from_string(name);
-                self.gen_singleton_method_def(name, block, use_mode.into(), loc)?;
+                self.gen_singleton_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::ClassDef {
@@ -605,7 +611,6 @@ impl BytecodeGen {
                 is_module,
             } => {
                 let name = IdentId::get_id_from_string(name);
-                let use_mode = use_mode.into();
                 self.gen_class_def(name, base, superclass, info, use_mode, is_module, loc)?;
                 return Ok(());
             }
@@ -613,7 +618,6 @@ impl BytecodeGen {
                 box singleton,
                 info,
             } => {
-                let use_mode = use_mode.into();
                 self.gen_singleton_class_def(singleton, info, use_mode, loc)?;
                 return Ok(());
             }

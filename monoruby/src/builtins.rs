@@ -25,12 +25,12 @@ mod struct_class;
 mod symbol;
 mod time;
 
-pub(self) use crate::compiler::jitgen::BBContext;
+use crate::compiler::jitgen::BBContext;
 use compiler::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;
-pub(self) use monoruby_attr::monoruby_builtin;
+use monoruby_attr::monoruby_builtin;
 pub use time::TimeInner;
 
 //
@@ -69,11 +69,11 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct Arg(*const Value);
+pub struct Arg(*const Option<Value>);
 
 impl std::ops::Index<usize> for Arg {
-    type Output = Value;
-    fn index(&self, index: usize) -> &Value {
+    type Output = Option<Value>;
+    fn index(&self, index: usize) -> &Option<Value> {
         unsafe { &*self.0.sub(index) }
     }
 }
@@ -85,12 +85,8 @@ impl std::ops::Add<usize> for Arg {
     }
 }
 
-impl Arg {
-    pub fn from(val: &Value) -> Arg {
-        Arg(val as _)
+/*impl Arg {
+    pub fn new(lfp: Lfp) -> Self {
+        Self(unsafe { lfp.register_ptr(1) as _ })
     }
-
-    pub fn as_ptr(&self) -> *const Value {
-        self.0
-    }
-}
+}*/

@@ -9,7 +9,6 @@ mod wrapper;
 use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
-use vmgen::init_method::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
@@ -58,12 +57,13 @@ type FiberInvoker = extern "C" fn(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
-    Rcx = 1,
+    //Rcx = 1,
     Rdx = 2,
     Rsp = 4,
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
+    //R9 = 9,
     R13 = 13,
     R15 = 15,
 }
@@ -125,15 +125,6 @@ pub struct Codegen {
     f64_to_val: DestLabel,
     div_by_zero: DestLabel,
     ///
-    /// Raise "wrong number of arguments" error.
-    ///
-    /// ### in
-    /// - rdx: actual number of arguments
-    /// - r13: pc (InitMethod)
-    ///
-    #[allow(dead_code)]
-    wrong_argument: DestLabel,
-    ///
     /// Get class id.
     ///
     /// ### in
@@ -178,7 +169,6 @@ impl Codegen {
 
         let entry_panic = entry_panic(&mut jit);
         let get_class = get_class(&mut jit);
-        let wrong_argument = wrong_arguments(&mut jit);
         let f64_to_val = f64_to_val(&mut jit);
         let entry_unimpl = unimplemented_inst(&mut jit);
 
@@ -196,7 +186,6 @@ impl Codegen {
             entry_raise: entry_panic,
             f64_to_val,
             div_by_zero: entry_panic,
-            wrong_argument,
             get_class,
             dispatch,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -274,6 +263,8 @@ impl Codegen {
 
     fn gen_entry_point(&mut self, main_object: Value) {
         // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         let entry = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             pushq rbx;
@@ -339,14 +330,11 @@ impl Codegen {
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
 
         #[cfg(feature = "perf")]
-        self.perf_info(entry, "entry-point");
+        self.perf_info(pair, "entry-point");
     }
 
     ///
     /// Execute garbage collection.
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi, r10, r11
     ///
     fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
         let alloc_flag = self.alloc_flag;
@@ -439,6 +427,7 @@ impl Codegen {
     fn get_func_data(&mut self) {
         monoasm! { &mut self.jit,
             movl rdx, rdx;
+            // assumes size_of::<FuncInfo>() is 64,
             shlq rdx, 6;
             addq rdx, [r12 + (GLOBALS_FUNCINFO)];
             lea  r15, [rdx + (FUNCINFO_DATA)];
@@ -714,98 +703,6 @@ impl Codegen {
     }
 
     ///
-    /// Handle req/opt/rest arguments
-    ///
-    /// #### in
-    /// - rdi: arg len
-    /// - rdx: CallSiteId
-    ///
-    /// #### out
-    /// - rdi: arg len
-    /// - rax: Option<Value>
-    ///  
-    fn handle_arguments(&mut self) {
-        monoasm! { &mut self.jit,
-            lea  r8, [rsp - 16];   // callee_lfp
-            movq rcx, rdi;
-            subq rsp, 4088;
-            pushq rdi;
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::vm_handle_arguments);
-            call rax;
-            popq rdi;
-            addq rsp, 4088;
-        }
-    }
-
-    ///
-    /// block args expansion
-    ///
-    /// #### in
-    /// - rdi: arg_num
-    /// - rsi: pc
-    ///
-    /// #### out
-    /// - rdi: arg_num
-    ///
-    /// #### destroy
-    /// - caller save registers (except rdx)
-    ///
-    fn block_arg_expand(&mut self) {
-        let l1 = self.jit.label();
-        monoasm! { &mut self.jit,
-            testq rsi, rsi;
-            je   l1;
-            // rax <- op
-            movzxb rax, [rsi + (INIT_METHOD_OP + 16)];
-            // block-style?
-            cmpb rax, (172u8 as i8);
-            jne  l1;
-            // reqopt > 1?
-            cmpw [rsi + (INIT_METHOD_ROP + 16)], 1;
-            jle  l1;
-        }
-        self.single_arg_expand();
-        monoasm! { &mut self.jit,
-        l1:
-        }
-    }
-
-    ///
-    /// Expand single Array argument.
-    ///
-    /// #### in/out
-    /// - rdi: arg_num
-    ///
-    /// #### destroy
-    /// - caller save registers
-    ///
-    fn single_arg_expand(&mut self) {
-        let l1 = self.jit.label();
-        monoasm! { &mut self.jit,
-            // arg_num == 1?
-            cmpl rdi, 1;
-            jne  l1;
-            // is val Array?
-            movq rax, [rsp - (16 + LBP_ARG0)];
-            testq rax, 0b111;
-            jnz  l1;
-            cmpl [rax + 4], (ARRAY_CLASS.u32());
-            jne  l1;
-            movq rdi, rax;
-            movzxw rdx, [rsi + 8];  // rdx <- req
-            lea  rsi, [rsp - (16 + LBP_ARG0)]; // rsi <- dst
-            subq rsp, 4096;
-            movq rax, (block_expand_array); // extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize
-            call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
-        l1:
-        }
-    }
-
-    ///
     /// Assume the Value is Integer, and convert to f64.
     ///
     /// side-exit if not Integer.
@@ -825,6 +722,62 @@ impl Codegen {
             sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
+    }
+
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    /// - rdx: src: *const Value
+    /// - r8: CallsiteId
+    /// - r9: arg_num
+    ///
+    /// ### out
+    /// - rax: arg_num: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn generic_handle_arguments(
+        &mut self,
+        f: extern "C" fn(
+            &mut Executor,
+            &mut Globals,
+            *const Value,
+            Lfp,
+            CallSiteId,
+        ) -> Option<Value>,
+    ) {
+        monoasm! { &mut self.jit,
+            // rcx <- callee LFP
+            lea  rcx, [rsp - 16];
+            // rdi <- stacck_offset
+            movzxw rdi, [r15 + (FUNCDATA_OFS)];
+            shlq rdi, 4;
+            addq rdi, 24;
+            subq rsp, rdi;
+            pushq rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            // rdi: &mut Executor
+            // rsi: &mut Globals
+            // rdx: src: *const Value
+            // rcx: callee LFP
+            // r8: CallsiteId
+            movq rax, (f);
+            call rax;
+            popq rdi;
+            addq rsp, rdi;
+        };
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
+        assert_eq!(0, self.jit.get_page());
+        let ptr0 = self.jit.get_current_address();
+        self.jit.select_page(1);
+        let ptr1 = self.jit.get_current_address();
+        self.jit.select_page(0);
+        (ptr0, ptr1)
     }
 }
 
@@ -876,20 +829,6 @@ fn get_class(jit: &mut JitMemory) -> DestLabel {
     exit:
         ret;
     );
-    label
-}
-
-fn wrong_arguments(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    monoasm! {jit,
-    label:
-        movq rdi, rbx;
-        movl rsi, rdx;  // given
-        movzxw rdx, [r13 - 8];  // min
-        movzxw rcx, [r13 - 14];  // max
-        movq rax, (runtime::err_wrong_number_of_arguments_range);
-        call rax;
-    }
     label
 }
 
@@ -1092,7 +1031,7 @@ impl Globals {
         }
 
         #[cfg(feature = "perf")]
-        let codeptr = self.codegen.jit.get_current_address();
+        let pair = self.codegen.get_address_pair();
 
         let _sourcemap =
             self.codegen
@@ -1100,10 +1039,14 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let class_name = self.get_class_name(self_value.class());
-            let desc = format!("{}#{}", class_name, self.store.func_description(func_id));
-            self.codegen.perf_info(codeptr, &desc);
+            let desc = format!(
+                "JIT:{}#{}",
+                class_name,
+                self.store.func_description(func_id)
+            );
+            self.codegen.perf_info(pair, &desc);
         }
-        #[cfg(any(feature = "emit-asm"))]
+        #[cfg(feature = "emit-asm")]
         self.dump_disas(_sourcemap, func_id);
     }
 

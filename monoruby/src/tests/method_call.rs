@@ -139,6 +139,20 @@ mod test {
         end
         "#,
         );
+        run_test_error(
+            r#"
+        def f(a:1)
+        end
+        f(b:1)
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f(a:1)
+        end
+        f(**{b:1})
+        "#,
+        );
     }
 
     #[test]
@@ -252,6 +266,48 @@ mod test {
             b.prepend(*a)
         end
         b
+        "##,
+        )
+    }
+
+    #[test]
+    fn hash_splat() {
+        run_test_with_prelude(
+            r##"
+            f(**{a:1})
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
+        "##,
+        )
+    }
+
+    #[test]
+    fn hash_splat2() {
+        run_test_with_prelude(
+            r##"
+            f()
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
+        "##,
+        )
+    }
+
+    #[test]
+    fn hash_splat3() {
+        run_test_with_prelude(
+            r##"
+            f(a:1, **{b:2,c:3})
+        "##,
+            r##"
+        def f(*x)
+            x
+        end
         "##,
         )
     }
@@ -473,6 +529,22 @@ mod test {
             r#"
             def f
               yield [1,[2,3],4]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_block_array_expand3() {
+        run_test_with_prelude(
+            r#"
+            f { |a, *b|
+                [a, b]
+            }
+            "#,
+            r#"
+            def f
+            	yield [1,2,3]
             end
             "#,
         );

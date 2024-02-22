@@ -7,9 +7,9 @@ static INLINE_INFO: LazyLock<RwLock<InlineTable>> =
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InlineMethodId(usize);
 
-impl std::convert::Into<usize> for InlineMethodId {
-    fn into(self) -> usize {
-        self.0
+impl std::convert::From<InlineMethodId> for usize {
+    fn from(v: InlineMethodId) -> usize {
+        v.0
     }
 }
 

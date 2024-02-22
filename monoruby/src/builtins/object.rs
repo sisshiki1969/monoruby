@@ -1,42 +1,47 @@
 use super::*;
 use crate::jitgen::conv;
-use std::io::Write;
 
 //
 // Object class
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
     globals.define_builtin_inline_func(
         OBJECT_CLASS,
         "object_id",
         object_id,
-        object_object_id,
+        Box::new(object_object_id),
         analysis::v_v,
+        0,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect);
-    globals.define_builtin_func(OBJECT_CLASS, "class", class);
-    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class);
-    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of);
-    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a);
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a);
-    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv);
-    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s);
-    globals.define_builtin_func(OBJECT_CLASS, "method", method);
-    globals.define_builtin_func(OBJECT_CLASS, "system", system);
-    globals.define_builtin_func(OBJECT_CLASS, "`", command);
-    globals.define_builtin_inline_func(OBJECT_CLASS, "send", send, object_send, analysis::v_v_vv);
-    globals.define_builtin_func(OBJECT_CLASS, "__send__", send);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
+    globals.define_builtin_inline_func_with(
+        OBJECT_CLASS,
+        &["send", "__send__"],
+        send,
+        Box::new(object_send),
+        analysis::v_v_vv,
+        0,
+        0,
+        true,
+    );
+    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
 }
 
 ///
@@ -46,7 +51,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/object_id.html]
 #[monoruby_builtin]
-fn object_id(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
@@ -78,11 +83,16 @@ fn object_object_id(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
 #[monoruby_builtin]
-fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
-    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    )?;
     Ok(obj)
 }
 
@@ -94,7 +104,7 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/is_a=3f.html]
 #[monoruby_builtin]
-fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.arg(0).expect_class_or_module(globals)?;
     Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
@@ -102,14 +112,14 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// ### Object#enum_for
 ///
-/// - to_enum(method = :each, *args) -> Enumerator
-/// - enum_for(method = :each, *args) -> Enumerator
-/// - to_enum(method = :each, *args) {|*args| ... } -> Enumerator
-/// - enum_for(method = :each, *args) {|*args| ... } -> Enumerator
+/// - to_enum([NOT SUPPORTED] method = :each, *args) -> Enumerator
+/// - enum_for([NOT SUPPORTED] method = :each, *args) -> Enumerator
+/// - to_enum([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
+/// - enum_for([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
-fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
 }
 
@@ -120,8 +130,7 @@ fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/equal=3f.html]
 #[monoruby_builtin]
-fn equal_(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
+fn equal_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().id() == lfp.arg(0).id()))
 }
 
@@ -132,7 +141,7 @@ fn equal_(_: &mut Executor, _: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
-fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().dup())
 }
 
@@ -143,7 +152,7 @@ fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let s = globals.to_s(lfp.self_val());
     Ok(Value::string(s))
 }
@@ -151,11 +160,11 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// ### Object#respond_to?
 ///
-/// - respond_to?(name, include_all = false) -> bool
+/// - respond_to?(name, [NOT SUPPORTED] include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
-fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let name = match lfp.arg(0).unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => IdentId::get_id(String::from_utf8_lossy(b).as_ref()),
@@ -173,7 +182,7 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let s = globals.inspect(lfp.self_val());
     Ok(Value::string(s))
 }
@@ -185,7 +194,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
 #[monoruby_builtin]
-fn class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().real_class(globals).as_val())
 }
 
@@ -196,7 +205,7 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
 #[monoruby_builtin]
-fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let b =
         lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?;
     Ok(Value::bool(b))
@@ -209,10 +218,9 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
 #[monoruby_builtin]
-fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
+fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).expect_symbol_or_string()?;
     let func_id = globals.find_method(receiver, method_name, false)?;
     Ok(Value::new_method(receiver, func_id))
 }
@@ -224,7 +232,7 @@ fn method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
 #[monoruby_builtin]
-fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().get_singleton(globals))
 }
 
@@ -235,11 +243,11 @@ fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
-fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -252,8 +260,8 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let val = lfp.arg(1);
     globals.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -266,8 +274,8 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let id = lfp.arg(0).expect_symbol_or_string()?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Ok(v)
 }
@@ -279,85 +287,12 @@ fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variables.html]
 #[monoruby_builtin]
-fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(0)?;
+fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let iter = globals
         .get_ivars(lfp.self_val())
         .into_iter()
         .map(|(id, _)| Value::symbol(id));
     Ok(Value::array_from_iter(iter))
-}
-
-fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
-    let mut args = vec![];
-    let include_meta = input.contains([
-        '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
-        '\"', '`', '\n',
-    ]);
-    let program = if include_meta {
-        args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
-        args.push(input.to_string());
-        if cfg!(windows) {
-            "cmd"
-        } else {
-            "sh"
-        }
-    } else {
-        let input: Vec<&str> = input.split(' ').collect();
-        let arg = input[1..].concat();
-        if !arg.is_empty() {
-            args.push(arg)
-        };
-        input[0]
-    }
-    .to_string();
-    (program, args)
-}
-
-///
-/// ### Kernel.#system
-///
-/// - system(command, options={}) -> bool | nil
-/// - system(program, *args, options={}) -> bool | nil
-/// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
-#[monoruby_builtin]
-fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    use std::process::Command;
-    let len = lfp.arg_len();
-    lfp.check_min_number_of_arguments(1)?;
-    let (program, mut args) = prepare_command_arg(&lfp.arg(0).as_str());
-    if len > 1 {
-        let iter = lfp.iter();
-        //iter.take(1);
-        for v in iter.take(1) {
-            args.push(v.expect_string(globals)?);
-        }
-    }
-    Ok(match Command::new(program).args(&args).status() {
-        Ok(status) => Value::bool(status.success()),
-        Err(_) => Value::nil(),
-    })
-}
-
-///
-/// ### Kernel.#`
-///
-/// - `command` -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
-#[monoruby_builtin]
-fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    use std::process::Command;
-    let (program, args) = prepare_command_arg(&lfp.arg(0).as_str());
-    match Command::new(program).args(&args).output() {
-        Ok(output) => {
-            std::io::stderr().write_all(&output.stderr).unwrap();
-            Ok(Value::string_from_vec(output.stdout))
-        }
-        Err(err) => Err(MonorubyErr::runtimeerr(err)),
-    }
 }
 
 ///
@@ -368,18 +303,14 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
-fn send(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_min_number_of_arguments(1)?;
-    let method = lfp.arg(0).expect_symbol_or_string(globals)?;
-    vm.invoke_method_inner2(
-        globals,
-        method,
-        lfp.self_val(),
-        args + 1,
-        len - 1,
-        lfp.block(),
-    )
+fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let ary = arg0.as_array();
+    if ary.len() < 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    }
+    let method = ary[0].expect_symbol_or_string()?;
+    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
 }
 
 const CACHE_SIZE: usize = 8;
@@ -389,25 +320,28 @@ fn object_send(
     _store: &Store,
     bb: &mut BBContext,
     callsite: &CallSiteInfo,
-    _pc: BcPc,
+    pc: BcPc,
 ) {
     let CallSiteInfo {
         recv,
         dst,
         args,
         pos_num,
-        block_fid: block_func_id,
+        block_fid,
         ..
     } = *callsite;
     ir.write_back_callargs(bb, callsite);
     ir.unlink(bb, dst);
     let using = bb.get_using_xmm();
-    let bh = match block_func_id {
+    let bh = match block_fid {
         None => 0,
-        Some(func_id) => BlockHandler::from(func_id).0.id(),
+        Some(func_id) => BlockHandler::from_caller(func_id).id(),
     };
-    ir.inline(move |gen, _| {
+    let error = ir.new_error(bb, pc);
+    ir.inline(move |gen, labels| {
         let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
+        let version = gen.jit.const_i32(-1);
+        let error = labels[error];
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rdi, rbx;
@@ -416,7 +350,8 @@ fn object_send(
             lea  rcx, [r14 - (conv(args))];
             movq r8, (pos_num);
             movq r9, (bh);
-            subq rsp, 8;
+            lea  rax, [rip + version];
+            pushq rax;
             lea  rax, [rip + cache];
             pushq rax;
             movq rax, (call_send_wrapper);
@@ -424,6 +359,7 @@ fn object_send(
             addq rsp, 16;
         }
         gen.xmm_restore(using);
+        gen.handle_error(error);
     });
     ir.reg2acc(bb, GP::Rax, dst);
 }
@@ -431,19 +367,19 @@ fn object_send(
 #[repr(C)]
 struct Cache {
     method: Option<IdentId>,
-    version: u32,
     fid: FuncId,
-    counter: u32,
+    counter: usize,
 }
 
 extern "C" fn call_send_wrapper(
-    vm: &mut Executor,           // rdi
-    globals: &mut Globals,       // rsi
-    recv: Value,                 // rdx
-    args: Arg,                   // rcx
-    len: usize,                  // r8
-    block: Option<BlockHandler>, // r9
+    vm: &mut Executor,        // rdi
+    globals: &mut Globals,    // rsi
+    recv: Value,              // rdx
+    args: Arg,                // rcx
+    len: usize,               // r8
+    bh: Option<BlockHandler>, // r9
     cache: &mut [Cache; CACHE_SIZE],
+    version: &mut u32,
 ) -> Option<Value> {
     fn call_send(
         globals: &mut Globals,
@@ -452,32 +388,34 @@ extern "C" fn call_send_wrapper(
         len: usize,
         cache: &mut [Cache; CACHE_SIZE],
     ) -> Result<FuncId> {
-        MonorubyErr::check_min_number_of_arguments(len, 1)?;
-        let method = args[0].expect_symbol_or_string(globals)?;
-        let mut min_i = usize::MAX;
-        let mut min_count = u32::MAX;
-        for i in 0..CACHE_SIZE {
-            if cache[i].method.is_none() || cache[i].version != globals.class_version() {
-                if min_count != 0 {
-                    min_count = 0;
-                    min_i = i;
+        if len < 1 {
+            return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
+        }
+        let method = args[0].unwrap().expect_symbol_or_string()?;
+        let mut min_i = 0;
+        let mut min_count = usize::MAX;
+        for (i, entry) in cache.iter_mut().enumerate() {
+            match entry.method {
+                Some(cached_method) if cached_method == method => {
+                    entry.counter += 1;
+                    return Ok(entry.fid);
                 }
-                continue;
-            }
-            if cache[i].method == Some(method) {
-                cache[i].counter += 1;
-                return Ok(cache[i].fid);
-            }
-            if cache[i].counter < min_count {
-                min_count = cache[i].counter;
-                min_i = i;
+                Some(_) => {
+                    if entry.counter < min_count {
+                        min_count = entry.counter;
+                        min_i = i;
+                    }
+                }
+                None => {
+                    min_i = i;
+                    break;
+                }
             }
         }
         let fid = globals.find_method(recv, method, false)?;
         //eprintln!("cache miss:{:?} {:?}", cache as *mut _, method);
         if cache[min_i].method.is_none() {
             cache[min_i].method = Some(method);
-            cache[min_i].version = globals.class_version();
             cache[min_i].fid = fid;
             cache[min_i].counter = 1;
         }
@@ -485,6 +423,12 @@ extern "C" fn call_send_wrapper(
         Ok(fid)
     }
 
+    if globals.class_version() != *version {
+        for entry in cache.iter_mut() {
+            entry.method = None;
+        }
+        *version = globals.class_version();
+    }
     let fid = match call_send(globals, recv, args, len, cache) {
         Ok(res) => res,
         Err(err) => {
@@ -492,7 +436,9 @@ extern "C" fn call_send_wrapper(
             return None;
         }
     };
-    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, block)
+    // Currently, we don't support calling with block in inlined method.
+    let bh = bh.map(|bh| bh.delegate());
+    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, bh)
 }
 
 #[cfg(test)]
@@ -727,6 +673,19 @@ mod test {
         f = Foo.new
         [f.send(methods[1]), f.send(methods[2]), f.send(methods[3])]
         "#,
+        );
+        run_test_with_prelude(
+            r#"
+            o.send(:f){ 3 }
+            "#,
+            r#"
+            class C
+                def f
+                    yield
+                end
+            end
+            o = C.new
+            "#,
         );
     }
 }

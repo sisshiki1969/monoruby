@@ -8,9 +8,9 @@ use super::*;
 ///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct CFP(std::ptr::NonNull<Option<CFP>>);
+pub struct Cfp(std::ptr::NonNull<Option<Cfp>>);
 
-impl CFP {
+impl Cfp {
     ///
     /// Create new CFP from a raw pointer.
     ///
@@ -18,13 +18,13 @@ impl CFP {
     /// This function is extremely dangerous. Programmer must ensure that *ptr* is a valid pointer which pointes to a control frame.
     ///
     unsafe fn new(ptr: *mut u8) -> Self {
-        CFP(std::ptr::NonNull::new(ptr as *mut Option<CFP>).unwrap())
+        Cfp(std::ptr::NonNull::new(ptr as *mut Option<Cfp>).unwrap())
     }
 
     ///
     /// Get inner raw pointer.
     ///
-    fn as_ptr(&self) -> *const Option<CFP> {
+    fn as_ptr(&self) -> *const Option<Cfp> {
         self.0.as_ptr()
     }
 
@@ -45,17 +45,17 @@ impl CFP {
     ///
     /// Get LFP.
     ///
-    pub(crate) fn lfp(&self) -> LFP {
+    pub(crate) fn lfp(&self) -> Lfp {
         unsafe {
             let bp = self.bp();
-            LFP::new(*bp.sub(BP_LFP as usize / 8) as _)
+            Lfp::new(*bp.sub(BP_LFP as usize / 8) as _)
         }
     }
 
     ///
     /// Get outermost LFP.
     ///
-    pub(crate) fn outermost_lfp(&self) -> LFP {
+    pub(crate) fn outermost_lfp(&self) -> Lfp {
         match self.lfp().outer() {
             Some(dfp) => dfp.outermost().0.lfp(),
             None => self.lfp(),
@@ -65,7 +65,7 @@ impl CFP {
     ///
     /// Get outermost LFP and the depth.
     ///
-    pub(crate) fn outermost_lfp_depth(&self) -> (LFP, usize) {
+    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
         match self.lfp().outer() {
             Some(dfp) => {
                 let (dfp, depth) = dfp.outermost();
@@ -82,7 +82,7 @@ impl CFP {
     ///
     /// Set LFP.
     ///
-    pub unsafe fn set_lfp(&mut self, lfp: LFP) {
+    pub unsafe fn set_lfp(&mut self, lfp: Lfp) {
         let bp = self.bp() as *mut usize;
         *bp.sub(BP_LFP as usize / 8) = lfp.as_ptr() as _;
     }
@@ -144,28 +144,28 @@ impl CFP {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct LFP(std::ptr::NonNull<u8>);
+pub struct Lfp(std::ptr::NonNull<u8>);
 
-impl std::ops::Deref for LFP {
+impl std::ops::Deref for Lfp {
     type Target = std::ptr::NonNull<u8>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::cmp::PartialEq<CFP> for LFP {
-    fn eq(&self, other: &CFP) -> bool {
+impl std::cmp::PartialEq<Cfp> for Lfp {
+    fn eq(&self, other: &Cfp) -> bool {
         self.as_ptr() == other.as_ptr() as _
     }
 }
 
-impl std::cmp::PartialOrd<CFP> for LFP {
-    fn partial_cmp(&self, other: &CFP) -> Option<std::cmp::Ordering> {
+impl std::cmp::PartialOrd<Cfp> for Lfp {
+    fn partial_cmp(&self, other: &Cfp) -> Option<std::cmp::Ordering> {
         self.as_ptr().partial_cmp(&(other.as_ptr() as _))
     }
 }
 
-impl alloc::GC<RValue> for LFP {
+impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         unsafe {
             let meta = self.meta();
@@ -184,7 +184,7 @@ impl alloc::GC<RValue> for LFP {
     }
 }
 
-impl LFP {
+impl Lfp {
     ///
     /// Create LFP from a raw pointer.
     ///
@@ -201,15 +201,15 @@ impl LFP {
     ///
     /// *self* must be on the stack. otherwise, panic.
     ///
-    fn cfp(&self) -> CFP {
+    fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { CFP::new(self.sub(BP_PREV_CFP) as _) }
+        unsafe { Cfp::new(self.sub(BP_PREV_CFP) as _) }
     }
 
     ///
     /// Set outer.
     ///
-    unsafe fn set_outer(&mut self, outer: Option<DFP>) {
+    unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
         *(self.outer_address().0.as_ptr()) = outer;
     }
 
@@ -220,8 +220,8 @@ impl LFP {
     ///
     /// Get the address of outer.
     ///
-    fn outer_address(&self) -> DFP {
-        unsafe { DFP::new(self.sub(LBP_OUTER) as _) }
+    fn outer_address(&self) -> Dfp {
+        unsafe { Dfp::new(self.sub(LBP_OUTER) as _) }
     }
 
     fn meta_mut(&mut self) -> &mut Meta {
@@ -281,7 +281,7 @@ impl LFP {
                 let mut cfp = self.cfp();
                 let len = self.frame_bytes();
                 let v = self.frame_ref().to_vec().into_boxed_slice();
-                let mut heap_lfp = LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+                let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
                 heap_lfp.meta_mut().set_on_heap();
                 cfp.set_lfp(heap_lfp);
                 if let Some(outer) = heap_lfp.outer() {
@@ -301,7 +301,7 @@ impl LFP {
         unsafe {
             let v = vec![0, 0, self_val.id(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
             let len = v.len() * 8;
-            let mut heap_lfp = LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();
             heap_lfp.meta_mut().set_reg_num(1);
             assert!(!heap_lfp.on_stack());
@@ -312,7 +312,7 @@ impl LFP {
     ///
     /// Get outer DFP.
     ///
-    pub fn outer(&self) -> Option<DFP> {
+    pub fn outer(&self) -> Option<Dfp> {
         self.outer_address().outer()
     }
 
@@ -363,7 +363,7 @@ impl LFP {
 }
 
 // APIs for native methods.
-impl LFP {
+impl Lfp {
     ///
     /// Get the length of arguments for a native function.
     ///
@@ -432,49 +432,15 @@ impl LFP {
     }
 
     pub fn arg(&self, i: usize) -> Value {
-        unsafe { *(self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8) as *mut Value) }
+        self.try_arg(i).unwrap()
     }
 
-    pub fn as_arg(&self) -> Arg {
-        unsafe {
-            Arg::from(
-                (self.0.as_ptr().sub(LBP_ARG0 as usize) as *mut Value)
-                    .as_ref()
-                    .unwrap(),
-            )
-        }
-    }
-
-    pub fn check_number_of_arguments(&self, expect: usize) -> Result<()> {
-        if self.arg_len() == expect {
-            Ok(())
+    pub fn try_arg(&self, i: usize) -> Option<Value> {
+        let v = unsafe { *((self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8)) as *const u64) };
+        if v == 0 {
+            None
         } else {
-            Err(MonorubyErr::wrong_number_of_arg(expect, self.arg_len()))
-        }
-    }
-
-    pub fn check_min_number_of_arguments(&self, min: usize) -> Result<()> {
-        let given = self.arg_len();
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
-    }
-
-    pub fn check_number_of_arguments_range(
-        &self,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        let given = self.arg_len();
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_number_of_arg(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
+            Some(Value::from(v))
         }
     }
 }
@@ -486,14 +452,14 @@ impl LFP {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct DFP(std::ptr::NonNull<Option<DFP>>);
+pub struct Dfp(std::ptr::NonNull<Option<Dfp>>);
 
-impl DFP {
+impl Dfp {
     unsafe fn new(ptr: *mut u8) -> Self {
-        DFP(std::ptr::NonNull::new(ptr as *mut Option<DFP>).unwrap())
+        Dfp(std::ptr::NonNull::new(ptr as *mut Option<Dfp>).unwrap())
     }
 
-    fn get(&self) -> *const Option<DFP> {
+    fn get(&self) -> *const Option<Dfp> {
         self.0.as_ptr()
     }
 
@@ -507,7 +473,7 @@ impl DFP {
     ///
     /// Get DFP of an outermost frame of *self*.
     ///
-    fn outermost(&self) -> (DFP, usize) {
+    fn outermost(&self) -> (Dfp, usize) {
         let mut dfp = *self;
         let mut depth = 0;
         while let Some(outer) = dfp.outer() {
@@ -520,7 +486,7 @@ impl DFP {
     ///
     /// Get LFP.
     ///
-    pub fn lfp(&self) -> LFP {
-        unsafe { LFP::new((self.get() as *const u8).add(LBP_OUTER as usize) as _) }
+    pub fn lfp(&self) -> Lfp {
+        unsafe { Lfp::new((self.get() as *const u8).add(LBP_OUTER as usize) as _) }
     }
 }

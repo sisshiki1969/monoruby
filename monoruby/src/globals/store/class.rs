@@ -399,8 +399,15 @@ impl Globals {
     pub(crate) fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
         let name = err.get_class_name();
         self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .expect(&format!("{name}"))
+            .expect(name)
             .as_class_id()
+    }
+
+    ///
+    /// Add a new public method *func* with *name* to the class of *class_id*.
+    ///
+    pub(crate) fn add_public_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
+        self.add_method(class_id, name, func_id, Visibility::Public)
     }
 
     ///
@@ -413,6 +420,14 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        #[cfg(feature = "perf")]
+        {
+            let info = self.store[func_id].get_wrapper_info();
+            let class_name = self.get_class_name(class_id);
+            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            self.codegen.perf_info2(info, &desc);
+        }
+        self.store[func_id].set_class(class_id);
         self.store[class_id].methods.insert(
             name,
             MethodTableEntry {
@@ -449,7 +464,15 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        #[cfg(feature = "perf")]
+        {
+            let info = self.store[func_id].get_wrapper_info();
+            let class_name = self.get_class_name(class_id);
+            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            self.codegen.perf_info2(info, &desc);
+        }
         let singleton = self.get_metaclass(class_id).id();
+        self.store[func_id].set_class(class_id);
         self.store[singleton].methods.insert(
             name,
             MethodTableEntry {
@@ -477,7 +500,7 @@ impl Globals {
                 match entry.visibility {
                     Visibility::Private => {
                         if !is_func_call {
-                            return Err(MonorubyErr::private_method_called(self, func_name, recv));
+                            return Err(MonorubyErr::private_method_called(func_name, recv));
                         }
                     }
                     Visibility::Protected => {
@@ -490,7 +513,7 @@ impl Globals {
                 }
                 Ok(entry.func_id())
             }
-            None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
+            None => Err(MonorubyErr::method_not_found(func_name, recv)),
         }
     }
 
@@ -499,10 +522,7 @@ impl Globals {
     ///
     pub(crate) fn method_defined(&mut self, class_id: ClassId, func_name: IdentId) -> bool {
         match self.check_method_for_class(class_id, func_name) {
-            Some(entry) => match entry.visibility {
-                Visibility::Private => false,
-                _ => true,
-            },
+            Some(entry) => !matches!(entry.visibility, Visibility::Private),
             None => false,
         }
     }
@@ -519,9 +539,7 @@ impl Globals {
     ) -> Result<MethodTableEntry> {
         match self.check_method_for_class(class, func_name) {
             Some(entry) => Ok(entry),
-            None => Err(MonorubyErr::method_not_found_for_class(
-                self, func_name, class,
-            )),
+            None => Err(MonorubyErr::method_not_found_for_class(func_name, class)),
         }
     }
 

@@ -14,9 +14,9 @@ mod rusage;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Process").id();
     globals.define_class_by_str("Tms", globals.object_class(), klass);
-    globals.define_builtin_module_func(klass, "pid", pid);
-    globals.define_builtin_module_func(klass, "times", times);
-    globals.define_builtin_module_func(klass, "clock_gettime", clock_gettime);
+    globals.define_builtin_module_func(klass, "pid", pid, 0);
+    globals.define_builtin_module_func(klass, "times", times, 0);
+    globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
 }
 
 ///
@@ -26,7 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
 #[monoruby_builtin]
-fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let tms_class = globals
         .get_qualified_constant(OBJECT_CLASS, &["Process", "Tms"])?
         .as_class();
@@ -65,7 +65,7 @@ fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/pid.html]
 #[monoruby_builtin]
-fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     Ok(Value::integer(std::process::id() as i64))
 }
 
@@ -76,27 +76,26 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments_range(1..=2)?;
-    let unit = if lfp.arg_len() == 1 {
-        IdentId::FLOAT_SECOND
-    } else {
-        match lfp.arg(1).try_symbol() {
+fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let unit = if let Some(arg1) = lfp.try_arg(1) {
+        match arg1.try_symbol() {
             Some(id) => id,
             None => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
-                    globals.to_s(lfp.arg(1))
+                    globals.to_s(arg1)
                 )))
             }
         }
+    } else {
+        IdentId::FLOAT_SECOND
     };
     let mut tp = TimeSpec::default();
-    let clk_id = lfp.arg(0).coerce_to_i64(globals)? as i32;
+    let clk_id = lfp.arg(0).coerce_to_i64()? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
     Ok(match unit {
-        IdentId::FLOAT_SECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000_000_000.0),
-        IdentId::FLOAT_MILLISECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000_000.0),
+        IdentId::FLOAT_SECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1_000_000_000.0),
+        IdentId::FLOAT_MILLISECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1_000_000.0),
         IdentId::FLOAT_MICROSECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1000.0),
         IdentId::SECOND => Value::integer(tp.sec()),
         IdentId::MILLISECOND => Value::integer(tp.millisec()),

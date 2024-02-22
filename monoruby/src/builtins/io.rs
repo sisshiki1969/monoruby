@@ -7,8 +7,8 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS);
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
-    globals.define_builtin_func(IO_CLASS, "sync", sync);
-    globals.define_builtin_func(IO_CLASS, "sync=", assign_sync);
+    globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
+    globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -25,12 +25,12 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]
-fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.arg(0))
 }
 

@@ -85,7 +85,7 @@ impl JitContext {
 
         let target = BBContext::union(&entries);
 
-        let mut bb = BBContext::new(&self);
+        let mut bb = BBContext::new(self);
         for (slot, coerced) in use_set {
             match target.slot(slot) {
                 LinkMode::Stack => {}
@@ -198,7 +198,7 @@ impl AsmIr {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
             if target.slot(slot) == LinkMode::Stack {
-                self.into_stack(&mut bb, slot, guarded);
+                self.write_back_with_guarded(&mut bb, slot, guarded);
             };
         }
 

@@ -7,12 +7,12 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS);
-    globals.define_builtin_class_func(TIME_CLASS, "new", now);
-    globals.define_builtin_class_func(TIME_CLASS, "now", now);
-    globals.define_builtin_func(TIME_CLASS, "inspect", inspect);
-    globals.define_builtin_func(TIME_CLASS, "to_s", to_s);
-    globals.define_builtin_func(TIME_CLASS, "strftime", strftime);
-    globals.define_builtin_func(TIME_CLASS, "-", sub);
+    globals.define_builtin_class_func(TIME_CLASS, "new", now, 0);
+    globals.define_builtin_class_func(TIME_CLASS, "now", now, 0);
+    globals.define_builtin_func(TIME_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(TIME_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(TIME_CLASS, "strftime", strftime, 1);
+    globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
 }
 
 ///
@@ -22,7 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
-fn now(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
+fn now(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInner::Local(t);
     Ok(Value::new_time(time_info))
@@ -34,7 +34,7 @@ fn now(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let time = lfp.self_val().as_time().to_string();
     Ok(Value::string(time))
 }
@@ -45,10 +45,10 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
-        TimeInner::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
+        TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
     Ok(Value::string(s))
@@ -60,12 +60,12 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
-fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let mut fmt = lfp.arg(0).expect_string(globals)?;
+fn strftime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut fmt = lfp.arg(0).expect_string()?;
     fmt = fmt.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format(&fmt).to_string(),
-        TimeInner::UTC(t) => {
+        TimeInner::Utc(t) => {
             let fmt = fmt + " UTC";
             t.format(&fmt).to_string()
         }
@@ -78,7 +78,7 @@ fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn sub(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs_rv = self_.try_rvalue().unwrap();
     let lhs = match lhs_rv.ty() {
@@ -89,7 +89,7 @@ fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
     let rhs = match rhs_rv.try_rvalue().unwrap().ty() {
         ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
-            return Err(MonorubyErr::method_not_found(globals, IdentId::_SUB, self_));
+            return Err(MonorubyErr::method_not_found(IdentId::_SUB, self_));
         }
     };
     let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;
@@ -99,7 +99,7 @@ fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TimeInner {
     Local(DateTime<FixedOffset>),
-    UTC(DateTime<Utc>),
+    Utc(DateTime<Utc>),
 }
 
 impl std::ops::Sub<Self> for TimeInner {
@@ -107,9 +107,9 @@ impl std::ops::Sub<Self> for TimeInner {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (TimeInner::Local(t), TimeInner::Local(rhs)) => t - rhs,
-            (TimeInner::Local(t), TimeInner::UTC(rhs)) => t.with_timezone(&Utc) - rhs,
-            (TimeInner::UTC(t), TimeInner::Local(rhs)) => t - rhs.with_timezone(&Utc),
-            (TimeInner::UTC(t), TimeInner::UTC(rhs)) => t - rhs,
+            (TimeInner::Local(t), TimeInner::Utc(rhs)) => t.with_timezone(&Utc) - rhs,
+            (TimeInner::Utc(t), TimeInner::Local(rhs)) => t - rhs.with_timezone(&Utc),
+            (TimeInner::Utc(t), TimeInner::Utc(rhs)) => t - rhs,
         }
     }
 }
@@ -118,7 +118,7 @@ impl std::fmt::Display for TimeInner {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             TimeInner::Local(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f %z")),
-            TimeInner::UTC(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f UTC")),
+            TimeInner::Utc(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f UTC")),
         }
     }
 }

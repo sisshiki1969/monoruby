@@ -62,7 +62,7 @@ fn main() {
                             {
                                 Ok(id) => id,
                                 Err(err) => {
-                                    err.show_error_message_and_all_loc();
+                                    err.show_error_message_and_all_loc(&globals);
                                     cont_mode = false;
                                     continue;
                                 }
@@ -76,7 +76,7 @@ fn main() {
                             cont_mode = true;
                         } else {
                             let err = MonorubyErr::parse(err);
-                            err.show_error_message_and_all_loc();
+                            err.show_error_message_and_all_loc(&globals);
                             cont_mode = false;
                         }
                         continue;
@@ -87,7 +87,7 @@ fn main() {
                 cont_mode = false;
                 match executor.exec_func(&mut globals, main_fid) {
                     Ok(val) => eprintln!("=> {}", globals.inspect(val)),
-                    Err(err) => err.show_error_message_and_all_loc(),
+                    Err(err) => err.show_error_message_and_all_loc(&globals),
                 };
                 script_line += 1;
             }

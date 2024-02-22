@@ -34,7 +34,7 @@ const DATA_LEN: usize = 64 * (SIZE - 1);
 const THRESHOLD: usize = 64 * (SIZE - 2);
 const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
-const MAX_PAGES: usize = 2048;
+const MAX_PAGES: usize = 8192;
 
 pub trait GC<T: GCBox> {
     fn mark(&self, alloc: &mut Allocator<T>);
@@ -181,6 +181,14 @@ impl<T: GCBox> Allocator<T> {
     #[allow(unused)]
     pub fn pages_len(&self) -> usize {
         self.pages.len() + 1
+    }
+
+    pub fn set_enabled(enable: bool) -> bool {
+        ALLOC.with(|alloc| {
+            let old = alloc.borrow().gc_enabled;
+            alloc.borrow_mut().gc_enabled = enable;
+            old
+        })
     }
 
     ///

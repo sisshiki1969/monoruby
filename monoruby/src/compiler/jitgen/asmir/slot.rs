@@ -175,7 +175,7 @@ impl SlotState {
     pub(super) fn is_array_ty(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::ArrayTy;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => assert_eq!(false, b),
+            LinkMode::Xmm(_) => assert!(!b),
             LinkMode::Literal(v) => assert_eq!(v.is_array_ty(), b),
             _ => {}
         };
@@ -185,7 +185,7 @@ impl SlotState {
     pub(super) fn is_fixnum(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Fixnum;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => assert_eq!(false, b),
+            LinkMode::Xmm(_) => assert!(!b),
             LinkMode::Literal(v) => assert_eq!(v.is_fixnum(), b),
             _ => {}
         };
@@ -195,7 +195,7 @@ impl SlotState {
     pub(super) fn is_float(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Float;
         match self.slots[slot] {
-            LinkMode::Xmm(_) => assert_eq!(true, b),
+            LinkMode::Xmm(_) => assert!(b),
             LinkMode::Literal(v) => assert_eq!(v.is_float(), b),
             _ => {}
         };
@@ -364,32 +364,12 @@ impl SlotState {
 }
 
 impl AsmIr {
-    pub(super) fn into_stack(&mut self, bb: &mut BBContext, slot: SlotId, guarded: Guarded) {
-        /*match bb.slot(slot) {
-            LinkMode::Xmm(xmm) => {
-                assert_eq!(Guarded::Float, bb.guarded(slot));
-                let slots = bb.xmm(xmm).to_vec();
-                for i in &slots {
-                    bb.set_both_float(*i, xmm);
-                }
-                self.xmm2stack(xmm, slots);
-            }
-            LinkMode::Literal(v) => {
-                self.lit2stack(bb, v, slot);
-            }
-            LinkMode::Alias(origin) => {
-                assert_eq!(bb.slots[origin], LinkMode::Stack);
-                assert!(bb.alias[origin.0 as usize].contains(&slot));
-                self.stack2reg(origin, GP::Rax);
-                self.reg2stack(GP::Rax, slot);
-                bb.alias[origin.0 as usize].retain(|e| *e != slot);
-            }
-            LinkMode::R15 => {
-                self.acc2stack(slot);
-                bb.r15 = None;
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {}
-        }*/
+    pub(super) fn write_back_with_guarded(
+        &mut self,
+        bb: &mut BBContext,
+        slot: SlotId,
+        guarded: Guarded,
+    ) {
         self.write_back_slot(bb, slot);
         bb.set_slot(slot, LinkMode::Stack, guarded);
     }
@@ -441,8 +421,8 @@ impl AsmIr {
     /// - r8
     ///
     pub(crate) fn unlink(&mut self, bb: &mut BBContext, slot: impl Into<Option<SlotId>>) {
-        match slot.into() {
-            Some(slot) => match bb.slots[slot] {
+        if let Some(slot) = slot.into() {
+            match bb.slots[slot] {
                 LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
                     assert!(bb.xmm(xmm).contains(&slot));
                     bb.xmm_mut(xmm).retain(|e| *e != slot);
@@ -473,8 +453,7 @@ impl AsmIr {
                         }
                     }
                 }
-            },
-            None => {}
+            }
         }
     }
 

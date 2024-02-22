@@ -26,7 +26,7 @@ pub(crate) struct Store {
     /// class table.
     classes: Vec<ClassInfo>,
     /// inline method info.
-    inline_method: Vec<(InlineGen, InlineAnalysis, String)>,
+    inline_method: Vec<(Box<InlineGen>, InlineAnalysis, String)>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -139,7 +139,7 @@ impl Store {
 impl Store {
     pub(super) fn add_inline_info(
         &mut self,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         name: String,
     ) -> InlineMethodId {
@@ -151,7 +151,7 @@ impl Store {
     pub(crate) fn get_inline_info(
         &self,
         id: InlineMethodId,
-    ) -> &(InlineGen, InlineAnalysis, String) {
+    ) -> &(Box<InlineGen>, InlineAnalysis, String) {
         let id: usize = id.into();
         &self.inline_method[id]
     }
@@ -180,6 +180,7 @@ impl Store {
                 lvar: LvarCollector::new(),
                 loc: Loc::default(),
             },
+            false,
             Loc::default(),
             sourceinfo,
         )
@@ -189,10 +190,12 @@ impl Store {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_method(name, info, loc, sourceinfo)
+        self.functions
+            .add_method(name, info, is_block_style, loc, sourceinfo)
     }
 
     pub fn add_classdef(
@@ -236,12 +239,28 @@ impl Store {
             .add_block(mother, outer, vec![], info, loc, sourceinfo)
     }
 
-    pub(super) fn add_builtin_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
-        self.functions.add_native_func(name, address)
+    pub(super) fn add_builtin_func(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.functions
+            .add_native_func(name, address, min, max, rest)
     }
 
-    pub(super) fn add_builtin_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
-        self.functions.add_native_func_eval(name, address)
+    pub(super) fn add_builtin_func_eval(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.functions
+            .add_native_func_eval(name, address, min, max, rest)
     }
 
     pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
@@ -278,7 +297,6 @@ impl Store {
             );
         }*/
         self.callsite_info.push(CallSiteInfo {
-            id,
             name,
             pos_num,
             kw_pos,
@@ -378,8 +396,6 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub(crate) struct CallSiteInfo {
-    /// ID
-    pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Position of the receiver.
@@ -406,8 +422,8 @@ pub(crate) struct CallSiteInfo {
 }
 
 impl CallSiteInfo {
-    pub fn kw_num(&self) -> usize {
-        self.kw_args.len()
+    pub fn kw_may_exists(&self) -> bool {
+        !self.kw_args.is_empty() || !self.hash_splat_pos.is_empty()
     }
 
     pub fn has_splat(&self) -> bool {

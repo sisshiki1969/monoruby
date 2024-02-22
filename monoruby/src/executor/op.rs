@@ -34,7 +34,7 @@ macro_rules! binop_values {
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        let err = MonorubyErr::cant_coerced_into_integer($op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -43,7 +43,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
                     (RV::Float(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into_float(&globals, $op_str, rhs);
+                        let err = MonorubyErr::cant_coerced_into_float($op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -118,7 +118,7 @@ pub(crate) extern "C" fn pow_values(
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_POW, rhs);
+            let err = MonorubyErr::cant_coerced_into_integer(IdentId::_POW, rhs);
             vm.set_error(err);
             return None;
         }
@@ -133,7 +133,7 @@ pub(crate) extern "C" fn pow_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_float(&globals, IdentId::_POW, rhs);
+            let err = MonorubyErr::cant_coerced_into_float(IdentId::_POW, rhs);
             vm.set_error(err);
             return None;
         }
@@ -189,7 +189,7 @@ pub(crate) extern "C" fn div_values(
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_DIV, rhs);
+            let err = MonorubyErr::cant_coerced_into_integer(IdentId::_DIV, rhs);
             vm.set_error(err);
             return None;
         }
@@ -198,7 +198,7 @@ pub(crate) extern "C" fn div_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_float(&globals, IdentId::_DIV, rhs);
+            let err = MonorubyErr::cant_coerced_into_float(IdentId::_DIV, rhs);
             vm.set_error(err);
             return None;
         }
@@ -224,7 +224,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        let err = MonorubyErr::cant_coerced_into_integer($op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -270,7 +270,7 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_SHR, rhs);
+            let err = MonorubyErr::cant_coerced_into_integer(IdentId::_SHR, rhs);
             vm.set_error(err);
             return None;
         }
@@ -303,7 +303,7 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into_integer(&globals, IdentId::_SHL, rhs);
+            let err = MonorubyErr::cant_coerced_into_integer(IdentId::_SHL, rhs);
             vm.set_error(err);
             return None;
         }
@@ -354,7 +354,7 @@ macro_rules! cmp_values {
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                     (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into_integer(&globals, $op_str, rhs);
+                        let err = MonorubyErr::cant_coerced_into_integer($op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -363,7 +363,7 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into_float(&globals, $op_str, rhs);
+                        let err = MonorubyErr::cant_coerced_into_float($op_str, rhs);
                         vm.set_error(err);
                         return None;
                     }
@@ -399,11 +399,11 @@ impl Executor {
             (RV::Nil, RV::Nil) => true,
             (RV::Nil, _) => false,
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
-            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(&rhs),
+            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
             (RV::Fixnum(_), _) => false,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
-            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(&rhs),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
             (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
             (RV::BigInt(_), _) => false,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
@@ -593,7 +593,7 @@ impl Executor {
     ) -> Result<Value> {
         let res = self
             .compare_values_inner(globals, lhs, rhs)?
-            .map_or(Value::nil(), |ord| Value::from_ord(ord));
+            .map_or(Value::nil(), Value::from_ord);
         Ok(res)
     }
 
@@ -630,7 +630,7 @@ impl Executor {
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).partial_cmp(&rhs),
             (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
-            (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(&rhs)),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
             (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
             (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
@@ -707,7 +707,7 @@ pub(crate) extern "C" fn bitnot_value(
     Some(v)
 }
 
-pub(crate) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Result<Value> {
+pub(crate) fn integer_index1(base: Value, index: Value) -> Result<Value> {
     // we must support Integer#[Range].
     match (base.unpack(), index.unpack()) {
         (RV::Fixnum(base), RV::Fixnum(index)) => {
@@ -721,11 +721,7 @@ pub(crate) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Re
             Ok(Value::integer(val))
         }
         (RV::Fixnum(_), RV::BigInt(_)) => Ok(Value::integer(0)),
-        (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            index,
-            INTEGER_CLASS,
-        )),
+        (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(index, INTEGER_CLASS)),
         (RV::BigInt(base), RV::Fixnum(index)) => {
             if index < 0 {
                 Ok(Value::integer(0))
@@ -735,77 +731,7 @@ pub(crate) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Re
             }
         }
         (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::integer(0)),
-        (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            index,
-            INTEGER_CLASS,
-        )),
+        (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(index, INTEGER_CLASS)),
         _ => unreachable!(),
-    }
-}
-
-pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
-    expand_splat_inner(src, dst)
-}
-
-pub extern "C" fn vm_expand_splat(
-    src: *const Value,
-    mut dst: *mut Value,
-    len: usize,
-    globals: &Globals,
-    callid: CallSiteId,
-) -> usize {
-    let mut dst_len = 0;
-    unsafe {
-        let splat_pos = &globals.store[callid].splat_pos;
-        for i in 0..len {
-            let v = *src.sub(i);
-            if splat_pos.contains(&i) {
-                let ofs = expand_splat_inner(v, dst);
-                dst_len += ofs;
-                dst = dst.sub(ofs);
-            } else {
-                *dst = v;
-                dst = dst.sub(1);
-                dst_len += 1;
-            }
-        }
-    }
-    dst_len
-}
-
-fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
-    if let Some(ary) = src.is_array() {
-        let len = ary.len();
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] };
-        }
-        len
-    } else if let Some(_range) = src.is_range() {
-        unimplemented!()
-    } else if let Some(_hash) = src.is_hash() {
-        unimplemented!()
-    } else {
-        unsafe { *dst = src };
-        1
-    }
-}
-
-pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
-    let ary: Array = src.into();
-    let len = ary.len();
-    if min_len <= len {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
-        len
-    } else {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
-        for i in len..min_len {
-            unsafe { *dst.sub(i) = Value::nil() }
-        }
-        min_len
     }
 }

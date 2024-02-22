@@ -63,6 +63,10 @@ impl MonorubyErr {
         &self.trace
     }
 
+    pub fn take_trace(&mut self) -> Vec<(Loc, SourceInfoRef)> {
+        std::mem::take(&mut self.trace)
+    }
+
     pub fn show_all_loc(&self) {
         for (loc, sourceinfo) in &self.trace {
             sourceinfo.show_loc(loc);
@@ -77,24 +81,28 @@ impl MonorubyErr {
         }
     }
 
-    pub fn show_error_message_and_all_loc(&self) {
-        eprintln!("{}", self.get_error_message());
+    pub fn show_error_message_and_all_loc(&self, globals: &Globals) {
+        eprintln!("{}", self.get_error_message(globals));
         self.show_all_loc();
     }
 
-    pub fn show_error_message_and_loc(&self) {
-        eprintln!("{}", self.get_error_message());
+    pub fn show_error_message_and_loc(&self, globals: &Globals) {
+        eprintln!("{}", self.get_error_message(globals));
         self.show_loc();
     }
 
-    pub fn get_error_message(&self) -> String {
-        format!("{} ({})", self.msg, self.get_class_name())
+    pub fn get_error_message(&self, globals: &Globals) -> String {
+        format!("{} ({})", self.show(globals), self.get_class_name())
+    }
+
+    pub fn show(&self, globals: &Globals) -> String {
+        format!("{}{}", self.msg, self.kind.show(globals),)
     }
 
     pub fn get_class_name(&self) -> &str {
         match &self.kind {
             MonorubyErrKind::Exception => "Exception",
-            MonorubyErrKind::NotMethod => "NoMethodError",
+            MonorubyErrKind::NotMethod(_) => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
@@ -102,7 +110,7 @@ impl MonorubyErr {
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",
             MonorubyErrKind::Range => "RangeError",
-            MonorubyErrKind::Type => "TypeError",
+            MonorubyErrKind::Type(_) => "TypeError",
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
             MonorubyErrKind::Load => "LoadError",
@@ -219,50 +227,31 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
-    pub(crate) fn method_return(val: Value, target_lfp: LFP) -> MonorubyErr {
+    pub(crate) fn method_return(val: Value, target_lfp: Lfp) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::MethodReturn(val, target_lfp),
             String::new(),
         )
     }
 
-    pub(crate) fn method_not_found(globals: &Globals, name: IdentId, obj: Value) -> MonorubyErr {
+    pub(crate) fn method_not_found(name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "undefined method `{name}' for {}:{}",
-                globals.inspect(obj),
-                obj.get_real_class_name(globals)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFound { name, obj }),
+            "",
         )
     }
 
-    pub(crate) fn method_not_found_for_class(
-        globals: &Globals,
-        name: IdentId,
-        class: ClassId,
-    ) -> MonorubyErr {
+    pub(crate) fn method_not_found_for_class(name: IdentId, class: ClassId) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "undefined method `{name}' for {}",
-                globals.get_class_name(class)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFoundForClass { name, class }),
+            "",
         )
     }
 
-    pub(crate) fn private_method_called(
-        globals: &Globals,
-        name: IdentId,
-        obj: Value,
-    ) -> MonorubyErr {
+    pub(crate) fn private_method_called(name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod,
-            format!(
-                "private method `{name}' called for {}:{}",
-                globals.to_s(obj),
-                obj.get_real_class_name(globals)
-            ),
+            MonorubyErrKind::NotMethod(NoMethodErrKind::PrivateMethodCalled { name, obj }),
+            "",
         )
     }
 
@@ -337,24 +326,19 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Type, msg)
+    pub(crate) fn typeerr(msg: impl ToString, kind: TypeErrKind) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Type(kind), msg)
     }
 
-    pub(crate) fn no_implicit_conversion(
-        globals: &Globals,
-        val: Value,
-        target_class: ClassId,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into {}",
-            val.get_real_class_name(globals),
-            globals.get_class_name(target_class),
-        ))
+    pub(crate) fn no_implicit_conversion(val: Value, target_class: ClassId) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NoImpricitConversion { val, target_class })
     }
 
     pub(crate) fn is_not_class_nor_module(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a class nor a module",))
+        MonorubyErr::typeerr(
+            format!("{name} is not a class nor a module"),
+            TypeErrKind::Other,
+        )
     }
 
     /*pub(crate) fn is_not_class_nor_module_rescue() -> MonorubyErr {
@@ -362,69 +346,49 @@ impl MonorubyErr {
     }*/
 
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a class"))
+        MonorubyErr::typeerr(format!("{name} is not a class"), TypeErrKind::Other)
     }
 
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("superclass mismatch for class {name}"))
+        MonorubyErr::typeerr(
+            format!("superclass mismatch for class {name}"),
+            TypeErrKind::Other,
+        )
     }
 
     ///
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
-    pub(crate) fn is_not_symbol_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{} is not a symbol nor a string",
-            globals.to_s(val)
-        ))
+    pub(crate) fn is_not_symbol_nor_string(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NotSymbolNorString { val })
     }
 
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
-    pub(crate) fn is_not_regexp_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{} is not a regexp nor a string",
-            globals.to_s(val)
-        ))
+    pub(crate) fn is_not_regexp_nor_string(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::NotRegexpNorString { val })
     }
 
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
-    pub(crate) fn cant_convert_into_float(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "can't convert {} into Float",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_convert_into_float(val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantConverFloat { val })
     }
 
     ///
     /// Set TypeError with message "{op}: *class of val* can't be coerced into Integer".
     ///
-    pub(crate) fn cant_coerced_into_integer(
-        globals: &Globals,
-        op: IdentId,
-        val: Value,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into Integer",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_coerced_into_integer(op: IdentId, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantCoercedInteger { op, val })
     }
 
     ///
     /// Set TypeError with message "{op}: *class of val* can't be coerced into Float".
     ///
-    pub(crate) fn cant_coerced_into_float(
-        globals: &Globals,
-        op: IdentId,
-        val: Value,
-    ) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "{op}: {} can't be coerced into Float",
-            val.get_real_class_name(globals)
-        ))
+    pub(crate) fn cant_coerced_into_float(op: IdentId, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantCoercedFloat { op, val })
     }
 
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
@@ -445,29 +409,6 @@ impl MonorubyErr {
 
     pub(crate) fn create_proc_no_block() -> MonorubyErr {
         MonorubyErr::argumenterr("tried to create Proc object without a block")
-    }
-
-    pub(crate) fn check_number_of_arguments_range(
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_number_of_arg(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
-        }
-    }
-
-    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
     }
 
     pub(crate) fn indexerr(msg: impl ToString) -> MonorubyErr {
@@ -535,8 +476,8 @@ impl MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    MethodReturn(Value, LFP),
-    NotMethod,
+    MethodReturn(Value, Lfp),
+    NotMethod(NoMethodErrKind),
     Arguments,
     Syntax,
     Unimplemented,
@@ -544,7 +485,7 @@ pub enum MonorubyErrKind {
     DivideByZero,
     LocalJump,
     Range,
-    Type,
+    Type(TypeErrKind),
     Index,
     Frozen,
     Load,
@@ -555,6 +496,92 @@ pub enum MonorubyErrKind {
     Fiber,
     StopIteration,
     Exception,
+}
+
+impl MonorubyErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            MonorubyErrKind::Type(kind) => kind.show(globals),
+            MonorubyErrKind::NotMethod(kind) => kind.show(globals),
+            _ => String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NoMethodErrKind {
+    MethodNotFound { name: IdentId, obj: Value },
+    MethodNotFoundForClass { name: IdentId, class: ClassId },
+    PrivateMethodCalled { name: IdentId, obj: Value },
+}
+
+impl NoMethodErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            NoMethodErrKind::MethodNotFound { name, obj } => format!(
+                "undefined method `{name}' for {}:{}",
+                globals.inspect(*obj),
+                obj.get_real_class_name(globals)
+            ),
+            NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
+                "undefined method `{name}' for {}",
+                globals.get_class_name(*class)
+            ),
+            NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
+                "private method `{name}' called for {}:{}",
+                globals.to_s(*obj),
+                obj.get_real_class_name(globals)
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeErrKind {
+    NoImpricitConversion { val: Value, target_class: ClassId },
+    NotSymbolNorString { val: Value },
+    NotRegexpNorString { val: Value },
+    CantConverFloat { val: Value },
+    CantCoercedInteger { op: IdentId, val: Value },
+    CantCoercedFloat { op: IdentId, val: Value },
+    Other,
+}
+
+impl TypeErrKind {
+    pub fn show(&self, globals: &Globals) -> String {
+        match self {
+            TypeErrKind::NoImpricitConversion { val, target_class } => format!(
+                "no implicit conversion of {} into {}",
+                val.get_real_class_name(globals),
+                globals.get_class_name(*target_class)
+            ),
+            TypeErrKind::NotSymbolNorString { val } => {
+                format!("{} is not a symbol nor a string", globals.to_s(*val))
+            }
+            TypeErrKind::NotRegexpNorString { val } => {
+                format!("{} is not a regexp nor a string", globals.to_s(*val))
+            }
+            TypeErrKind::CantConverFloat { val } => {
+                format!(
+                    "can't convert {} into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::CantCoercedInteger { op, val } => {
+                format!(
+                    "{op}: {} can't be coerced into Integer",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::CantCoercedFloat { op, val } => {
+                format!(
+                    "{op}: {} can't be coerced into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::Other => "type error".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

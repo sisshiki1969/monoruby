@@ -6,22 +6,22 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Module", MODULE_CLASS);
-    globals.define_builtin_func(MODULE_CLASS, "==", eq);
-    globals.define_builtin_func(MODULE_CLASS, "===", teq);
-    globals.define_builtin_func(MODULE_CLASS, "to_s", tos);
-    globals.define_builtin_func(MODULE_CLASS, "constants", constants);
-    globals.define_builtin_func(MODULE_CLASS, "const_get", const_get);
-    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods);
-    globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader);
-    globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer);
-    globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor);
-    globals.define_builtin_func(MODULE_CLASS, "include", include);
-    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined);
-    globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function);
-    globals.define_private_builtin_func(MODULE_CLASS, "private", private);
-    globals.define_private_builtin_func(MODULE_CLASS, "protected", protected);
-    globals.define_private_builtin_func(MODULE_CLASS, "public", public);
-    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method);
+    globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
+    globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
+    globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
+    globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
+    globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
+    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods, 1);
+    globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
+    globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
+    globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
+    globals.define_private_builtin_func_rest(MODULE_CLASS, "module_function", module_function);
+    globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
+    globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
+    globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+    globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
+    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
 }
 
 /// ### Module#==
@@ -29,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// []
 #[monoruby_builtin]
-fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let rhs = match lfp.arg(0).is_class_or_module() {
         Some(class) => class,
         None => return Ok(Value::bool(false)),
@@ -43,7 +43,7 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     Ok(Value::bool(lfp.arg(0).is_kind_of(globals, class)))
 }
@@ -53,7 +53,7 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
-fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_name = globals.get_class_name(lfp.self_val().as_class_id());
     let res = Value::string(class_name);
     Ok(res)
@@ -64,11 +64,9 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
-fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(0..=1)?;
+fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let v = if len == 0 || lfp.arg(0).as_bool() {
+    let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
         globals.get_constant_names_inherit(class_id)
     } else {
         globals.get_constant_names(class_id)
@@ -82,12 +80,10 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
-fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    lfp.check_number_of_arguments_range(1..=2)?;
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
-    let v = if len == 1 || lfp.arg(1).as_bool() {
+    let v = if lfp.try_arg(1).is_none() || lfp.arg(1).as_bool() {
         globals
             .search_constant_superclass(module, name)
             .map(|(_, v)| v)
@@ -101,7 +97,7 @@ fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 }
 
 /// ### Module#instance_methods
-/// - instance_methods(inherited_too = true) -> [Symbol]
+/// - instance_methods([NOT SUPPRTED] inherited_too = true) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
 ///
@@ -109,12 +105,7 @@ fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Res
 ///
 /// TODO: support inherited_too.
 #[monoruby_builtin]
-fn instance_methods(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-) -> Result<Value> {
+fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let iter = globals
         .get_method_names(class_id)
@@ -128,12 +119,12 @@ fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
-fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+    for v in lfp.arg(0).as_array().iter() {
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
@@ -145,12 +136,12 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
-fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+    for v in lfp.arg(0).as_array().iter() {
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
@@ -162,12 +153,12 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
-fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = Array::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.iter() {
-        let arg_name = v.expect_symbol_or_string(globals)?;
+    for v in lfp.arg(0).as_array().iter() {
+        let arg_name = v.expect_symbol_or_string()?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
@@ -181,23 +172,23 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
 #[monoruby_builtin]
-fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let len = arg0.as_array().len();
     if len == 0 {
         vm.set_module_function();
         Ok(Value::nil())
     } else {
         let class_id = lfp.self_val().as_class_id();
         let visi = vm.context_visibility();
-        for v in lfp.iter() {
-            let name = v.expect_symbol_or_string(globals)?;
+        for v in arg0.as_array().iter() {
+            let name = v.expect_symbol_or_string()?;
             let func_id = globals
                 .find_method_entry_for_class(class_id, name)?
                 .func_id();
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
-        let res = Value::array_from_iter(lfp.iter());
-        Ok(res)
+        Ok(arg0)
     }
 }
 
@@ -206,11 +197,14 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
-fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    lfp.check_min_number_of_arguments(1)?;
+    let arg0 = lfp.arg(0);
+    if arg0.as_array().len() == 0 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+    }
     let class = self_.as_class();
-    for v in lfp.rev() {
+    for v in arg0.as_array().iter().cloned().rev() {
         v.expect_module(globals)?;
         globals.include_module(class, v.as_class());
     }
@@ -223,8 +217,8 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 #[monoruby_builtin]
-fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Private)
+fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    change_visi(vm, globals, lfp.self_val(), lfp.arg(0), Visibility::Private)
 }
 
 /// ### Module#protected
@@ -233,8 +227,14 @@ fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 #[monoruby_builtin]
-fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Protected)
+fn protected(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    change_visi(
+        vm,
+        globals,
+        lfp.self_val(),
+        lfp.arg(0),
+        Visibility::Protected,
+    )
 }
 
 /// ### Module#public
@@ -243,39 +243,38 @@ fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 #[monoruby_builtin]
-fn public(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Public)
+fn public(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    change_visi(vm, globals, lfp.self_val(), lfp.arg(0), Visibility::Public)
 }
 
 fn change_visi(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
-    lfp: LFP,
+    arg: Value,
     visi: Visibility,
 ) -> Result<Value> {
-    let len = lfp.arg_len();
+    let len = arg.as_array().len();
     if len == 0 {
         vm.set_context_visibility(visi);
         return Ok(Value::nil());
     }
     let class_id = self_val.as_class_id();
     let mut names = vec![];
-    if let Some(ary) = lfp.arg(0).is_array() {
-        if len == 1 {
-            for v in ary.iter() {
-                names.push(v.expect_symbol_or_string(globals)?);
-            }
-            globals.change_method_visibility_for_class(class_id, &names, visi);
-            return Ok(lfp.arg(0));
+    if len == 1
+        && let Some(ary) = arg.as_array()[0].try_array_ty()
+    {
+        for v in ary.iter() {
+            names.push(v.expect_symbol_or_string()?);
         }
+        globals.change_method_visibility_for_class(class_id, &names, visi);
+        return Ok(arg.as_array()[0]);
     }
-    for v in lfp.iter() {
-        names.push(v.expect_symbol_or_string(globals)?);
+    for v in arg.as_array().iter() {
+        names.push(v.expect_symbol_or_string()?);
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
-    let res = Value::array_from_iter(lfp.iter());
-    Ok(res)
+    Ok(arg)
 }
 
 /// ### Module#method_defined?
@@ -283,10 +282,9 @@ fn change_visi(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
-fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.check_number_of_arguments(1)?;
+fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let func_name = lfp.arg(0).expect_symbol_or_string()?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))
 }
 
@@ -295,10 +293,10 @@ fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
 #[monoruby_builtin]
-fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let new_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let old_name = lfp.arg(1).expect_symbol_or_string(globals)?;
+    let new_name = lfp.arg(0).expect_symbol_or_string()?;
+    let old_name = lfp.arg(1).expect_symbol_or_string()?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
     Ok(Value::symbol(new_name))
 }

@@ -40,17 +40,11 @@ impl Ir {
     }
 
     pub(crate) fn is_loop_start(&self, index: usize) -> bool {
-        match self.0[index].0 {
-            BcIr::LoopStart => true,
-            _ => false,
-        }
+        matches!(self.0[index].0, BcIr::LoopStart)
     }
 
     pub(crate) fn is_loop_end(&self, index: usize) -> bool {
-        match self.0[index].0 {
-            BcIr::LoopEnd => true,
-            _ => false,
-        }
+        matches!(self.0[index].0, BcIr::LoopEnd)
     }
 
     pub(crate) fn is_terminal(&self, index: usize) -> bool {

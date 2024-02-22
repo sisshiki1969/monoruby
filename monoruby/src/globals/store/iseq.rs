@@ -43,8 +43,13 @@ pub(crate) struct ISeqInfo {
         Option<BcPc>,          // ensure destination pc
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
-    /// the name of arguments.
+    ///
+    /// Information of parameters.
+    ///
     pub args: ParamsInfo,
+    ///
+    /// Name of local variabl
+    ///
     pub locals: HashMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
@@ -185,24 +190,12 @@ impl ISeqInfo {
         self.non_temp_num as usize
     }
 
-    pub(crate) fn no_keyword(&self) -> bool {
-        self.args.kw_names.is_empty() && self.kw_rest().is_none()
-    }
-
-    pub(crate) fn kw_rest(&self) -> Option<SlotId> {
-        self.args.kw_rest
-    }
-
-    pub(crate) fn required_num(&self) -> usize {
-        self.args.required_num
-    }
-
-    ///
+    /*///
     /// Get a number of optional and rest parameters.
     ///
     pub(crate) fn optional_num(&self) -> usize {
         self.args.pos_num - self.args.required_num
-    }
+    }*/
 
     ///
     /// Get a number of required parameters.
@@ -396,7 +389,86 @@ impl ParamsInfo {
         }
     }
 
+    pub fn new_attr_reader() -> Self {
+        ParamsInfo::default()
+    }
+
+    pub fn new_attr_writer() -> Self {
+        ParamsInfo {
+            required_num: 1,
+            reqopt_num: 1,
+            pos_num: 1,
+            args_names: vec![],
+            kw_names: vec![],
+            kw_rest: None,
+            block_param: None,
+        }
+    }
+
+    pub fn new_native(min: usize, max: usize, rest: bool) -> Self {
+        ParamsInfo {
+            required_num: min,
+            reqopt_num: max,
+            pos_num: max + rest as usize,
+            args_names: vec![],
+            kw_names: vec![],
+            kw_rest: None,
+            block_param: None,
+        }
+    }
+
+    ///
+    /// The number of required arguments.
+    ///
+    pub(crate) fn req_num(&self) -> usize {
+        self.required_num
+    }
+
+    ///
+    /// The number of required + optional arguments.
+    ///
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.reqopt_num
+    }
+
+    ///
+    /// The number of optional + rest arguments.
+    ///
+    pub(crate) fn opt_rest_num(&self) -> usize {
+        self.pos_num - self.required_num
+    }
+
+    ///
+    /// The number of required + optional + rest arguments.
+    ///
     pub fn pos_num(&self) -> usize {
         self.pos_num
+    }
+
+    pub fn max_positional_args(&self) -> usize {
+        self.reqopt_num
+    }
+
+    pub fn total_args(&self) -> usize {
+        self.pos_num
+            + self.kw_names.len()
+            + self.kw_rest.is_some() as usize
+            + self.block_param.is_some() as usize
+    }
+
+    pub fn is_rest(&self) -> bool {
+        self.pos_num != self.reqopt_num
+    }
+
+    ///
+    /// If `self` is "simple", return true.
+    ///
+    /// "simple" means that the function has no optional, rest, keyword, keywoed rest, and block parameters.
+    ///
+    pub fn is_simple(&self) -> bool {
+        self.opt_rest_num() == 0
+            && self.kw_names.is_empty()
+            && self.kw_rest.is_none()
+            && self.block_param.is_none()
     }
 }

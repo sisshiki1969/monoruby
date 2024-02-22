@@ -6,19 +6,19 @@ pub(super) struct TimeSpec {
 
 impl TimeSpec {
     pub fn sec(&self) -> i64 {
-        self.tv_sec + self.tv_nsec / 1000_000_000
+        self.tv_sec + self.tv_nsec / 1_000_000_000
     }
 
     pub fn millisec(&self) -> i64 {
-        self.tv_sec * 1000 + self.tv_nsec / 1000_000
+        self.tv_sec * 1_000 + self.tv_nsec / 1_000_000
     }
 
     pub fn microsec(&self) -> i64 {
-        self.tv_sec * 1000_000 + self.tv_nsec / 1000
+        self.tv_sec * 1_000_000 + self.tv_nsec / 1_000
     }
 
     pub fn nanosec(&self) -> i64 {
-        self.tv_sec * 1000_000_000 + self.tv_nsec
+        self.tv_sec * 1_000_000_000 + self.tv_nsec
     }
 }
 

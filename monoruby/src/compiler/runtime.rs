@@ -2,6 +2,9 @@ use indexmap::IndexMap;
 
 use super::*;
 
+mod args;
+pub(crate) use args::*;
+
 //
 // Runtime functions.
 //
@@ -34,7 +37,7 @@ pub(super) extern "C" fn find_method(
         match globals.check_super(self_val, func_name) {
             Some(entry) => Some(entry.func_id()),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 None
             }
         }
@@ -63,7 +66,7 @@ pub(super) extern "C" fn find_method2(
         match globals.check_super(self_val, func_name) {
             Some(entry) => Some(entry.func_id()),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 None
             }
         }
@@ -93,7 +96,7 @@ pub(super) extern "C" fn vm_find_method(
         match globals.check_super(self_val, func_name) {
             Some(entry) => entry.func_id(),
             None => {
-                vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
+                vm.set_error(MonorubyErr::method_not_found(func_name, self_val));
                 return None;
             }
         }
@@ -174,11 +177,12 @@ pub(super) extern "C" fn gen_array(
                 if globals.store[callid].splat_pos.contains(&i) {
                     if let Some(fid) = globals.check_method(v, to_a) {
                         let a = vm.invoke_func(globals, fid, v, &[], None)?;
-                        if let Some(a) = a.is_array() {
+                        if let Some(a) = a.try_array_ty() {
                             ary.extend_from_slice(&a);
                         } else {
                             vm.set_error(MonorubyErr::typeerr(
                                 "`to_a' method should return Array.",
+                                TypeErrKind::Other,
                             ));
                             return None;
                         }
@@ -259,7 +263,7 @@ pub(super) extern "C" fn concatenate_regexp(
 }
 
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
-    match src.is_array() {
+    match src.try_array_ty() {
         Some(ary) => {
             if len <= ary.len() {
                 for i in 0..len {
@@ -283,49 +287,41 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
-///
-/// Handle arguments.
-///
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
+    src: *const Value,
+    callee_lfp: Lfp,
     callid: CallSiteId,
-    arg_num: usize,
-    callee_lfp: LFP,
 ) -> Option<Value> {
-    let meta = *callee_lfp.meta();
-    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)?;
-
-    let CallSiteInfo {
-        block_fid,
-        block_arg,
-        ..
-    } = globals.store[callid];
-
-    let bh = if let Some(block_fid) = block_fid {
-        let bh = BlockHandler::from(block_fid);
-        Some(bh)
-    } else if let Some(block_arg) = block_arg {
-        unsafe { Some(BlockHandler(vm.get_slot(block_arg).unwrap())) }
-    } else {
-        None
-    };
-    callee_lfp.set_block(bh);
-    Some(Value::nil())
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
+        Ok(_) => {
+            set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
+            Some(Value::nil())
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
-///
-/// Handle arguments.
-///
-pub(super) extern "C" fn jit_handle_arguments(
+pub(super) extern "C" fn jit_handle_arguments_no_block(
     vm: &mut Executor,
     globals: &mut Globals,
+    src: *const Value,
+    callee_lfp: Lfp,
     callid: CallSiteId,
-    arg_num: usize,
-    callee_lfp: LFP,
-    meta: Meta,
 ) -> Option<Value> {
-    vm.handle_arguments(globals, callid, arg_num, callee_lfp, meta)
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 #[repr(C)]
@@ -337,12 +333,14 @@ pub(super) struct ClassIdSlot {
 ///
 /// Generic index operation.
 ///
-/// # Arguments
-/// base: Value
-/// index: Value
-/// class_slot: &mut ClassIdSlot
+/// ### in
 ///
-/// # Returns
+/// - base: Value
+/// - index: Value
+/// - class_slot: &mut ClassIdSlot
+///
+/// ### out
+///
 /// Some(Value) if succeeded.
 /// None if failed.
 ///
@@ -356,9 +354,9 @@ pub(super) extern "C" fn get_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
-    /*match base_classid {
+    match base_classid {
         ARRAY_CLASS => {
-            return match base.as_array().get_elem1(globals, index) {
+            return match base.as_array().get_elem1(index) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -368,7 +366,7 @@ pub(super) extern "C" fn get_index(
         }
         HASH_CLASS => return Some(base.as_hash().get(index).unwrap_or_default()),
         INTEGER_CLASS => {
-            return match op::integer_index1(globals, base, index) {
+            return match op::integer_index1(base, index) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -383,7 +381,7 @@ pub(super) extern "C" fn get_index(
             return vm.invoke_func(globals, func_id, receiver, &[index], None);
         }
         _ => {}
-    }*/
+    }
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
 }
 
@@ -398,20 +396,17 @@ pub(super) extern "C" fn set_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
-    match base_classid {
-        ARRAY_CLASS => {
-            if let Some(idx) = index.try_fixnum() {
-                class_slot.idx = INTEGER_CLASS;
-                return match base.as_array_mut().set_index(idx, src) {
-                    Ok(val) => Some(val),
-                    Err(err) => {
-                        vm.set_error(err);
-                        None
-                    }
-                };
+    if base_classid == ARRAY_CLASS
+        && let Some(idx) = index.try_fixnum()
+    {
+        class_slot.idx = INTEGER_CLASS;
+        return match base.as_array_mut().set_index(idx, src) {
+            Ok(val) => Some(val),
+            Err(err) => {
+                vm.set_error(err);
+                None
             }
-        }
-        _ => {}
+        };
     }
     vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
 }
@@ -569,7 +564,7 @@ pub(super) extern "C" fn singleton_define_method(
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     let class_id = globals.get_singleton(obj).id();
-    globals.add_method(class_id, name, func, Visibility::Public);
+    globals.add_public_method(class_id, name, func);
     globals.class_version_inc();
 }
 
@@ -677,19 +672,6 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }
 
-pub(super) extern "C" fn err_wrong_number_of_arguments_range(
-    vm: &mut Executor,
-    given: usize,
-    min: usize,
-    max: usize,
-) -> Option<Value> {
-    if let Err(err) = MonorubyErr::check_number_of_arguments_range(given, min..=max) {
-        vm.set_error(err);
-        return None;
-    };
-    Some(Value::nil())
-}
-
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
@@ -752,13 +734,11 @@ pub(super) extern "C" fn handle_error(
             {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(ensure)
+                } else if lfp == target_lfp {
+                    vm.take_error();
+                    ErrorReturn::return_normal(val)
                 } else {
-                    if lfp == target_lfp {
-                        vm.take_error();
-                        ErrorReturn::return_normal(val)
-                    } else {
-                        ErrorReturn::return_err()
-                    }
+                    ErrorReturn::return_err()
                 };
             }
             let bc_base = func_info.pc();

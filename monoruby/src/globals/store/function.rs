@@ -5,6 +5,9 @@ pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr)
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
 pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
 pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
+pub(crate) const FUNCDATA_OFS: u64 = std::mem::offset_of!(FuncData, ofs) as _;
+pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
+//pub(crate) const FUNCDATA_MAX: u64 = std::mem::offset_of!(FuncData, max) as _;
 
 pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
@@ -41,6 +44,10 @@ pub(crate) struct FuncData {
     meta: Meta,
     /// the address of program counter
     pc: Option<BcPc>,
+    ofs: u16,
+    min: u16,
+    max: u16,
+    _padding: [u8; 4],
 }
 
 impl FuncData {
@@ -52,8 +59,9 @@ impl FuncData {
         self.pc = Some(pc);
     }
 
-    pub(super) fn set_reg_num(&mut self, reg_num: u16) {
+    fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
+        self.ofs = ((reg_num as usize * 8 + LBP_SELF as usize + 15) >> 4) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -84,13 +92,14 @@ impl FuncData {
 pub struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
+    mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 4:  1:simple (no optional, no rest, no keyword, no block)
     /// bit 3:  0:no eval 1:eval(which possibly manipulates stack slots in outer frames)
     /// bit 2:  0:method_style arg 1:block_style arg
     /// bit 1:  0:Ruby 1:native
     /// bit 0:  0:method 1:class_def
     kind: u8,
-    mode: u8,
 }
 
 impl std::fmt::Debug for Meta {
@@ -115,6 +124,7 @@ impl Meta {
     pub fn new(
         func_id: Option<FuncId>,
         reg_num: u16,
+        is_simple: bool,
         is_eval: bool,
         is_native: bool,
         is_class_def: bool,
@@ -123,11 +133,12 @@ impl Meta {
         Self {
             func_id,
             reg_num,
-            kind: (is_eval as u8) << 3
+            mode: 0,
+            kind: (is_simple as u8) << 4
+                | (is_eval as u8) << 3
                 | (is_block_style as u8) << 2
                 | (is_native as u8) << 1
                 | is_class_def as u8,
-            mode: 0,
         }
     }
 
@@ -135,22 +146,51 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
-    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64, is_block_style: bool) -> Self {
+    fn vm_method(
+        func_id: impl Into<Option<FuncId>>,
+        reg_num: i64,
+        is_block_style: bool,
+        is_simple: bool,
+    ) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false, false, is_block_style)
+        Self::new(
+            func_id.into(),
+            reg_num,
+            is_simple,
+            false,
+            false,
+            false,
+            is_block_style,
+        )
     }
 
     fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id.into(), reg_num, false, false, true, false)
+        Self::new(func_id.into(), reg_num, true, false, false, true, false)
     }
 
-    fn native(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, false, true, false, false)
+    fn native(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
+        Self::new(
+            Some(func_id),
+            reg_num as u16,
+            is_simple,
+            false,
+            true,
+            false,
+            false,
+        )
     }
 
-    fn native_eval(func_id: FuncId) -> Self {
-        Self::new(Some(func_id), 1, true, true, false, false)
+    fn native_eval(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
+        Self::new(
+            Some(func_id),
+            reg_num as u16,
+            is_simple,
+            true,
+            true,
+            false,
+            false,
+        )
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -161,11 +201,26 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
+    /*
+    ///
+    /// If `self` is "simple", return true.
+    ///
+    /// "simple" means that the function has no optional, rest, keyword, keyword rest, and block parameters.
+    ///
+    pub fn is_simple(&self) -> bool {
+        (self.kind & 0b1_0000) != 0
+    }
+    */
+
     ///
     /// Returns true if this function possibly manipulates outer local variables.
     ///
     pub fn is_eval(&self) -> bool {
         (self.kind & 0b1000) != 0
+    }
+
+    pub fn is_block_style(&self) -> bool {
+        (self.kind & 0b100) != 0
     }
 
     pub fn is_native(&self) -> bool {
@@ -199,11 +254,11 @@ mod test {
 
     #[test]
     fn meta_test() {
-        let meta = Meta::vm_method(FuncId::new(12), 42, false);
+        let meta = Meta::vm_method(FuncId::new(12), 42, false, false);
         assert_eq!(FuncId::new(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
         assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId::new(42), -1, false);
+        let mut meta = Meta::vm_method(FuncId::new(42), -1, false, false);
         assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
         meta.set_reg_num(12);
@@ -249,10 +304,8 @@ impl std::default::Default for Funcs {
     }
 }
 
-use crate::builtins::Arg;
-
 #[monoruby_builtin]
-fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let e: Enumerator = lfp.self_val().into();
     let receiver = e.obj;
     let method = e.method;
@@ -262,14 +315,13 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -
         method,
         receiver,
         args,
-        Some(BlockHandler::from(FuncId::new(2))),
+        Some(BlockHandler::from_current(FuncId::new(2))),
     )
 }
 
 #[monoruby_builtin]
-fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let v = Value::array_from_iter(lfp.iter());
-    vm.yield_fiber(globals, v)
+fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    vm.yield_fiber(globals, lfp.arg(0))
 }
 
 impl alloc::GC<RValue> for Funcs {
@@ -296,12 +348,13 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
+        Ok(self.add_method_iseq(name, args, is_block_style, loc, sourceinfo))
     }
 
     pub(super) fn add_block(
@@ -336,15 +389,31 @@ impl Funcs {
         Ok(func_id)
     }
 
-    pub(super) fn add_native_func(&mut self, name: String, address: BuiltinFn) -> FuncId {
+    pub(super) fn add_native_func(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native(id, name, address));
+        self.info
+            .push(FuncInfo::new_native(id, name, address, min, max, rest));
         id
     }
 
-    pub(super) fn add_native_func_eval(&mut self, name: String, address: BuiltinFn) -> FuncId {
+    pub(super) fn add_native_func_eval(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native_eval(id, name, address));
+        self.info
+            .push(FuncInfo::new_native_eval(id, name, address, min, max, rest));
         id
     }
 
@@ -366,11 +435,12 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         args: ParamsInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, args, is_block_style, loc, sourceinfo);
         self.info.push(info);
         func_id
     }
@@ -428,7 +498,7 @@ impl Funcs {
                     optional_info.push(OptionalInfo::new(local, initializer));
                 }
                 ParamKind::Rest(name) => {
-                    args_names.push(name.map(|n| IdentId::get_id_from_string(n)));
+                    args_names.push(name.map(IdentId::get_id_from_string));
                     assert_eq!(0, rest);
                     rest = 1;
                 }
@@ -510,14 +580,25 @@ impl std::default::Default for FuncKind {
 pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
 #[derive(Debug, Clone, Default)]
-pub struct FuncInfo {
+struct FuncExt {
     /// name of this function.
     name: Option<IdentId>,
+    /// class id which this function belongs to.
+    class_id: Option<ClassId>,
+    /// JIT code entries for each class of *self*.
+    jit_entry: HashMap<ClassId, DestLabel>,
+    /// parameter information of this function.
+    params: ParamsInfo,
+    #[cfg(feature = "perf")]
+    wrapper: Option<(CodePtr, usize, CodePtr, usize)>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FuncInfo {
+    /// function data.
     data: FuncData,
     pub(crate) kind: FuncKind,
-    /// JIT code entries for each class of *self*.
-    jit_entry: Box<HashMap<ClassId, DestLabel>>,
-    _padding: usize,
+    ext: Box<FuncExt>,
 }
 
 impl alloc::GC<RValue> for FuncInfo {
@@ -527,34 +608,53 @@ impl alloc::GC<RValue> for FuncInfo {
 }
 
 impl FuncInfo {
-    fn new(name: impl Into<Option<IdentId>>, kind: FuncKind, meta: Meta) -> Self {
+    fn new(
+        name: impl Into<Option<IdentId>>,
+        kind: FuncKind,
+        meta: Meta,
+        params: ParamsInfo,
+    ) -> Self {
         let name = name.into();
+        let min = params.req_num() as u16;
+        let max = params.reqopt_num() as u16;
+        let ofs = ((max as usize * 8 + LBP_ARG0 as usize + 15) >> 4) as u16;
         Self {
-            name,
             data: FuncData {
                 codeptr: None,
                 pc: None,
                 meta,
+                ofs,
+                min,
+                max,
+                _padding: [0; 4],
             },
             kind,
-            jit_entry: Default::default(),
-            _padding: 0,
+            ext: Box::new(FuncExt {
+                name,
+                class_id: None,
+                jit_entry: Default::default(),
+                params,
+                #[cfg(feature = "perf")]
+                wrapper: None,
+            }),
         }
     }
 
     fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
-        args: ParamsInfo,
+        params: ParamsInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name, args, loc, sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, false),
+            Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
+            params,
         )
     }
 
@@ -562,15 +662,16 @@ impl FuncInfo {
         func_id: FuncId,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
-        args: ParamsInfo,
+        params: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, mother, outer, args, loc, sourceinfo);
+        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, true),
+            Meta::vm_method(func_id, 0, true, params.is_simple()),
+            params,
         )
     }
 
@@ -585,47 +686,82 @@ impl FuncInfo {
             name,
             FuncKind::ISeq(Box::new(info)),
             Meta::vm_classdef(func_id, 0),
+            ParamsInfo::default(),
         )
     }
 
-    fn new_native(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
+    fn new_native(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native(func_id),
+            Meta::native(func_id, reg_num, params.is_simple()),
+            params,
         )
     }
 
-    fn new_native_eval(func_id: FuncId, name: String, address: BuiltinFn) -> Self {
+    fn new_native_eval(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
-            Meta::native_eval(func_id),
+            Meta::native_eval(func_id, reg_num, params.is_simple()),
+            params,
         )
     }
 
     fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        let params = ParamsInfo::new_attr_reader();
+        let reg_num = params.total_args() + 1;
         Self::new(
             name,
             FuncKind::AttrReader { ivar_name },
-            Meta::native(func_id),
+            Meta::native(func_id, reg_num, true),
+            params,
         )
     }
 
     fn new_attr_writer(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        let params = ParamsInfo::new_attr_writer();
+        let reg_num = params.total_args() + 1;
         Self::new(
             name,
             FuncKind::AttrWriter { ivar_name },
-            Meta::native(func_id),
+            Meta::native(func_id, reg_num, true),
+            params,
         )
     }
 
     pub(crate) fn name(&self) -> Option<IdentId> {
-        self.name
+        self.ext.name
+    }
+
+    /*pub(crate) fn class(&self) -> Option<ClassId> {
+        self.ext.class_id
+    }*/
+
+    pub(super) fn set_class(&mut self, class: ClassId) {
+        self.ext.class_id = Some(class);
     }
 
     ///
@@ -649,6 +785,59 @@ impl FuncInfo {
         self.data.codeptr()
     }
 
+    pub(crate) fn req_num(&self) -> usize {
+        self.ext.params.req_num()
+    }
+
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.ext.params.reqopt_num()
+    }
+
+    pub(crate) fn pos_num(&self) -> usize {
+        self.ext.params.pos_num()
+    }
+
+    pub(crate) fn kw_names(&self) -> &[IdentId] {
+        &self.ext.params.kw_names
+    }
+
+    pub(crate) fn kw_rest(&self) -> Option<SlotId> {
+        self.ext.params.kw_rest
+    }
+
+    pub(crate) fn no_keyword(&self) -> bool {
+        self.kw_names().is_empty() && self.kw_rest().is_none()
+    }
+
+    pub(crate) fn is_rest(&self) -> bool {
+        self.ext.params.is_rest()
+    }
+
+    pub(crate) fn is_block_style(&self) -> bool {
+        self.meta().is_block_style()
+    }
+
+    pub(crate) fn total_args(&self) -> usize {
+        self.ext.params.total_args()
+    }
+
+    ///
+    /// Get the max number of positional arguments (= required + optional) of this function.
+    ///
+    pub(crate) fn max_positional_args(&self) -> usize {
+        self.ext.params.max_positional_args()
+    }
+
+    pub(crate) fn single_arg_expand(&self) -> bool {
+        let is_rest = self.ext.params.is_rest();
+        self.meta().is_block_style() && (self.ext.params.max_positional_args() > 1 || is_rest)
+    }
+
+    pub(crate) fn discard_excess_positional_args(&self) -> bool {
+        let is_rest = self.ext.params.is_rest();
+        self.meta().is_block_style() && !is_rest
+    }
+
     ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
@@ -659,6 +848,21 @@ impl FuncInfo {
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
         self.data.set_codeptr(codeptr)
+    }
+
+    #[cfg(feature = "perf")]
+    pub(in crate::globals) fn set_wrapper_info(
+        &mut self,
+        info: (monoasm::CodePtr, usize, monoasm::CodePtr, usize),
+    ) {
+        self.ext.wrapper = Some(info);
+    }
+
+    #[cfg(feature = "perf")]
+    pub(in crate::globals) fn get_wrapper_info(
+        &self,
+    ) -> (monoasm::CodePtr, usize, monoasm::CodePtr, usize) {
+        self.ext.wrapper.clone().unwrap()
     }
 
     pub(crate) fn data_ref(&self) -> &FuncData {
@@ -698,11 +902,11 @@ impl FuncInfo {
         self_class: ClassId,
         entry: DestLabel,
     ) -> Option<DestLabel> {
-        self.jit_entry.insert(self_class, entry)
+        self.ext.jit_entry.insert(self_class, entry)
     }
 
     pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
-        self.jit_entry.get(&self_class).cloned()
+        self.ext.jit_entry.get(&self_class).cloned()
     }
 }
 
