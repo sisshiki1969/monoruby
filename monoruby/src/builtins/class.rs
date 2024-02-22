@@ -4,6 +4,10 @@ use super::*;
 // Class class
 //
 
+pub fn gen_class_new_object() -> Box<InlineGen> {
+    Box::new(gen_class_new(allocate_object))
+}
+
 pub(super) fn init(globals: &mut Globals) {
     let module = MODULE_CLASS.get_module(globals);
     globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
@@ -12,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
         CLASS_CLASS,
         &["new"],
         new,
-        inline_class_new,
+        gen_class_new_object(),
         analysis::v_v_vv,
         0,
         0,
@@ -80,88 +84,86 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     Ok(obj)
 }
 
-pub(super) fn inline_class_new(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
-    let CallSiteInfo {
-        recv,
-        args,
-        pos_num,
-        dst,
-        ..
-    } = *callsite;
-    ir.write_back_callargs(bb, callsite);
-    ir.unlink(bb, dst);
-    ir.stack2reg(recv, GP::Rdi);
-    let using = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
-    ir.inline(move |gen, labels| {
-        let cached_version = gen.jit.const_i32(-1);
-        let cached_funcid = gen.jit.const_i32(-1);
-        let class_version = gen.class_version_label();
-        let slow_path = gen.jit.label();
-        let checked = gen.jit.label();
-        let initialize = gen.jit.label();
-        let exit = gen.jit.label();
-        let error = labels[error];
-        gen.xmm_save(using);
-        monoasm!( &mut gen.jit,
-            movq rax, (allocate_instance);
-            call rax;
-            movq r15, rax; // r15 <- new instance
-            movl rax, [rip + class_version];
-            cmpl rax, [rip + cached_version];
-            jne  slow_path;
-            movl rax, [rip + cached_funcid];
-        checked:
-            testq rax, rax;
-            jne  initialize;
-        exit:
-            movq rax, r15;
-        );
+pub(super) fn gen_class_new(
+    f: extern "C" fn(Value) -> Value,
+) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, &CallSiteInfo, BcPc) {
+    move |ir: &mut AsmIr, _store: &Store, bb: &mut BBContext, callsite: &CallSiteInfo, pc: BcPc| {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            dst,
+            ..
+        } = *callsite;
+        ir.write_back_callargs(bb, callsite);
+        ir.unlink(bb, dst);
+        ir.stack2reg(recv, GP::Rdi);
+        let using = bb.get_using_xmm();
+        let error = ir.new_error(bb, pc);
+        ir.inline(move |gen, labels| {
+            let cached_version = gen.jit.const_i32(-1);
+            let cached_funcid = gen.jit.const_i32(-1);
+            let class_version = gen.class_version_label();
+            let slow_path = gen.jit.label();
+            let checked = gen.jit.label();
+            let initialize = gen.jit.label();
+            let exit = gen.jit.label();
+            let error = labels[error];
+            gen.xmm_save(using);
+            monoasm!( &mut gen.jit,
+                movq rax, (f);
+                call rax;
+                movq r15, rax; // r15 <- new instance
+                movl rax, [rip + class_version];
+                cmpl rax, [rip + cached_version];
+                jne  slow_path;
+                movl rax, [rip + cached_funcid];
+            checked:
+                testq rax, rax;
+                jne  initialize;
+            exit:
+                movq rax, r15;
+            );
 
-        gen.xmm_restore(using);
-        gen.handle_error(error);
+            gen.xmm_restore(using);
+            gen.handle_error(error);
 
-        gen.jit.select_page(1);
-        monoasm!( &mut gen.jit,
-        initialize:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, rax;
-            movq rcx, r15;
-            lea r8, [r14 - (crate::executor::jitgen::conv(args))];
-            movl r9, (pos_num);
-            subq rsp, 8;
-            xorq rax, rax;
-            pushq rax;
-            movq rax, (gen.method_invoker2);
-            call rax;
-            addq rsp, 16;
-            testq rax, rax;
-            jne  exit;
-            xorq r15, r15;
-            jmp  exit;
-        slow_path:
-            movq rdi, r12;
-            movq rsi, r15;
-            movq rax, (check_initializer);
-            call rax;
-            movl [rip + cached_funcid], rax;
-            movl rdi, [rip + class_version];
-            movl [rip + cached_version], rdi;
-            jmp  checked;
-        );
-        gen.jit.select_page(0);
-    });
-    ir.rax2acc(bb, dst);
+            gen.jit.select_page(1);
+            monoasm!( &mut gen.jit,
+            initialize:
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, rax;
+                movq rcx, r15;
+                lea r8, [r14 - (crate::executor::jitgen::conv(args))];
+                movl r9, (pos_num);
+                subq rsp, 8;
+                xorq rax, rax;
+                pushq rax;
+                movq rax, (gen.method_invoker2);
+                call rax;
+                addq rsp, 16;
+                testq rax, rax;
+                jne  exit;
+                xorq r15, r15;
+                jmp  exit;
+            slow_path:
+                movq rdi, r12;
+                movq rsi, r15;
+                movq rax, (check_initializer);
+                call rax;
+                movl [rip + cached_funcid], rax;
+                movl rdi, [rip + class_version];
+                movl [rip + cached_version], rdi;
+                jmp  checked;
+            );
+            gen.jit.select_page(0);
+        });
+        ir.rax2acc(bb, dst);
+    }
 }
 
-extern "C" fn allocate_instance(class_val: Value) -> Value {
+extern "C" fn allocate_object(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::object(class_id)
 }

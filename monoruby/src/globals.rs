@@ -20,7 +20,7 @@ use prng::*;
 pub use store::*;
 
 pub(crate) type InlineGen =
-    fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc);
+    dyn Fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc);
 pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]

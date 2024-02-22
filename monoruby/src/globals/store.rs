@@ -26,7 +26,7 @@ pub(crate) struct Store {
     /// class table.
     classes: Vec<ClassInfo>,
     /// inline method info.
-    inline_method: Vec<(InlineGen, InlineAnalysis, String)>,
+    inline_method: Vec<(Box<InlineGen>, InlineAnalysis, String)>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -139,7 +139,7 @@ impl Store {
 impl Store {
     pub(super) fn add_inline_info(
         &mut self,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         name: String,
     ) -> InlineMethodId {
@@ -151,7 +151,7 @@ impl Store {
     pub(crate) fn get_inline_info(
         &self,
         id: InlineMethodId,
-    ) -> &(InlineGen, InlineAnalysis, String) {
+    ) -> &(Box<InlineGen>, InlineAnalysis, String) {
         let id: usize = id.into();
         &self.inline_method[id]
     }

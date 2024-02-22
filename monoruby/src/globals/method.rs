@@ -164,7 +164,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {
@@ -183,7 +183,7 @@ impl Globals {
         class_id: ClassId,
         name: &[&str],
         address: BuiltinFn,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         min: usize,
         max: usize,
@@ -250,7 +250,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         max: usize,
         min: usize,
@@ -274,7 +274,7 @@ impl Globals {
         class_id: ClassId,
         name: &[&str],
         address: BuiltinFn,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
@@ -319,7 +319,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        inline_gen: InlineGen,
+        inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {

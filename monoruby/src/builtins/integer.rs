@@ -10,7 +10,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, integer_tof, analysis::f_v, 0);
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "to_f",
+        to_f,
+        Box::new(integer_tof),
+        analysis::f_v,
+        0,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
@@ -22,8 +29,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "&", band, 1);
     globals.define_builtin_func(INTEGER_CLASS, "|", bor, 1);
     globals.define_builtin_func(INTEGER_CLASS, "^", bxor, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, integer_shr, analysis::v_v_v, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, integer_shl, analysis::v_v_v, 1);
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        ">>",
+        shr,
+        Box::new(integer_shr),
+        analysis::v_v_v,
+        1,
+    );
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "<<",
+        shl,
+        Box::new(integer_shl),
+        analysis::v_v_v,
+        1,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "==", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, "===", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);

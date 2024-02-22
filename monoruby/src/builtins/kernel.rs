@@ -10,7 +10,14 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Kernel");
     let kernel_class = klass.id();
     globals.include_module(OBJECT_CLASS.get_module(globals), klass);
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, object_nil, analysis::v_v, 0);
+    globals.define_builtin_inline_func(
+        kernel_class,
+        "nil?",
+        nil,
+        Box::new(object_nil),
+        analysis::v_v,
+        0,
+    );
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);

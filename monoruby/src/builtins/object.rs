@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
         OBJECT_CLASS,
         "object_id",
         object_id,
-        object_object_id,
+        Box::new(object_object_id),
         analysis::v_v,
         0,
     );
@@ -35,7 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
         OBJECT_CLASS,
         &["send", "__send__"],
         send,
-        object_send,
+        Box::new(object_send),
         analysis::v_v_vv,
         0,
         0,

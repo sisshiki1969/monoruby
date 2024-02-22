@@ -684,13 +684,12 @@ impl JitContext {
             TraceIr::InlineCall {
                 inline_id, callid, ..
             } => {
-                let inline_gen = store.get_inline_info(inline_id).0;
                 let recv = store[callid].recv;
                 self.ir.fetch_to_reg(bb, recv, GP::Rdi);
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.guard_class_version(pc, using_xmm, deopt, error);
-                inline_gen(&mut self.ir, store, bb, &store[callid], pc);
+                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, &store[callid], pc);
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);
