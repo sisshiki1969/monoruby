@@ -6,13 +6,18 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Proc", PROC_CLASS);
-    globals.define_builtin_class_func(PROC_CLASS, "new", new);
-    globals.define_builtin_func(PROC_CLASS, "call", call);
+    globals.define_builtin_class_func(PROC_CLASS, "new", new, 0);
+    globals.define_builtin_func_rest(PROC_CLASS, "call", call);
 }
 
+///
 /// ### Proc.new
+///
+/// - new { ... } -> Proc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let p = vm.generate_proc(globals, bh)?;
         Ok(p.into())
@@ -21,10 +26,18 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
     }
 }
 
+///
 /// ### Proc#call
+///
+/// - [NOT SUPPORTED] self[*arg] -> ()
+/// - call(*arg) -> ()
+/// - [NOT SUPPORTED] self === *arg -> ()
+/// - [NOT SUPPORTED] yield(*arg) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    vm.invoke_proc(globals, lfp.self_val(), &lfp.to_vec())
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    vm.invoke_proc(globals, lfp.self_val(), &lfp.arg(0).as_array())
 }
 
 #[cfg(test)]

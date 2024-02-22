@@ -6,7 +6,7 @@ const CACHED_VERSION: i64 = 28 - 16;
 const CACHED_FUNCID: i64 = 8 - 16;
 const RET_REG: i64 = 4 - 16;
 const OPCODE_SUB: i64 = 7 - 16;
-const POS_NUM: i64 = 16 - 16;
+const POS_NUM: i64 = 0;
 const ARG_REG: i64 = 18 - 16;
 const RECV_REG: i64 = 20 - 16;
 
@@ -38,7 +38,7 @@ impl Codegen {
     /// version:  class version
     /// fid:      FuncId
     /// ~~~
-    pub(super) fn vm_call(&mut self, has_splat: bool) -> CodePtr {
+    pub(super) fn vm_call(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exec = self.jit.label();
         let slow_path1 = self.jit.label();
@@ -69,8 +69,7 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-        self.set_arguments(has_splat);
-        self.call();
+        self.call(is_simple);
         self.fetch_and_dispatch();
 
         self.slow_path(exec, slow_path1, slow_path2);
@@ -104,45 +103,104 @@ impl Codegen {
             subq rsp, 8;
         };
         self.set_block_self_outer();
-        self.set_arguments(true);
-        self.call();
+        self.call(true);
         self.fetch_and_dispatch();
         label
+    }
+
+    ///
+    /// Preparation for call.
+    ///
+    /// ### in
+    /// - r13: pc
+    ///
+    /// ### out
+    /// - r8: CallSiteId
+    /// - r9: pos_num
+    /// - rdx: *const args
+    ///
+    fn call_prep(&mut self) {
+        monoasm! { &mut self.jit,
+            movl r8, [r13 + (CALLSITE_ID)]; // r8 <- CallSiteId
+        }
     }
 
     ///
     /// Call
     ///
     /// ### in
-    /// - rdi: args len
     /// - r13: pc
     /// - r15: &FuncData
     ///
-    fn call(&mut self) {
+    fn call(
+        &mut self,
+        // The call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
+        is_simple: bool,
+    ) {
         monoasm! { &mut self.jit,
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp -(16 + LBP_META)], rax;
-            movq rsi, [r15 + (FUNCDATA_PC)];
         }
-        self.block_arg_expand();
         monoasm! { &mut self.jit,
-            movl rdx, [r13 + (CALLSITE_ID)];    // CallSiteId
+            movzxw r9, [r13 + (POS_NUM)];
+            movzxw rdx, [r13 + (ARG_REG)];
         }
-        self.handle_arguments();
-        self.vm_handle_error();
+        self.vm_get_slot_addr(GP::Rdx);
+        if is_simple {
+            // if callee is "simple" (has no optional parameter, no rest parameter, no keyword parameters,
+            // no keyword rest parameter), no single arg expansion, and req == pos_num == req_opt,
+            // we can optimize this.
+            let generic = self.jit.label();
+            let exit = self.jit.label();
+            let loop_ = self.jit.label();
+            //let opt = self.jit.label();
+            // rax: Meta
+            // r9: number of positional arguments passed to callee
+            // rdx: *const args
+            //self.guard_simple_call(GP::Rax, GP::R9, GP::Rdx, opt, generic);
+            monoasm! { &mut self.jit,
+            //opt:
+                // check Meta. if !is_simple || is_block_style, go to generic.
+                shrq rax, 56;
+                testq rax, 0b1_0000;
+                jz  generic;
+                cmpw r9, [r15 + (FUNCDATA_MIN)];
+                jne  generic;
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+                // rdx : *args
+                // r9 : len
+                testq r9, r9;
+                jeq  exit;
+                negq r9;
+            loop_:
+                movq rax, [rdx + r9 * 8 + 8];
+                movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
+                addq r9, 1;
+                jne  loop_;
+            exit:
+            };
+            self.jit.select_page(1);
+            self.jit.bind_label(generic);
+            self.call_prep();
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.vm_handle_error();
+            monoasm! { &mut self.jit,
+                jmp exit;
+            }
+            self.jit.select_page(0);
+        } else {
+            self.call_prep();
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.vm_handle_error();
+        }
         monoasm! { &mut self.jit,
-            movq rdx, rdi;
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
-            // push cfp
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rsi], rdi;
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-            // set lfp
-            lea  r14, [rsp - 16];
-            movq [r14 - (BP_LFP)], r14;
+        }
+        self.push_frame();
+        self.set_lfp();
+        monoasm! { &mut self.jit,
             call [r15 + (FUNCDATA_CODEPTR)];
         }
         self.pop_frame();
@@ -208,65 +266,5 @@ impl Codegen {
             movl [r13 + (CACHED_VERSION)], rdi;    // class_version
             jmp exec;
         );
-    }
-
-    /// Set arguments
-    ///
-    /// ### in
-    ///
-    /// - r13: pc
-    ///
-    /// ### out
-    ///
-    /// - rdi: arg len
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    fn set_arguments(&mut self, has_splat: bool) {
-        monoasm! { &mut self.jit,
-            movsxw rdi, [r13 + (POS_NUM)]; // rdi <- pos_num
-            movzxw rcx, [r13 + (ARG_REG)]; // rcx <- %args
-            movl r8, [r13 + (CALLSITE_ID)]; // CallSiteId
-        }
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
-        self.vm_get_slot_addr(GP::Rcx); // rcx <- *args
-        monoasm! { &mut self.jit,
-            testq rdi, rdi;
-            jeq  loop_exit;
-            // rdx <- len
-            movl rdx, rdi;
-            // rsi <- destination address
-            lea  rsi, [rsp - (16 + LBP_ARG0)];
-        }
-        if has_splat {
-            monoasm! { &mut self.jit,
-                // TODO: this possibly cause problem.
-                subq rsp, 4096;
-                // rdi <- source address
-                movq rdi, rcx;
-                // rsi <- destination address
-                // rdx <- len
-                movq rcx, r12;
-                movq rax, (vm_expand_splat);
-                call rax;
-                // rax <- length
-                movq rdi, rax;
-                addq rsp, 4096;
-            };
-        } else {
-            monoasm! { &mut self.jit,
-            loop_:
-                // rax <- source value
-                movq rax, [rcx];
-                movq [rsi], rax;
-                subq rsi, 8;
-                subq rcx, 8;
-                subl rdx, 1;
-                jne  loop_;
-            };
-        }
-        self.jit.bind_label(loop_exit);
     }
 }

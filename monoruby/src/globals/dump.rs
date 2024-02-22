@@ -1,7 +1,7 @@
 use super::*;
 
 impl Globals {
-    pub(crate) unsafe fn dump_frame_info(&mut self, lfp: LFP) {
+    pub(crate) unsafe fn dump_frame_info(&mut self, lfp: Lfp) {
         let meta = lfp.meta();
         let outer = lfp.outer();
         let func_id = meta.func_id();
@@ -481,7 +481,8 @@ impl Globals {
                     ..
                 } = *callsite;
                 let has_splat = callsite.has_splat();
-                let kw_len = callsite.kw_num();
+                // TODO: we must handle hash aplat arguments correctly.
+                let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",
                     ret_str(ret),
@@ -707,7 +708,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = v {
                     eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s(v));
+                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s2(v));
                 } else {
                     eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", index);

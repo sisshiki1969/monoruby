@@ -64,10 +64,6 @@ DFP->  -0x18 |    outer    |
 
 ## ABI of interpreter and JIT-ed code
 
-### argument register
-
-- rdx: number of args
-
 ### global registers (callee save)
 
 - rbx: &mut Executer ([rbx] points to cfp)

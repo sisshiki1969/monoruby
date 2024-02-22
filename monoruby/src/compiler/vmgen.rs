@@ -7,6 +7,7 @@ use paste::paste;
 
 mod definition;
 pub mod init_method;
+mod invoker;
 mod method_call;
 mod variables;
 
@@ -64,7 +65,7 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         #[cfg(feature = "perf")]
-        let vm_start_addr = self.jit.get_current_address();
+        let pair = self.get_address_pair();
         let entry = self.jit.label();
         //
         // VM entry
@@ -207,7 +208,7 @@ impl Codegen {
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values);
         let (rem_rr, rem_ri, rem_ir) = self.vm_binops(rem_values);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values);
-        let vm_call_splat = self.vm_call(true);
+        let vm_call_simple = self.vm_call(true);
         let vm_call = self.vm_call(false);
 
         self.dispatch[1] = self.vm_singleton_method_def();
@@ -236,9 +237,9 @@ impl Codegen {
         self.dispatch[27] = self.vm_load_cvar();
         self.dispatch[28] = self.vm_load_svar();
         self.dispatch[29] = self.vm_store_cvar();
-        self.dispatch[30] = vm_call_splat;
+        self.dispatch[30] = vm_call_simple;
         self.dispatch[31] = vm_call;
-        self.dispatch[32] = vm_call_splat;
+        self.dispatch[32] = vm_call;
         self.dispatch[33] = vm_call;
         self.dispatch[34] = self.vm_yield();
         self.dispatch[35] = self.vm_array();
@@ -344,162 +345,15 @@ impl Codegen {
         self.dispatch[208] = pow_rr;
 
         #[cfg(feature = "perf")]
-        self.perf_info(vm_start_addr, "monoruby-vm");
+        self.perf_info(pair, "monoruby-vm");
 
-        // method invoker.
-        let codeptr = self.jit.get_current_address();
-        self.method_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: FuncId
-        // rcx: receiver: Value
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        // r11: Option<BlockHandler>
-        monoasm! { &mut self.jit,
-            movq r11, [rsp + 8];
-        }
-        self.gen_invoker_prologue();
-        self.invoker_frame_setup(false, true);
-        self.invoker_prep();
-        self.invoker_call();
-        self.gen_invoker_epilogue();
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "method-invoker");
-
-        // method invoker.
-        let codeptr = self.jit.get_current_address();
-        self.method_invoker2 = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: FuncId
-        // rcx: receiver: Value
-        // r8:  args: Arg
-        // r9:  len: usize
-        // r11: Option<BlockHandler>
-        monoasm! { &mut self.jit,
-            movq r11, [rsp + 8];
-        }
-        self.gen_invoker_prologue();
-        self.invoker_frame_setup(false, true);
-        self.gen_invoker_prep2();
-        self.invoker_call();
-        self.gen_invoker_epilogue();
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "method-invoker2");
-
-        // block invoker.
-        let codeptr = self.jit.get_current_address();
-        self.block_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: &BlockData
-        // rcx: <dummy>
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        self.gen_invoker_prologue();
-        self.invoker_frame_setup(true, false);
-        self.invoker_prep();
-        self.invoker_call();
-        self.gen_invoker_epilogue();
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "block-invoker");
-
-        let codeptr = self.jit.get_current_address();
-        self.block_invoker_with_self = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: &BlockData
-        // rcx: self: Value
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        self.gen_invoker_prologue();
-        self.invoker_frame_setup(true, true);
-        self.invoker_prep();
-        self.invoker_call();
-        self.gen_invoker_epilogue();
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "block-invoker-with-self");
-
-        let codeptr = self.jit.get_current_address();
-        self.fiber_invoker = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: &BlockkData
-        // rcx:
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        // [rsp + 8]: *mut Executor
-        monoasm! { &mut self.jit,
-            movq r10, [rsp + 8];
-        };
-        self.push_callee_save();
-        monoasm! { &mut self.jit,
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, r10;
-            movq r12, rsi;
-        }
-        self.invoker_frame_setup(true, false);
-        self.invoker_prep();
-        self.invoker_call();
-        monoasm! { &mut self.jit,
-            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
-            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
-            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
-        }
-        self.pop_callee_save();
-        monoasm! { &mut self.jit,
-            ret;
-        };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "fiber-invoker");
-
-        let codeptr = self.jit.get_current_address();
-        self.fiber_invoker_with_self = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: &BlockkData
-        // rcx: Value
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        // [rsp + 8]: *mut Executor
-        monoasm! { &mut self.jit,
-            movq r10, [rsp + 8];
-        };
-        self.push_callee_save();
-        monoasm! { &mut self.jit,
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [r10 + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [r10 + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, r10;
-            movq r12, rsi;
-        }
-        self.invoker_frame_setup(true, true);
-        self.invoker_prep();
-        self.invoker_call();
-        monoasm! { &mut self.jit,
-            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
-            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
-            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
-        }
-        self.pop_callee_save();
-        monoasm! { &mut self.jit,
-            ret;
-        };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "fiber-invoker-with-self");
+        self.gen_invoker();
 
         // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
         let codeptr = self.jit.get_current_address();
         self.resume_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -513,11 +367,13 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "resume-fiber");
+        self.perf_info(pair, "resume-fiber");
 
         // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
         let codeptr = self.jit.get_current_address();
         self.yield_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         self.push_callee_save();
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
@@ -531,21 +387,36 @@ impl Codegen {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(codeptr, "yield-fiber");
+        self.perf_info(pair, "yield-fiber");
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_info(&mut self, start: CodePtr, func_name: &str) {
-        let size = self.jit.get_current_address() - start;
+    pub(crate) fn get_wrapper_info(
+        &mut self,
+        pair: (CodePtr, CodePtr),
+    ) -> (CodePtr, usize, CodePtr, usize) {
+        let (ptr0, ptr1) = pair;
+        assert_eq!(0, self.jit.get_page());
+        let size0 = self.jit.get_current_address() - ptr0;
+        self.jit.select_page(1);
+        let size1 = self.jit.get_current_address() - ptr1;
+        self.jit.select_page(0);
+        (ptr0, size0 as usize, ptr1, size1 as usize)
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
+        let info = self.get_wrapper_info(pair);
+        self.perf_info2(info, func_name);
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_info2(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         self.perf_file
-            .write_all(
-                format!(
-                    "{:x} {:x} {func_name}\n",
-                    start.as_ptr() as usize,
-                    size as usize
-                )
-                .as_bytes(),
-            )
+            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
+            .unwrap();
+        self.perf_file
+            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
             .unwrap();
     }
 
@@ -568,149 +439,6 @@ impl Codegen {
             popq r13;
             popq r14;
             popq r15;
-        };
-    }
-
-    fn gen_invoker_prologue(&mut self) {
-        // rdi: &mut Interp
-        // rsi: &mut Globals
-        monoasm! { &mut self.jit,
-            pushq rbx;
-            pushq r12;
-            pushq r13;
-            pushq r14;
-            pushq r15;
-            movq rbx, rdi;
-            movq r12, rsi;
-        }
-    }
-
-    ///
-    /// Frame preparation.
-    ///
-    /// ### in
-    /// - rcx: `self` (if *specify_self* is true)
-    /// - rdx: FuncId (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
-    ///
-    /// ### out
-    /// - r15: &FuncData
-    ///
-    fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
-        if invoke_block {
-            monoasm! { &mut self.jit,
-                movq [rsp - (16 + LBP_BLOCK)], 0;
-                movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
-                movl rdx, [rdx + (PROCINNER_FUNCID)];    // rdx <- FuncId
-            };
-            self.get_func_data();
-            // r15: &FuncData
-            self.set_block_outer();
-            if !specify_self {
-                monoasm! { &mut self.jit,
-                    // set self
-                    movq  rcx, [rax - (LBP_SELF)];
-                };
-            }
-        } else {
-            self.get_func_data();
-            monoasm! { &mut self.jit,
-                // set block
-                movq [rsp - (16 + LBP_BLOCK)], r11;
-            };
-            self.set_method_outer()
-        }
-        monoasm! { &mut self.jit,
-            // set self
-            movq [rsp - (16 + LBP_SELF)], rcx;
-            // set meta
-            movq rdi, [r15 + (FUNCDATA_META)];
-            movq [rsp - (16 + LBP_META)], rdi;
-        };
-    }
-
-    ///
-    ///
-    /// ### in
-    /// - rdi: arg_num
-    /// - r15: &FuncData
-    ///
-    fn invoker_call(&mut self) {
-        monoasm! { &mut self.jit,
-            lea  rdx, [rsp - 16];
-            subq rsp, 4096;
-            movq rcx, rdi; // arg_num
-            movq rdi, rbx; // &mut Executor
-            movq rsi, r12; // &mut Globals
-            movq rax, (handle_invoker_arguments);
-            call rax;
-            // set arg len
-            movq rdx, rax;
-            addq rsp, 4096;
-        }
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // r15 : &FuncData
-            // set codeptr
-            movq rax, [r15 + (FUNCDATA_CODEPTR)];
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call rax;
-            movq rdi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-        };
-    }
-
-    fn gen_invoker_epilogue(&mut self) {
-        monoasm! { &mut self.jit,
-            popq r15;
-            popq r14;
-            popq r13;
-            popq r12;
-            popq rbx;
-            ret;
-        };
-    }
-
-    fn invoker_prep(&mut self) {
-        let loop_exit = self.jit.label();
-        let loop_ = self.jit.label();
-        monoasm! { &mut self.jit,
-            // r8 : *args
-            // r9 : len
-            movq rdi, r9;
-            testq r9, r9;
-            jeq  loop_exit;
-            movq r10, r9;
-            negq r9;
-        loop_:
-            movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
-            subq r10, 1;
-            addq r9, 1;
-            jne  loop_;
-        loop_exit:
-        };
-    }
-
-    fn gen_invoker_prep2(&mut self) {
-        let loop_exit = self.jit.label();
-        let loop_ = self.jit.label();
-        monoasm! { &mut self.jit,
-            // set block
-            movq [rsp - (16 + LBP_BLOCK)], r11;
-            // r8 <- *args
-            // r9 <- len
-            movq rdi, r9;
-            testq r9, r9;
-            jeq  loop_exit;
-            negq r9;
-        loop_:
-            movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
-            addq r9, 1;
-            jne  loop_;
-        loop_exit:
         };
     }
 
@@ -1608,48 +1336,6 @@ impl Codegen {
         };
         label
     }
-}
-
-extern "C" fn handle_invoker_arguments(
-    vm: &mut Executor,
-    globals: &Globals,
-    callee_lfp: LFP,
-    mut arg_num: usize,
-) -> usize {
-    let callee_func_id = callee_lfp.meta().func_id();
-    match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => unsafe {
-            // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_lfp);
-
-            // required + optional + rest
-            vm.handle_positional(info, arg_num, callee_lfp, None);
-            // keyword
-            let params = &info.args.kw_names;
-            let callee_kw_pos = info.pos_num() + 1;
-            for (id, _) in params.iter().enumerate() {
-                *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
-            }
-        },
-        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
-    }
-    arg_num
-}
-
-/// deconstruct array for block
-fn expand_array_for_block(info: &ISeqInfo, arg_num: usize, callee_lfp: LFP) -> usize {
-    let req_num = info.required_num();
-    let reqopt_num = info.reqopt_num();
-    if info.is_block_style() && arg_num == 1 && reqopt_num > 1 {
-        unsafe {
-            let v = callee_lfp.register(1).unwrap();
-            if v.is_array().is_some() {
-                let ptr = callee_lfp.register_ptr(1);
-                return block_expand_array(v, ptr as _, req_num);
-            }
-        }
-    }
-    arg_num
 }
 
 extern "C" fn opt_case(

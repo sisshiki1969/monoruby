@@ -313,9 +313,8 @@ impl RegexpInner {
                 }
             };
         }
-        match last_captures {
-            Some(c) => vm.save_captures(&c, given),
-            None => {}
+        if let Some(c) = last_captures {
+            vm.save_captures(&c, given)
         }
         Ok(ary)
     }

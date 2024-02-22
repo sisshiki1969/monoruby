@@ -6,9 +6,9 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Method", METHOD_CLASS);
-    globals.define_builtin_func(METHOD_CLASS, "call", call);
-    globals.define_builtin_func(METHOD_CLASS, "[]", call);
-    globals.define_builtin_func(METHOD_CLASS, "===", call);
+    globals.define_builtin_func_rest(METHOD_CLASS, "call", call);
+    globals.define_builtin_func_rest(METHOD_CLASS, "[]", call);
+    globals.define_builtin_func_rest(METHOD_CLASS, "===", call);
 }
 
 ///
@@ -21,14 +21,22 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     let func_id = method.func_id();
     let receiver = method.receiver();
 
-    vm.invoke_func2(globals, func_id, receiver, arg, len, lfp.block())
+    match vm.invoke_func(
+        globals,
+        func_id,
+        receiver,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    ) {
+        Some(v) => Ok(v),
+        None => Err(vm.take_error()),
+    }
 }
 
 #[cfg(test)]

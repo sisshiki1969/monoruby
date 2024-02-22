@@ -1,5 +1,5 @@
 use super::*;
-use crate::{builtins::Arg, bytecodegen::*};
+use crate::bytecodegen::*;
 
 pub mod frame;
 pub mod inline;
@@ -13,7 +13,7 @@ pub use op::*;
 use ruruby_parse::{CmpKind, Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
@@ -42,7 +42,7 @@ pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, par
 #[repr(C)]
 pub struct Executor {
     /// control frame pointer.
-    cfp: Option<CFP>,
+    cfp: Option<Cfp>,
     /// rsp save area.
     ///
     /// - 0: created
@@ -103,7 +103,7 @@ impl Executor {
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../startup/startup.rb").to_string();
         if let Err(err) = executor.exec_script(globals, code, path) {
-            err.show_error_message_and_all_loc();
+            err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
         };
         #[cfg(feature = "emit-bc")]
@@ -113,7 +113,7 @@ impl Executor {
         executor
     }
 
-    pub fn cfp(&self) -> CFP {
+    pub fn cfp(&self) -> Cfp {
         self.cfp.unwrap()
     }
 
@@ -133,24 +133,33 @@ impl Executor {
         self.temp_stack.push(val);
     }
 
-    pub fn temp_append(&mut self, mut v: Vec<Value>) -> usize {
-        let len = self.temp_stack.len();
-        self.temp_stack.append(&mut v);
-        len
-    }
-
-    pub fn temp_extend_form_slice(&mut self, slice: &[Value]) -> usize {
-        let len = self.temp_stack.len();
-        self.temp_stack.extend_from_slice(slice);
-        len
-    }
-
     pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }
 
-    pub fn temp_tear(&mut self, len: usize) -> Vec<Value> {
-        self.temp_stack.drain(len..).collect()
+    pub fn temp_array_new(&mut self, size_hint: impl Into<Option<usize>>) {
+        let size_hint = size_hint.into();
+        if let Some(size_hint) = size_hint {
+            self.temp_stack.push(Value::array_with_capacity(size_hint));
+        } else {
+            self.temp_stack.push(Value::array_empty());
+        }
+    }
+
+    pub fn temp_pop(&mut self) -> Value {
+        self.temp_stack.pop().unwrap()
+    }
+
+    pub fn temp_array_push(&mut self, v: Value) {
+        self.temp_stack.last_mut().unwrap().as_array_mut().push(v);
+    }
+
+    pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
+        self.temp_stack
+            .last_mut()
+            .unwrap()
+            .as_array_mut()
+            .extend_from_slice(slice);
     }
 
     pub fn parent_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
@@ -288,14 +297,6 @@ impl Executor {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    pub(crate) fn err_wrong_number_of_arg_range(
-        &mut self,
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) {
-        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
-    }
-
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
@@ -314,7 +315,7 @@ impl Executor {
 
     fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
         let class_id = globals.get_error_class(&err);
-        Value::new_exception_from_err(err, class_id)
+        Value::new_exception_from_err(globals, err, class_id)
     }
 }
 
@@ -430,7 +431,7 @@ impl Executor {
             let err = MonorubyErr::internalerr(format!(
                 "define func: {:?} {:016x}",
                 name,
-                (func.get() as u64) + (name.get() as u64) << 32
+                (func.get() as u64) + ((name.get() as u64) << 32)
             ));
             runtime::_dump_stacktrace(self, globals);
             self.set_error(err);
@@ -490,33 +491,6 @@ impl Executor {
             receiver,
             args.as_ptr(),
             args.len(),
-            block_handler,
-        ) {
-            Some(res) => Ok(res),
-            None => Err(self.take_error()),
-        }
-    }
-
-    ///
-    /// Invoke method for *receiver* and *method*.
-    ///
-    pub(crate) fn invoke_method_inner2(
-        &mut self,
-        globals: &mut Globals,
-        method: IdentId,
-        receiver: Value,
-        args: Arg,
-        len: usize,
-        block_handler: Option<BlockHandler>,
-    ) -> Result<Value> {
-        let func_id = globals.find_method(receiver, method, false)?;
-        match (globals.codegen.method_invoker2)(
-            self,
-            globals,
-            func_id,
-            receiver,
-            args,
-            len,
             block_handler,
         ) {
             Some(res) => Ok(res),
@@ -611,30 +585,40 @@ impl Executor {
         globals: &mut Globals,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
-    ) -> Result<Vec<Value>> {
+        size_hint: impl Into<Option<usize>>,
+    ) -> Result<Value> {
         let data = globals.get_block_data(self.cfp(), bh);
-        let t = self.temp_len();
+        let old = alloc::Allocator::<RValue>::set_enabled(false);
+        self.temp_array_new(size_hint);
         for v in iter {
             let res = self.invoke_block(globals, &data, &[v])?;
-            self.temp_push(res);
+            self.temp_array_push(res);
         }
-        let vec = self.temp_tear(t);
-        Ok(vec)
+        alloc::Allocator::<RValue>::set_enabled(old);
+        let v = self.temp_pop();
+        Ok(v)
     }
 
-    pub(crate) fn flat_map(
+    pub(crate) fn invoke_block_flat_map1(
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
-    ) -> Result<Vec<Value>> {
-        let mut v = vec![];
-        for elem in self.invoke_block_map1(globals, bh, iter)? {
-            match elem.is_array() {
-                Some(ary) => v.extend(ary.iter()),
-                None => v.push(elem),
+        size_hint: impl Into<Option<usize>>,
+    ) -> Result<Value> {
+        let data = globals.get_block_data(self.cfp(), bh);
+        let old = alloc::Allocator::<RValue>::set_enabled(false);
+        self.temp_array_new(size_hint);
+        for v in iter {
+            let res = self.invoke_block(globals, &data, &[v])?;
+            if let Some(ary) = res.try_array_ty() {
+                self.temp_array_extend_from_slice(&ary);
+            } else {
+                self.temp_array_push(res);
             }
         }
+        alloc::Allocator::<RValue>::set_enabled(old);
+        let v = self.temp_pop();
         Ok(v)
     }
 
@@ -677,32 +661,17 @@ impl Executor {
         globals: &mut Globals,
         method: IdentId,
         receiver: Value,
-        args: Arg,
-        len: usize,
+        args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func2(globals, func_id, receiver, args, len, bh)
+            match self.invoke_func(globals, func_id, receiver, args, bh) {
+                Some(val) => Ok(val),
+                None => Err(self.take_error()),
+            }
         } else {
             Ok(Value::nil())
         }
-    }
-
-    ///
-    /// Invoke func with *args*: Args.
-    ///
-    pub(crate) fn invoke_func2(
-        &mut self,
-        globals: &mut Globals,
-        func_id: FuncId,
-        receiver: Value,
-        args: Arg,
-        len: usize,
-        bh: Option<BlockHandler>,
-    ) -> Result<Value> {
-        let bh = bh.map(|bh| bh.delegate());
-        (globals.codegen.method_invoker2)(self, globals, func_id, receiver, args, len, bh)
-            .ok_or_else(|| self.take_error())
     }
 
     ///
@@ -800,180 +769,10 @@ impl Executor {
         obj: Value,
         args: Vec<Value>,
     ) -> Result<Value> {
-        let outer_lfp = LFP::dummy_heap_frame_with_self(obj);
+        let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from(outer_lfp, FuncId::new(1));
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
-    }
-}
-
-impl Executor {
-    pub(crate) fn handle_arguments(
-        &mut self,
-        globals: &mut Globals,
-        callid: CallSiteId,
-        arg_num: usize,
-        callee_lfp: LFP,
-        meta: Meta,
-    ) -> Option<Value> {
-        let callee_func_id = meta.func_id();
-        match &globals[callee_func_id].kind {
-            FuncKind::ISeq(info) => {
-                let caller = &globals.store[callid];
-                if info.no_keyword() && caller.kw_num() != 0 {
-                    // handle excessive keyword arguments
-                    let mut h = IndexMap::default();
-                    for (k, id) in caller.kw_args.iter() {
-                        let v = unsafe { self.get_slot(caller.kw_pos + *id as u16).unwrap() };
-                        h.insert(HashKey(Value::symbol(*k)), v);
-                    }
-                    let ex: Value = Value::hash(h);
-                    self.handle_positional(&info, arg_num, callee_lfp, Some(ex))?;
-                } else {
-                    self.handle_positional(&info, arg_num, callee_lfp, None)?;
-                    self.handle_keyword(&info, caller, callee_lfp);
-                }
-            }
-            _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
-        }
-
-        Some(Value::nil())
-    }
-
-    ///
-    /// if argument mismatch occurs, return None.
-    ///
-    pub(crate) fn handle_positional(
-        &mut self,
-        info: &ISeqInfo,
-        arg_num: usize,
-        mut callee_lfp: LFP,
-        ex: Option<Value>,
-    ) -> Option<Value> {
-        let req_num = info.required_num();
-        let reqopt_num = info.reqopt_num();
-        let pos_num = info.pos_num();
-        let is_rest = pos_num != reqopt_num;
-        let is_block_style = info.is_block_style();
-        let ex_num = ex.is_some() as usize;
-        unsafe {
-            if (arg_num + ex_num) > reqopt_num {
-                if is_rest {
-                    let len = arg_num - reqopt_num;
-                    let mut ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
-                    if let Some(ex) = ex {
-                        ary.push(ex);
-                    }
-                    callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
-                } else if !is_block_style {
-                    self.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
-                    return None;
-                }
-                return Some(Value::nil());
-            }
-
-            if (arg_num + ex_num) >= req_num {
-                let len = reqopt_num - arg_num;
-                Self::fill(callee_lfp, reqopt_num, len, None);
-            } else {
-                if !is_block_style {
-                    self.err_wrong_number_of_arg_range(arg_num + ex_num, req_num..=reqopt_num);
-                    return None;
-                }
-                let len = req_num - (arg_num + ex_num);
-                Self::fill(callee_lfp, req_num, len, Some(Value::nil()));
-                let len = reqopt_num - req_num;
-                Self::fill(callee_lfp, reqopt_num, len, None);
-            }
-            if let Some(ex) = ex {
-                callee_lfp.set_register(1 + arg_num, Some(ex));
-            }
-
-            if is_rest {
-                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
-            }
-        }
-        Some(Value::nil())
-    }
-
-    ///
-    /// Handle keyword arguments.
-    ///
-    pub(crate) fn handle_keyword(
-        &mut self,
-        info: &ISeqInfo,
-        callsite: &CallSiteInfo,
-        mut callee_lfp: LFP,
-    ) {
-        let CallSiteInfo {
-            kw_pos,
-            kw_args,
-            hash_splat_pos,
-            ..
-        } = callsite;
-
-        let caller_lfp = self.cfp().lfp();
-        let callee_kw_pos = info.pos_num() + 1;
-        for (id, param_name) in info.args.kw_names.iter().enumerate() {
-            unsafe {
-                let v = kw_args
-                    .get(param_name)
-                    .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
-                callee_lfp.set_register(callee_kw_pos + id, v);
-            }
-        }
-
-        for h in hash_splat_pos
-            .iter()
-            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
-        {
-            for (id, param_name) in info.args.kw_names.iter().enumerate() {
-                unsafe {
-                    let sym = Value::symbol(*param_name);
-                    if let Some(v) = h.as_hash().get(sym) {
-                        let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
-                        if (*ptr).is_some() {
-                            eprintln!(
-                                " warning: key :{} is duplicated and overwritten",
-                                param_name
-                            );
-                        }
-                        *ptr = Some(v);
-                    }
-                }
-            }
-        }
-
-        if let Some(rest) = info.kw_rest() {
-            let mut kw_rest = IndexMap::default();
-            for (name, i) in kw_args.iter() {
-                if info.args.kw_names.contains(name) {
-                    continue;
-                }
-                let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
-                kw_rest.insert(HashKey(Value::symbol(*name)), v);
-            }
-            for h in hash_splat_pos
-                .iter()
-                .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
-            {
-                let mut h = h.as_hash().clone();
-                for name in info.args.kw_names.iter() {
-                    let sym = Value::symbol(*name);
-                    h.remove(sym);
-                }
-                for (k, v) in h {
-                    kw_rest.insert(HashKey(k), v);
-                }
-            }
-
-            unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
-        }
-    }
-
-    unsafe fn fill(lfp: LFP, start_pos: usize, len: usize, val: Option<Value>) {
-        let ptr = lfp.register_ptr(start_pos);
-        std::slice::from_raw_parts_mut(ptr, len).fill(val);
     }
 }
 
@@ -1349,7 +1148,7 @@ impl BcPc {
 impl BcPc {
     pub(crate) fn trace_ir(&self) -> TraceIr {
         let op = self.op1;
-        let opcode = self.opcode() as u8;
+        let opcode = self.opcode();
         if opcode & 0xc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
@@ -1419,19 +1218,17 @@ impl BcPc {
                 },
                 30..=31 => {
                     let cached_fid = self.cached_fid();
-                    let has_splat = opcode == 30;
+                    let is_simple = opcode == 30;
 
-                    if let Some(fid) = cached_fid {
-                        if !has_splat {
-                            if let Some(inline_id) =
-                                crate::executor::inline::InlineTable::get_inline(fid)
-                            {
-                                return TraceIr::InlineCall {
-                                    inline_id,
-                                    callid: op2.into(),
-                                };
-                            }
-                        }
+                    if is_simple
+                        && let Some(fid) = cached_fid
+                        && let Some(inline_id) =
+                            crate::executor::inline::InlineTable::get_inline(fid)
+                    {
+                        return TraceIr::InlineCall {
+                            inline_id,
+                            callid: op2.into(),
+                        };
                     }
                     TraceIr::MethodCall { callid: op2.into() }
                 }
@@ -1696,7 +1493,7 @@ impl std::iter::Step for SlotId {
     }
 
     fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.0 + count as u16 <= std::u16::MAX {
+        if start.0 as usize + count <= std::u16::MAX as usize {
             Some(Self(start.0 + count as u16))
         } else {
             None

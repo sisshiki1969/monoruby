@@ -8,6 +8,12 @@ pub const ARRAY_INLINE_CAPA: usize = 5;
 #[monoruby_object]
 pub struct Array(Value);
 
+impl Default for Array {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Array {
     pub fn id(self) -> u64 {
         self.0.id()
@@ -40,6 +46,12 @@ impl Array {
 #[derive(Debug, Clone)]
 pub struct ArrayInner(SmallVec<[Value; ARRAY_INLINE_CAPA]>);
 
+impl Default for ArrayInner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::ops::Deref for ArrayInner {
     type Target = [Value];
     fn deref(&self) -> &Self::Target {
@@ -56,6 +68,10 @@ impl std::ops::DerefMut for ArrayInner {
 impl ArrayInner {
     pub fn new() -> Self {
         ArrayInner(smallvec!())
+    }
+
+    pub fn with_capacity(len: usize) -> Self {
+        ArrayInner(SmallVec::with_capacity(len))
     }
 
     pub fn from(smallvec: SmallVec<[Value; 5]>) -> Self {
@@ -152,6 +168,22 @@ impl ArrayInner {
             }
         }
     }
+
+    #[cfg(feature = "jit-log")]
+    pub fn to_s2(&self, globals: &Globals) -> String {
+        match self.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", globals.inspect(self[0])),
+            _ => {
+                let mut s = format!("[{}", globals.inspect(self[0]));
+                for val in self[1..].iter().take(3) {
+                    s += &format!(", {}", globals.inspect(*val));
+                }
+                s += " .. ]";
+                s
+            }
+        }
+    }
 }
 
 impl ArrayInner {
@@ -176,7 +208,7 @@ impl ArrayInner {
 
     pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
         let len = self.len();
-        match val.is_array() {
+        match val.try_array_ty() {
             Some(ary) => {
                 // if self = ary, something wrong happens..
                 let ary_len = ary.len();
@@ -230,16 +262,11 @@ impl ArrayInner {
         }
     }
 
-    pub(crate) fn get_elem2(
-        &self,
-        globals: &mut Globals,
-        arg0: Value,
-        arg1: Value,
-    ) -> Result<Value> {
-        let index = arg0.coerce_to_i64(globals)?;
+    pub(crate) fn get_elem2(&self, arg0: Value, arg1: Value) -> Result<Value> {
+        let index = arg0.coerce_to_i64()?;
         let self_len = self.len();
         let index = self.get_array_index(index).unwrap_or(self_len);
-        let len = arg1.coerce_to_i64(globals)?;
+        let len = arg1.coerce_to_i64()?;
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
@@ -253,21 +280,20 @@ impl ArrayInner {
         Ok(val)
     }
 
-    pub(crate) fn get_elem1(&self, globals: &mut Globals, idx: Value) -> Result<Value> {
+    pub(crate) fn get_elem1(&self, idx: Value) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start.coerce_to_i64(globals)? {
+            let i_start = match range.start.coerce_to_i64()? {
                 i if i < 0 => len + i,
                 i => i,
             };
-            let start = if len < i_start {
-                return Ok(Value::nil());
-            } else if len == i_start {
-                return Ok(Value::array_empty());
-            } else {
-                i_start as usize
+            let start = match len {
+                i if i == i_start => return Ok(Value::array_empty()),
+                i if i < i_start => return Ok(Value::nil()),
+                _ => i_start as usize,
             };
-            let i_end = range.end.coerce_to_i64(globals)?;
+
+            let i_end = range.end.coerce_to_i64()?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
                 if self.len() < end {
@@ -283,7 +309,7 @@ impl ArrayInner {
             }
             Ok(Value::array_from_iter(self[start..end].iter().cloned()))
         } else {
-            let index = idx.coerce_to_i64(globals)?;
+            let index = idx.coerce_to_i64()?;
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();

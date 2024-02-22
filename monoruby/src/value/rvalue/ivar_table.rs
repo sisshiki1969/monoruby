@@ -133,10 +133,7 @@ impl<T> Clone for RawVec<T> {
         unsafe {
             let ptr = alloc(self.cap);
             ptr::copy_nonoverlapping(self.ptr.as_ptr(), ptr.as_ptr(), self.cap);
-            Self {
-                ptr: ptr.into(),
-                cap: self.cap,
-            }
+            Self { ptr, cap: self.cap }
         }
     }
 }
@@ -168,7 +165,7 @@ impl<T> RawVec<T> {
             (std::ptr::NonNull::dangling(), 0)
         } else {
             let cap = capacity.next_power_of_two();
-            let ptr = alloc(cap).into();
+            let ptr = alloc(cap);
             (ptr, cap)
         };
         RawVec { ptr, cap }
@@ -193,7 +190,7 @@ impl<T> RawVec<T> {
             self.realloc(capacity)
         };
 
-        self.ptr = ptr.into();
+        self.ptr = ptr;
         self.cap = capacity;
     }
 

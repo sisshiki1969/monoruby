@@ -1,4 +1,5 @@
 use fancy_regex::Regex;
+use monoasm::CodePtr;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -19,7 +20,7 @@ use prng::*;
 pub use store::*;
 
 pub(crate) type InlineGen =
-    fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc);
+    dyn Fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, &CallSiteInfo, BcPc);
 pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +39,7 @@ impl MethodTableEntry {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct ProcData {
-    outer: Option<LFP>,
+    outer: Option<Lfp>,
     func_id: Option<FuncId>,
 }
 
@@ -158,6 +159,7 @@ impl alloc::GC<RValue> for Globals {
 
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
+        assert_eq!(64, std::mem::size_of::<FuncInfo>());
         let main_object = Value::object(OBJECT_CLASS);
 
         let mut globals = Self {
@@ -186,13 +188,14 @@ impl Globals {
             #[cfg(feature = "emit-bc")]
             startup_flag: false,
         };
+        globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
         assert_eq!(
             FuncId::new(1),
-            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder)
+            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
         );
         assert_eq!(
             FuncId::new(2),
-            globals.define_builtin_func(OBJECT_CLASS, "", yielder)
+            globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
         );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
@@ -249,7 +252,7 @@ impl Globals {
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        caller_cfp: CFP,
+        caller_cfp: Cfp,
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
@@ -279,7 +282,7 @@ impl Globals {
         info.data_ref()
     }
 
-    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> ProcData {
+    pub(crate) fn get_yield_data(&mut self, cfp: Cfp) -> ProcData {
         match cfp.get_block() {
             Some(bh) => {
                 let info = self.get_block_data(cfp, bh);
@@ -295,7 +298,7 @@ impl Globals {
         }
     }
 
-    pub(crate) fn get_block_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> ProcInner {
+    pub(crate) fn get_block_data(&mut self, mut cfp: Cfp, bh: BlockHandler) -> ProcInner {
         if let Some((func_id, idx)) = bh.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
@@ -424,10 +427,18 @@ impl Globals {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
+    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) -> CodePtr {
+        #[cfg(feature = "perf")]
+        let pair = self.codegen.get_address_pair();
         let kind = self[func_id].kind.clone();
         let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
         self[func_id].set_codeptr(codeptr);
+        #[cfg(feature = "perf")]
+        {
+            let info = self.codegen.get_wrapper_info(pair);
+            self[func_id].set_wrapper_info(info);
+        }
+        codeptr
     }
 
     pub(crate) fn class_version_inc(&mut self) {
@@ -479,7 +490,7 @@ impl Globals {
                 },
             }
         } else {
-            return "<INVALID>".to_string();
+            "<INVALID>".to_string()
         }
     }
 
@@ -504,6 +515,40 @@ impl Globals {
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => Self::proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
+                ObjKind::REGEXP => Self::regexp_tos(val),
+                ObjKind::IO => rvalue.as_io().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
+                ObjKind::METHOD => rvalue.as_method().to_s(self),
+                ObjKind::FIBER => self.fiber_tos(val),
+                ObjKind::ENUMERATOR => self.enumerator_tos(val),
+                ObjKind::GENERATOR => self.object_tos(val),
+                _ => format!("{:016x}", val.id()),
+            },
+        }
+    }
+
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn to_s2(&self, val: Value) -> String {
+        match val.unpack() {
+            RV::None => "Undef".to_string(),
+            RV::Nil => "".to_string(),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Fixnum(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Symbol(id) => id.to_string(),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => s,
+                Err(_) => format!("{:?}", s),
+            },
+            RV::Object(rvalue) => match rvalue.ty() {
+                ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
+                ObjKind::TIME => rvalue.as_time().to_string(),
+                ObjKind::ARRAY => rvalue.as_array().to_s2(self),
+                ObjKind::OBJECT => self.object_tos(val),
+                ObjKind::RANGE => self.range_tos(val),
+                ObjKind::PROC => Self::proc_tos(val),
+                ObjKind::HASH => self.hash_tos2(val),
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
                 ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
@@ -618,6 +663,37 @@ impl Globals {
                     first = false;
                 }
                 format! {"{{{}}}", result}
+            }
+        }
+    }
+
+    #[cfg(feature = "jit-log")]
+    fn hash_tos2(&self, val: Value) -> String {
+        let hash = val.as_hash();
+        match hash.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in hash.iter().take(3) {
+                    let k_inspect = if k == val {
+                        "{...}".to_string()
+                    } else {
+                        self.inspect(k)
+                    };
+                    let v_inspect = if v == val {
+                        "{...}".to_string()
+                    } else {
+                        self.inspect(v)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{} .. }}", result}
             }
         }
     }

@@ -16,10 +16,9 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
         pub extern "C" fn #base_name(
             vm: &mut Executor,
             globals: &mut Globals,
-            lfp: LFP,
-            arg: Arg,
+            lfp: Lfp,
         ) -> Option<Value> {
-            match #wrapped(vm, globals, lfp, arg) {
+            match #wrapped(vm, globals, lfp) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
