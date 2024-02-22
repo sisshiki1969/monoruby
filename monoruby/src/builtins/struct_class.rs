@@ -3,6 +3,10 @@ use super::*;
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
+    globals.define_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
+    globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
+    globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
 }
 
 ///
@@ -14,53 +18,55 @@ pub(crate) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let mut arg_vec = lfp.arg(0).as_array().to_vec();
+    let args = lfp.arg(0);
 
-    let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
-    let class_id = class.as_class_id();
-    match lfp.arg(0).is_str() {
-        None => {}
-        Some(s) => {
-            match s.chars().next() {
-                Some(c) if c.is_ascii_uppercase() => {}
-                _ => return Err(MonorubyErr::identifier_must_be_constant(&s)),
-            };
-            arg_vec.remove(0);
+    let mut new_struct = globals.new_unnamed_class(Some(self_val.as_class()));
+    let class_id = new_struct.as_class_id();
+    let start_idx = if let Some(arg0) = args.as_array().get(0)
+        && let Some(s) = arg0.is_str()
+    {
+        if s.starts_with(|c: char| c.is_ascii_uppercase()) {
             globals.store[class_id].set_name(&format!("Struct::{s}"));
+            1
+        } else {
+            return Err(MonorubyErr::identifier_must_be_constant(&s));
         }
+    } else {
+        0
     };
-    globals.define_builtin_func_rest(class_id, "initialize", initialize);
-    globals.define_builtin_func(class_id, "inspect", inspect, 0);
-    globals.define_builtin_func(class_id, "to_s", inspect, 0);
     globals.define_builtin_class_inline_func_rest(
         class_id,
-        "[]",
+        &["[]", "new"],
         new,
         super::class::inline_class_new,
         analysis::v_v_vv,
     );
-    globals.define_builtin_class_inline_func_rest(
-        class_id,
-        "new",
-        new,
-        super::class::inline_class_new,
-        analysis::v_v_vv,
-    );
+    globals.define_builtin_class_func(class_id, "members", struct_members, 0);
 
-    for arg in &arg_vec {
+    let members = ArrayInner::from_iter(args.as_array().iter().skip(start_idx).cloned());
+
+    for arg in members.iter() {
         let name = arg.expect_symbol_or_string()?;
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }
-    class.set_instance_var(globals, "/members", Value::array_from_vec(arg_vec))?;
+    new_struct.set_instance_var(globals, "/members", Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
         vm.push_class_context(class_id);
         let data = globals.get_block_data(vm.cfp(), bh);
-        vm.invoke_block_with_self(globals, &data, class, &[class])?;
+        vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct])?;
         vm.pop_class_context();
     };
-    Ok(class)
+    Ok(new_struct)
+}
+
+#[monoruby_builtin]
+fn struct_members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let members = globals
+        .get_ivar(lfp.self_val(), IdentId::get_id("/members"))
+        .unwrap();
+    Ok(members)
 }
 
 #[monoruby_builtin]
@@ -119,6 +125,15 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     Ok(Value::string(inspect))
 }
 
+#[monoruby_builtin]
+fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_obj = lfp.self_val().class().get_obj(globals);
+    let members = globals
+        .get_ivar(class_obj, IdentId::get_id("/members"))
+        .unwrap();
+    Ok(members)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -136,6 +151,25 @@ mod tests {
         [Customer.new("Dave", "New York").greeting, Customer["Gave", "Hawaii"].greeting]
         "#;
         run_test_with_prelude(code, prelude);
+    }
+
+    #[test]
+    fn struct_new() {
+        run_test(
+            r###"
+            Struct.new("Foo", :a, :b).to_s
+        "###,
+        );
+        run_test(
+            r###"
+            Struct.new(:a, :b, :c).new.members
+        "###,
+        );
+        run_test(
+            r###"
+            Struct.new(:a, :b, :c).members
+        "###,
+        );
     }
 
     #[test]

@@ -320,7 +320,7 @@ fn object_send(
     _store: &Store,
     bb: &mut BBContext,
     callsite: &CallSiteInfo,
-    _pc: BcPc,
+    pc: BcPc,
 ) {
     let CallSiteInfo {
         recv,
@@ -337,9 +337,11 @@ fn object_send(
         None => 0,
         Some(func_id) => BlockHandler::from(func_id).0.id(),
     };
-    ir.inline(move |gen, _| {
+    let error = ir.new_error(bb, pc);
+    ir.inline(move |gen, labels| {
         let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
         let version = gen.jit.const_i32(-1);
+        let error = labels[error];
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rdi, rbx;
@@ -357,6 +359,7 @@ fn object_send(
             addq rsp, 16;
         }
         gen.xmm_restore(using);
+        gen.handle_error(error);
     });
     ir.reg2acc(bb, GP::Rax, dst);
 }

@@ -1454,6 +1454,11 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Handle error.
+    ///
+    /// Check *rax*, and if it is 0, go to 'error'.
+    ///
     pub(crate) fn handle_error(&mut self, error: DestLabel) {
         monoasm! { &mut self.jit,
             testq rax, rax;

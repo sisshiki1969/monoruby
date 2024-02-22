@@ -136,8 +136,9 @@ pub(super) fn inline_class_new(
             movq rcx, r15;
             lea r8, [r14 - (crate::executor::jitgen::conv(args))];
             movl r9, (pos_num);
-            subq rsp, 16;
-            movq [rsp], 0;
+            subq rsp, 8;
+            xorq rax, rax;
+            pushq rax;
             movq rax, (gen.method_invoker2);
             call rax;
             addq rsp, 16;

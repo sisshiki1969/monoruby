@@ -299,7 +299,7 @@ impl Value {
         RValue::new_bytes(b).pack()
     }
 
-    fn array(ary: ArrayInner) -> Self {
+    pub fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
 

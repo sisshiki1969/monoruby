@@ -245,30 +245,34 @@ impl Globals {
         self.new_builtin_fn(class_id, name, address, Visibility::Public, min, max, rest)
     }
 
-    /*pub(crate) fn define_builtin_class_inline_func(
+    pub(crate) fn define_builtin_class_inline_func_with(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
-        arg_num: usize,
+        max: usize,
+        min: usize,
+        rest: bool,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
-        self.define_builtin_inline_func(
+        self.define_builtin_inline_func_with(
             class_id,
-            name,
+            &[name],
             address,
             inline_gen,
             inline_analysis,
-            arg_num,
+            min,
+            max,
+            rest,
         )
-    }*/
+    }
 
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
         class_id: ClassId,
-        name: &str,
+        name: &[&str],
         address: BuiltinFn,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
@@ -276,7 +280,7 @@ impl Globals {
         let class_id = self.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(
             class_id,
-            &[name],
+            name,
             address,
             inline_gen,
             inline_analysis,
