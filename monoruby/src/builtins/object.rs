@@ -33,7 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
     globals.define_builtin_inline_func_with(
         OBJECT_CLASS,
-        "send",
+        &["send", "__send__"],
         send,
         object_send,
         analysis::v_v_vv,
@@ -42,7 +42,6 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
-    globals.define_builtin_func_with(OBJECT_CLASS, "__send__", send, 1, 1, true);
 }
 
 ///
@@ -340,6 +339,7 @@ fn object_send(
     };
     ir.inline(move |gen, _| {
         let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
+        let version = gen.jit.const_i32(-1);
         gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rdi, rbx;
@@ -348,7 +348,8 @@ fn object_send(
             lea  rcx, [r14 - (conv(args))];
             movq r8, (pos_num);
             movq r9, (bh);
-            subq rsp, 8;
+            lea  rax, [rip + version];
+            pushq rax;
             lea  rax, [rip + cache];
             pushq rax;
             movq rax, (call_send_wrapper);
@@ -363,9 +364,8 @@ fn object_send(
 #[repr(C)]
 struct Cache {
     method: Option<IdentId>,
-    version: u32,
     fid: FuncId,
-    counter: u32,
+    counter: usize,
 }
 
 extern "C" fn call_send_wrapper(
@@ -376,6 +376,7 @@ extern "C" fn call_send_wrapper(
     len: usize,                  // r8
     block: Option<BlockHandler>, // r9
     cache: &mut [Cache; CACHE_SIZE],
+    version: &mut u32,
 ) -> Option<Value> {
     fn call_send(
         globals: &mut Globals,
@@ -388,30 +389,30 @@ extern "C" fn call_send_wrapper(
             return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
         }
         let method = args[0].unwrap().expect_symbol_or_string()?;
-        let mut min_i = usize::MAX;
-        let mut min_count = u32::MAX;
-        for (i, entry) in cache.iter_mut().enumerate().take(CACHE_SIZE) {
-            if entry.method.is_none() || entry.version != globals.class_version() {
-                if min_count != 0 {
-                    min_count = 0;
-                    min_i = i;
+        let mut min_i = 0;
+        let mut min_count = usize::MAX;
+        for (i, entry) in cache.iter_mut().enumerate() {
+            match entry.method {
+                Some(cached_method) if cached_method == method => {
+                    entry.counter += 1;
+                    return Ok(entry.fid);
                 }
-                continue;
-            }
-            if entry.method == Some(method) {
-                entry.counter += 1;
-                return Ok(entry.fid);
-            }
-            if entry.counter < min_count {
-                min_count = entry.counter;
-                min_i = i;
+                Some(_) => {
+                    if entry.counter < min_count {
+                        min_count = entry.counter;
+                        min_i = i;
+                    }
+                }
+                None => {
+                    min_i = i;
+                    break;
+                }
             }
         }
         let fid = globals.find_method(recv, method, false)?;
         //eprintln!("cache miss:{:?} {:?}", cache as *mut _, method);
         if cache[min_i].method.is_none() {
             cache[min_i].method = Some(method);
-            cache[min_i].version = globals.class_version();
             cache[min_i].fid = fid;
             cache[min_i].counter = 1;
         }
@@ -419,6 +420,12 @@ extern "C" fn call_send_wrapper(
         Ok(fid)
     }
 
+    if globals.class_version() != *version {
+        for entry in cache.iter_mut() {
+            entry.method = None;
+        }
+        *version = globals.class_version();
+    }
     let fid = match call_send(globals, recv, args, len, cache) {
         Ok(res) => res,
         Err(err) => {

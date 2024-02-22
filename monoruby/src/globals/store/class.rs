@@ -404,6 +404,13 @@ impl Globals {
     }
 
     ///
+    /// Add a new public method *func* with *name* to the class of *class_id*.
+    ///
+    pub(crate) fn add_public_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
+        self.add_method(class_id, name, func_id, Visibility::Public)
+    }
+
+    ///
     /// Add a new method *func* with *name* to the class of *class_id*.
     ///
     pub(crate) fn add_method(

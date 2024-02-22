@@ -564,7 +564,7 @@ pub(super) extern "C" fn singleton_define_method(
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     let class_id = globals.get_singleton(obj).id();
-    globals.add_method(class_id, name, func, Visibility::Public);
+    globals.add_public_method(class_id, name, func);
     globals.class_version_inc();
 }
 

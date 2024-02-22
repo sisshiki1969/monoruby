@@ -169,6 +169,7 @@ impl ArrayInner {
         }
     }
 
+    #[cfg(feature = "jit-log")]
     pub fn to_s2(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),

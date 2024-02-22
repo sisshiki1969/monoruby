@@ -24,64 +24,94 @@ impl Codegen {
         using_xmm: UsingXmm,
     ) {
         match kind {
-            BinOpK::Add => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        subq rdi, 1;
-                        addq rdi, rsi;
-                        jo deopt;
-                    );
+            BinOpK::Add => {
+                let overflow = self.jit.label();
+                match mode {
+                    OpMode::RR(_, _) => {
+                        monoasm!( &mut self.jit,
+                            subq rdi, 1;
+                            addq rdi, rsi;
+                            jo overflow;
+                        );
+                    }
+                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                        monoasm!( &mut self.jit,
+                            addq rdi, (Value::i32(*i as i32).id() - 1);
+                            jo overflow;
+                        );
+                    }
                 }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        addq rdi, (Value::i32(*i as i32).id() - 1);
-                        jo deopt;
-                    );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                overflow:
+                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    jmp deopt;
+                );
+                self.jit.select_page(0);
+            }
+            BinOpK::Mul => {
+                let overflow = self.jit.label();
+                match mode {
+                    OpMode::RR(_, _) => {
+                        monoasm!( &mut self.jit,
+                            subq rdi, 1;
+                            sarq rsi,1;
+                            imul rdi, rsi;
+                            jo overflow;
+                            orq  rdi, 1;
+                        );
+                    }
+                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                        monoasm!( &mut self.jit,
+                            subq rdi, 1;
+                            movq rsi, (*i as i64);
+                            imul rdi, rsi;
+                            jo overflow;
+                            orq  rdi, 1;
+                        );
+                    }
                 }
-            },
-            BinOpK::Mul => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        subq rdi, 1;
-                        sarq rsi,1;
-                        imul rdi, rsi;
-                        jo deopt;
-                        orq  rdi, 1;
-                    );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                overflow:
+                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    jmp deopt;
+                );
+                self.jit.select_page(0);
+            }
+            BinOpK::Sub => {
+                let overflow = self.jit.label();
+                match mode {
+                    OpMode::RR(_, _) => {
+                        monoasm!( &mut self.jit,
+                            subq rdi, rsi;
+                            jo overflow;
+                            addq rdi, 1;
+                        );
+                    }
+                    OpMode::RI(_, rhs) => {
+                        monoasm!( &mut self.jit,
+                            subq rdi, (Value::i32(*rhs as i32).id() - 1);
+                            jo overflow;
+                        );
+                    }
+                    OpMode::IR(lhs, _) => {
+                        monoasm!( &mut self.jit,
+                            movq rdi, (Value::i32(*lhs as i32).id());
+                            subq rdi, rsi;
+                            jo overflow;
+                            addq rdi, 1;
+                        );
+                    }
                 }
-                OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                    monoasm!( &mut self.jit,
-                        subq rdi, 1;
-                        movq rsi, (*i as i64);
-                        imul rdi, rsi;
-                        jo deopt;
-                        orq  rdi, 1;
-                    );
-                }
-            },
-            BinOpK::Sub => match mode {
-                OpMode::RR(_, _) => {
-                    monoasm!( &mut self.jit,
-                        subq rdi, rsi;
-                        jo deopt;
-                        addq rdi, 1;
-                    );
-                }
-                OpMode::RI(_, rhs) => {
-                    monoasm!( &mut self.jit,
-                        subq rdi, (Value::i32(*rhs as i32).id() - 1);
-                        jo deopt;
-                    );
-                }
-                OpMode::IR(lhs, _) => {
-                    monoasm!( &mut self.jit,
-                        movq rdi, (Value::i32(*lhs as i32).id());
-                        subq rdi, rsi;
-                        jo deopt;
-                        addq rdi, 1;
-                    );
-                }
-            },
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                overflow:
+                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    jmp deopt;
+                );
+                self.jit.select_page(0);
+            }
             BinOpK::Exp => {
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,

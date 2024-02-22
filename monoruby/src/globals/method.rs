@@ -30,7 +30,7 @@ impl Globals {
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, Visibility::Private);
         let class_id = self.get_metaclass(class_id).id();
-        self.add_method(class_id, method_name, func_id, Visibility::Public);
+        self.add_public_method(class_id, method_name, func_id);
         func_id
     }
 
@@ -181,7 +181,7 @@ impl Globals {
     pub(crate) fn define_builtin_inline_func_with(
         &mut self,
         class_id: ClassId,
-        name: &str,
+        name: &[&str],
         address: BuiltinFn,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
@@ -189,14 +189,25 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let func_id =
-            self.new_builtin_fn(class_id, name, address, Visibility::Public, min, max, rest);
+        assert!(!name.is_empty());
+        let func_id = self.new_builtin_fn(
+            class_id,
+            &name[0],
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+        );
         let inline_id = self.store.add_inline_info(
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", self.get_class_name(class_id)),
+            format!("{}#{}", self.get_class_name(class_id), &name[0]),
         );
         inline::InlineTable::add_inline(func_id, inline_id);
+        for name in &name[1..] {
+            self.add_method(class_id, IdentId::get_id(name), func_id, Visibility::Public);
+        }
         func_id
     }
 
@@ -265,7 +276,7 @@ impl Globals {
         let class_id = self.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(
             class_id,
-            name,
+            &[name],
             address,
             inline_gen,
             inline_analysis,

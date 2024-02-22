@@ -527,6 +527,7 @@ impl Globals {
         }
     }
 
+    #[cfg(feature = "jit-log")]
     pub(crate) fn to_s2(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
@@ -666,6 +667,7 @@ impl Globals {
         }
     }
 
+    #[cfg(feature = "jit-log")]
     fn hash_tos2(&self, val: Value) -> String {
         let hash = val.as_hash();
         match hash.len() {
