@@ -452,7 +452,7 @@ impl Executor {
         method: IdentId,
         receiver: Value,
         args: &[Value],
-        block_handler: Option<BlockHandler>,
+        bh: Option<BlockHandler>,
     ) -> Option<Value> {
         let func_id = match globals.find_method(receiver, method, false) {
             Ok(id) => id,
@@ -461,15 +461,7 @@ impl Executor {
                 return None;
             }
         };
-        (globals.codegen.method_invoker)(
-            self,
-            globals,
-            func_id,
-            receiver,
-            args.as_ptr(),
-            args.len(),
-            block_handler,
-        )
+        self.invoke_func(globals, func_id, receiver, args, bh)
     }
 
     ///
@@ -481,18 +473,10 @@ impl Executor {
         method: IdentId,
         receiver: Value,
         args: &[Value],
-        block_handler: Option<BlockHandler>,
+        bh: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        match (globals.codegen.method_invoker)(
-            self,
-            globals,
-            func_id,
-            receiver,
-            args.as_ptr(),
-            args.len(),
-            block_handler,
-        ) {
+        match self.invoke_func(globals, func_id, receiver, args, bh) {
             Some(res) => Ok(res),
             None => Err(self.take_error()),
         }
@@ -834,7 +818,7 @@ impl Executor {
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct BlockHandler(pub Value);
+pub struct BlockHandler(Value);
 
 impl std::fmt::Debug for BlockHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -853,8 +837,18 @@ impl BlockHandler {
         Self(val)
     }
 
-    pub fn from(func_id: FuncId) -> Self {
+    pub fn get(self) -> Value {
+        self.0
+    }
+
+    pub fn from_caller(func_id: FuncId) -> Self {
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+        let bh = Value::integer(block_handler);
+        Self::new(bh)
+    }
+
+    pub fn from_current(func_id: FuncId) -> Self {
+        let block_handler = (u32::from(func_id) as i64) << 16;
         let bh = Value::integer(block_handler);
         Self::new(bh)
     }
@@ -881,6 +875,10 @@ impl BlockHandler {
 
     pub(crate) fn as_proc(&self) -> &ProcInner {
         self.0.as_proc()
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.0.id()
     }
 }
 

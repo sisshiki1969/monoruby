@@ -305,17 +305,18 @@ impl Codegen {
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
         // So several conditions are met, we can optimize this.
         // the conditions are:
-        // - is_simple
-        // - no single arg expansion
-        // - req == pos_num == req_opt
+        // - the callee is_simple (no optional, no rest, no keyword, no keyword rest, no block arguments)
+        // - req == pos_num
+        // - thus, no single argument expansion
         let generic = self.jit.label();
         let exit = self.jit.label();
         //self.guard_simple_call(GP::Rsi, GP::Rdi, GP::R8, exit, generic);
         monoasm! { &mut self.jit,
-            // check Meta. if !is_simple || is_block_style, go to generic.
+            // check if the callee is_simple
             shrq rsi, 56;
             testq rsi, 0b1_0000;
             jz  generic;
+            //check if req == pos_num
             cmpw rdi, [r15 + (FUNCDATA_MIN)];
             jeq exit;
         generic:
@@ -360,11 +361,12 @@ extern "C" fn handle_invoker_arguments(
     callee_lfp: Lfp,
     mut arg_num: usize,
 ) -> Option<Value> {
-    //eprintln!("handle invloker arguments");
     let callee_fid = callee_lfp.meta().func_id();
     let info = &globals[callee_fid];
     // expand array for block
-    arg_num = expand_array_for_block(info, arg_num, callee_lfp);
+    if info.single_arg_expand() && arg_num == 1 {
+        arg_num = expand_array_for_block(info, arg_num, callee_lfp);
+    }
 
     // required + optional + rest
     if let Err(err) = super::runtime::handle_positional(info, arg_num, callee_lfp) {
@@ -386,14 +388,12 @@ extern "C" fn handle_invoker_arguments(
 
 /// deconstruct array for block
 fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
-    if info.single_arg_expand() && arg_num == 1 {
-        let req_num = info.req_num();
-        unsafe {
-            let v = callee_lfp.register(1).unwrap();
-            if v.try_array_ty().is_some() {
-                let ptr = callee_lfp.register_ptr(1);
-                return block_expand_array(v, ptr as _, req_num);
-            }
+    let req_num = info.req_num();
+    unsafe {
+        let v = callee_lfp.register(1).unwrap();
+        if v.try_array_ty().is_some() {
+            let ptr = callee_lfp.register_ptr(1);
+            return block_expand_array(v, ptr as _, req_num);
         }
     }
     arg_num
@@ -402,17 +402,17 @@ fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> u
 fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
     let ary: Array = src.into();
     let len = ary.len();
+    for i in 0..len {
+        unsafe { *dst.sub(i) = ary[i] }
+    }
+    for i in 0..len {
+        unsafe { *dst.sub(i) = ary[i] }
+    }
     if min_len <= len {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
         len
     } else {
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] }
-        }
-        for i in len..min_len {
-            unsafe { *dst.sub(i) = Value::nil() }
+        unsafe {
+            std::slice::from_raw_parts_mut(dst.sub(len), min_len - len - 1).fill(Value::nil());
         }
         min_len
     }

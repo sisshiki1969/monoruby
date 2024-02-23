@@ -344,9 +344,9 @@ impl Codegen {
         }
         // set block
         if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from(func_id);
+            let bh = BlockHandler::from_caller(func_id);
             monoasm!( &mut self.jit,
-                movq rax, (bh.0.id());
+                movq rax, (bh.id());
                 movq [rsp - (16 + LBP_BLOCK)], rax;
             );
         } else if let Some(block) = callsite.block_arg {
@@ -416,9 +416,9 @@ impl Codegen {
     ///
     fn push_block(&mut self, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from(func_id);
+            let bh = BlockHandler::from_caller(func_id);
             monoasm!( &mut self.jit,
-                movq rax, (bh.0.id());
+                movq rax, (bh.id());
                 pushq rax;
             );
         } else if let Some(block) = callsite.block_arg {

@@ -15,7 +15,7 @@ impl Globals {
                         Some((func_id, idx)) => {
                             format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
-                        _ => self.inspect(block.0),
+                        _ => self.inspect(block.get()),
                     }
                 }
                 None => "None".to_string(),

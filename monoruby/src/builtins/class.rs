@@ -138,6 +138,7 @@ pub(super) fn gen_class_new(
                 lea r8, [r14 - (crate::executor::jitgen::conv(args))];
                 movl r9, (pos_num);
                 subq rsp, 8;
+                // TODO: Currently inline call does not support calling with block.
                 xorq rax, rax;
                 pushq rax;
                 movq rax, (gen.method_invoker2);

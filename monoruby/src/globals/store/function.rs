@@ -315,7 +315,7 @@ fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
         method,
         receiver,
         args,
-        Some(BlockHandler::from(FuncId::new(2))),
+        Some(BlockHandler::from_current(FuncId::new(2))),
     )
 }
 

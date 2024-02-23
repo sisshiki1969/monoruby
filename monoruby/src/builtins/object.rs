@@ -335,7 +335,7 @@ fn object_send(
     let using = bb.get_using_xmm();
     let bh = match block_fid {
         None => 0,
-        Some(func_id) => BlockHandler::from(func_id).0.id(),
+        Some(func_id) => BlockHandler::from_caller(func_id).id(),
     };
     let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {
@@ -372,12 +372,12 @@ struct Cache {
 }
 
 extern "C" fn call_send_wrapper(
-    vm: &mut Executor,           // rdi
-    globals: &mut Globals,       // rsi
-    recv: Value,                 // rdx
-    args: Arg,                   // rcx
-    len: usize,                  // r8
-    block: Option<BlockHandler>, // r9
+    vm: &mut Executor,        // rdi
+    globals: &mut Globals,    // rsi
+    recv: Value,              // rdx
+    args: Arg,                // rcx
+    len: usize,               // r8
+    bh: Option<BlockHandler>, // r9
     cache: &mut [Cache; CACHE_SIZE],
     version: &mut u32,
 ) -> Option<Value> {
@@ -436,7 +436,9 @@ extern "C" fn call_send_wrapper(
             return None;
         }
     };
-    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, block)
+    // Currently, we don't support calling with block in inlined method.
+    let bh = bh.map(|bh| bh.delegate());
+    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, bh)
 }
 
 #[cfg(test)]
@@ -671,6 +673,19 @@ mod test {
         f = Foo.new
         [f.send(methods[1]), f.send(methods[2]), f.send(methods[3])]
         "#,
+        );
+        run_test_with_prelude(
+            r#"
+            o.send(:f){ 3 }
+            "#,
+            r#"
+            class C
+                def f
+                    yield
+                end
+            end
+            o = C.new
+            "#,
         );
     }
 }

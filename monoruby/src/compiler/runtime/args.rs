@@ -101,11 +101,11 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
     } = *caller;
 
     let bh = if let Some(block_fid) = block_fid {
-        let bh = BlockHandler::from(block_fid);
+        let bh = BlockHandler::from_caller(block_fid);
         Some(bh)
     } else {
         block_arg.map(|block_arg| unsafe {
-            BlockHandler(caller_lfp.register(block_arg.0 as usize).unwrap())
+            BlockHandler::new(caller_lfp.register(block_arg.0 as usize).unwrap())
         })
     };
     callee_lfp.set_block(bh);
