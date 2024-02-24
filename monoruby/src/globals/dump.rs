@@ -8,7 +8,7 @@ impl Globals {
         let block = lfp.block();
         eprintln!(
             "    {} block:{} outer:{} {:?}",
-            self.store.func_description(func_id),
+            self.func_description(func_id),
             match block {
                 Some(block) => {
                     match block.try_proxy() {
@@ -120,7 +120,7 @@ impl Globals {
         eprintln!();
         eprintln!("deoptimization stats (top 20)");
         eprintln!(
-            "{:30} FuncId [{:05}]     {:7}",
+            "{:40} FuncId [{:05}]     {:7}",
             "func name", "index", "count"
         );
         eprintln!("-------------------------------------------------------------------------------------------------------------------");
@@ -133,9 +133,9 @@ impl Globals {
             } else {
                 "<INVALID>".to_string()
             };
-            let name = self.store.func_description(*func_id);
+            let name = self.func_description(*func_id);
             eprintln!(
-                "{:30}  {:5} [{:05}]  {:10}   {fmt}",
+                "{:40}  {:5} [{:05}]  {:10}   {fmt}",
                 name,
                 func_id.get(),
                 index,
@@ -166,6 +166,20 @@ impl Globals {
             eprintln!(
                 "{:30} {:30} {:10}",
                 name.to_string(),
+                self.get_class_name(*class_id),
+                count
+            );
+        }
+        eprintln!();
+        eprintln!("jit class guard failed stats (top 20)");
+        eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((func_id, class_id), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:40} {:30} {:10}",
+                self.func_description(*func_id),
                 self.get_class_name(*class_id),
                 count
             );
@@ -678,7 +692,7 @@ pub(crate) extern "C" fn log_deoptimize(
         // normal exit from jit'ed loop
         #[cfg(feature = "jit-log")]
         {
-            let name = globals.store.func_description(func_id);
+            let name = globals.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
             eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);
@@ -696,7 +710,7 @@ pub(crate) extern "C" fn log_deoptimize(
         #[cfg(feature = "jit-log")]
         {
             let trace_ir = pc.trace_ir();
-            let name = globals.store.func_description(func_id);
+            let name = globals.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
             match trace_ir {
                 TraceIr::LoadConst(..)          // inline constant cache miss

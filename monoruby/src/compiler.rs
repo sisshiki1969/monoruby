@@ -638,20 +638,33 @@ impl Codegen {
         jit_entry: DestLabel,
         guard: DestLabel,
     ) {
-        let old = self.jit.get_page();
-        self.jit.select_page(1);
-
         let vm_entry = self.vm_entry;
+        let exit = self.jit.label();
         monoasm! { &mut self.jit,
         guard:
             movq rdi, [r14 - (LBP_SELF)];
         }
-        self.guard_class_rdi(self_class, vm_entry);
+        self.guard_class_rdi(self_class, exit);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;
         }
-        self.jit.select_page(old);
+        self.jit.select_page(1);
+        self.jit.bind_label(exit);
+        #[cfg(feature = "profile")]
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (guard_fail);
+            subq rsp, 4096;
+            call rax;
+            addq rsp, 4096;
+        }
+        monoasm! { &mut self.jit,
+            jmp vm_entry;
+        }
+        self.jit.select_page(0);
     }
 
     ///
@@ -949,6 +962,12 @@ fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
     lebel
 }
 
+#[cfg(feature = "profile")]
+extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
+    let func_id = vm.cfp().lfp().meta().func_id();
+    globals.jit_class_guard_failed(func_id, self_val.class());
+}
+
 #[test]
 fn guard_class() {
     let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
@@ -1014,7 +1033,7 @@ impl Globals {
         {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
-            let name = self.store.func_description(func_id);
+            let name = self.func_description(func_id);
             eprintln!(
                 "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}:{}",
                 if position.is_some() {
@@ -1038,12 +1057,7 @@ impl Globals {
                 .compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
-            let class_name = self.get_class_name(self_value.class());
-            let desc = format!(
-                "JIT:{}#{}",
-                class_name,
-                self.store.func_description(func_id)
-            );
+            let desc = format!("JIT:{}", self.func_description(func_id));
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]

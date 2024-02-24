@@ -756,11 +756,11 @@ impl FuncInfo {
         self.ext.name
     }
 
-    /*pub(crate) fn class(&self) -> Option<ClassId> {
+    pub(crate) fn owner_class(&self) -> Option<ClassId> {
         self.ext.class_id
-    }*/
+    }
 
-    pub(super) fn set_class(&mut self, class: ClassId) {
+    pub(super) fn set_owner_class(&mut self, class: ClassId) {
         self.ext.class_id = Some(class);
     }
 
@@ -918,10 +918,7 @@ impl FuncInfo {
         let loc = info.loc;
         let line = info.sourceinfo.get_line(&loc);
         let file_name = info.sourceinfo.file_name();
-        eprintln!(
-            "{} {file_name}:{line}",
-            globals.store.func_description(info.id()),
-        );
+        eprintln!("{} {file_name}:{line}", globals.func_description(info.id()),);
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
