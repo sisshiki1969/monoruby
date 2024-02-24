@@ -10,6 +10,8 @@ use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
 
+const COUNT_START_COMPILE: i32 = 10;
+
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
 type MethodInvoker = extern "C" fn(
@@ -100,6 +102,7 @@ pub struct Codegen {
     entry_panic: DestLabel,
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
+    jit_class_guard_fail: DestLabel,
     ///
     /// Raise error.
     ///
@@ -183,6 +186,7 @@ impl Codegen {
             entry_panic,
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
+            jit_class_guard_fail: entry_panic,
             entry_raise: entry_panic,
             f64_to_val,
             div_by_zero: entry_panic,
@@ -638,33 +642,37 @@ impl Codegen {
         jit_entry: DestLabel,
         guard: DestLabel,
     ) {
-        let vm_entry = self.vm_entry;
-        let exit = self.jit.label();
+        let exit = self.jit_class_guard_fail;
+        let exit_patch_point = self.jit.label();
+        let counter = self.jit.const_i32(COUNT_START_COMPILE);
+
         monoasm! { &mut self.jit,
         guard:
             movq rdi, [r14 - (LBP_SELF)];
         }
-        self.guard_class_rdi(self_class, exit);
+        self.guard_class_rdi(self_class, exit_patch_point);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;
         }
-        self.jit.select_page(1);
-        self.jit.bind_label(exit);
-        #[cfg(feature = "profile")]
+        let cont = self.jit.label();
         monoasm! { &mut self.jit,
-            movq rdx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (guard_fail);
-            subq rsp, 4096;
+        exit_patch_point:
+            jmp cont;
+        cont:
+            subl [rip + counter], 1;
+            jne exit;
+
+            movq rdi, r12;
+            movl rsi, [r14 - (LBP_META_FUNCID)];
+            movq rdx, [r14 - (LBP_SELF)];
+            movq rcx, (exit_patch_point.to_usize());
+            subq rsp, 4088;
+            movq rax, (exec_jit_compile_patch);
             call rax;
-            addq rsp, 4096;
+            addq rsp, 4088;
+            jmp exit_patch_point;
         }
-        monoasm! { &mut self.jit,
-            jmp vm_entry;
-        }
-        self.jit.select_page(0);
     }
 
     ///

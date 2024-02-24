@@ -1,7 +1,5 @@
 use super::*;
 
-const COMPILE_COUNT: i32 = 10;
-
 impl Codegen {
     pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
         let codeptr = self.jit.get_current_address();
@@ -42,7 +40,7 @@ impl Codegen {
     /// ```
     fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry;
-        let counter = self.jit.const_i32(COMPILE_COUNT);
+        let counter = self.jit.const_i32(COUNT_START_COMPILE);
         let entry = self.jit.label();
         let next = self.jit.label();
         monoasm!( &mut self.jit,
