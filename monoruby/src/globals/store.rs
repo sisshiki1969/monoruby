@@ -356,23 +356,6 @@ impl Store {
         let pc = info.get_top_pc();
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
     }
-
-    pub(crate) fn func_description(&self, func_id: FuncId) -> String {
-        let info = &self[func_id];
-        if let Some(func) = info.is_ruby_func() {
-            let mother = func.mother.0;
-            if mother != func_id {
-                format!("<block in {}>", self[mother].as_ruby_func().name())
-            } else {
-                format!("<{}>", func.name())
-            }
-        } else {
-            match info.name() {
-                Some(name) => format!("{}", name),
-                None => "<unnamed>".to_string(),
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

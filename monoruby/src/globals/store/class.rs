@@ -423,11 +423,10 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let info = self.store[func_id].get_wrapper_info();
-            let class_name = self.get_class_name(class_id);
-            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            let desc = self.func_description(func_id);
             self.codegen.perf_info2(info, &desc);
         }
-        self.store[func_id].set_class(class_id);
+        self.store[func_id].set_owner_class(class_id);
         self.store[class_id].methods.insert(
             name,
             MethodTableEntry {
@@ -467,12 +466,11 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let info = self.store[func_id].get_wrapper_info();
-            let class_name = self.get_class_name(class_id);
-            let desc = format!("{class_name}#{}", self.store.func_description(func_id));
+            let desc = self.func_description(func_id);
             self.codegen.perf_info2(info, &desc);
         }
         let singleton = self.get_metaclass(class_id).id();
-        self.store[func_id].set_class(class_id);
+        self.store[func_id].set_owner_class(class_id);
         self.store[singleton].methods.insert(
             name,
             MethodTableEntry {
@@ -594,10 +592,8 @@ impl Globals {
             };
         }
         let class_version = self.class_version();
-        if let Some((version, entry)) = self.global_method_cache.get(&(name, class_id)) {
-            if *version == class_version {
-                return entry.clone();
-            }
+        if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
+            return entry.cloned();
         };
         #[cfg(feature = "profile")]
         {
@@ -610,7 +606,7 @@ impl Globals {
         }
         let entry = self.search_method(class_id, name);
         self.global_method_cache
-            .insert((name, class_id), (class_version, entry.clone()));
+            .insert((name, class_id), class_version, entry.clone());
         entry
     }
 
@@ -675,5 +671,50 @@ impl Globals {
     ///
     fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
         self.store[class_id].methods.get(&name)
+    }
+
+    #[cfg(feature = "profile")]
+    pub(crate) fn jit_class_guard_failed(&mut self, func_id: FuncId, class_id: ClassId) {
+        {
+            match self.jit_class_unmatched_stats.get_mut(&(func_id, class_id)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.jit_class_unmatched_stats
+                        .insert((func_id, class_id), 1);
+                }
+            };
+        }
+    }
+}
+
+#[derive(Default)]
+pub(in crate::globals) struct GlobalMethodCache {
+    version: u32,
+    cache: HashMap<(IdentId, ClassId), Option<MethodTableEntry>>,
+}
+
+impl GlobalMethodCache {
+    fn get(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<Option<&MethodTableEntry>> {
+        if self.version != class_version {
+            self.cache.clear();
+            self.version = class_version;
+            return None;
+        }
+        self.cache.get(&(name, class_id)).map(|e| e.as_ref())
+    }
+
+    fn insert(
+        &mut self,
+        key: (IdentId, ClassId),
+        class_version: u32,
+        entry: Option<MethodTableEntry>,
+    ) {
+        self.version = class_version;
+        self.cache.insert(key, entry);
     }
 }
