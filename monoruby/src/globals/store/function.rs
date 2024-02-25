@@ -27,7 +27,7 @@ impl From<FuncId> for u32 {
 }
 
 impl FuncId {
-    pub fn new(id: u32) -> Self {
+    pub const fn new(id: u32) -> Self {
         Self(std::num::NonZeroU32::new(id).unwrap())
     }
 
@@ -276,7 +276,7 @@ mod test {
 }
 
 pub(crate) struct Funcs {
-    pub info: MonoVec<FuncInfo>,
+    pub(in crate::globals) info: MonoVec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }
 

@@ -1144,7 +1144,7 @@ impl BcPc {
 }
 
 impl BcPc {
-    pub(crate) fn trace_ir(&self) -> TraceIr {
+    pub(crate) fn trace_ir(&self, store: &Store) -> TraceIr {
         let op = self.op1;
         let opcode = self.opcode();
         if opcode & 0xc0 == 0 {
@@ -1217,18 +1217,21 @@ impl BcPc {
                 30..=31 => {
                     let cached_fid = self.cached_fid();
                     let is_simple = opcode == 30;
+                    let callid: CallSiteId = op2.into();
 
-                    if is_simple
-                        && let Some(fid) = cached_fid
+                    if let Some(fid) = cached_fid
                         && let Some(inline_id) =
                             crate::executor::inline::InlineTable::get_inline(fid)
+                        && (is_simple
+                            || (fid == OBJECT_SEND_FUNCID
+                                && store[callid].splat_pos.len() == 1
+                                && store[callid].pos_num == 1
+                                && !store[callid].kw_may_exists()))
                     {
-                        return TraceIr::InlineCall {
-                            inline_id,
-                            callid: op2.into(),
-                        };
+                        TraceIr::InlineCall { inline_id, callid }
+                    } else {
+                        TraceIr::MethodCall { callid }
                     }
-                    TraceIr::MethodCall { callid: op2.into() }
                 }
                 32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
                 34 => TraceIr::Yield { callid: op2.into() },

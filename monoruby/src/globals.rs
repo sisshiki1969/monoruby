@@ -49,8 +49,9 @@ impl ProcData {
     }
 }
 
-pub const GLOBALS_FUNCINFO: usize =
+pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
+pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
@@ -200,6 +201,19 @@ impl Globals {
         assert_eq!(
             FuncId::new(2),
             globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
+        );
+        assert_eq!(
+            OBJECT_SEND_FUNCID,
+            globals.define_builtin_inline_func_with(
+                OBJECT_CLASS,
+                &["send", "__send__"],
+                crate::builtins::send,
+                Box::new(crate::builtins::object_send),
+                analysis::v_v_vv,
+                0,
+                0,
+                true,
+            )
         );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
