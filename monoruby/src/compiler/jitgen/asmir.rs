@@ -267,7 +267,7 @@ impl AsmIr {
     }
 
     ///
-    /// Class version guard fro JIT.
+    /// Class version guard for JIT.
     ///
     /// Check the cached class version, and if the version is changed, call `find_method` and
     /// compare obtained FuncId and cached FuncId.
@@ -284,7 +284,7 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn guard_class_version(
+    pub(super) fn guard_version(
         &mut self,
         pc: BcPc,
         using_xmm: UsingXmm,
@@ -312,16 +312,25 @@ impl AsmIr {
         class: ClassId,
         deopt: AsmDeopt,
     ) {
-        if class == INTEGER_CLASS {
-            if bb.is_fixnum(slot) {
-                return;
+        match class {
+            INTEGER_CLASS => {
+                if bb.is_fixnum(slot) {
+                    return;
+                }
+                bb.set_guard_fixnum(slot);
             }
-            bb.set_guard_fixnum(slot);
-        } else if class == FLOAT_CLASS {
-            if bb.is_float(slot) {
-                return;
+            FLOAT_CLASS => {
+                if bb.is_float(slot) {
+                    return;
+                }
+                bb.set_guard_float(slot);
             }
-            bb.set_guard_float(slot);
+            class => {
+                if bb.is_class(slot, class) {
+                    return;
+                }
+                bb.set_guard_class(slot, class);
+            }
         }
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
