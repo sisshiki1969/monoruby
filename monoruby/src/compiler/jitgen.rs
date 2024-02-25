@@ -11,7 +11,7 @@ use self::slot::Guarded;
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::SlotState;
+use slot::SlotContext;
 use trace_ir::*;
 
 pub mod analysis;
@@ -921,7 +921,7 @@ impl WriteBack {
 #[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     /// state stack slots.
-    slot_state: SlotState,
+    slot_state: SlotContext,
     /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
@@ -930,7 +930,7 @@ pub(crate) struct BBContext {
 }
 
 impl std::ops::Deref for BBContext {
-    type Target = SlotState;
+    type Target = SlotContext;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
@@ -945,7 +945,7 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            slot_state: SlotState::new(cc),
+            slot_state: SlotContext::new(cc),
             sp: SlotId(cc.local_num as u16),
             next_sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,
@@ -1016,6 +1016,12 @@ pub(crate) enum LinkMode {
     /// On R15 register.
     ///
     R15,
+}
+
+impl std::default::Default for LinkMode {
+    fn default() -> Self {
+        LinkMode::Stack
+    }
 }
 
 #[derive(Debug, Clone)]
