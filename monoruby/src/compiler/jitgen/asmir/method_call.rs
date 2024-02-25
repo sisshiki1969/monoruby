@@ -25,7 +25,7 @@ impl AsmIr {
             self.fetch_to_reg(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
-            self.guard_class_version(pc, using_xmm, deopt, error);
+            self.guard_version(pc, using_xmm, deopt, error);
             let cached_class = pc.cached_class1().unwrap();
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.

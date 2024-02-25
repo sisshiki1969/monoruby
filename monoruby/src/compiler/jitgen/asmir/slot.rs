@@ -9,6 +9,7 @@ pub enum Guarded {
     Fixnum,
     Float,
     ArrayTy,
+    Class(ClassId),
 }
 
 impl Guarded {
@@ -20,16 +21,15 @@ impl Guarded {
         } else if v.is_array_ty() {
             Guarded::ArrayTy
         } else {
-            Guarded::Value
+            Guarded::Class(v.class())
         }
     }
 
     pub(super) fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Guarded::Float, Guarded::Float) => Guarded::Float,
-            (Guarded::Fixnum, Guarded::Fixnum) => Guarded::Fixnum,
-            (Guarded::ArrayTy, Guarded::ArrayTy) => Guarded::ArrayTy,
-            _ => Guarded::Value,
+        if self == other {
+            self.clone()
+        } else {
+            Guarded::Value
         }
     }
 }
@@ -126,16 +126,30 @@ impl SlotState {
         self.slots.0[slot.0 as usize].1
     }
 
+    fn set_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+        self.slots.0[slot.0 as usize].1 = guarded;
+        self.alias[slot.0 as usize].iter().for_each(|slot| {
+            self.slots.0[slot.0 as usize].1 = guarded;
+        });
+        if let LinkMode::Alias(origin) = self.slots[slot] {
+            self.slots.0[origin.0 as usize].1 = guarded;
+        };
+    }
+
     pub(super) fn set_guard_fixnum(&mut self, slot: SlotId) {
-        self.slots.0[slot.0 as usize].1 = Guarded::Fixnum
+        self.set_guarded(slot, Guarded::Fixnum)
     }
 
     pub(super) fn set_guard_float(&mut self, slot: SlotId) {
-        self.slots.0[slot.0 as usize].1 = Guarded::Float
+        self.set_guarded(slot, Guarded::Float)
     }
 
     pub(super) fn set_guard_array_ty(&mut self, slot: SlotId) {
-        self.slots.0[slot.0 as usize].1 = Guarded::ArrayTy
+        self.set_guarded(slot, Guarded::ArrayTy)
+    }
+
+    pub(super) fn set_guard_class(&mut self, slot: SlotId, class: ClassId) {
+        self.set_guarded(slot, Guarded::Class(class))
     }
 
     fn clear_link(&mut self, slot: SlotId) {
@@ -177,6 +191,7 @@ impl SlotState {
         match self.slots[slot] {
             LinkMode::Xmm(_) => assert!(!b),
             LinkMode::Literal(v) => assert_eq!(v.is_array_ty(), b),
+            LinkMode::Alias(origin) => assert_eq!(self.is_array_ty(origin), b),
             _ => {}
         };
         b
@@ -187,6 +202,7 @@ impl SlotState {
         match self.slots[slot] {
             LinkMode::Xmm(_) => assert!(!b),
             LinkMode::Literal(v) => assert_eq!(v.is_fixnum(), b),
+            LinkMode::Alias(origin) => assert_eq!(self.is_fixnum(origin), b),
             _ => {}
         };
         b
@@ -197,6 +213,7 @@ impl SlotState {
         match self.slots[slot] {
             LinkMode::Xmm(_) => assert!(b),
             LinkMode::Literal(v) => assert_eq!(v.is_float(), b),
+            LinkMode::Alias(origin) => assert_eq!(self.is_float(origin), b),
             _ => {}
         };
         b
@@ -206,13 +223,16 @@ impl SlotState {
         match class {
             INTEGER_CLASS => self.is_fixnum(slot),
             FLOAT_CLASS => self.is_float(slot),
-            _ => match self.slots[slot] {
-                LinkMode::Xmm(_) => false,
-                LinkMode::Literal(v) => v.class() == class,
-                LinkMode::Both(_) | LinkMode::Stack => false,
-                LinkMode::R15 => false,
-                LinkMode::Alias(origin) => self.is_class(origin, class),
-            },
+            _ => {
+                let b = self.guarded(slot) == Guarded::Class(class);
+                match self.slots[slot] {
+                    LinkMode::Xmm(_) => assert!(!b),
+                    LinkMode::Literal(v) => assert_eq!(v.class() == class, b),
+                    LinkMode::Alias(origin) => assert_eq!(self.is_class(origin, class), b),
+                    _ => {}
+                };
+                b
+            }
         }
     }
 
@@ -400,13 +420,13 @@ impl AsmIr {
                 // R15 -> Stack
                 self.acc2stack(slot);
                 self.unlink(bb, slot);
-                bb.slots.0[slot.0 as usize].1 = guarded;
+                bb.set_guarded(slot, guarded);
             }
             LinkMode::Alias(origin) => {
                 self.stack2reg(origin, GP::Rax);
                 self.reg2stack(GP::Rax, slot);
                 self.unlink(bb, slot);
-                bb.slots.0[slot.0 as usize].1 = guarded;
+                bb.set_guarded(slot, guarded);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
