@@ -918,7 +918,10 @@ impl FuncInfo {
         let loc = info.loc;
         let line = info.sourceinfo.get_line(&loc);
         let file_name = info.sourceinfo.file_name();
-        eprintln!("{} {file_name}:{line}", globals.func_description(info.id()),);
+        eprintln!(
+            "<{}> {file_name}:{line}",
+            globals.func_description(info.id()),
+        );
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {

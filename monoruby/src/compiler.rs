@@ -10,7 +10,11 @@ use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
 
-const COUNT_START_COMPILE: i32 = 10;
+#[cfg(feature = "test")]
+const COUNT_START_COMPILE: i32 = 5;
+#[cfg(not(feature = "test"))]
+const COUNT_START_COMPILE: i32 = 100;
+const COUNT_START_RECOMPILE: i32 = 10;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
@@ -644,7 +648,7 @@ impl Codegen {
     ) {
         let exit = self.jit_class_guard_fail;
         let exit_patch_point = self.jit.label();
-        let counter = self.jit.const_i32(COUNT_START_COMPILE);
+        let counter = self.jit.const_i32(COUNT_START_RECOMPILE);
 
         monoasm! { &mut self.jit,
         guard:
@@ -655,6 +659,8 @@ impl Codegen {
         patch_point:
             jmp jit_entry;
         }
+
+        self.jit.select_page(1);
         let cont = self.jit.label();
         monoasm! { &mut self.jit,
         exit_patch_point:
@@ -673,6 +679,8 @@ impl Codegen {
             addq rsp, 4088;
             jmp exit_patch_point;
         }
+        self.jit.select_page(0);
+        self.jit.finalize();
     }
 
     ///
@@ -1043,7 +1051,7 @@ impl Globals {
             let start_pos = func.get_pc_index(position);
             let name = self.func_description(func_id);
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}:{}",
+                "==> start {} compile: <{}> {:?} self_class:{} start:[{start_pos}] {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -1065,7 +1073,7 @@ impl Globals {
                 .compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
-            let desc = format!("JIT:{}", self.func_description(func_id));
+            let desc = format!("JIT:<{}>", self.func_description(func_id));
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]

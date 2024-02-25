@@ -21,13 +21,15 @@ name = "irm"
 dump-bc = []
 emit-asm = ["dump-bc"]
 emit-bc = ["dump-bc"]
-jit-log = ["dump-bc"]
+jit-log = []
 jit-debug = []
+deopt = ["jit-log", "dump-bc"]
 gc-log = []
 gc-debug = []
 gc-stress = []
 profile = ["dump-bc"]
 perf = []
+test = []
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }

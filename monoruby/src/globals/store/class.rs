@@ -420,12 +420,6 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        #[cfg(feature = "perf")]
-        {
-            let info = self.store[func_id].get_wrapper_info();
-            let desc = self.func_description(func_id);
-            self.codegen.perf_info2(info, &desc);
-        }
         self.store[func_id].set_owner_class(class_id);
         self.store[class_id].methods.insert(
             name,
@@ -435,6 +429,12 @@ impl Globals {
                 visibility,
             },
         );
+        #[cfg(feature = "perf")]
+        {
+            let info = self.store[func_id].get_wrapper_info();
+            let desc = self.func_description(func_id);
+            self.codegen.perf_info2(info, &desc);
+        }
     }
 
     pub(crate) fn add_empty_method(

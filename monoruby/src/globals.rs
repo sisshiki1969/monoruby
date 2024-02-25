@@ -13,7 +13,7 @@ mod error;
 mod method;
 mod prng;
 mod store;
-#[cfg(any(feature = "jit-log", feature = "profile"))]
+#[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
@@ -421,24 +421,35 @@ impl Globals {
         if let Some(func) = info.is_ruby_func() {
             let mother = func.mother.0;
             if mother != func_id {
-                format!("<block in {}>", self.func_description(mother))
+                format!("block in {}", self.func_description(mother))
             } else {
                 match info.owner_class() {
                     Some(owner) => format!(
-                        "<{}#{}>",
+                        "{}#{}",
                         match owner.get_name_id(self) {
                             Some(name) => format!("{:?}", name),
                             None => "<unnamed>".to_string(),
                         },
                         func.name()
                     ),
-                    None => format!("<{}>", func.name()),
+                    None => format!("{}", func.name()),
                 }
             }
         } else {
-            match info.name() {
-                Some(name) => format!("{}", name),
-                None => "<unnamed>".to_string(),
+            let name = if let Some(name) = info.name() {
+                format!("{:?}", name)
+            } else {
+                String::new()
+            };
+            match info.owner_class() {
+                Some(owner) => format!(
+                    "{}#{name}",
+                    match owner.get_name_id(self) {
+                        Some(name) => format!("{:?}", name),
+                        None => "<unnamed>".to_string(),
+                    },
+                ),
+                None => format!("{name}"),
             }
         }
     }
@@ -572,7 +583,6 @@ impl Globals {
         }
     }
 
-    #[cfg(feature = "jit-log")]
     pub(crate) fn to_s2(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
@@ -712,7 +722,6 @@ impl Globals {
         }
     }
 
-    #[cfg(feature = "jit-log")]
     fn hash_tos2(&self, val: Value) -> String {
         let hash = val.as_hash();
         match hash.len() {
@@ -724,12 +733,12 @@ impl Globals {
                     let k_inspect = if k == val {
                         "{...}".to_string()
                     } else {
-                        self.inspect(k)
+                        self.to_s2(k)
                     };
                     let v_inspect = if v == val {
                         "{...}".to_string()
                     } else {
-                        self.inspect(v)
+                        self.to_s2(v)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

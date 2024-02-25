@@ -1398,7 +1398,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.u64());
         );
-        #[cfg(any(feature = "jit-log", feature = "profile"))]
+        #[cfg(any(feature = "deopt", feature = "profile"))]
         monoasm!( &mut self.jit,
             movq rcx, rdi; // the Value which caused this deopt.
             movq rdi, rbx;
