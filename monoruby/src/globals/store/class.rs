@@ -592,10 +592,8 @@ impl Globals {
             };
         }
         let class_version = self.class_version();
-        if let Some((version, entry)) = self.global_method_cache.get(&(name, class_id)) {
-            if *version == class_version {
-                return entry.clone();
-            }
+        if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
+            return entry.cloned();
         };
         #[cfg(feature = "profile")]
         {
@@ -608,7 +606,7 @@ impl Globals {
         }
         let entry = self.search_method(class_id, name);
         self.global_method_cache
-            .insert((name, class_id), (class_version, entry.clone()));
+            .insert((name, class_id), class_version, entry.clone());
         entry
     }
 
@@ -686,5 +684,37 @@ impl Globals {
                 }
             };
         }
+    }
+}
+
+#[derive(Default)]
+pub(in crate::globals) struct GlobalMethodCache {
+    version: u32,
+    cache: HashMap<(IdentId, ClassId), Option<MethodTableEntry>>,
+}
+
+impl GlobalMethodCache {
+    fn get(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<Option<&MethodTableEntry>> {
+        if self.version != class_version {
+            self.cache.clear();
+            self.version = class_version;
+            return None;
+        }
+        self.cache.get(&(name, class_id)).map(|e| e.as_ref())
+    }
+
+    fn insert(
+        &mut self,
+        key: (IdentId, ClassId),
+        class_version: u32,
+        entry: Option<MethodTableEntry>,
+    ) {
+        self.version = class_version;
+        self.cache.insert(key, entry);
     }
 }

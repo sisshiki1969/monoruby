@@ -426,13 +426,9 @@ impl Cache {
             }
         }
         let fid = globals.find_method(recv, method, false)?;
-        let last_i = CACHE_SIZE - 1;
-        if min_i != last_i {
-            self.0.swap(min_i, last_i);
-        }
-        self.0[last_i].method = Some(method);
-        self.0[last_i].fid = fid;
-        self.0[last_i].counter = 1;
+        self.0[min_i].method = Some(method);
+        self.0[min_i].fid = fid;
+        self.0[min_i].counter = 1;
         Ok(fid)
     }
 

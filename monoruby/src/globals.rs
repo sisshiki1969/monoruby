@@ -108,7 +108,7 @@ pub struct Globals {
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
-    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
+    global_method_cache: GlobalMethodCache,
     /// regex cache.
     regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
@@ -169,7 +169,7 @@ impl Globals {
             codegen: Codegen::new(no_jit, main_object),
             store: Store::new(),
             global_vars: HashMap::default(),
-            global_method_cache: HashMap::default(),
+            global_method_cache: GlobalMethodCache::default(),
             regexp_cache: HashMap::default(),
             warning,
             no_jit,
