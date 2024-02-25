@@ -520,7 +520,7 @@ impl NoMethodErrKind {
         match self {
             NoMethodErrKind::MethodNotFound { name, obj } => format!(
                 "undefined method `{name}' for {}:{}",
-                globals.inspect(*obj),
+                globals.to_s(*obj),
                 obj.get_real_class_name(globals)
             ),
             NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(

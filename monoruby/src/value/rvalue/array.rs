@@ -157,11 +157,11 @@ impl ArrayInner {
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),
-            1 => format!("[{}]", globals.inspect(self[0])),
+            1 => format!("[{}]", globals.to_s(self[0])),
             _ => {
-                let mut s = format!("[{}", globals.inspect(self[0]));
+                let mut s = format!("[{}", globals.to_s(self[0]));
                 for val in self[1..].iter() {
-                    s += &format!(", {}", globals.inspect(*val));
+                    s += &format!(", {}", globals.to_s(*val));
                 }
                 s += "]";
                 s
@@ -169,15 +169,14 @@ impl ArrayInner {
         }
     }
 
-    #[cfg(feature = "jit-log")]
     pub fn to_s2(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),
-            1 => format!("[{}]", globals.inspect(self[0])),
+            1 => format!("[{}]", globals.to_s2(self[0])),
             _ => {
-                let mut s = format!("[{}", globals.inspect(self[0]));
+                let mut s = format!("[{}", globals.to_s2(self[0]));
                 for val in self[1..].iter().take(3) {
-                    s += &format!(", {}", globals.inspect(*val));
+                    s += &format!(", {}", globals.to_s2(*val));
                 }
                 s += " .. ]";
                 s

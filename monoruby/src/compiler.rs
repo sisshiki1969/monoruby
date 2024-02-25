@@ -10,6 +10,12 @@ use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
 
+#[cfg(feature = "test")]
+const COUNT_START_COMPILE: i32 = 5;
+#[cfg(not(feature = "test"))]
+const COUNT_START_COMPILE: i32 = 100;
+const COUNT_START_RECOMPILE: i32 = 10;
+
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
 type MethodInvoker = extern "C" fn(
@@ -100,6 +106,7 @@ pub struct Codegen {
     entry_panic: DestLabel,
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
+    jit_class_guard_fail: DestLabel,
     ///
     /// Raise error.
     ///
@@ -183,6 +190,7 @@ impl Codegen {
             entry_panic,
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
+            jit_class_guard_fail: entry_panic,
             entry_raise: entry_panic,
             f64_to_val,
             div_by_zero: entry_panic,
@@ -638,20 +646,41 @@ impl Codegen {
         jit_entry: DestLabel,
         guard: DestLabel,
     ) {
-        let old = self.jit.get_page();
-        self.jit.select_page(1);
+        let exit = self.jit_class_guard_fail;
+        let exit_patch_point = self.jit.label();
+        let counter = self.jit.const_i32(COUNT_START_RECOMPILE);
 
-        let vm_entry = self.vm_entry;
         monoasm! { &mut self.jit,
         guard:
             movq rdi, [r14 - (LBP_SELF)];
         }
-        self.guard_class_rdi(self_class, vm_entry);
+        self.guard_class_rdi(self_class, exit_patch_point);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;
         }
-        self.jit.select_page(old);
+
+        self.jit.select_page(1);
+        let cont = self.jit.label();
+        monoasm! { &mut self.jit,
+        exit_patch_point:
+            jmp cont;
+        cont:
+            subl [rip + counter], 1;
+            jne exit;
+
+            movq rdi, r12;
+            movl rsi, [r14 - (LBP_META_FUNCID)];
+            movq rdx, [r14 - (LBP_SELF)];
+            movq rcx, (exit_patch_point.to_usize());
+            subq rsp, 4088;
+            movq rax, (exec_jit_compile_patch);
+            call rax;
+            addq rsp, 4088;
+            jmp exit_patch_point;
+        }
+        self.jit.select_page(0);
+        self.jit.finalize();
     }
 
     ///
@@ -949,6 +978,12 @@ fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
     lebel
 }
 
+#[cfg(feature = "profile")]
+extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
+    let func_id = vm.cfp().lfp().meta().func_id();
+    globals.jit_class_guard_failed(func_id, self_val.class());
+}
+
 #[test]
 fn guard_class() {
     let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
@@ -1014,9 +1049,9 @@ impl Globals {
         {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
-            let name = self.store.func_description(func_id);
+            let name = self.func_description(func_id);
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}:{}",
+                "==> start {} compile: <{}> {:?} self_class:{} start:[{start_pos}] {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -1038,12 +1073,7 @@ impl Globals {
                 .compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
-            let class_name = self.get_class_name(self_value.class());
-            let desc = format!(
-                "JIT:{}#{}",
-                class_name,
-                self.store.func_description(func_id)
-            );
+            let desc = format!("JIT:<{}>", self.func_description(func_id));
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]

@@ -7,15 +7,15 @@ impl Globals {
         let func_id = meta.func_id();
         let block = lfp.block();
         eprintln!(
-            "    {} block:{} outer:{} {:?}",
-            self.store.func_description(func_id),
+            "    <{}> block:{} outer:{} {:?}",
+            self.func_description(func_id),
             match block {
                 Some(block) => {
                     match block.try_proxy() {
                         Some((func_id, idx)) => {
                             format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
-                        _ => self.inspect(block.get()),
+                        _ => self.to_s2(block.get()),
                     }
                 }
                 None => "None".to_string(),
@@ -33,7 +33,7 @@ impl Globals {
                 r,
                 if r == 0 { "(self)" } else { "" },
                 if let Some(v) = lfp.register(r) {
-                    self.inspect(v)
+                    self.to_s2(v)
                 } else {
                     "None".to_string()
                 }
@@ -120,7 +120,7 @@ impl Globals {
         eprintln!();
         eprintln!("deoptimization stats (top 20)");
         eprintln!(
-            "{:30} FuncId [{:05}]     {:7}",
+            "{:40} FuncId [{:05}]     {:7}",
             "func name", "index", "count"
         );
         eprintln!("-------------------------------------------------------------------------------------------------------------------");
@@ -133,9 +133,9 @@ impl Globals {
             } else {
                 "<INVALID>".to_string()
             };
-            let name = self.store.func_description(*func_id);
+            let name = self.func_description(*func_id);
             eprintln!(
-                "{:30}  {:5} [{:05}]  {:10}   {fmt}",
+                "{:40}  {:5} [{:05}]  {:10}   {fmt}",
                 name,
                 func_id.get(),
                 index,
@@ -170,6 +170,20 @@ impl Globals {
                 count
             );
         }
+        eprintln!();
+        eprintln!("jit class guard failed stats (top 20)");
+        eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((func_id, class_id), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:40} {:30} {:10}",
+                self.func_description(*func_id),
+                self.get_class_name(*class_id),
+                count
+            );
+        }
     }
 
     #[cfg(feature = "dump-bc")]
@@ -191,7 +205,7 @@ impl Globals {
             }
         }
 
-        let s = match pc.trace_ir() {
+        let s = match pc.trace_ir(&self.store) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
@@ -228,7 +242,7 @@ impl Globals {
                 end
             ),
             TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, self.inspect(val))
+                format!("{:?} = literal[{}]", reg, self.to_s2(val))
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
@@ -278,7 +292,7 @@ impl Globals {
                     op1,
                     match pc.value() {
                         None => "<INVALID>".to_string(),
-                        Some(val) => self.inspect(val),
+                        Some(val) => self.to_s2(val),
                     }
                 )
             }
@@ -662,25 +676,25 @@ impl Globals {
     }
 }
 
-#[cfg(any(feature = "jit-log", feature = "profile"))]
+#[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) extern "C" fn log_deoptimize(
     vm: &mut Executor,
     globals: &mut Globals,
     pc: BcPc,
-    #[cfg(feature = "jit-log")] v: Option<Value>,
+    #[cfg(feature = "deopt")] v: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
 
-    if let TraceIr::LoopEnd = pc.trace_ir() {
+    if let TraceIr::LoopEnd = pc.trace_ir(&globals.store) {
         // normal exit from jit'ed loop
-        #[cfg(feature = "jit-log")]
+        #[cfg(feature = "deopt")]
         {
-            let name = globals.store.func_description(func_id);
+            let name = globals.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
-            eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
+            eprint!("<-- exited from JIT code in <{}> {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);
         }
     } else {
@@ -693,24 +707,24 @@ pub(crate) extern "C" fn log_deoptimize(
                 }
             }
         }
-        #[cfg(feature = "jit-log")]
+        #[cfg(feature = "deopt")]
         {
-            let trace_ir = pc.trace_ir();
-            let name = globals.store.func_description(func_id);
+            let trace_ir = pc.trace_ir(&globals.store);
+            let name = globals.func_description(func_id);
             let fmt = globals.format(pc, index).unwrap_or_default();
             match trace_ir {
                 TraceIr::LoadConst(..)          // inline constant cache miss
                 | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)
                 | TraceIr::LoadIvar(..)         // inline ivar cache miss
                 | TraceIr::StoreIvar(..) => {
-                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", index);
                 },
                 _ => if let Some(v) = v {
-                    eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+                    eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s2(v));
                 } else {
-                    eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
+                    eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", index);
                 },
             }

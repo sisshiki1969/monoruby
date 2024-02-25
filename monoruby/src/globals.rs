@@ -13,7 +13,7 @@ mod error;
 mod method;
 mod prng;
 mod store;
-#[cfg(any(feature = "jit-log", feature = "profile"))]
+#[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
@@ -49,8 +49,9 @@ impl ProcData {
     }
 }
 
-pub const GLOBALS_FUNCINFO: usize =
+pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
+pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
@@ -107,7 +108,7 @@ pub struct Globals {
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
-    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
+    global_method_cache: GlobalMethodCache,
     /// regex cache.
     regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
@@ -131,6 +132,8 @@ pub struct Globals {
     /// stats for method cache miss
     #[cfg(feature = "profile")]
     method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
+    #[cfg(feature = "profile")]
+    jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
     #[cfg(feature = "emit-bc")]
@@ -166,7 +169,7 @@ impl Globals {
             codegen: Codegen::new(no_jit, main_object),
             store: Store::new(),
             global_vars: HashMap::default(),
-            global_method_cache: HashMap::default(),
+            global_method_cache: GlobalMethodCache::default(),
             regexp_cache: HashMap::default(),
             warning,
             no_jit,
@@ -174,15 +177,17 @@ impl Globals {
             lib_directories: vec![
                 "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/gems/json-2.6.3/lib".to_string(),
                 "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/extensions/x86_64-linux/3.3.0+0-static/json-2.6.3".to_string()
-                ],
-                random: Box::new(Prng::new()),
-                loaded_canonicalized_files: IndexSet::default(),
-                #[cfg(feature = "profile")]
-                deopt_stats: HashMap::default(),
-                #[cfg(feature = "profile")]
-                global_method_cache_stats: HashMap::default(),
-                #[cfg(feature = "profile")]
-                method_exploration_stats: HashMap::default(),
+            ],
+            random: Box::new(Prng::new()),
+            loaded_canonicalized_files: IndexSet::default(),
+            #[cfg(feature = "profile")]
+            deopt_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            global_method_cache_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            method_exploration_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            jit_class_unmatched_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
             #[cfg(feature = "emit-bc")]
@@ -196,6 +201,19 @@ impl Globals {
         assert_eq!(
             FuncId::new(2),
             globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
+        );
+        assert_eq!(
+            OBJECT_SEND_FUNCID,
+            globals.define_builtin_inline_func_with(
+                OBJECT_CLASS,
+                &["send", "__send__"],
+                crate::builtins::send,
+                Box::new(crate::builtins::object_send),
+                analysis::v_v_vv,
+                0,
+                0,
+                true,
+            )
         );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
@@ -398,6 +416,44 @@ impl Globals {
         }
     }
 
+    pub(crate) fn func_description(&self, func_id: FuncId) -> String {
+        let info = &self[func_id];
+        if let Some(func) = info.is_ruby_func() {
+            let mother = func.mother.0;
+            if mother != func_id {
+                format!("block in {}", self.func_description(mother))
+            } else {
+                match info.owner_class() {
+                    Some(owner) => format!(
+                        "{}#{}",
+                        match owner.get_name_id(self) {
+                            Some(name) => format!("{:?}", name),
+                            None => "<unnamed>".to_string(),
+                        },
+                        func.name()
+                    ),
+                    None => format!("{}", func.name()),
+                }
+            }
+        } else {
+            let name = if let Some(name) = info.name() {
+                format!("{:?}", name)
+            } else {
+                String::new()
+            };
+            match info.owner_class() {
+                Some(owner) => format!(
+                    "{}#{name}",
+                    match owner.get_name_id(self) {
+                        Some(name) => format!("{:?}", name),
+                        None => "<unnamed>".to_string(),
+                    },
+                ),
+                None => format!("{name}"),
+            }
+        }
+    }
+
     /// ## ABI of JIT-compiled code.
     ///
     /// ### argument registers:
@@ -527,7 +583,6 @@ impl Globals {
         }
     }
 
-    #[cfg(feature = "jit-log")]
     pub(crate) fn to_s2(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
@@ -667,7 +722,6 @@ impl Globals {
         }
     }
 
-    #[cfg(feature = "jit-log")]
     fn hash_tos2(&self, val: Value) -> String {
         let hash = val.as_hash();
         match hash.len() {
@@ -679,12 +733,12 @@ impl Globals {
                     let k_inspect = if k == val {
                         "{...}".to_string()
                     } else {
-                        self.inspect(k)
+                        self.to_s2(k)
                     };
                     let v_inspect = if v == val {
                         "{...}".to_string()
                     } else {
-                        self.inspect(v)
+                        self.to_s2(v)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

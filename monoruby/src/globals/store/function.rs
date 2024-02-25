@@ -27,7 +27,7 @@ impl From<FuncId> for u32 {
 }
 
 impl FuncId {
-    pub fn new(id: u32) -> Self {
+    pub const fn new(id: u32) -> Self {
         Self(std::num::NonZeroU32::new(id).unwrap())
     }
 
@@ -276,7 +276,7 @@ mod test {
 }
 
 pub(crate) struct Funcs {
-    pub info: MonoVec<FuncInfo>,
+    pub(in crate::globals) info: MonoVec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }
 
@@ -756,11 +756,11 @@ impl FuncInfo {
         self.ext.name
     }
 
-    /*pub(crate) fn class(&self) -> Option<ClassId> {
+    pub(crate) fn owner_class(&self) -> Option<ClassId> {
         self.ext.class_id
-    }*/
+    }
 
-    pub(super) fn set_class(&mut self, class: ClassId) {
+    pub(super) fn set_owner_class(&mut self, class: ClassId) {
         self.ext.class_id = Some(class);
     }
 
@@ -919,8 +919,8 @@ impl FuncInfo {
         let line = info.sourceinfo.get_line(&loc);
         let file_name = info.sourceinfo.file_name();
         eprintln!(
-            "{} {file_name}:{line}",
-            globals.store.func_description(info.id()),
+            "<{}> {file_name}:{line}",
+            globals.func_description(info.id()),
         );
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());

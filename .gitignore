@@ -5,6 +5,7 @@
 *.bytecode
 *.jpg
 *.perf
+perf
 perf.data
 .vscode
 .ruby-version

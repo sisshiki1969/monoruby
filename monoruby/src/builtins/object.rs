@@ -1,5 +1,7 @@
 use super::*;
 use crate::jitgen::conv;
+mod send;
+pub(crate) use send::{object_send, send};
 
 //
 // Object class
@@ -31,7 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
-    globals.define_builtin_inline_func_with(
+    /*globals.define_builtin_inline_func_with(
         OBJECT_CLASS,
         &["send", "__send__"],
         send,
@@ -40,7 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         0,
         true,
-    );
+    );*/
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
 }
 
@@ -293,152 +295,6 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         .into_iter()
         .map(|(id, _)| Value::symbol(id));
     Ok(Value::array_from_iter(iter))
-}
-
-///
-/// Object#send
-///
-/// - send(name, *args) -> object
-/// - send(name, *args) { .... } -> object
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
-#[monoruby_builtin]
-fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg0 = lfp.arg(0);
-    let ary = arg0.as_array();
-    if ary.len() < 1 {
-        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
-    }
-    let method = ary[0].expect_symbol_or_string()?;
-    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
-}
-
-const CACHE_SIZE: usize = 8;
-
-fn object_send(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
-    let CallSiteInfo {
-        recv,
-        dst,
-        args,
-        pos_num,
-        block_fid,
-        ..
-    } = *callsite;
-    ir.write_back_callargs(bb, callsite);
-    ir.unlink(bb, dst);
-    let using = bb.get_using_xmm();
-    let bh = match block_fid {
-        None => 0,
-        Some(func_id) => BlockHandler::from_caller(func_id).id(),
-    };
-    let error = ir.new_error(bb, pc);
-    ir.inline(move |gen, labels| {
-        let cache = gen.jit.bytes(std::mem::size_of::<Cache>() * CACHE_SIZE);
-        let version = gen.jit.const_i32(-1);
-        let error = labels[error];
-        gen.xmm_save(using);
-        monoasm! {&mut gen.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (conv(recv))];
-            lea  rcx, [r14 - (conv(args))];
-            movq r8, (pos_num);
-            movq r9, (bh);
-            lea  rax, [rip + version];
-            pushq rax;
-            lea  rax, [rip + cache];
-            pushq rax;
-            movq rax, (call_send_wrapper);
-            call rax;
-            addq rsp, 16;
-        }
-        gen.xmm_restore(using);
-        gen.handle_error(error);
-    });
-    ir.reg2acc(bb, GP::Rax, dst);
-}
-
-#[repr(C)]
-struct Cache {
-    method: Option<IdentId>,
-    fid: FuncId,
-    counter: usize,
-}
-
-extern "C" fn call_send_wrapper(
-    vm: &mut Executor,        // rdi
-    globals: &mut Globals,    // rsi
-    recv: Value,              // rdx
-    args: Arg,                // rcx
-    len: usize,               // r8
-    bh: Option<BlockHandler>, // r9
-    cache: &mut [Cache; CACHE_SIZE],
-    version: &mut u32,
-) -> Option<Value> {
-    fn call_send(
-        globals: &mut Globals,
-        recv: Value,
-        args: Arg,
-        len: usize,
-        cache: &mut [Cache; CACHE_SIZE],
-    ) -> Result<FuncId> {
-        if len < 1 {
-            return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
-        }
-        let method = args[0].unwrap().expect_symbol_or_string()?;
-        let mut min_i = 0;
-        let mut min_count = usize::MAX;
-        for (i, entry) in cache.iter_mut().enumerate() {
-            match entry.method {
-                Some(cached_method) if cached_method == method => {
-                    entry.counter += 1;
-                    return Ok(entry.fid);
-                }
-                Some(_) => {
-                    if entry.counter < min_count {
-                        min_count = entry.counter;
-                        min_i = i;
-                    }
-                }
-                None => {
-                    min_i = i;
-                    break;
-                }
-            }
-        }
-        let fid = globals.find_method(recv, method, false)?;
-        //eprintln!("cache miss:{:?} {:?}", cache as *mut _, method);
-        if cache[min_i].method.is_none() {
-            cache[min_i].method = Some(method);
-            cache[min_i].fid = fid;
-            cache[min_i].counter = 1;
-        }
-
-        Ok(fid)
-    }
-
-    if globals.class_version() != *version {
-        for entry in cache.iter_mut() {
-            entry.method = None;
-        }
-        *version = globals.class_version();
-    }
-    let fid = match call_send(globals, recv, args, len, cache) {
-        Ok(res) => res,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    };
-    // Currently, we don't support calling with block in inlined method.
-    let bh = bh.map(|bh| bh.delegate());
-    (globals.codegen.method_invoker2)(vm, globals, fid, recv, args + 1, len - 1, bh)
 }
 
 #[cfg(test)]

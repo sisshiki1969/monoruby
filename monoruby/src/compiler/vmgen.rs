@@ -66,7 +66,7 @@ impl Codegen {
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
-        let entry = self.jit.label();
+        let vm_entry = self.jit.label();
         //
         // VM entry
         //
@@ -79,17 +79,32 @@ impl Codegen {
         //   r13: pc
         //
         monoasm! { &mut self.jit,
-        entry:
+        vm_entry:
             pushq rbp;
             movq rbp, rsp;
             //movq rdx, rdi;
         };
         let entry_fetch = self.jit.label();
         self.jit.bind_label(entry_fetch);
-        self.vm_fetch = entry_fetch;
         self.fetch_and_dispatch();
+        self.vm_fetch = entry_fetch;
 
-        self.vm_entry = entry;
+        self.vm_entry = vm_entry;
+        self.jit_class_guard_fail = self.jit.label();
+        self.jit.bind_label(self.jit_class_guard_fail);
+        #[cfg(feature = "profile")]
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (guard_fail);
+            subq rsp, 4088;
+            call rax;
+            addq rsp, 4088;
+        }
+        monoasm! { &mut self.jit,
+            jmp vm_entry;
+        }
 
         let vm_raise = self.jit.label();
         let leave = self.jit.label();

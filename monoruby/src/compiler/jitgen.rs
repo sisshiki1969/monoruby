@@ -373,9 +373,7 @@ impl JitContext {
         bb_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bb_pos);
-        //eprintln!("{:?}", &bb.slot_state);
-        //eprintln!("{:?}", &pc.trace_ir());
-        match pc.trace_ir() {
+        match pc.trace_ir(store) {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart(_) => {
                 self.loop_count += 1;
@@ -614,7 +612,7 @@ impl JitContext {
 
             TraceIr::Cmp(kind, ret, mode, true) => {
                 let index = bb_pos + 1;
-                match (pc + 1).trace_ir() {
+                match (pc + 1).trace_ir(store) {
                     TraceIr::CondBr(_, disp, true, brkind) => {
                         let dest_idx = index + disp + 1;
                         let branch_dest = self.asm_label();
@@ -1088,7 +1086,7 @@ impl Codegen {
         } else {
             // for method JIT, class of *self* is already checked in an entry stub.
             let pc = func.get_top_pc();
-            self.prologue(pc);
+            self.prologue(store, pc);
         }
 
         #[cfg(feature = "jit-debug")]
@@ -1400,7 +1398,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.u64());
         );
-        #[cfg(any(feature = "jit-log", feature = "profile"))]
+        #[cfg(any(feature = "deopt", feature = "profile"))]
         monoasm!( &mut self.jit,
             movq rcx, rdi; // the Value which caused this deopt.
             movq rdi, rbx;

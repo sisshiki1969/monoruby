@@ -4,18 +4,18 @@
 
 ```text
 
-      wrapper                                                   
+      wrapper
    +---------------------------------+
-   |                                 |    
----+-> entry:                        |    
+   |                                 |
+---+-> entry:                        |
    |       jmp [next];               |
    |   next:                         |
-   |       subl [rip + counter], 1;  | 
-   |       jne vm_entry;             | 
-   |       <exec_compile_and_patch>  |    
-   |       jmp entry;                |    
-   |                                 | 
-   +---------------------------------+ 
+   |       subl [rip + counter], 1;  |
+   |       jne vm_entry;             |
+   |       <exec_compile_and_patch>  |
+   |       jmp entry;                |
+   |                                 |
+   +---------------------------------+
 
 ```
 
@@ -23,54 +23,82 @@
 
 ```text
 
-      wrapper                                class guard stub (1)                             
-   +---------------------------------+     +--------------------------------------------+ 
-   |                                 |     |                                            |     
----+-> entry:                        |  +--+-> guard1:                                  |     
-   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |     
-   |   next:                         |     |       class_guard(self_class1)  -----------+-----> vm_entry
-   |       subl [rip + counter], 1;  |     |   jit_entry:                               |  
-   |       jne vm_entry;             |     |       jmp [jit_entry1];                    |  
-   |       <exec_compile_and_patch>  |     |         |                                  |     
-   |       jmp entry;                |     +---------+----------------------------------+     
+      wrapper                                class guard stub (1)
+   +---------------------------------+     +--------------------------------------------+
+   |                                 |     |                                            |
+---+-> entry:                        |  +--+-> guard1:                                  |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |
+   |   next:                         |     |       class_guard(self_class1)  -----------+-----> exit
+   |       subl [rip + counter], 1;  |     |   patch_point:                             |
+   |       jne vm_entry;             |     |       jmp [jit_entry1];                    |
+   |       <exec_compile_and_patch>  |     |         |                                  |
+   |       jmp entry;                |     +---------+----------------------------------+
    |                                 |               |
    +---------------------------------+               |
-                                                     |      JIT code for self_class        
-                                                     |   +---------------------------+      
-                                                     |   |                           |    
-                                                     +---+-> jit_entry1              | 
-                                                         |                           |  
-                                                         |     <jit_code>            |   
-                                                         |                           |  
-                                                         |                           |  
-                                                         +---------------------------+ 
+                                                     |      JIT code for self_class
+                                                     |   +---------------------------+
+                                                     |   |                           |
+                                                     +---+-> jit_entry1              |
+                                                         |                           |
+                                                         |     <jit_code>            |
+                                                         |                           |
+                                                         |                           |
+                                                         +---------------------------+
 
+```
+
+## after re-compilation for self_class1
+
+```text
+
+      wrapper                                class guard stub (1)
+   +---------------------------------+     +--------------------------------------------+
+   |                                 |     |                                            |
+---+-> entry:                        |  +--+-> guard1:                                  |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |
+   |   next:                         |     |       class_guard(self_class1)  -----------+-----> exit
+   |       subl [rip + counter], 1;  |     |   patch_point:                             |
+   |       jne vm_entry;             |     |       jmp [jit_entry2];                    |
+   |       <exec_compile_and_patch>  |     |         |                                  |
+   |       jmp entry;                |     +---------+----------------------------------+
+   |                                 |               |
+   +---------------------------------+               |
+                                                     |      JIT code for self_class1
+                                                     |   +---------------------------+
+                                                     |   | +---------------------------+
+                                                     |   | |                           |
+                                                     +---+-+-> jit_entry2              |
+                                                         | |                           |
+                                                         | |     <jit_code>            |
+                                                         | |                           |
+                                                         +-|                           |
+                                                           +---------------------------+
 ```
 
 ## after compilation for self_class2
 
 ```text
 
-      wrapper                                class guard stub (1)                               class guard stub (2)                            
+      wrapper                                class guard stub (1)                               class guard stub (2)
    +---------------------------------+     +--------------------------------------------+     +--------------------------------------------+
-   |                                 |     |                                            |     |                                            |    
----+-> entry:                        |  +--+-> guard1:                                  |   +-+-> guard2:                                  |    
-   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |  /  |       movq rdi, [r14 - (LBP_SELF)];        |    
+   |                                 |     |                                            |     |                                            |
+---+-> entry:                        |  +--+-> guard1:                                  |   +-+-> guard2:                                  |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |  /  |       movq rdi, [r14 - (LBP_SELF)];        |
    |   next:                         |     |       class_guard(self_class1)  -----------+-+   |       class_guard(self_class2)  -----------+-----> vm_entry
-   |       subl [rip + counter], 1;  |     |   patch_point:                             |     |   patch_point:                             | 
-   |       jne vm_entry;             |     |       jmp [jit_entry1];                    |     |       jmp [jit_entry2];                    | 
-   |       <exec_compile_and_patch>  |     |         |                                  |     |         |                                  |    
-   |       jmp entry;                |     +---------+----------------------------------+     +---------+----------------------------------+    
+   |       subl [rip + counter], 1;  |     |   patch_point:                             |     |   patch_point:                             |
+   |       jne vm_entry;             |     |       jmp [jit_entry1];                    |     |       jmp [jit_entry2];                    |
+   |       <exec_compile_and_patch>  |     |         |                                  |     |         |                                  |
+   |       jmp entry;                |     +---------+----------------------------------+     +---------+----------------------------------+
    |                                 |               |                                                  |
-   +---------------------------------+               |                                                  |                                
-                                                     |      JIT code for self_class1                    |      JIT code for self_class2        
-                                                     |   +---------------------------+                  |   +---------------------------+      
-                                                     |   |                           |                  |   |                           |      
-                                                     +---+-> jit_entry1:             |                  +---+-> jit_entry2:             |      
-                                                         |                           |                      |                           |       
-                                                         |     <jit_code>            |                      |     <jit_code>            |        
-                                                         |                           |                      |                           |       
-                                                         |                           |                      |                           |       
-                                                         +---------------------------+                      +---------------------------+      
+   +---------------------------------+               |                                                  |
+                                                     |      JIT code for self_class1                    |      JIT code for self_class2
+                                                     |   +---------------------------+                  |   +---------------------------+
+                                                     |   |                           |                  |   |                           |
+                                                     +---+-> jit_entry1:             |                  +---+-> jit_entry2:             |
+                                                         |                           |                      |                           |
+                                                         |     <jit_code>            |                      |     <jit_code>            |
+                                                         |                           |                      |                           |
+                                                         |                           |                      |                           |
+                                                         +---------------------------+                      +---------------------------+
 
 ```
