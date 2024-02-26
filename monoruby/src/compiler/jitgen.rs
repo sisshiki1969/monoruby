@@ -1138,6 +1138,7 @@ impl Codegen {
         {
             let elapsed = now.elapsed();
             eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+            self.jit_compile_time += elapsed;
         }
         #[cfg(any(feature = "emit-asm", feature = "jit-debug"))]
         eprintln!("<== finished compile.");

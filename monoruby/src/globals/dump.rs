@@ -115,73 +115,84 @@ impl Globals {
         }
     }
 
-    #[cfg(feature = "profile")]
+    #[cfg(any(feature = "profile", feature = "jit-log"))]
     pub(crate) fn show_stats(&self) {
-        eprintln!();
-        eprintln!("deoptimization stats (top 20)");
-        eprintln!(
-            "{:40} FuncId [{:05}]     {:7}",
-            "func name", "index", "count"
-        );
-        eprintln!("-------------------------------------------------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.deopt_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((func_id, index), count) in v.into_iter().take(20) {
-            let bc = BcPc::from(&self.store[*func_id].as_ruby_func().bytecode()[*index]);
-            let fmt = if let Some(fmt) = self.format(bc, *index) {
-                fmt
-            } else {
-                "<INVALID>".to_string()
-            };
-            let name = self.func_description(*func_id);
+        #[cfg(feature = "profile")]
+        {
+            eprintln!();
+            eprintln!("deoptimization stats (top 20)");
             eprintln!(
-                "{:40}  {:5} [{:05}]  {:10}   {fmt}",
-                name,
-                func_id.get(),
-                index,
-                count
+                "{:40} FuncId [{:05}]     {:7}",
+                "func name", "index", "count"
             );
+            eprintln!("-------------------------------------------------------------------------------------------------------------------");
+            let mut v: Vec<_> = self.deopt_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((func_id, index), count) in v.into_iter().take(20) {
+                let bc = BcPc::from(&self.store[*func_id].as_ruby_func().bytecode()[*index]);
+                let fmt = if let Some(fmt) = self.format(bc, *index) {
+                    fmt
+                } else {
+                    "<INVALID>".to_string()
+                };
+                let name = self.func_description(*func_id);
+                eprintln!(
+                    "{:40}  {:5} [{:05}]  {:10}   {fmt}",
+                    name,
+                    func_id.get(),
+                    index,
+                    count
+                );
+            }
+            eprintln!();
+            eprintln!("global method cache stats (top 20)");
+            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+            eprintln!("------------------------------------------------------------------------");
+            let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.get_class_name(*class_id),
+                    count
+                );
+            }
+            eprintln!();
+            eprintln!("full method exploration stats (top 20)");
+            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+            eprintln!("------------------------------------------------------------------------");
+            let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.get_class_name(*class_id),
+                    count
+                );
+            }
+            eprintln!();
+            eprintln!("jit class guard failed stats (top 20)");
+            eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
+            eprintln!("------------------------------------------------------------------------");
+            let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((func_id, class_id), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:40} {:30} {:10}",
+                    self.func_description(*func_id),
+                    self.get_class_name(*class_id),
+                    count
+                );
+            }
         }
-        eprintln!();
-        eprintln!("global method cache stats (top 20)");
-        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-        eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
+        #[cfg(feature = "jit-log")]
+        {
+            eprintln!();
             eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.get_class_name(*class_id),
-                count
-            );
-        }
-        eprintln!();
-        eprintln!("full method exploration stats (top 20)");
-        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-        eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.get_class_name(*class_id),
-                count
-            );
-        }
-        eprintln!();
-        eprintln!("jit class guard failed stats (top 20)");
-        eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
-        eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((func_id, class_id), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:40} {:30} {:10}",
-                self.func_description(*func_id),
-                self.get_class_name(*class_id),
-                count
+                "elapsed JIT compile time: {:?}",
+                self.codegen.jit_compile_time
             );
         }
     }

@@ -247,7 +247,7 @@ impl Globals {
         let mut executor = Executor::init(self);
         let res = executor.exec_script(self, code, path);
         self.flush_stdout();
-        #[cfg(feature = "profile")]
+        #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
         #[cfg(feature = "gc-log")]
         {
