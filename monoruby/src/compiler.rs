@@ -163,6 +163,8 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    #[cfg(feature = "jit-log")]
+    pub(crate) jit_compile_time: std::time::Duration,
     #[cfg(feature = "perf")]
     pub(crate) perf_file: std::fs::File,
 }
@@ -205,6 +207,8 @@ impl Codegen {
             fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            #[cfg(feature = "jit-log")]
+            jit_compile_time: std::time::Duration::default(),
             #[cfg(feature = "perf")]
             perf_file: {
                 let pid = std::process::id();
@@ -1051,14 +1055,19 @@ impl Globals {
             let start_pos = func.get_pc_index(position);
             let name = self.func_description(func_id);
             eprintln!(
-                "==> start {} compile: <{}> {:?} self_class:{} start:[{start_pos}] {}:{}",
+                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
                     "whole"
                 },
-                name,
                 func.id(),
+                name,
+                if position.is_some() {
+                    format!("start:[{}] ", start_pos)
+                } else {
+                    String::new()
+                },
                 self.get_class_name(self_value.class()),
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
