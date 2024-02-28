@@ -287,6 +287,14 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
+pub(crate) extern "C" fn create_array(src: *mut Value, len: usize) -> Value {
+    if len == 0 {
+        return Value::array_empty();
+    }
+    let slice = unsafe { std::slice::from_raw_parts(src.sub(len - 1), len) };
+    Value::array_from_iter(slice.iter().rev().copied())
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
