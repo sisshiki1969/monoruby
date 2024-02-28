@@ -175,8 +175,8 @@ impl Globals {
             no_jit,
             stdout: BufWriter::new(stdout()),
             lib_directories: vec![
-                "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/gems/json-2.6.3/lib".to_string(),
-                "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/extensions/x86_64-linux/3.3.0+0-static/json-2.6.3".to_string()
+                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json-2.7.1/lib/"
+                    .to_string(),
             ],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
@@ -220,6 +220,7 @@ impl Globals {
         globals
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
+
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
         let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
@@ -228,6 +229,16 @@ impl Globals {
 
         let lib: Array = Value::from_ast2(&nodes).into();
         globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+
+        // load gem library path
+        let load_path = include_str!(concat!(env!("OUT_DIR"), "/gempath.rb"));
+        let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
+            .unwrap()
+            .node;
+
+        let lib: Array = Value::from_ast2(&nodes).into();
+        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");

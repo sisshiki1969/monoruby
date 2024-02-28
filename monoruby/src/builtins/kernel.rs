@@ -27,7 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
-    globals.define_builtin_module_func(kernel_class, "require", require, 0);
+    globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
     globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);

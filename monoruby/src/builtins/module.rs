@@ -11,7 +11,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
-    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods, 1);
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "instance_methods",
+        instance_methods,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
@@ -107,6 +114,12 @@ fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 #[monoruby_builtin]
 fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    let inhereted_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    if !inhereted_too {
+        return Err(MonorubyErr::argumenterr(
+            "Currently, inherited_too is not supported.",
+        ));
+    }
     let iter = globals
         .get_method_names(class_id)
         .into_iter()

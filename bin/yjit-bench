@@ -1,3 +1,5 @@
+#!/bin/sh
+
 cargo build
 cargo install --path monoruby
 cd ../yjit-bench
