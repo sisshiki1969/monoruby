@@ -102,6 +102,7 @@ impl IdentId {
     pub const MICROSECOND: IdentId = id!(41);
     pub const NANOSECOND: IdentId = id!(42);
     pub const _MATCH: IdentId = id!(43);
+    pub const TO_PROC: IdentId = id!(44);
 }
 
 impl IdentId {
@@ -234,6 +235,7 @@ impl IdentifierTable {
         table.set_id("microsecond", IdentId::MICROSECOND);
         table.set_id("nanosecond", IdentId::NANOSECOND);
         table.set_id("=~", IdentId::_MATCH);
+        table.set_id("to_proc", IdentId::TO_PROC);
         table
     }
 

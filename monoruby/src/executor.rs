@@ -487,7 +487,7 @@ impl Executor {
     ///
     /// To get BlockData, use get_block_data().
     ///  
-    /// let data = globals.get_block_data(cfp, block);
+    /// let data = vm.get_block_data(globals, block);
     ///
     pub(crate) fn invoke_block(
         &mut self,
@@ -534,7 +534,7 @@ impl Executor {
         bh: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         self.invoke_block(globals, &data, args)
     }
 
@@ -544,7 +544,7 @@ impl Executor {
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -557,7 +557,7 @@ impl Executor {
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         for (index, val) in iter.enumerate() {
             self.invoke_block(globals, &data, &[val, Value::integer(index as i64)])?;
         }
@@ -571,7 +571,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         let old = alloc::Allocator::<RValue>::set_enabled(false);
         self.temp_array_new(size_hint);
         for v in iter {
@@ -590,7 +590,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         let old = alloc::Allocator::<RValue>::set_enabled(false);
         self.temp_array_new(size_hint);
         for v in iter {
@@ -613,7 +613,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), bh);
+        let data = self.get_block_data(globals, bh);
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }
@@ -680,6 +680,37 @@ impl Executor {
             bh,
         )
     }
+}
+
+impl Executor {
+    ///
+    /// Generate *ProcInner* from 'bh'.
+    ///
+    pub(crate) fn get_block_data(&mut self, globals: &mut Globals, bh: BlockHandler) -> ProcInner {
+        let mut cfp = self.cfp();
+        if let Some((func_id, idx)) = bh.try_proxy() {
+            for _ in 0..idx {
+                cfp = cfp.prev().unwrap();
+            }
+            ProcInner::from(cfp.lfp(), func_id)
+        } else if let Some(proc) = bh.try_proc() {
+            proc.clone()
+        } else {
+            let proc = self
+                .invoke_method(globals, IdentId::TO_PROC, bh.get(), &[], None)
+                .unwrap();
+            proc.as_proc().clone()
+        }
+    }
+
+    ///
+    /// Generate *ProcInner* from a given block.
+    ///
+    pub(crate) fn get_yield_data(&mut self, globals: &mut Globals) -> Option<ProcInner> {
+        self.cfp()
+            .get_block()
+            .map(|bh| self.get_block_data(globals, bh))
+    }
 
     pub(crate) fn define_class(
         &mut self,
@@ -727,7 +758,7 @@ impl Executor {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             outer_lfp.move_frame_to_heap();
-            let proc = Proc::new(globals.get_block_data(self.cfp(), bh));
+            let proc = Proc::new(self.get_block_data(globals, bh));
             Ok(proc)
         } else if bh.try_proc().is_some() {
             Ok(bh.0.into())
@@ -871,10 +902,6 @@ impl BlockHandler {
 
     pub fn try_proc(&self) -> Option<&ProcInner> {
         self.0.is_proc()
-    }
-
-    pub(crate) fn as_proc(&self) -> &ProcInner {
-        self.0.as_proc()
     }
 
     pub(crate) fn id(&self) -> u64 {

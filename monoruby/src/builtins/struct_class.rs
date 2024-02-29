@@ -55,7 +55,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
     if let Some(bh) = lfp.block() {
         vm.push_class_context(class_id);
-        let data = globals.get_block_data(vm.cfp(), bh);
+        let data = vm.get_block_data(globals, bh);
         vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct])?;
         vm.pop_class_context();
     };

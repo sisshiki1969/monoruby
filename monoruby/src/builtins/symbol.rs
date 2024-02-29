@@ -49,5 +49,10 @@ mod test {
         :to_i.to_proc["ff", 16]
         "#,
         );
+        run_test(
+            r#"
+        (1..3).collect(&:to_s)
+        "#,
+        );
     }
 }

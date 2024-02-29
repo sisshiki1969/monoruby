@@ -126,4 +126,21 @@ mod test {
         ",
         );
     }
+
+    #[test]
+    fn block_param() {
+        run_test_with_prelude(
+            r#"
+            $ans = []
+            [1, 2, 3].each(&Foo.new)
+        "#,
+            r#"
+            class Foo
+              def to_proc
+                Proc.new {|v| $ans << v * v}
+              end
+            end
+        "#,
+        );
+    }
 }

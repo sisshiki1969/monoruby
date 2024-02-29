@@ -36,19 +36,6 @@ impl MethodTableEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub(crate) struct ProcData {
-    outer: Option<Lfp>,
-    func_id: Option<FuncId>,
-}
-
-impl ProcData {
-    pub fn is_none(&self) -> bool {
-        self.func_id.is_none()
-    }
-}
-
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
@@ -310,33 +297,6 @@ impl Globals {
         let info = &self[func_id];
         assert!(info.codeptr().is_some());
         info.data_ref()
-    }
-
-    pub(crate) fn get_yield_data(&mut self, cfp: Cfp) -> ProcData {
-        match cfp.get_block() {
-            Some(bh) => {
-                let info = self.get_block_data(cfp, bh);
-                ProcData {
-                    outer: Some(info.outer_lfp()),
-                    func_id: Some(info.func_id()),
-                }
-            }
-            None => ProcData {
-                outer: None,
-                func_id: None,
-            },
-        }
-    }
-
-    pub(crate) fn get_block_data(&mut self, mut cfp: Cfp, bh: BlockHandler) -> ProcInner {
-        if let Some((func_id, idx)) = bh.try_proxy() {
-            for _ in 0..idx {
-                cfp = cfp.prev().unwrap();
-            }
-            ProcInner::from(cfp.lfp(), func_id)
-        } else {
-            bh.as_proc().clone()
-        }
     }
 
     pub fn gc_enable(flag: bool) {
