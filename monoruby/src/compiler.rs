@@ -13,7 +13,7 @@ use crate::executor::*;
 #[cfg(feature = "test")]
 const COUNT_START_COMPILE: i32 = 5;
 #[cfg(not(feature = "test"))]
-const COUNT_START_COMPILE: i32 = 100;
+const COUNT_START_COMPILE: i32 = 10;
 const COUNT_START_RECOMPILE: i32 = 10;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
