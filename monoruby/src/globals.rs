@@ -204,9 +204,10 @@ impl Globals {
         );
         assert_eq!(
             OBJECT_SEND_FUNCID,
-            globals.define_builtin_inline_func_with(
+            globals.define_builtin_inline_funcs_with(
                 OBJECT_CLASS,
-                &["send", "__send__"],
+                "send",
+                &["__send__"],
                 crate::builtins::send,
                 Box::new(crate::builtins::object_send),
                 analysis::v_v_vv,

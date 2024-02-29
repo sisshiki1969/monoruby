@@ -34,9 +34,10 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     } else {
         0
     };
-    globals.define_builtin_class_inline_func_rest(
+    globals.define_builtin_class_inline_funcs_rest(
         class_id,
-        &["[]", "new"],
+        "new",
+        &["[]"],
         new,
         Box::new(super::class::gen_class_new_object()),
         analysis::v_v_vv,

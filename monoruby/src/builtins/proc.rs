@@ -7,7 +7,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Proc", PROC_CLASS);
     globals.define_builtin_class_func(PROC_CLASS, "new", new, 0);
-    globals.define_builtin_func_rest(PROC_CLASS, "call", call);
+    globals.define_builtin_funcs_rest(PROC_CLASS, "call", &["[]", "yield", "==="], call);
 }
 
 ///
@@ -29,11 +29,12 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// ### Proc#call
 ///
-/// - [NOT SUPPORTED] self[*arg] -> ()
+/// - self[*arg] -> ()
 /// - call(*arg) -> ()
-/// - [NOT SUPPORTED] self === *arg -> ()
-/// - [NOT SUPPORTED] yield(*arg) -> ()
+/// - self === *arg -> ()
+/// - yield(*arg) -> ()
 ///
+/// TODO: we must support [] with >2 args.
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d=3d.html]
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
@@ -72,6 +73,18 @@ mod test {
         a
         ",
         )
+    }
+
+    #[test]
+    fn proc1() {
+        run_test_with_prelude(
+            r#"
+        [p.call(3,4), p.yield(3,4), p[3,4], p.===(3,4)]
+        "#,
+            r#"
+        p = Proc.new {|x,y| x * y} 
+        "#,
+        );
     }
 
     #[test]

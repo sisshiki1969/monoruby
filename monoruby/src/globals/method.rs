@@ -61,6 +61,20 @@ impl Globals {
         self.new_builtin_fn(class_id, name, address, Visibility::Public, 0, 0, true)
     }
 
+    pub(crate) fn define_builtin_funcs_rest(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(class_id, name, address, Visibility::Public, 0, 0, true);
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
+        }
+        fid
+    }
+
     pub(crate) fn define_builtin_func_with(
         &mut self,
         class_id: ClassId,
@@ -181,7 +195,7 @@ impl Globals {
     pub(crate) fn define_builtin_inline_func_with(
         &mut self,
         class_id: ClassId,
-        name: &[&str],
+        name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
@@ -189,26 +203,43 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        assert!(!name.is_empty());
-        let func_id = self.new_builtin_fn(
+        let func_id =
+            self.new_builtin_fn(class_id, name, address, Visibility::Public, min, max, rest);
+        let inline_id = self.store.add_inline_info(
+            inline_gen,
+            inline_analysis,
+            format!("{}#{name}", self.get_class_name(class_id)),
+        );
+        inline::InlineTable::add_inline(func_id, inline_id);
+        func_id
+    }
+
+    pub(crate) fn define_builtin_inline_funcs_with(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        inline_gen: Box<InlineGen>,
+        inline_analysis: InlineAnalysis,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let fid = self.define_builtin_inline_func_with(
             class_id,
-            &name[0],
+            name,
             address,
-            Visibility::Public,
+            inline_gen,
+            inline_analysis,
             min,
             max,
             rest,
         );
-        let inline_id = self.store.add_inline_info(
-            inline_gen,
-            inline_analysis,
-            format!("{}#{}", self.get_class_name(class_id), &name[0]),
-        );
-        inline::InlineTable::add_inline(func_id, inline_id);
-        for name in &name[1..] {
-            self.add_method(class_id, IdentId::get_id(name), func_id, Visibility::Public);
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
         }
-        func_id
+        fid
     }
 
     pub(crate) fn define_builtin_class_func(
@@ -259,7 +290,7 @@ impl Globals {
         let class_id = self.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(
             class_id,
-            &[name],
+            name,
             address,
             inline_gen,
             inline_analysis,
@@ -272,7 +303,7 @@ impl Globals {
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
         class_id: ClassId,
-        name: &[&str],
+        name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
@@ -281,6 +312,29 @@ impl Globals {
         self.define_builtin_inline_func_with(
             class_id,
             name,
+            address,
+            inline_gen,
+            inline_analysis,
+            0,
+            0,
+            true,
+        )
+    }
+
+    pub(crate) fn define_builtin_class_inline_funcs_rest(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        inline_gen: Box<InlineGen>,
+        inline_analysis: InlineAnalysis,
+    ) -> FuncId {
+        let class_id = self.get_metaclass(class_id).id();
+        self.define_builtin_inline_funcs_with(
+            class_id,
+            name,
+            alias,
             address,
             inline_gen,
             inline_analysis,

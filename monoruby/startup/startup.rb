@@ -74,3 +74,11 @@ module Warning
     true
   end
 end
+
+class Symbol
+  def to_proc
+    Proc.new do |slf, *args|
+      slf.send(self, *args)
+    end
+  end
+end
