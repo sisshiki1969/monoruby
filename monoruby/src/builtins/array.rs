@@ -713,7 +713,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
         }
         Some(bh) => {
-            let data = globals.get_block_data(vm.cfp(), bh);
+            let data = vm.get_block_data(globals, bh)?;
             for v in iter {
                 let rhs = vm.invoke_block(globals, &data, &[v])?;
                 sum = executor::op::add_values(vm, globals, sum, rhs)
@@ -814,7 +814,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = vm.get_block_data(globals, bh)?;
     let f = |vm: &mut Executor,
              globals: &mut Globals,
              lhs: Value,
@@ -913,7 +913,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     if let Some(bh) = lfp.block() {
-        let data = globals.get_block_data(vm.cfp(), bh);
+        let data = vm.get_block_data(globals, bh)?;
         for elem in ary.iter() {
             if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
                 return Ok(Value::bool(false));
@@ -940,7 +940,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
     let bh = lfp.expect_block()?;
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = vm.get_block_data(globals, bh)?;
     for elem in ary.iter() {
         if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
             return Ok(*elem);
@@ -1173,7 +1173,7 @@ fn uniq_inner(
     bh: BlockHandler,
 ) -> Result<bool> {
     let mut h = HashSet::default();
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = vm.get_block_data(globals, bh)?;
     ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
         vm.temp_push(res);

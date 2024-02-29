@@ -36,4 +36,23 @@ mod test {
             &[":aaa", ":xxx", "nil", "3"],
         );
     }
+
+    #[test]
+    fn symbol_to_proc() {
+        run_test(
+            r#"
+        :to_i.to_proc.call("42")
+        "#,
+        );
+        run_test(
+            r#"
+        :to_i.to_proc["ff", 16]
+        "#,
+        );
+        run_test(
+            r#"
+        (1..3).collect(&:to_s)
+        "#,
+        );
+    }
 }

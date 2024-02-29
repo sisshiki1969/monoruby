@@ -104,9 +104,9 @@ impl BytecodeGen {
             } else {
                 let args = self.sp().into();
                 for i in 0..pos_len {
-                    let ret = self.push().into();
+                    let dst = self.push().into();
                     let src = BcLocal(i as _).into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
                 }
                 args
             };
@@ -118,10 +118,10 @@ impl BytecodeGen {
                 let kw_start = if outer == 0 {
                     BcLocal(mother_args.pos_num() as u16).into()
                 } else {
-                    let ret = self.push().into();
+                    let dst = self.push().into();
                     let src = BcLocal(mother_args.pos_num() as u16).into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
-                    ret
+                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
+                    dst
                 };
                 for (id, name) in kw_list.iter().enumerate() {
                     kw_args.insert(*name, id);
@@ -353,20 +353,17 @@ impl BytecodeGen {
             }
             NodeKind::LocalVar(outer, proc_local) => {
                 let proc_local = IdentId::get_id_from_string(proc_local);
-                let ret = self.push().into();
+                let dst = self.push().into();
                 if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
                     let src = src.into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
-                    self.emit(BcIr::BlockArgProxy(ret, outer), loc);
+                    self.emit(BcIr::BlockArgProxy(dst, outer), loc);
                 }
             }
             _ => {
-                return Err(MonorubyErr::unsupported_block_param(
-                    &block,
-                    self.sourceinfo.clone(),
-                ))
+                self.push_expr(block)?;
             }
         }
         Ok(None)

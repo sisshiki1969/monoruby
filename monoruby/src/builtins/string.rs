@@ -956,7 +956,7 @@ fn scan_inner(
     block: BlockHandler,
     vec: &[Value],
 ) -> Result<()> {
-    let data = globals.get_block_data(vm.cfp(), block);
+    let data = vm.get_block_data(globals, block)?;
     for arg in vec {
         match arg.try_array_ty() {
             Some(ary) => {

@@ -107,7 +107,7 @@ pub(super) enum BcIr {
     BlockArg(BcReg, usize),
     LoadDynVar {
         /// return register of the current frame.
-        ret: BcReg,
+        dst: BcReg,
         /// source register of the outer frame.
         src: BcReg,
         /// outer frame count.

@@ -9,7 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
     globals.define_builtin_class_inline_func_rest(
         FIBER_CLASS,
-        &["yield"],
+        "yield",
         fiber_yield,
         Box::new(fiber_yield_inline),
         analysis::v_v_vv,
