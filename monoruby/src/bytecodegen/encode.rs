@@ -483,7 +483,11 @@ impl BytecodeGen {
                     _ => unreachable!(),
                 }
             }
-            BcIr::LoadDynVar { ret, src, outer } => {
+            BcIr::LoadDynVar {
+                dst: ret,
+                src,
+                outer,
+            } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 let op3 = outer as u16;

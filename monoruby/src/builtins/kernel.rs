@@ -129,7 +129,7 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = vm.get_block_data(globals, bh)?;
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
             return if err.kind() == &MonorubyErrKind::StopIteration {

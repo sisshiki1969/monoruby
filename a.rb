@@ -1,16 +1,5 @@
-class C
-  def f(x)
-    x*100
-  end
+a = [nil] * 15
+for e in a
+  p e&.nil?
 end
 
-c = C.new
-
-m = [*(0..15)]
-
-20000000.times do |x|
-  if x == 12
-    m = c.method(:f)
-  end
-  m[x]
-end

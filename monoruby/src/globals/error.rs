@@ -160,15 +160,6 @@ impl MonorubyErr {
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)
     }
 
-    pub(crate) fn unsupported_block_param(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        let msg = format!("unsupported block parameter type {:?}", lhs.kind);
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
-        MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)
-    }
-
     pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported nodekind {:?}", expr.kind);
         eprintln!(
@@ -544,6 +535,7 @@ pub enum TypeErrKind {
     CantConverFloat { val: Value },
     CantCoercedInteger { op: IdentId, val: Value },
     CantCoercedFloat { op: IdentId, val: Value },
+    WrongArgumentTypeProc { val: Value },
     Other,
 }
 
@@ -576,6 +568,12 @@ impl TypeErrKind {
             TypeErrKind::CantCoercedFloat { op, val } => {
                 format!(
                     "{op}: {} can't be coerced into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::WrongArgumentTypeProc { val } => {
+                format!(
+                    "wrong argument type {} (expected Proc)",
                     val.get_real_class_name(globals)
                 )
             }

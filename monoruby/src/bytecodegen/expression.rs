@@ -151,14 +151,7 @@ impl BytecodeGen {
                 let name = IdentId::get_id_from_string(ident);
                 if let Some(src) = self.refer_dynamic_local(outer, name) {
                     let src = src.into();
-                    self.emit(
-                        BcIr::LoadDynVar {
-                            ret: dst,
-                            src,
-                            outer,
-                        },
-                        loc,
-                    );
+                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(name), self.block_param);
                     self.emit(BcIr::BlockArg(dst, outer), loc);
@@ -423,7 +416,14 @@ impl BytecodeGen {
                 let lvar = IdentId::get_id_from_string(ident);
                 if let Some(src) = self.refer_dynamic_local(outer, lvar) {
                     let src = src.into();
-                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    self.emit(
+                        BcIr::LoadDynVar {
+                            dst: ret,
+                            src,
+                            outer,
+                        },
+                        loc,
+                    );
                 } else {
                     assert_eq!(Some(lvar), self.outer_block_param_name(outer));
                     self.emit(BcIr::BlockArg(ret, outer), loc);

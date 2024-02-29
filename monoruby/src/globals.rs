@@ -36,19 +36,6 @@ impl MethodTableEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub(crate) struct ProcData {
-    outer: Option<Lfp>,
-    func_id: Option<FuncId>,
-}
-
-impl ProcData {
-    pub fn is_none(&self) -> bool {
-        self.func_id.is_none()
-    }
-}
-
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
@@ -204,9 +191,10 @@ impl Globals {
         );
         assert_eq!(
             OBJECT_SEND_FUNCID,
-            globals.define_builtin_inline_func_with(
+            globals.define_builtin_inline_funcs_with(
                 OBJECT_CLASS,
-                &["send", "__send__"],
+                "send",
+                &["__send__"],
                 crate::builtins::send,
                 Box::new(crate::builtins::object_send),
                 analysis::v_v_vv,
@@ -309,33 +297,6 @@ impl Globals {
         let info = &self[func_id];
         assert!(info.codeptr().is_some());
         info.data_ref()
-    }
-
-    pub(crate) fn get_yield_data(&mut self, cfp: Cfp) -> ProcData {
-        match cfp.get_block() {
-            Some(bh) => {
-                let info = self.get_block_data(cfp, bh);
-                ProcData {
-                    outer: Some(info.outer_lfp()),
-                    func_id: Some(info.func_id()),
-                }
-            }
-            None => ProcData {
-                outer: None,
-                func_id: None,
-            },
-        }
-    }
-
-    pub(crate) fn get_block_data(&mut self, mut cfp: Cfp, bh: BlockHandler) -> ProcInner {
-        if let Some((func_id, idx)) = bh.try_proxy() {
-            for _ in 0..idx {
-                cfp = cfp.prev().unwrap();
-            }
-            ProcInner::from(cfp.lfp(), func_id)
-        } else {
-            bh.as_proc().clone()
-        }
     }
 
     pub fn gc_enable(flag: bool) {
@@ -594,30 +555,34 @@ impl Globals {
         }
     }
 
-    pub(crate) fn to_s2(&self, val: Value) -> String {
+    pub(crate) fn inspect2(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
-            RV::Nil => "".to_string(),
+            RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => id.to_string(),
+            RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => s,
+                Ok(s) => format!("{:?}", s),
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.ty() {
                 ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
                 ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => rvalue.as_array().to_s2(self),
+                ObjKind::ARRAY => rvalue.as_array().inspect2(self),
                 ObjKind::OBJECT => self.object_tos(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => Self::proc_tos(val),
-                ObjKind::HASH => self.hash_tos2(val),
+                ObjKind::HASH => self.hash_inspect2(val),
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
+                ObjKind::EXCEPTION => {
+                    let class_name = self.get_class_name(val.class());
+                    let msg = rvalue.as_exception().msg();
+                    format!("#<{class_name}: {msg}>")
+                }
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(val),
@@ -733,7 +698,7 @@ impl Globals {
         }
     }
 
-    fn hash_tos2(&self, val: Value) -> String {
+    fn hash_inspect2(&self, val: Value) -> String {
         let hash = val.as_hash();
         match hash.len() {
             0 => "{}".to_string(),
@@ -744,12 +709,12 @@ impl Globals {
                     let k_inspect = if k == val {
                         "{...}".to_string()
                     } else {
-                        self.to_s2(k)
+                        self.inspect2(k)
                     };
                     let v_inspect = if v == val {
                         "{...}".to_string()
                     } else {
-                        self.to_s2(v)
+                        self.inspect2(v)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

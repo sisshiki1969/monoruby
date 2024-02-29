@@ -163,7 +163,7 @@ fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let ary = lfp.self_val();
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = vm.get_block_data(globals, bh)?;
     for (k, v) in ary.as_hash().iter() {
         vm.invoke_block(globals, &data, &[k, v])?;
     }

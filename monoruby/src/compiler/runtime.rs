@@ -117,6 +117,13 @@ pub(super) extern "C" fn enter_classdef<'a>(
     globals.get_func_data(func_id)
 }
 
+#[derive(Debug, Clone, Default)]
+#[repr(C)]
+pub(crate) struct ProcData {
+    outer: Option<Lfp>,
+    func_id: Option<FuncId>,
+}
+
 ///
 /// Get *BlockData* for yield.
 ///
@@ -129,11 +136,23 @@ pub(super) extern "C" fn enter_classdef<'a>(
 /// - rdx: FuncId
 ///
 pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
-    let res = globals.get_yield_data(vm.cfp());
-    if res.is_none() {
-        vm.set_error(MonorubyErr::no_block_given());
+    let bh = match vm.cfp().get_block() {
+        Some(data) => data,
+        None => {
+            vm.set_error(MonorubyErr::no_block_given());
+            return ProcData::default();
+        }
+    };
+    match vm.get_block_data(globals, bh) {
+        Ok(data) => ProcData {
+            outer: Some(data.outer_lfp()),
+            func_id: Some(data.func_id()),
+        },
+        Err(err) => {
+            vm.set_error(err);
+            ProcData::default()
+        }
     }
-    res
 }
 
 pub(super) extern "C" fn block_arg(
