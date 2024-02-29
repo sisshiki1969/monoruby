@@ -176,7 +176,7 @@ impl RegexpInner {
         ) -> Result<(String, bool)> {
             let mut range = vec![];
             let mut i = 0;
-            let data = vm.get_block_data(globals, bh);
+            let data = vm.get_block_data(globals, bh)?;
             loop {
                 let (start, end, matched_str) = match re.captures_from_pos(given, i) {
                     Ok(None) => break,

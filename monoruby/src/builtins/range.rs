@@ -110,7 +110,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
 
             let iter = (start..end).map(Value::fixnum);
-            let data = vm.get_block_data(globals, bh);
+            let data = vm.get_block_data(globals, bh)?;
             for val in iter {
                 if !vm.invoke_block(globals, &data, &[val])?.as_bool() {
                     return Ok(Value::bool(false));

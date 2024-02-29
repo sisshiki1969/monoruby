@@ -136,13 +136,20 @@ pub(crate) struct ProcData {
 /// - rdx: FuncId
 ///
 pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
-    match vm.get_yield_data(globals) {
-        Some(data) => ProcData {
+    let bh = match vm.cfp().get_block() {
+        Some(data) => data,
+        None => {
+            vm.set_error(MonorubyErr::no_block_given());
+            return ProcData::default();
+        }
+    };
+    match vm.get_block_data(globals, bh) {
+        Ok(data) => ProcData {
             outer: Some(data.outer_lfp()),
             func_id: Some(data.func_id()),
         },
-        None => {
-            vm.set_error(MonorubyErr::no_block_given());
+        Err(err) => {
+            vm.set_error(err);
             ProcData::default()
         }
     }

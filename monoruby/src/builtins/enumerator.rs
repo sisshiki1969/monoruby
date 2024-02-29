@@ -100,7 +100,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
     let self_val: Enumerator = lfp.self_val().into();
     let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)
+        vm.get_block_data(globals, bh)?
     } else {
         return Ok(self_val.into());
     };
@@ -164,7 +164,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
     let id = IdentId::get_id("with_index");
     let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)
+        vm.get_block_data(globals, bh)?
     } else {
         return vm.generate_enumerator(id, lfp.self_val(), vec![]);
     };
@@ -260,7 +260,7 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         }
     }
     let self_val: Generator = lfp.self_val().into();
-    let data = vm.get_block_data(globals, lfp.expect_block()?);
+    let data = vm.get_block_data(globals, lfp.expect_block()?)?;
     let internal = self_val.create_internal();
     vm.temp_push(internal.into());
     let res = each_inner(vm, globals, internal, &data);

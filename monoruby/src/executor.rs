@@ -534,7 +534,7 @@ impl Executor {
         bh: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         self.invoke_block(globals, &data, args)
     }
 
@@ -544,7 +544,7 @@ impl Executor {
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -557,7 +557,7 @@ impl Executor {
         bh: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         for (index, val) in iter.enumerate() {
             self.invoke_block(globals, &data, &[val, Value::integer(index as i64)])?;
         }
@@ -571,7 +571,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         let old = alloc::Allocator::<RValue>::set_enabled(false);
         self.temp_array_new(size_hint);
         for v in iter {
@@ -590,7 +590,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         let old = alloc::Allocator::<RValue>::set_enabled(false);
         self.temp_array_new(size_hint);
         for v in iter {
@@ -613,7 +613,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh);
+        let data = self.get_block_data(globals, bh)?;
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }
@@ -686,30 +686,37 @@ impl Executor {
     ///
     /// Generate *ProcInner* from 'bh'.
     ///
-    pub(crate) fn get_block_data(&mut self, globals: &mut Globals, bh: BlockHandler) -> ProcInner {
+    pub(crate) fn get_block_data(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+    ) -> Result<ProcInner> {
         let mut cfp = self.cfp();
         if let Some((func_id, idx)) = bh.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
-            ProcInner::from(cfp.lfp(), func_id)
+            Ok(ProcInner::from(cfp.lfp(), func_id))
         } else if let Some(proc) = bh.try_proc() {
-            proc.clone()
+            Ok(proc.clone())
         } else {
-            let proc = self
-                .invoke_method(globals, IdentId::TO_PROC, bh.get(), &[], None)
-                .unwrap();
-            proc.as_proc().clone()
+            self.to_proc(globals, bh.get())
         }
     }
 
-    ///
-    /// Generate *ProcInner* from a given block.
-    ///
-    pub(crate) fn get_yield_data(&mut self, globals: &mut Globals) -> Option<ProcInner> {
-        self.cfp()
-            .get_block()
-            .map(|bh| self.get_block_data(globals, bh))
+    fn to_proc(&mut self, globals: &mut Globals, val: Value) -> Result<ProcInner> {
+        match self.invoke_method_inner(globals, IdentId::TO_PROC, val, &[], None) {
+            Ok(proc) => {
+                if let Some(proc) = proc.is_proc() {
+                    return Ok(proc.clone());
+                }
+            }
+            _ => {}
+        };
+        Err(MonorubyErr::typeerr(
+            "",
+            TypeErrKind::WrongArgumentTypeProc { val },
+        ))
     }
 
     pub(crate) fn define_class(
@@ -758,7 +765,7 @@ impl Executor {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             outer_lfp.move_frame_to_heap();
-            let proc = Proc::new(self.get_block_data(globals, bh));
+            let proc = Proc::new(self.get_block_data(globals, bh)?);
             Ok(proc)
         } else if bh.try_proc().is_some() {
             Ok(bh.0.into())

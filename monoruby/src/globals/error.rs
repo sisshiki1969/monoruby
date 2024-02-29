@@ -535,6 +535,7 @@ pub enum TypeErrKind {
     CantConverFloat { val: Value },
     CantCoercedInteger { op: IdentId, val: Value },
     CantCoercedFloat { op: IdentId, val: Value },
+    WrongArgumentTypeProc { val: Value },
     Other,
 }
 
@@ -567,6 +568,12 @@ impl TypeErrKind {
             TypeErrKind::CantCoercedFloat { op, val } => {
                 format!(
                     "{op}: {} can't be coerced into Float",
+                    val.get_real_class_name(globals)
+                )
+            }
+            TypeErrKind::WrongArgumentTypeProc { val } => {
+                format!(
+                    "wrong argument type {} (expected Proc)",
                     val.get_real_class_name(globals)
                 )
             }

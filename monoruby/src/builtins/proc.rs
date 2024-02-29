@@ -142,5 +142,24 @@ mod test {
             end
         "#,
         );
+        run_test_error(
+            r#"
+        class Foo
+            def to_proc
+                :xxx
+            end
+        end
+
+        [1,2,3].each(&Foo.new)
+        "#,
+        );
+        run_test_error(
+            r#"
+        class Foo
+        end
+
+        [1,2,3].each(&Foo.new)
+        "#,
+        );
     }
 }
