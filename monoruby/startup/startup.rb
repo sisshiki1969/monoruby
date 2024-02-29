@@ -65,3 +65,12 @@ class Module
   def private_constant(*x)
   end
 end
+
+module Warning
+  def self.warn(*x)
+  end
+
+  def self.[](category)
+    true
+  end
+end
