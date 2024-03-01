@@ -91,13 +91,17 @@ impl BytecodeGen {
         }
         self.emit_call(callid, loc);
         if let Some(nil_exit) = nil_exit {
-            let exit = self.new_label();
-            self.emit_br(exit);
-            self.apply_label(nil_exit);
-            if let Some(dst) = dst {
+            if let Some(dst) = dst
+                && dst != recv
+            {
+                let exit = self.new_label();
+                self.emit_br(exit);
+                self.apply_label(nil_exit);
                 self.emit_nil(dst);
+                self.apply_label(exit);
+            } else {
+                self.apply_label(nil_exit);
             }
-            self.apply_label(exit);
         }
         if use_mode.is_ret() {
             self.emit_ret(None)?;
