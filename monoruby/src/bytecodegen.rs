@@ -786,6 +786,11 @@ impl BytecodeGen {
         );
     }
 
+    fn emit_nilbr(&mut self, cond: BcReg, jmp_pos: Label) {
+        self.add_merge(jmp_pos);
+        self.emit(BcIr::NilBr(cond, jmp_pos), Loc::default());
+    }
+
     fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
         self.add_merge(else_pos);
         self.emit(BcIr::CheckLocal(local, else_pos), Loc::default());

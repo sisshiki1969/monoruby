@@ -259,6 +259,7 @@ impl Codegen {
         self.dispatch[34] = self.vm_yield();
         self.dispatch[35] = self.vm_array();
         self.dispatch[36] = self.vm_optcase(branch);
+        self.dispatch[37] = self.vm_nilbr(branch);
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
@@ -1317,6 +1318,18 @@ impl Codegen {
             orq r15, 0x10;
             cmpq r15, (FALSE_VALUE);
             jne branch;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_nilbr(&mut self, branch: DestLabel) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_value(GP::R15);
+        monoasm! { &mut self.jit,
+            cmpq r15, (NIL_VALUE);
+            je branch;
         };
         self.fetch_and_dispatch();
         label

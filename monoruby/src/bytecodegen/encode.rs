@@ -149,6 +149,16 @@ impl BytecodeGen {
                 );
                 Bc::from(op)
             }
+            BcIr::NilBr(reg, dst) => {
+                // 37
+                let dst = self[dst].to_usize();
+                incoming.push(idx, dst);
+                incoming.push(idx, idx + 1);
+                let op1 = self.slot_id(&reg);
+                let op2 = dst as isize - idx as isize - 1;
+                let op = enc_wl(37, op1.0, op2 as u32);
+                Bc::from(op)
+            }
             BcIr::CheckLocal(local, dst) => {
                 // 20
                 let op1 = self.slot_id(&local);

@@ -145,6 +145,8 @@ pub(super) enum BcIr {
     CheckLocal(BcReg, Label),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
+    /// when *BcReg* is nil, goto *Label*.
+    NilBr(BcReg, Label),
     OptCase {
         // a register for cond and ret.
         reg: BcReg,
