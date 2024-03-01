@@ -1277,6 +1277,7 @@ impl BcPc {
                     cond: SlotId::new(op1),
                     optid: OptCaseId::from(op2),
                 },
+                37 => TraceIr::NilBr(SlotId::new(op1), op2 as i32),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

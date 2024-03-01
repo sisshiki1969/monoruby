@@ -826,6 +826,13 @@ impl JitContext {
                 self.ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                 self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
             }
+            TraceIr::NilBr(cond_, disp) => {
+                let dest_idx = bb_pos + 1 + disp;
+                let branch_dest = self.asm_label();
+                self.ir.fetch_to_reg(bb, cond_, GP::Rax);
+                self.ir.inst.push(AsmInst::NilBr(branch_dest));
+                self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+            }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, disp) => {
                 let dest_idx = bb_pos + 1 + disp;
