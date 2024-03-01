@@ -8,5 +8,6 @@
 perf
 perf.data
 .vscode
+.quine
 .ruby-version
 out.*

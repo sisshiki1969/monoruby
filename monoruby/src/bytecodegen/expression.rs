@@ -84,7 +84,7 @@ impl BytecodeGen {
             } => {
                 if index.len() == 1 {
                     self.gen_index(Some(dst), base, index.remove(0), loc)?;
-                } else if index.len() == 2 {
+                } else {
                     let arglist = ArgList::from_args(index);
                     self.gen_method_call(
                         IdentId::_INDEX,
@@ -94,12 +94,6 @@ impl BytecodeGen {
                         UseMode2::Store(dst),
                         loc,
                     )?;
-                } else {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("unsupported index. {}", index.len()),
-                        loc,
-                        self.sourceinfo.clone(),
-                    ));
                 };
             }
             NodeKind::UnOp(op, box rhs) => match op {
@@ -331,7 +325,7 @@ impl BytecodeGen {
             } => {
                 if index.len() == 1 {
                     self.gen_index(None, base, index.remove(0), loc)?;
-                } else if index.len() == 2 {
+                } else {
                     let arglist = ArgList::from_args(index);
                     self.gen_method_call(
                         IdentId::_INDEX,
@@ -342,12 +336,6 @@ impl BytecodeGen {
                         loc,
                     )?;
                     return Ok(());
-                } else {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("unsupported index. {}", index.len()),
-                        loc,
-                        self.sourceinfo.clone(),
-                    ));
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {

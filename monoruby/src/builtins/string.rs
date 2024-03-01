@@ -28,6 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
+    globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub!", sub_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "gsub", gsub, 1, 2, false);
@@ -51,6 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
+    globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
 }
 
 ///
@@ -787,7 +789,38 @@ fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     };
 
     let self_ = lfp.self_val().expect_string()?;
-    let res = if rs.is_empty() {
+    let res = chomp_sub(&self_, rs);
+    Ok(Value::string_from_str(res))
+}
+
+///
+/// ### String#chomp!
+/// - chomp!(rs = $/) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
+#[monoruby_builtin]
+fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let rs = if let Some(arg0) = lfp.try_arg(0) {
+        if arg0.is_nil() {
+            return Ok(Value::nil());
+        }
+        arg0.expect_string()?
+    } else {
+        "\n".to_string()
+    };
+
+    let self_ = lfp.self_val().expect_string()?;
+    let res = chomp_sub(&self_, rs);
+    if res.len() == self_.len() {
+        Ok(Value::nil())
+    } else {
+        *lfp.self_val().as_bytes_mut() = StringInner::from_slice(res.as_bytes());
+        Ok(lfp.self_val())
+    }
+}
+
+fn chomp_sub(self_: &String, rs: String) -> &str {
+    if rs.is_empty() {
         let mut s = self_.as_str();
         let mut len = s.len();
         loop {
@@ -800,13 +833,12 @@ fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             }
             len = s.len();
         }
-        s.to_string()
+        s
     } else if rs == "\n" {
-        self_.trim_end_matches(&['\n', '\r']).to_string()
+        self_.trim_end_matches(&['\n', '\r'])
     } else {
-        self_.trim_end_matches(&rs).to_string()
-    };
-    Ok(Value::string(res))
+        self_.trim_end_matches(&rs)
+    }
 }
 
 ///
@@ -1276,6 +1308,19 @@ fn sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::integer((sum & ((1 << bits) - 1)) as i64))
 }
 
+///
+/// String#replace
+///
+/// - replace(other) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/replace.html]
+#[monoruby_builtin]
+fn replace(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0).expect_string()?;
+    lfp.self_val().replace_string(arg0);
+    Ok(lfp.self_val())
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1615,6 +1660,52 @@ mod test {
     }
 
     #[test]
+    fn chomp_() {
+        run_test(
+            r##"
+        s = "foo\n"
+        [s.chomp!, s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "foo\n"
+        [s.chomp!("\n"), s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "foo\r\n"
+        [s.chomp!("\r\n"), s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "string\n"
+        [s.chomp!(nil), s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "foo\r\n\n"
+        [s.chomp!(""), s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "foo\n\r\n"
+        [s.chomp!(""), s]
+        "##,
+        );
+        run_test(
+            r##"
+        s = "foo\n\r\r"
+        [s.chomp!(""), s]
+        "##,
+        );
+    }
+
+    #[test]
     fn to_i() {
         run_test(r"'42581'.to_i");
         run_test(r"'4a5f1'.to_i(16)");
@@ -1640,5 +1731,15 @@ mod test {
     fn sum() {
         run_test(r#"File.read("../LICENSE-MIT").sum"#);
         run_test(r#"File.read("../LICENSE-MIT").sum(11)"#);
+    }
+
+    #[test]
+    fn replace() {
+        run_test(
+            r#"
+        str = "foo"
+        [str.replace("bar"), str]
+        "#,
+        );
     }
 }
