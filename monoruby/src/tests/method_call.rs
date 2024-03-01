@@ -578,5 +578,19 @@ mod test {
         x
         "#,
         );
+        run_test(
+            r#"
+        def f(x)
+          x&.nil?
+        end
+
+        a = [1,2,3,nil] * 5
+        x = []
+        for e in a
+          x << f(e)
+        end
+        x
+        "#,
+        );
     }
 }
