@@ -40,7 +40,7 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let (dst, ret_pop_flag) = match use_mode {
+        let (dst, push_flag) = match use_mode {
             UseMode2::NotUse => (None, false),
             UseMode2::Push | UseMode2::Ret => (Some(self.sp().into()), true),
             UseMode2::Store(dst) => (Some(dst), false),
@@ -62,13 +62,18 @@ impl BytecodeGen {
         };
 
         let nil_exit = if safe_nav {
-            Some(self.new_label())
+            let nil_exit = self.new_label();
+            let org_temp = self.temp;
+            self.temp = old_temp;
+            if push_flag {
+                self.push();
+            }
+            self.emit_nilbr(recv, nil_exit);
+            self.temp = org_temp;
+            Some(nil_exit)
         } else {
             None
         };
-        if let Some(nil_exit) = nil_exit {
-            self.emit_nilbr(recv, nil_exit);
-        }
 
         if arglist.delegate {
             return Err(MonorubyErr::unsupported_feature(
@@ -81,18 +86,22 @@ impl BytecodeGen {
         let callid = self.handle_arguments(arglist, method, recv, dst, loc)?;
 
         self.temp = old_temp;
-        if ret_pop_flag {
+        if push_flag {
             self.push();
         }
         self.emit_call(callid, loc);
         if let Some(nil_exit) = nil_exit {
-            let exit = self.new_label();
-            self.emit_br(exit);
-            self.apply_label(nil_exit);
-            if let Some(dst) = dst {
+            if let Some(dst) = dst
+                && dst != recv
+            {
+                let exit = self.new_label();
+                self.emit_br(exit);
+                self.apply_label(nil_exit);
                 self.emit_nil(dst);
+                self.apply_label(exit);
+            } else {
+                self.apply_label(nil_exit);
             }
-            self.apply_label(exit);
         }
         if use_mode.is_ret() {
             self.emit_ret(None)?;
