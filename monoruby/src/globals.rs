@@ -555,30 +555,34 @@ impl Globals {
         }
     }
 
-    pub(crate) fn to_s2(&self, val: Value) -> String {
+    pub(crate) fn inspect2(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
-            RV::Nil => "".to_string(),
+            RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => id.to_string(),
+            RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => s,
+                Ok(s) => format!("{:?}", s),
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.ty() {
                 ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
                 ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => rvalue.as_array().to_s2(self),
+                ObjKind::ARRAY => rvalue.as_array().inspect2(self),
                 ObjKind::OBJECT => self.object_tos(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => Self::proc_tos(val),
-                ObjKind::HASH => self.hash_tos2(val),
+                ObjKind::HASH => self.hash_inspect2(val),
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
+                ObjKind::EXCEPTION => {
+                    let class_name = self.get_class_name(val.class());
+                    let msg = rvalue.as_exception().msg();
+                    format!("#<{class_name}: {msg}>")
+                }
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(val),
@@ -694,7 +698,7 @@ impl Globals {
         }
     }
 
-    fn hash_tos2(&self, val: Value) -> String {
+    fn hash_inspect2(&self, val: Value) -> String {
         let hash = val.as_hash();
         match hash.len() {
             0 => "{}".to_string(),
@@ -705,12 +709,12 @@ impl Globals {
                     let k_inspect = if k == val {
                         "{...}".to_string()
                     } else {
-                        self.to_s2(k)
+                        self.inspect2(k)
                     };
                     let v_inspect = if v == val {
                         "{...}".to_string()
                     } else {
-                        self.to_s2(v)
+                        self.inspect2(v)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

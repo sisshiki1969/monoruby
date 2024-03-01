@@ -15,7 +15,7 @@ impl Globals {
                         Some((func_id, idx)) => {
                             format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
-                        _ => self.to_s2(block.get()),
+                        _ => self.inspect2(block.get()),
                     }
                 }
                 None => "None".to_string(),
@@ -33,7 +33,7 @@ impl Globals {
                 r,
                 if r == 0 { "(self)" } else { "" },
                 if let Some(v) = lfp.register(r) {
-                    self.to_s2(v)
+                    self.inspect2(v)
                 } else {
                     "None".to_string()
                 }
@@ -253,7 +253,7 @@ impl Globals {
                 end
             ),
             TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, self.to_s2(val))
+                format!("{:?} = literal[{}]", reg, self.inspect2(val))
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
@@ -303,7 +303,7 @@ impl Globals {
                     op1,
                     match pc.value() {
                         None => "<INVALID>".to_string(),
-                        Some(val) => self.to_s2(val),
+                        Some(val) => self.inspect2(val),
                     }
                 )
             }
@@ -733,7 +733,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = v {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.to_s2(v));
+                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.inspect2(v));
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", index);

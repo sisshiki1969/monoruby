@@ -1,4 +1,5 @@
-class Foo
+a = [nil] * 15
+for e in a
+  p e&.nil?
 end
 
-[1,2,3].each(&Foo.new)
