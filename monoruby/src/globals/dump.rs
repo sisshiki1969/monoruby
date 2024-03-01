@@ -235,6 +235,9 @@ impl Globals {
                     i as i32 + 1 + disp
                 )
             }
+            TraceIr::NilBr(reg, disp) => {
+                format!("nilbr {:?} =>:{:05}", reg, i as i32 + 1 + disp)
+            }
             TraceIr::OptCase { cond: dst, optid } => {
                 format!("opt_case {:?}->({:?})", dst, self.store[optid])
             }

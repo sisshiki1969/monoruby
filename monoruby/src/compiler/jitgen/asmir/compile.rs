@@ -237,6 +237,13 @@ impl Codegen {
                     BrKind::BrIfNot => monoasm!( &mut self.jit, jeq dest;),
                 }
             }
+            AsmInst::NilBr(dest) => {
+                let dest = ctx[dest];
+                monoasm!( &mut self.jit,
+                    cmpq rax, (NIL_VALUE);
+                    jeq  dest;
+                );
+            }
             AsmInst::CheckLocal(branch_dest) => {
                 let branch_dest = ctx[branch_dest];
                 monoasm!( &mut self.jit,

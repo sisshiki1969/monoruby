@@ -10,6 +10,8 @@ pub(crate) enum TraceIr {
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
     CondBr(SlotId, i32, bool, BrKind),
+    /// conditional branch(%reg, dest)  : branch when reg is nil.
+    NilBr(SlotId, i32),
     /// check local var(%reg, dest)  : branch when reg was None.
     OptCase {
         cond: SlotId,

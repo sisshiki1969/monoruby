@@ -423,6 +423,10 @@ impl JitContext {
                     info.r#use(cond_);
                     return (ExitType::Continue, info);
                 }
+                TraceIr::NilBr(cond_, _) => {
+                    info.r#use(cond_);
+                    return (ExitType::Continue, info);
+                }
                 TraceIr::CheckLocal(src, _) => {
                     info.r#use(src);
                     return (ExitType::Continue, info);

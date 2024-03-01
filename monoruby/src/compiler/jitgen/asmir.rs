@@ -982,6 +982,7 @@ pub(super) enum AsmInst {
     EnsureEnd,
     Br(AsmLabel),
     CondBr(BrKind, AsmLabel),
+    NilBr(AsmLabel),
     CheckLocal(AsmLabel),
     ///
     /// Conditional branch

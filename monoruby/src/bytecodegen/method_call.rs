@@ -36,6 +36,7 @@ impl BytecodeGen {
         method: IdentId,
         receiver: Option<Node>,
         arglist: ArgList,
+        safe_nav: bool,
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
@@ -60,6 +61,15 @@ impl BytecodeGen {
             None => BcReg::Self_,
         };
 
+        let nil_exit = if safe_nav {
+            Some(self.new_label())
+        } else {
+            None
+        };
+        if let Some(nil_exit) = nil_exit {
+            self.emit_nilbr(recv, nil_exit);
+        }
+
         if arglist.delegate {
             return Err(MonorubyErr::unsupported_feature(
                 "argument delegation is not supported.",
@@ -75,6 +85,15 @@ impl BytecodeGen {
             self.push();
         }
         self.emit_call(callid, loc);
+        if let Some(nil_exit) = nil_exit {
+            let exit = self.new_label();
+            self.emit_br(exit);
+            self.apply_label(nil_exit);
+            if let Some(dst) = dst {
+                self.emit_nil(dst);
+            }
+            self.apply_label(exit);
+        }
         if use_mode.is_ret() {
             self.emit_ret(None)?;
         }

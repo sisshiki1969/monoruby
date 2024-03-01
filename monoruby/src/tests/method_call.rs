@@ -565,4 +565,18 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn safe_nav_operator() {
+        run_test(
+            r#"
+        a = [1,2,3,nil] * 5
+        x = []
+        for e in a
+          x << e&.nil?
+        end
+        x
+        "#,
+        );
+    }
 }

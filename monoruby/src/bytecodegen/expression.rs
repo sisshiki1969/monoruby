@@ -90,6 +90,7 @@ impl BytecodeGen {
                         IdentId::_INDEX,
                         Some(base),
                         arglist,
+                        false,
                         UseMode2::Store(dst),
                         loc,
                     )?;
@@ -191,18 +192,25 @@ impl BytecodeGen {
                 box receiver,
                 method,
                 arglist,
-                safe_nav: false,
+                safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, Some(receiver), arglist, UseMode2::Store(dst), loc)?;
+                self.gen_method_call(
+                    method,
+                    Some(receiver),
+                    arglist,
+                    safe_nav,
+                    UseMode2::Store(dst),
+                    loc,
+                )?;
             }
             NodeKind::FuncCall {
                 method,
                 arglist,
-                safe_nav: false,
+                safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, None, arglist, UseMode2::Store(dst), loc)?;
+                self.gen_method_call(method, None, arglist, safe_nav, UseMode2::Store(dst), loc)?;
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
@@ -325,7 +333,14 @@ impl BytecodeGen {
                     self.gen_index(None, base, index.remove(0), loc)?;
                 } else if index.len() == 2 {
                     let arglist = ArgList::from_args(index);
-                    self.gen_method_call(IdentId::_INDEX, Some(base), arglist, use_mode, loc)?;
+                    self.gen_method_call(
+                        IdentId::_INDEX,
+                        Some(base),
+                        arglist,
+                        false,
+                        use_mode,
+                        loc,
+                    )?;
                     return Ok(());
                 } else {
                     return Err(MonorubyErr::unsupported_feature(
@@ -434,18 +449,25 @@ impl BytecodeGen {
                 box receiver,
                 method,
                 arglist,
-                safe_nav: false,
+                safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, Some(receiver), arglist, use_mode, loc);
+                return self.gen_method_call(
+                    method,
+                    Some(receiver),
+                    arglist,
+                    safe_nav,
+                    use_mode,
+                    loc,
+                );
             }
             NodeKind::FuncCall {
                 method,
                 arglist,
-                safe_nav: false,
+                safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, safe_nav, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
                 return self.gen_super(arglist, use_mode, loc);
@@ -453,7 +475,7 @@ impl BytecodeGen {
             NodeKind::Command(box expr) => {
                 let arglist = ArgList::from_args(vec![expr]);
                 let method = IdentId::get_id("`");
-                return self.gen_method_call(method, None, arglist, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, false, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
                 return self.gen_yield(arglist, use_mode, loc);
@@ -461,7 +483,7 @@ impl BytecodeGen {
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, false, use_mode, loc);
             }
             NodeKind::If {
                 box cond,
