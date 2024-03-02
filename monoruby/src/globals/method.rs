@@ -52,6 +52,29 @@ impl Globals {
         )
     }
 
+    pub(crate) fn define_builtin_funcs(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            arg_num,
+            arg_num,
+            false,
+        );
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
+        }
+        fid
+    }
+
     pub(crate) fn define_builtin_func_rest(
         &mut self,
         class_id: ClassId,

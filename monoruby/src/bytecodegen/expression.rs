@@ -58,6 +58,7 @@ impl BytecodeGen {
             }
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
+            NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(dst, nodes, loc)?,
@@ -100,6 +101,7 @@ impl BytecodeGen {
                 UnOp::Neg => {
                     match rhs.kind {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
+                        NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
                         _ => self.emit_neg(dst, rhs, loc)?,
                     };
@@ -107,6 +109,7 @@ impl BytecodeGen {
                 UnOp::Pos => {
                     match rhs.kind {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
+                        NodeKind::Imaginary(r) => self.emit_imaginary(dst, Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, f),
                         _ => self.emit_pos(dst, rhs, loc)?,
                     };
@@ -285,6 +288,7 @@ impl BytecodeGen {
                 | NodeKind::Symbol(_)
                 | NodeKind::Bignum(_)
                 | NodeKind::Float(_)
+                | NodeKind::Imaginary(_)
                 | NodeKind::String(_) => return Ok(()),
                 _ => {}
             }
@@ -301,6 +305,7 @@ impl BytecodeGen {
             | NodeKind::Symbol(_)
             | NodeKind::Bignum(_)
             | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
             | NodeKind::String(_)
             | NodeKind::Array(..)
             | NodeKind::Hash(..)

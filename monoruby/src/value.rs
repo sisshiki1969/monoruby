@@ -239,6 +239,10 @@ impl Value {
         RValue::new_float(num).pack()
     }
 
+    pub fn complex(re: Value, im: Value) -> Self {
+        RValue::new_complex(re, im).pack()
+    }
+
     pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::integer(i)
@@ -830,6 +834,17 @@ impl Value {
         }
     }
 
+    pub(crate) fn try_bytes(&self) -> Option<&StringInner> {
+        if let Some(rv) = self.try_rvalue() {
+            match rv.ty() {
+                ObjKind::BYTES => Some(rv.as_bytes()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn as_bytes(&self) -> &StringInner {
         assert_eq!(ObjKind::BYTES, self.rvalue().ty());
         self.rvalue().as_bytes()
@@ -875,6 +890,11 @@ impl Value {
     pub(crate) fn as_io(&self) -> &IoInner {
         assert_eq!(ObjKind::IO, self.rvalue().ty());
         self.rvalue().as_io()
+    }
+
+    pub(crate) fn as_io_mut(&mut self) -> &mut IoInner {
+        assert_eq!(ObjKind::IO, self.rvalue().ty());
+        self.rvalue_mut().as_io_mut()
     }
 
     pub(crate) fn as_proc(&self) -> &ProcInner {
@@ -926,6 +946,8 @@ impl Value {
 impl Value {
     #[cfg(test)]
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
+        use ruruby_parse::NReal;
+
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
                 assert_eq!(1, stmts.len());
@@ -934,6 +956,11 @@ impl Value {
             NodeKind::Integer(num) => Value::integer(*num),
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
             NodeKind::Float(num) => Value::float(*num),
+            NodeKind::Imaginary(r) => match r {
+                NReal::Float(f) => Value::complex(Value::integer(0), Value::float(*f)),
+                NReal::Integer(i) => Value::complex(Value::integer(0), Value::integer(*i)),
+                NReal::Bignum(b) => Value::complex(Value::integer(0), Value::bigint(b.clone())),
+            },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
@@ -987,7 +1014,15 @@ impl Value {
                 }
                 Value::hash(map)
             }
-            _ => unreachable!(),
+            NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
+                let lhs = Self::from_ast(lhs, globals);
+                if let NodeKind::Imaginary(im) = &rhs.kind {
+                    Value::complex(lhs, Real::from(im.clone()).into())
+                } else {
+                    unreachable!()
+                }
+            }
+            _ => unreachable!("{:?}", node.kind),
         }
     }
 

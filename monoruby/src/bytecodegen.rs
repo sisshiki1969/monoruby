@@ -821,6 +821,10 @@ impl BytecodeGen {
         self.emit_literal(dst, Value::float(f));
     }
 
+    fn emit_imaginary(&mut self, dst: BcReg, r: crate::value::rvalue::Real) {
+        self.emit_literal(dst, Value::complex(Value::integer(0), r.into()));
+    }
+
     fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
         self.emit(BcIr::Symbol(dst, sym), Loc::default());
     }

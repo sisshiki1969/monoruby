@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 mod case;
+mod literal;
 mod method_call;
 mod rescue;
 mod variables;
