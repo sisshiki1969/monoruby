@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_func_with(STRING_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
@@ -53,6 +54,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
+    globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "center", center, 1, 2, false);
+    globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
 }
 
 ///
@@ -513,6 +517,21 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(res)
 }
 
+fn conv_index(i: i64, len: usize) -> Option<usize> {
+    if i >= 0 {
+        if i <= len as i64 {
+            Some(i as usize)
+        } else {
+            None
+        }
+    } else {
+        match len as i64 + i {
+            n if n < 0 => None,
+            n => Some(n as usize),
+        }
+    }
+}
+
 ///
 /// ### String#[]
 /// - self[nth] -> String | nil
@@ -525,20 +544,6 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d.html]
 #[monoruby_builtin]
 fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    fn conv_index(i: i64, len: usize) -> Option<usize> {
-        if i >= 0 {
-            if i <= len as i64 {
-                Some(i as usize)
-            } else {
-                None
-            }
-        } else {
-            match len as i64 + i {
-                n if n < 0 => None,
-                n => Some(n as usize),
-            }
-        }
-    }
     let self_ = lfp.self_val();
     let lhs = self_.expect_string()?;
     if let Some(i) = lfp.arg(0).try_fixnum() {
@@ -613,6 +618,137 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
     }
+}
+
+///
+/// ### String#[]=
+/// - self[nth] = val
+/// - self[nth, len] = val
+/// - [NOT SUPPORTED] self[substr] = val
+/// - [NOT SUPPORTED] self[regexp, nth] = val
+/// - [NOT SUPPORTED] self[regexp, name] = val
+/// - [NOT SUPPORTED] self[regexp] = val
+/// - [NOT SUPPORTED] self[range] = val
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d=3d.html]
+#[monoruby_builtin]
+fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let (arg1, subst) = if let Some(arg2) = lfp.try_arg(2) {
+        (Some(lfp.arg(1)), arg2.expect_string()?)
+    } else {
+        (None, lfp.arg(1).expect_string()?)
+    };
+    let self_ = lfp.self_val();
+    let mut lhs = self_.expect_string()?;
+    let len = lhs.chars().count();
+    if let Some(arg0) = lfp.arg(0).try_fixnum() {
+        let start = match conv_index(arg0, len) {
+            Some(i) => i,
+            None => return Err(MonorubyErr::indexerr("index out of range.")),
+        };
+        let start = match lhs.char_indices().nth(start) {
+            Some((i, _)) => i,
+            None => return Err(MonorubyErr::indexerr("index out of range.")),
+        };
+        let len = if let Some(arg1) = arg1 {
+            // self[nth, len] = val
+            match arg1.expect_integer()? {
+                i if i < 0 => return Err(MonorubyErr::indexerr("negative length.")),
+                i => i as usize,
+            }
+        } else {
+            // self[nth] = val
+            1
+        };
+        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len as usize) {
+            i
+        } else {
+            lhs.len()
+        };
+        lhs.replace_range(start..end, &subst);
+        *lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+        Ok(lfp.self_val())
+    } else {
+        Err(MonorubyErr::argumenterr("Bad type for index."))
+    }
+}
+
+fn succ_char(ch: char) -> char {
+    // This logic is not compatible with CRuby.
+    let u = match ch as u32 {
+        0x7f => 0x00,
+        0xdfbf => 0xe0a080,
+        0xefbfbf => 0xf0908080,
+        0xf48fbfbf => 0xc2800,
+        i => i + 1,
+    };
+    std::char::from_u32(u).expect("Error occured in char_forward()")
+}
+
+fn str_next(self_: &str) -> String {
+    if self_.len() == 0 {
+        return "".to_string();
+    }
+    let chars = self_.chars();
+    let mut buf: Vec<char> = vec![];
+    let mut carry_flag = true;
+    let mut last_alnum = 0;
+    if self_.chars().all(|c| !c.is_alphanumeric()) {
+        // non-alnum mode
+        for c in chars.rev() {
+            if carry_flag {
+                buf.push(succ_char(c));
+                carry_flag = false;
+            } else {
+                buf.push(c);
+            }
+        }
+        return buf.iter().rev().collect::<String>();
+    }
+    for c in chars.rev() {
+        if carry_flag {
+            if '0' <= c && c <= '8'
+                || 'a' <= c && c <= 'y'
+                || 'A' <= c && c <= 'Y'
+                || '０' <= c && c <= '８'
+            {
+                carry_flag = false;
+                buf.push(succ_char(c));
+            } else if c == '9' {
+                last_alnum = buf.len();
+                buf.push('0');
+            } else if c == '９' {
+                last_alnum = buf.len();
+                buf.push('０');
+            } else if c == 'z' {
+                last_alnum = buf.len();
+                buf.push('a');
+            } else if c == 'Z' {
+                last_alnum = buf.len();
+                buf.push('A');
+            } else if !c.is_alphanumeric() {
+                buf.push(c);
+            } else {
+                carry_flag = false;
+                buf.push(succ_char(c));
+            }
+        } else {
+            buf.push(c);
+        }
+    }
+    if carry_flag {
+        let c = buf[last_alnum];
+        if c == '0' {
+            buf.insert(last_alnum + 1, '1');
+        } else if c == '０' {
+            buf.insert(last_alnum + 1, '１');
+        } else if c == 'a' {
+            buf.insert(last_alnum + 1, 'a');
+        } else if c == 'A' {
+            buf.insert(last_alnum + 1, 'A');
+        }
+    }
+    buf.iter().rev().collect::<String>()
 }
 
 ///
@@ -1277,11 +1413,10 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
 #[monoruby_builtin]
 fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    // TODO: support tr(1)
     let rec = lfp.self_val().expect_string()?;
     let from = lfp.arg(0).expect_string()?;
     let to = lfp.arg(1).expect_string()?;
-    assert_eq!(1, from.chars().count());
-    assert_eq!(1, to.chars().count());
     let res = rec.replace(&from, &to);
     Ok(Value::string(res))
 }
@@ -1319,6 +1454,72 @@ fn replace(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
     let arg0 = lfp.arg(0).expect_string()?;
     lfp.self_val().replace_string(arg0);
     Ok(lfp.self_val())
+}
+
+///
+/// ### String#chars
+///
+/// - chars -> [String]
+/// - chars {|cstr| block } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chars.html]
+#[monoruby_builtin]
+fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let recv = lfp.self_val().expect_string()?;
+    if let Some(bh) = lfp.block() {
+        let iter = recv.chars().map(|c| Value::string(c.to_string()));
+        vm.invoke_block_map1(globals, bh, iter, None)?;
+        Ok(lfp.self_val())
+    } else {
+        let iter = recv.chars().map(|c| Value::string(c.to_string()));
+        Ok(Value::array_from_iter(iter))
+    }
+}
+
+///
+/// ### String#center
+///
+/// - center(width, padding = ' ') -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/center.html]
+#[monoruby_builtin]
+fn center(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let padding = if let Some(arg) = lfp.try_arg(1) {
+        arg.expect_string()?
+    } else {
+        " ".to_string()
+    };
+    if padding.len() == 0 {
+        return Err(MonorubyErr::argumenterr("Zero width padding."));
+    };
+    let lhs = lfp.self_val();
+    let width = lfp.arg(0).coerce_to_i64()?;
+    let str_len = lhs.as_str().chars().count();
+    if width <= 0 || width as usize <= str_len {
+        return Ok(Value::string_from_inner(lhs.as_bytes().clone()));
+    }
+    let head = (width as usize - str_len) / 2;
+    let tail = width as usize - str_len - head;
+    return Ok(Value::string(format!(
+        "{}{}{}",
+        gen_pad(&padding, head),
+        lhs.as_str(),
+        gen_pad(&padding, tail)
+    )));
+}
+
+///
+/// ### String#next
+///
+/// - succ -> String
+/// - next -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/next.html]
+#[monoruby_builtin]
+fn next(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let recv = lfp.self_val().expect_string()?;
+    let res = Value::string(str_next(&recv));
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -1741,5 +1942,65 @@ mod test {
         [str.replace("bar"), str]
         "#,
         );
+    }
+
+    #[test]
+    fn chars() {
+        run_test(
+            r#"
+        "hello世界".chars 
+        "#,
+        );
+        run_test(
+            r#"
+        x = []
+        ["hello world".chars do |c| x << c.upcase end, x]
+        "#,
+        );
+    }
+
+    #[test]
+    fn center() {
+        run_test(r#""foo".center(10)"#);
+        run_test(r#""foo".center(9)"#);
+        run_test(r#""foo".center(8)"#);
+        run_test(r#""foo".center(7)"#);
+        run_test(r#""foo".center(3)"#);
+        run_test(r#""foo".center(2)"#);
+        run_test(r#""foo".center(1)"#);
+        run_test(r#""foo".center(10, "*")"#);
+    }
+
+    #[test]
+    fn index_assign() {
+        run_test(r#"buf = "string"; buf[0]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[1]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[5]="!!"; buf"#);
+        run_test_error(r#"buf = "string"; buf[10]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[-1]="!!"; buf"#);
+        run_test_error(r#"buf = "string"; buf[-10]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[1,3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[-1,3]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[-1,10]="!!"; buf"#);
+        run_test_error(r#"buf = "string"; buf[-100,100]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[3,10]="!!"; buf"#);
+        run_test(r#"buf = "string"; buf[3,0]="!!"; buf"#);
+        run_test_error(r#"buf = "string"; buf[3,-1]="!!"; buf"#);
+    }
+
+    #[test]
+    fn succ() {
+        run_test(r#""aa".succ"#);
+        run_test(r#""88".succ.succ"#);
+        run_test(r#""99".succ"#);
+        run_test(r#""ZZ".succ"#);
+        run_test(r#""a9".succ"#);
+        run_test(r#""-9".succ"#);
+        run_test(r#""9".succ"#);
+        run_test(r#""09".succ"#);
+        run_test(r#""1.9.9".succ"#);
+        run_test(r#"".".succ"#);
+        run_test(r#""".succ"#);
+        run_test(r#""AZ".succ"#);
     }
 }

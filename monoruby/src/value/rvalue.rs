@@ -4,18 +4,21 @@ use ruruby_parse::Loc;
 use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
-pub use self::array::*;
-pub use self::enumerator::*;
-pub use self::fiber::*;
-pub use self::hash::*;
-pub use self::io::IoInner;
-pub use self::ivar_table::*;
-pub use self::method::MethodInner;
-pub use self::module::*;
-pub use self::regexp::RegexpInner;
-pub use self::string::StringInner;
+pub use array::*;
+pub use complex::ComplexInner;
+pub(crate) use complex::Real;
+pub use enumerator::*;
+pub use fiber::*;
+pub use hash::*;
+pub use io::IoInner;
+pub use ivar_table::*;
+pub use method::MethodInner;
+pub use module::*;
+pub use regexp::RegexpInner;
+pub use string::StringInner;
 
 mod array;
+mod complex;
 mod enumerator;
 mod fiber;
 mod hash;
@@ -37,6 +40,203 @@ pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_
 
 pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
 pub const PROCINNER_FUNCID: i64 = std::mem::offset_of!(ProcInner, func_id) as _;
+
+#[repr(C)]
+pub union ObjKind {
+    invalid: (),
+    class: ManuallyDrop<ModuleInner>,
+    object: [Option<Value>; OBJECT_INLINE_IVAR],
+    bignum: ManuallyDrop<BigInt>,
+    float: f64,
+    complex: ManuallyDrop<ComplexInner>,
+    string: ManuallyDrop<StringInner>,
+    time: ManuallyDrop<TimeInner>,
+    array: ManuallyDrop<ArrayInner>,
+    range: ManuallyDrop<RangeInner>,
+    exception: ManuallyDrop<Box<ExceptionInner>>,
+    proc: ManuallyDrop<ProcInner>,
+    hash: ManuallyDrop<HashInner>,
+    regexp: ManuallyDrop<RegexpInner>,
+    io: ManuallyDrop<IoInner>,
+    method: ManuallyDrop<MethodInner>,
+    fiber: ManuallyDrop<FiberInner>,
+    enumerator: ManuallyDrop<EnumeratorInner>,
+    generator: ManuallyDrop<GeneratorInner>,
+}
+
+#[allow(dead_code)]
+impl ObjKind {
+    pub const INVALID: u8 = 0;
+    pub const CLASS: u8 = 1;
+    pub const MODULE: u8 = 2;
+    pub const OBJECT: u8 = 3;
+    pub const BIGNUM: u8 = 4;
+    pub const FLOAT: u8 = 5;
+    pub const BYTES: u8 = 6;
+    pub const TIME: u8 = 7;
+    pub const ARRAY: u8 = 8;
+    pub const RANGE: u8 = 9;
+    pub const EXCEPTION: u8 = 10;
+    pub const PROC: u8 = 11;
+    pub const HASH: u8 = 12;
+    pub const REGEXP: u8 = 13;
+    pub const IO: u8 = 14;
+    pub const METHOD: u8 = 15;
+    pub const FIBER: u8 = 16;
+    pub const ENUMERATOR: u8 = 17;
+    pub const GENERATOR: u8 = 18;
+    pub const COMPLEX: u8 = 19;
+}
+
+impl ObjKind {
+    fn invalid() -> Self {
+        Self { invalid: () }
+    }
+
+    fn class(class: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
+        Self {
+            class: ManuallyDrop::new(ModuleInner::new(class, superclass, class_type)),
+        }
+    }
+
+    fn object() -> Self {
+        Self {
+            object: [None; OBJECT_INLINE_IVAR],
+        }
+    }
+
+    fn bignum(b: BigInt) -> Self {
+        Self {
+            bignum: ManuallyDrop::new(b),
+        }
+    }
+
+    fn float(float: f64) -> Self {
+        Self { float }
+    }
+
+    fn complex(re: Value, im: Value) -> Self {
+        Self {
+            complex: ManuallyDrop::new(ComplexInner::new(re, im)),
+        }
+    }
+
+    fn bytes(s: StringInner) -> Self {
+        Self {
+            string: ManuallyDrop::new(s),
+        }
+    }
+
+    fn bytes_from_slice(slice: &[u8]) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner::from_slice(slice)),
+        }
+    }
+
+    fn bytes_from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner::from_vec(vec)),
+        }
+    }
+
+    fn array(ary: ArrayInner) -> Self {
+        Self {
+            array: ManuallyDrop::new(ary),
+        }
+    }
+
+    fn range(start: Value, end: Value, exclude_end: bool) -> Self {
+        Self {
+            range: ManuallyDrop::new(RangeInner {
+                start,
+                end,
+                exclude_end: u32::from(exclude_end),
+            }),
+        }
+    }
+
+    fn exception(kind: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
+        Self {
+            exception: ManuallyDrop::new(Box::new(ExceptionInner {
+                class_name: kind,
+                msg,
+                trace,
+            })),
+        }
+    }
+
+    fn exception_from(mut err: MonorubyErr, globals: &Globals) -> Self {
+        let kind = IdentId::get_id(err.get_class_name());
+        let msg = err.show(globals);
+        Self {
+            exception: ManuallyDrop::new(Box::new(ExceptionInner {
+                class_name: kind,
+                msg,
+                trace: err.take_trace(),
+            })),
+        }
+    }
+
+    fn hash(map: IndexMap<HashKey, Value>) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashInner::new(map)),
+        }
+    }
+
+    fn hash_from_inner(inner: HashInner) -> Self {
+        Self {
+            hash: ManuallyDrop::new(inner),
+        }
+    }
+
+    fn regexp(regexp: RegexpInner) -> Self {
+        Self {
+            regexp: ManuallyDrop::new(regexp),
+        }
+    }
+
+    fn io(io: IoInner) -> Self {
+        Self {
+            io: ManuallyDrop::new(io),
+        }
+    }
+
+    fn time(info: TimeInner) -> Self {
+        Self {
+            time: ManuallyDrop::new(info),
+        }
+    }
+
+    fn proc(block_data: ProcInner) -> Self {
+        Self {
+            proc: ManuallyDrop::new(block_data),
+        }
+    }
+
+    fn method(receiver: Value, func_id: FuncId) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner::new(receiver, func_id)),
+        }
+    }
+
+    fn fiber(proc: Proc) -> Self {
+        Self {
+            fiber: ManuallyDrop::new(FiberInner::new(proc)),
+        }
+    }
+
+    fn enumerator(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
+        Self {
+            enumerator: ManuallyDrop::new(EnumeratorInner::new(obj, method, proc, args)),
+        }
+    }
+
+    fn generator(proc: Proc) -> Self {
+        Self {
+            generator: ManuallyDrop::new(GeneratorInner::new(proc)),
+        }
+    }
+}
 
 /// Heap-allocated objects.
 #[repr(C)]
@@ -64,7 +264,7 @@ impl std::fmt::Debug for RValue {
                 self.id(),
                 meta.class,
                 unsafe {
-                    match meta.ty {
+                    match meta.ty as u16 {
                         0 => "<INVALID>".to_string(),
                         1 => format!("CLASS({:?})", self.kind.class),
                         2 => format!("MODULE({:?})", self.kind.class),
@@ -75,7 +275,7 @@ impl std::fmt::Debug for RValue {
                         7 => format!("TIME({:?})", self.kind.time),
                         8 => format!("ARRAY({:?})", self.kind.array),
                         9 => format!("RANGE({:?})", self.kind.range),
-                        //10 => format!("SPLAT({:?})", self.kind.array),
+                        10 => format!("EXCEPTION({:?})", self.kind.exception),
                         11 => format!("PROC({:?})", self.kind.proc),
                         12 => format!("HASH({:?})", self.kind.hash),
                         13 => format!("REGEXP({:?})", self.kind.regexp),
@@ -83,6 +283,8 @@ impl std::fmt::Debug for RValue {
                         15 => format!("METHOD({:?})", self.kind.method),
                         16 => format!("FIBER({:?})", self.kind.fiber),
                         17 => format!("ENUMERATOR({:?})", self.kind.enumerator),
+                        18 => format!("GENERATOR({:?})", self.kind.generator),
+                        19 => format!("COMPLEX({:?})", self.kind.complex),
                         _ => unreachable!(),
                     }
                 },
@@ -107,7 +309,7 @@ impl std::hash::Hash for RValue {
             ObjKind::ARRAY => self.as_array().hash(state),
             ObjKind::RANGE => self.as_range().hash(state),
             ObjKind::HASH => self.as_hash().hash(state),
-            //ObjKind::METHOD => lhs.method().hash(state),
+            ObjKind::COMPLEX => self.as_complex().hash(state),
             _ => self.hash(state),
         }
     }
@@ -120,9 +322,7 @@ impl RValue {
             (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
             (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
             (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
-            //(ObjKind::COMPLEX, ObjKind::COMPLEX) => {
-            //    self.complex().r.eql(&other.complex().r) && self.complex().i.eql(&other.complex().i)
-            //}
+            (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(&other.as_complex()),
             (ObjKind::BYTES, ObjKind::BYTES) => self.as_bytes() == other.as_bytes(),
             (ObjKind::ARRAY, ObjKind::ARRAY) => {
                 let lhs = self.as_array();
@@ -186,6 +386,10 @@ impl alloc::GC<RValue> for RValue {
                 }
                 ObjKind::BIGNUM => {}
                 ObjKind::FLOAT => {}
+                ObjKind::COMPLEX => {
+                    self.as_complex().re().mark(alloc);
+                    self.as_complex().im().mark(alloc);
+                }
                 ObjKind::BYTES => {}
                 ObjKind::TIME => {}
                 ObjKind::ARRAY => {
@@ -231,7 +435,6 @@ impl alloc::GCBox for RValue {
             match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::MODULE | ObjKind::CLASS => ManuallyDrop::drop(&mut self.kind.class),
-                ObjKind::OBJECT => {}
                 ObjKind::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
                 ObjKind::BYTES => ManuallyDrop::drop(&mut self.kind.string),
                 ObjKind::TIME => ManuallyDrop::drop(&mut self.kind.time),
@@ -351,6 +554,10 @@ impl RValue {
                 ObjKind::FLOAT => ObjKind {
                     float: self.as_float(),
                 },
+                ObjKind::COMPLEX => ObjKind::complex(
+                    self.as_complex().re().deep_copy(),
+                    self.as_complex().im().deep_copy(),
+                ),
                 ObjKind::BYTES => ObjKind::bytes_from_slice(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                 ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
@@ -399,6 +606,9 @@ impl RValue {
                     },
                     ObjKind::FLOAT => ObjKind {
                         float: self.kind.float,
+                    },
+                    ObjKind::COMPLEX => ObjKind {
+                        complex: ManuallyDrop::new(self.kind.complex.dup()),
                     },
                     ObjKind::BYTES => ObjKind {
                         string: self.kind.string.clone(),
@@ -457,6 +667,14 @@ impl RValue {
         RValue {
             header: Header::new(FLOAT_CLASS, ObjKind::FLOAT),
             kind: ObjKind::float(f),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_complex(re: Value, im: Value) -> Self {
+        RValue {
+            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            kind: ObjKind::complex(re, im),
             var_table: None,
         }
     }
@@ -713,6 +931,7 @@ impl RValue {
         match (lhs.ty(), rhs.ty()) {
             (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
             (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
+            (ObjKind::COMPLEX, ObjKind::COMPLEX) => lhs.as_complex() == rhs.as_complex(),
             (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
             (ObjKind::ARRAY, ObjKind::ARRAY) => {
                 let lhs = lhs.as_array();
@@ -767,6 +986,10 @@ impl RValue {
         unsafe { &self.kind.bignum }
     }
 
+    pub(crate) fn as_complex(&self) -> &ComplexInner {
+        unsafe { &self.kind.complex }
+    }
+
     pub(super) fn as_bytes(&self) -> &StringInner {
         unsafe { &self.kind.string }
     }
@@ -811,8 +1034,12 @@ impl RValue {
         unsafe { &self.kind.regexp }
     }
 
-    pub fn as_io(&self) -> &IoInner {
+    pub(crate) fn as_io(&self) -> &IoInner {
         unsafe { &self.kind.io }
+    }
+
+    pub(super) fn as_io_mut(&mut self) -> &mut IoInner {
+        unsafe { &mut self.kind.io }
     }
 
     pub(super) fn as_proc(&self) -> &ProcInner {
@@ -915,51 +1142,6 @@ impl Header {
     }
 }
 
-#[repr(C)]
-pub union ObjKind {
-    invalid: (),
-    class: ManuallyDrop<ModuleInner>,
-    object: [Option<Value>; OBJECT_INLINE_IVAR],
-    bignum: ManuallyDrop<BigInt>,
-    float: f64,
-    string: ManuallyDrop<StringInner>,
-    time: ManuallyDrop<TimeInner>,
-    array: ManuallyDrop<ArrayInner>,
-    range: ManuallyDrop<RangeInner>,
-    exception: ManuallyDrop<Box<ExceptionInner>>,
-    proc: ManuallyDrop<ProcInner>,
-    hash: ManuallyDrop<HashInner>,
-    regexp: ManuallyDrop<RegexpInner>,
-    io: ManuallyDrop<IoInner>,
-    method: ManuallyDrop<MethodInner>,
-    fiber: ManuallyDrop<FiberInner>,
-    enumerator: ManuallyDrop<EnumeratorInner>,
-    generator: ManuallyDrop<GeneratorInner>,
-}
-
-#[allow(dead_code)]
-impl ObjKind {
-    pub const INVALID: u8 = 0;
-    pub const CLASS: u8 = 1;
-    pub const MODULE: u8 = 2;
-    pub const OBJECT: u8 = 3;
-    pub const BIGNUM: u8 = 4;
-    pub const FLOAT: u8 = 5;
-    pub const BYTES: u8 = 6;
-    pub const TIME: u8 = 7;
-    pub const ARRAY: u8 = 8;
-    pub const RANGE: u8 = 9;
-    pub const EXCEPTION: u8 = 10;
-    pub const PROC: u8 = 11;
-    pub const HASH: u8 = 12;
-    pub const REGEXP: u8 = 13;
-    pub const IO: u8 = 14;
-    pub const METHOD: u8 = 15;
-    pub const FIBER: u8 = 16;
-    pub const ENUMERATOR: u8 = 17;
-    pub const GENERATOR: u8 = 18;
-}
-
 #[derive(Debug, Clone)]
 pub struct ExceptionInner {
     class_name: IdentId,
@@ -1005,150 +1187,6 @@ impl RangeInner {
 
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
-    }
-}
-
-impl ObjKind {
-    fn invalid() -> Self {
-        Self { invalid: () }
-    }
-
-    fn class(class: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
-        Self {
-            class: ManuallyDrop::new(ModuleInner::new(class, superclass, class_type)),
-        }
-    }
-
-    fn object() -> Self {
-        Self {
-            object: [None; OBJECT_INLINE_IVAR],
-        }
-    }
-
-    fn bignum(b: BigInt) -> Self {
-        Self {
-            bignum: ManuallyDrop::new(b),
-        }
-    }
-
-    fn float(float: f64) -> Self {
-        Self { float }
-    }
-
-    fn bytes(s: StringInner) -> Self {
-        Self {
-            string: ManuallyDrop::new(s),
-        }
-    }
-
-    fn bytes_from_slice(slice: &[u8]) -> Self {
-        Self {
-            string: ManuallyDrop::new(StringInner::from_slice(slice)),
-        }
-    }
-
-    fn bytes_from_vec(vec: Vec<u8>) -> Self {
-        Self {
-            string: ManuallyDrop::new(StringInner::from_vec(vec)),
-        }
-    }
-
-    fn array(ary: ArrayInner) -> Self {
-        Self {
-            array: ManuallyDrop::new(ary),
-        }
-    }
-
-    fn range(start: Value, end: Value, exclude_end: bool) -> Self {
-        Self {
-            range: ManuallyDrop::new(RangeInner {
-                start,
-                end,
-                exclude_end: u32::from(exclude_end),
-            }),
-        }
-    }
-
-    fn exception(kind: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
-        Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                class_name: kind,
-                msg,
-                trace,
-            })),
-        }
-    }
-
-    fn exception_from(mut err: MonorubyErr, globals: &Globals) -> Self {
-        let kind = IdentId::get_id(err.get_class_name());
-        let msg = err.show(globals);
-        Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                class_name: kind,
-                msg,
-                trace: err.take_trace(),
-            })),
-        }
-    }
-
-    fn hash(map: IndexMap<HashKey, Value>) -> Self {
-        Self {
-            hash: ManuallyDrop::new(HashInner::new(map)),
-        }
-    }
-
-    fn hash_from_inner(inner: HashInner) -> Self {
-        Self {
-            hash: ManuallyDrop::new(inner),
-        }
-    }
-
-    fn regexp(regexp: RegexpInner) -> Self {
-        Self {
-            regexp: ManuallyDrop::new(regexp),
-        }
-    }
-
-    fn io(io: IoInner) -> Self {
-        Self {
-            io: ManuallyDrop::new(io),
-        }
-    }
-
-    fn time(info: TimeInner) -> Self {
-        Self {
-            time: ManuallyDrop::new(info),
-        }
-    }
-
-    fn proc(block_data: ProcInner) -> Self {
-        Self {
-            proc: ManuallyDrop::new(block_data),
-        }
-    }
-
-    fn method(receiver: Value, func_id: FuncId) -> Self {
-        Self {
-            method: ManuallyDrop::new(MethodInner::new(receiver, func_id)),
-        }
-    }
-
-    fn fiber(proc: Proc) -> Self {
-        Self {
-            fiber: ManuallyDrop::new(FiberInner::new(proc)),
-        }
-    }
-
-    fn enumerator(obj: Value, method: IdentId, proc: Proc, args: Vec<Value>) -> Self {
-        Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new(obj, method, proc, args)),
-        }
-    }
-
-    fn generator(proc: Proc) -> Self {
-        Self {
-            generator: ManuallyDrop::new(GeneratorInner::new(proc)),
-        }
     }
 }
 

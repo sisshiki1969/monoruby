@@ -29,6 +29,7 @@ pub const METHOD_CLASS: ClassId = ClassId::new(20);
 pub const FIBER_CLASS: ClassId = ClassId::new(21);
 pub const ENUMERATOR_CLASS: ClassId = ClassId::new(22);
 pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
+pub const COMPLEX_CLASS: ClassId = ClassId::new(24);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -60,6 +61,7 @@ impl std::fmt::Debug for ClassId {
             21 => write!(f, "FIBER"),
             22 => write!(f, "ENUMERATOR"),
             23 => write!(f, "GENERATOR"),
+            24 => write!(f, "COMPLEX"),
             n => write!(f, "ClassId({n})"),
         }
     }

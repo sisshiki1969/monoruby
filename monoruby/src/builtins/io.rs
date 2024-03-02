@@ -7,6 +7,8 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS);
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
+    globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
+    globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
 
@@ -22,6 +24,35 @@ pub(super) fn init(globals: &mut Globals) {
     let stderr = Value::new_io_stderr();
     globals.set_constant_by_str(OBJECT_CLASS, "STDERR", stderr);
     globals.set_gvar(IdentId::get_id("$stderr"), stderr);
+}
+
+///
+/// ### IO#<<
+///
+/// - self << object -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/=3c=3c.html]
+#[monoruby_builtin]
+fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if let Some(b) = lfp.arg(0).try_bytes() {
+        lfp.self_val().as_io_mut().write(b.as_bytes())?;
+    } else {
+        let s = vm.to_s(globals, lfp.arg(0))?;
+        lfp.self_val().as_io_mut().write(s.as_bytes())?;
+    };
+    Ok(lfp.self_val())
+}
+
+///
+/// ### IO#isatty
+///
+/// - isatty -> bool
+/// - tty? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/isatty.html]
+#[monoruby_builtin]
+fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_io_mut().isatty()))
 }
 
 #[monoruby_builtin]
@@ -42,9 +73,15 @@ mod test {
     fn test() {
         run_test_no_result_check(
             r#"
+            $stdout << "a"
             $stdin.sync
             $stdin.sync = true
         "#,
         );
+        run_test(
+            r#"
+            [$stdin.isatty, $stdout.isatty, $stderr.isatty]
+        "#,
+        )
     }
 }

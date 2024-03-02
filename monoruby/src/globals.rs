@@ -550,6 +550,11 @@ impl Globals {
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(val),
                 ObjKind::GENERATOR => self.object_tos(val),
+                ObjKind::COMPLEX => {
+                    let re = rvalue.as_complex().re();
+                    let im = rvalue.as_complex().im();
+                    format!("{}+{}i", self.to_s(re), self.to_s(im))
+                }
                 _ => format!("{:016x}", val.id()),
             },
         }
@@ -587,6 +592,11 @@ impl Globals {
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(val),
                 ObjKind::GENERATOR => self.object_tos(val),
+                ObjKind::COMPLEX => {
+                    let re = rvalue.as_complex().re();
+                    let im = rvalue.as_complex().im();
+                    format!("({}+{}i)", self.to_s(re), self.to_s(im))
+                }
                 _ => format!("{:016x}", val.id()),
             },
         }
@@ -618,6 +628,11 @@ impl Globals {
                     return format!("#<{class_name}: {msg}>");
                 }
                 ObjKind::GENERATOR => return self.object_tos(val),
+                ObjKind::COMPLEX => {
+                    let re = rvalue.as_complex().re();
+                    let im = rvalue.as_complex().im();
+                    return format!("({}+{}i)", self.to_s(re), self.to_s(im));
+                }
                 _ => {}
             },
         }
