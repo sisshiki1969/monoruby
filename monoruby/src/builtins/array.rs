@@ -1214,11 +1214,14 @@ fn uniq_inner(
 ) -> Result<bool> {
     let mut h = HashSet::default();
     let data = vm.get_block_data(globals, bh)?;
-    ary.retain(|x| {
+    vm.temp_array_new(Some(ary.len()));
+    let res = ary.retain(|x| {
         let res = vm.invoke_block(globals, &data, &[*x])?;
-        vm.temp_push(res);
+        vm.temp_array_push(res);
         Ok(h.insert(HashKey(res)))
-    })
+    });
+    vm.temp_pop();
+    res
 }
 
 ///
