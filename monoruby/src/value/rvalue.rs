@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 
 pub use array::*;
 pub use complex::ComplexInner;
-pub(crate) use complex::Real;
+pub use complex::Real;
 pub use enumerator::*;
 pub use fiber::*;
 pub use hash::*;
@@ -115,9 +115,15 @@ impl ObjKind {
         Self { float }
     }
 
-    fn complex(re: Value, im: Value) -> Self {
+    fn complex(re: complex::Real, im: complex::Real) -> Self {
         Self {
             complex: ManuallyDrop::new(ComplexInner::new(re, im)),
+        }
+    }
+
+    fn complex_from(complex: num::complex::Complex<Real>) -> Self {
+        Self {
+            complex: ManuallyDrop::new(ComplexInner::from(complex)),
         }
     }
 
@@ -338,7 +344,7 @@ impl RValue {
                 ObjKind::COMPLEX => {
                     let re = self.as_complex().re();
                     let im = self.as_complex().im();
-                    format!("{}+{}i", globals.to_s(re), globals.to_s(im))
+                    format!("{}+{}i", globals.to_s(re.get()), globals.to_s(im.get()))
                 }
                 _ => format!("{:016x}", self.id()),
             }
@@ -358,7 +364,7 @@ impl RValue {
                 ObjKind::COMPLEX => {
                     let re = self.as_complex().re();
                     let im = self.as_complex().im();
-                    format!("({}+{}i)", globals.to_s(re), globals.to_s(im))
+                    format!("({}+{}i)", globals.to_s(re.get()), globals.to_s(im.get()))
                 }
                 _ => self.to_s(globals),
             }
@@ -574,8 +580,8 @@ impl alloc::GC<RValue> for RValue {
                 ObjKind::BIGNUM => {}
                 ObjKind::FLOAT => {}
                 ObjKind::COMPLEX => {
-                    self.as_complex().re().mark(alloc);
-                    self.as_complex().im().mark(alloc);
+                    self.as_complex().re().get().mark(alloc);
+                    self.as_complex().im().get().mark(alloc);
                 }
                 ObjKind::BYTES => {}
                 ObjKind::TIME => {}
@@ -885,10 +891,18 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_complex(re: Value, im: Value) -> Self {
+    pub(super) fn new_complex(re: complex::Real, im: complex::Real) -> Self {
         RValue {
             header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
             kind: ObjKind::complex(re, im),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_complex_from(complex: num::Complex<Real>) -> Self {
+        RValue {
+            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            kind: ObjKind::complex_from(complex),
             var_table: None,
         }
     }
@@ -1135,6 +1149,7 @@ impl RValue {
                 ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
                 ObjKind::FLOAT => RV::Float(self.as_float()),
                 ObjKind::BYTES => RV::String(self.as_bytes()),
+                ObjKind::COMPLEX => RV::Complex(self.as_complex()),
                 _ => RV::Object(self),
             }
         }
@@ -1148,7 +1163,10 @@ impl RValue {
             match (lhs.ty(), rhs.ty()) {
                 (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
                 (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
-                (ObjKind::COMPLEX, ObjKind::COMPLEX) => lhs.as_complex() == rhs.as_complex(),
+                (ObjKind::COMPLEX, ObjKind::COMPLEX) => {
+                    lhs.as_complex().re() == rhs.as_complex().re()
+                        && lhs.as_complex().im() == rhs.as_complex().im()
+                }
                 (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
                 (ObjKind::ARRAY, ObjKind::ARRAY) => {
                     let lhs = lhs.as_array();
@@ -1204,9 +1222,13 @@ impl RValue {
         &self.kind.bignum
     }
 
-    pub(crate) unsafe fn as_complex(&self) -> &ComplexInner {
+    pub(super) unsafe fn as_complex(&self) -> &ComplexInner {
         &self.kind.complex
     }
+
+    /*pub(super) unsafe fn as_complex_mut(&mut self) -> &mut ComplexInner {
+        &mut self.kind.complex
+    }*/
 
     pub(super) fn as_bytes(&self) -> &StringInner {
         unsafe { &self.kind.string }

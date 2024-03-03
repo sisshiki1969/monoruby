@@ -530,8 +530,14 @@ impl Globals {
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Complex { re, im } => {
-                format!("{}+{}i", self.to_s(re), self.to_s(im))
+            RV::Complex(c) => {
+                let im = c.im;
+                format!(
+                    "{}{}{}i",
+                    self.to_s(c.re.get()),
+                    if im.is_positive() { "+" } else { "" },
+                    self.to_s(im.get())
+                )
             }
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => match String::from_utf8(s.to_vec()) {

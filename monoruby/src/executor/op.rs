@@ -30,9 +30,17 @@ macro_rules! binop_values {
                     }
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
                     (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
+                    (RV::Fixnum(lhs), RV::Complex(rhs)) => {
+                        let lhs = ComplexInner::from(Real::from_i64(lhs));
+                        Value::complex_from(lhs.$op(rhs.get().clone()))
+                    }
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
+                    (RV::BigInt(lhs), RV::Complex(rhs)) => {
+                        let lhs = ComplexInner::from(Real::from_bigint(lhs.clone()));
+                        Value::complex_from(lhs.$op(rhs.get().clone()))
+                    }
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
                         let err = MonorubyErr::cant_coerced_into_integer($op_str, rhs);
                         vm.set_error(err);
@@ -42,10 +50,17 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
+                    (RV::Float(lhs), RV::Complex(rhs)) => {
+                        let lhs = ComplexInner::from(Real::from_float(lhs));
+                        Value::complex_from(lhs.$op(rhs.get().clone()))
+                    }
                     (RV::Float(_), _) => {
                         let err = MonorubyErr::cant_coerced_into_float($op_str, rhs);
                         vm.set_error(err);
                         return None;
+                    }
+                    (RV::Complex(lhs), RV::Complex(rhs)) => {
+                        Value::complex_from(lhs.$op(rhs.get().clone()))
                     }
                     _ => {
                         return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);

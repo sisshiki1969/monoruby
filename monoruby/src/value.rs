@@ -239,8 +239,14 @@ impl Value {
         RValue::new_float(num).pack()
     }
 
-    pub fn complex(re: Value, im: Value) -> Self {
+    pub fn complex(re: impl Into<Real>, im: impl Into<Real>) -> Self {
+        let re = re.into();
+        let im = im.into();
         RValue::new_complex(re, im).pack()
+    }
+
+    pub fn complex_from(complex: num::complex::Complex<Real>) -> Self {
+        RValue::new_complex_from(complex).pack()
     }
 
     pub fn bigint(bigint: BigInt) -> Self {
@@ -574,6 +580,16 @@ impl Value {
         }
         None
     }
+
+    /*fn as_complex(&self) -> &ComplexInner {
+        assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
+        unsafe { self.rvalue().as_complex() }
+    }
+
+    fn as_complex_mut(&mut self) -> &mut ComplexInner {
+        assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
+        unsafe { self.rvalue_mut().as_complex_mut() }
+    }*/
 
     fn is_symbol(&self) -> bool {
         self.id() & 0xff == TAG_SYMBOL
@@ -967,9 +983,9 @@ impl Value {
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
             NodeKind::Float(num) => Value::float(*num),
             NodeKind::Imaginary(r) => match r {
-                NReal::Float(f) => Value::complex(Value::integer(0), Value::float(*f)),
-                NReal::Integer(i) => Value::complex(Value::integer(0), Value::integer(*i)),
-                NReal::Bignum(b) => Value::complex(Value::integer(0), Value::bigint(b.clone())),
+                NReal::Float(f) => Value::complex(0, Real::from_float(*f)),
+                NReal::Integer(i) => Value::complex(0, *i),
+                NReal::Bignum(b) => Value::complex(0, Real::from_bigint(b.clone())),
             },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
@@ -1027,7 +1043,15 @@ impl Value {
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast(lhs, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
-                    Value::complex(lhs, Real::from(im.clone()).into())
+                    Value::complex(Real::try_from(lhs).unwrap(), im.clone())
+                } else {
+                    unreachable!()
+                }
+            }
+            NodeKind::BinOp(ruruby_parse::BinOp::Sub, box lhs, box rhs) => {
+                let lhs = Self::from_ast(lhs, globals);
+                if let NodeKind::Imaginary(im) = &rhs.kind {
+                    Value::complex(Real::try_from(lhs).unwrap(), -Real::from(im.clone()))
                 } else {
                     unreachable!()
                 }
@@ -1080,7 +1104,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    Complex { re: Value, im: Value },
+    Complex(&'a ComplexInner),
     String(&'a [u8]),
     Object(&'a RValue),
 }
@@ -1094,7 +1118,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
-            RV::Complex { re, im } => write!(f, "Complex({re:?}, {im:?})"),
+            RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{s}\""),

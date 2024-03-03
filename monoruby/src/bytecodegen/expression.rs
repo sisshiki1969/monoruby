@@ -109,7 +109,7 @@ impl BytecodeGen {
                 UnOp::Pos => {
                     match rhs.kind {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
-                        NodeKind::Imaginary(r) => self.emit_imaginary(dst, Real::from(r)),
+                        NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
                         _ => self.emit_pos(dst, rhs, loc)?,
                     };
