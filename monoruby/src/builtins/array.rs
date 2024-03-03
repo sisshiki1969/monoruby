@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
+    globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
@@ -181,6 +182,45 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.self_val().as_array().len();
     Ok(Value::integer(len as i64))
+}
+
+///
+/// ### Array#count
+///
+/// - count -> Integer
+/// - count(item) -> Integer
+/// - count {|item| ... } -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/count.html]
+#[monoruby_builtin]
+fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if let Some(arg0) = lfp.try_arg(0) {
+        if lfp.block().is_some() {
+            eprintln!("warning: given block not used");
+        }
+        let mut count = 0;
+        for elem in lfp.self_val().as_array().iter() {
+            if vm
+                .invoke_method_inner(globals, IdentId::_EQ, arg0, &[*elem], None)?
+                .as_bool()
+            {
+                count += 1;
+            }
+        }
+        Ok(Value::integer(count))
+    } else if let Some(bh) = lfp.block() {
+        let mut count = 0;
+        let bh = vm.get_block_data(globals, bh)?;
+        for elem in lfp.self_val().as_array().iter() {
+            if vm.invoke_block(globals, &bh, &[*elem])?.as_bool() {
+                count += 1;
+            }
+        }
+        Ok(Value::integer(count))
+    } else {
+        let len = lfp.self_val().as_array().len();
+        Ok(Value::integer(len as i64))
+    }
 }
 
 ///
@@ -1339,6 +1379,14 @@ mod test {
         end
         "##,
         );
+    }
+
+    #[test]
+    fn count() {
+        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count"##);
+        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count(2)"##);
+        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count{|x| x % 2 == 0 }"##);
+        run_test(r##"ary = [1, 2, 4, 5]; ary.count(&:even?)"##);
     }
 
     #[test]

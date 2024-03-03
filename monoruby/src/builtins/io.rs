@@ -74,6 +74,7 @@ mod test {
         run_test_no_result_check(
             r#"
             $stdout << "a"
+            $stdout << 5
             $stdin.sync
             $stdin.sync = true
         "#,

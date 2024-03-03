@@ -530,6 +530,9 @@ impl Globals {
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Complex { re, im } => {
+                format!("{}+{}i", self.to_s(re), self.to_s(im))
+            }
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => s,
@@ -568,6 +571,9 @@ impl Globals {
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Complex { re, im } => {
+                format!("{}+{}i", self.to_s(re), self.to_s(im))
+            }
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => format!("{:?}", s),
@@ -611,7 +617,6 @@ impl Globals {
 
     pub fn inspect(&self, val: Value) -> String {
         match val.unpack() {
-            RV::None | RV::Bool(_) | RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {}
             RV::Nil => return "nil".to_string(),
             RV::Symbol(id) => return format!(":{id}"),
             RV::String(s) => {
@@ -635,6 +640,7 @@ impl Globals {
                 }
                 _ => {}
             },
+            _ => {}
         }
         self.to_s(val)
     }

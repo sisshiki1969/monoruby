@@ -2,6 +2,7 @@ use super::*;
 
 mod array;
 mod class;
+mod complex;
 pub(crate) mod enumerator;
 mod exception;
 mod fiber;
@@ -46,6 +47,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     exception::init(globals);
     integer::init(globals);
     float::init(globals);
+    complex::init(globals);
     string::init(globals);
     array::init(globals);
     hash::init(globals);
