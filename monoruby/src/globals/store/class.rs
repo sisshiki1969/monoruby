@@ -204,6 +204,10 @@ impl ClassInfo {
         self.ivar_names.get(&name).cloned()
     }
 
+    pub(crate) fn ivar_names(&self) -> impl Iterator<Item = (&IdentId, &IvarId)> {
+        self.ivar_names.iter()
+    }
+
     pub(crate) fn set_name(&mut self, name: &str) {
         self.name = Some(IdentId::get_id(name));
     }
@@ -391,11 +395,6 @@ impl Globals {
             assert_eq!(singleton.id(), obj.class());
         }
         singleton
-    }
-
-    pub(crate) fn include_module(&mut self, mut class: Module, module: Module) {
-        let module = module.make_iclass(class.superclass());
-        class.change_superclass(module);
     }
 
     pub(crate) fn get_error_class(&self, err: &MonorubyErr) -> ClassId {

@@ -569,7 +569,7 @@ impl Value {
             return Some(f);
         } else if let Some(rv) = self.try_rvalue() {
             if rv.ty() == ObjKind::FLOAT {
-                return Some(rv.as_float());
+                return Some(unsafe { rv.as_float() });
             }
         }
         None
@@ -591,6 +591,16 @@ impl Value {
         }
     }
 
+    fn as_module(&self) -> &ModuleInner {
+        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        unsafe { self.rvalue().as_module() }
+    }
+
+    fn as_module_mut(&mut self) -> &mut ModuleInner {
+        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        unsafe { self.rvalue_mut().as_module_mut() }
+    }
+
     ///
     /// Get a reference of underlying array from `self`.
     /// If `self` is not an array, return None.
@@ -608,7 +618,7 @@ impl Value {
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::ARRAY => Some((*self).into()),
+            ObjKind::ARRAY => Some(Array::new(*self)),
             _ => None,
         }
     }
@@ -681,7 +691,7 @@ impl Value {
     pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::CLASS | ObjKind::MODULE => Some(rv.as_class_id()),
+            ObjKind::CLASS | ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }
@@ -689,7 +699,7 @@ impl Value {
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::CLASS => Some(rv.as_class_id()),
+            ObjKind::CLASS => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }
@@ -697,7 +707,7 @@ impl Value {
     pub(crate) fn is_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::MODULE => Some(rv.as_class_id()),
+            ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }

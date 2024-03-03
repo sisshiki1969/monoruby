@@ -215,7 +215,7 @@ impl Globals {
             .unwrap()
             .node;
 
-        let lib: Array = Value::from_ast2(&nodes).into();
+        let lib = Array::new(Value::from_ast2(&nodes));
         globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
 
         // load gem library path
@@ -224,7 +224,7 @@ impl Globals {
             .unwrap()
             .node;
 
-        let lib: Array = Value::from_ast2(&nodes).into();
+        let lib = Array::new(Value::from_ast2(&nodes));
         globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
 
         // set constants
@@ -538,73 +538,27 @@ impl Globals {
                 Ok(s) => s,
                 Err(_) => format!("{:?}", s),
             },
-            RV::Object(rvalue) => match rvalue.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
-                ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => rvalue.as_array().to_s(self),
-                ObjKind::OBJECT => self.object_tos(val),
-                ObjKind::RANGE => self.range_tos(val),
-                ObjKind::PROC => Self::proc_tos(val),
-                ObjKind::HASH => self.hash_tos(val),
-                ObjKind::REGEXP => Self::regexp_tos(val),
-                ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
-                ObjKind::METHOD => rvalue.as_method().to_s(self),
-                ObjKind::FIBER => self.fiber_tos(val),
-                ObjKind::ENUMERATOR => self.enumerator_tos(val),
-                ObjKind::GENERATOR => self.object_tos(val),
-                ObjKind::COMPLEX => {
-                    let re = rvalue.as_complex().re();
-                    let im = rvalue.as_complex().im();
-                    format!("{}+{}i", self.to_s(re), self.to_s(im))
-                }
-                _ => format!("{:016x}", val.id()),
-            },
+            RV::Object(rvalue) => rvalue.to_s(self),
         }
     }
 
-    pub(crate) fn inspect2(&self, val: Value) -> String {
+    pub fn inspect(&self, val: Value) -> String {
         match val.unpack() {
-            RV::None => "Undef".to_string(),
             RV::Nil => "nil".to_string(),
-            RV::Bool(b) => format!("{:?}", b),
-            RV::Fixnum(n) => format!("{}", n),
-            RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Complex { re, im } => {
-                format!("{}+{}i", self.to_s(re), self.to_s(im))
-            }
             RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => format!("{:?}", s),
                 Err(_) => format!("{:?}", s),
             },
-            RV::Object(rvalue) => match rvalue.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => self.get_class_name(rvalue.as_class_id()),
-                ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => rvalue.as_array().inspect2(self),
-                ObjKind::OBJECT => self.object_tos(val),
-                ObjKind::RANGE => self.range_tos(val),
-                ObjKind::PROC => Self::proc_tos(val),
-                ObjKind::HASH => self.hash_inspect2(val),
-                ObjKind::REGEXP => Self::regexp_tos(val),
-                ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => {
-                    let class_name = self.get_class_name(val.class());
-                    let msg = rvalue.as_exception().msg();
-                    format!("#<{class_name}: {msg}>")
-                }
-                ObjKind::METHOD => rvalue.as_method().to_s(self),
-                ObjKind::FIBER => self.fiber_tos(val),
-                ObjKind::ENUMERATOR => self.enumerator_tos(val),
-                ObjKind::GENERATOR => self.object_tos(val),
-                ObjKind::COMPLEX => {
-                    let re = rvalue.as_complex().re();
-                    let im = rvalue.as_complex().im();
-                    format!("({}+{}i)", self.to_s(re), self.to_s(im))
-                }
-                _ => format!("{:016x}", val.id()),
-            },
+            RV::Object(rvalue) => rvalue.inspect(self),
+            _ => self.to_s(val),
+        }
+    }
+
+    pub(crate) fn inspect2(&self, val: Value) -> String {
+        match val.unpack() {
+            RV::Object(rvalue) => rvalue.inspect2(self),
+            _ => self.inspect(val),
         }
     }
 
@@ -613,36 +567,6 @@ impl Globals {
             return s.to_vec();
         }
         self.to_s(val).into_bytes()
-    }
-
-    pub fn inspect(&self, val: Value) -> String {
-        match val.unpack() {
-            RV::Nil => return "nil".to_string(),
-            RV::Symbol(id) => return format!(":{id}"),
-            RV::String(s) => {
-                return match String::from_utf8(s.to_vec()) {
-                    Ok(s) => format!("{:?}", s),
-                    Err(_) => format!("{:?}", s),
-                }
-            }
-            RV::Object(rvalue) => match rvalue.ty() {
-                ObjKind::OBJECT => return self.object_inspect(val),
-                ObjKind::EXCEPTION => {
-                    let class_name = self.get_class_name(val.class());
-                    let msg = rvalue.as_exception().msg();
-                    return format!("#<{class_name}: {msg}>");
-                }
-                ObjKind::GENERATOR => return self.object_tos(val),
-                ObjKind::COMPLEX => {
-                    let re = rvalue.as_complex().re();
-                    let im = rvalue.as_complex().im();
-                    return format!("({}+{}i)", self.to_s(re), self.to_s(im));
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        self.to_s(val)
     }
 
     pub(crate) fn generate_range(
@@ -655,133 +579,6 @@ impl Globals {
             return Err(MonorubyErr::bad_range(start, end));
         }
         Ok(Value::range(start, end, exclude_end))
-    }
-
-    fn proc_tos(val: Value) -> String {
-        format!("#<Proc:0x{:016x}>", val.rvalue().id())
-    }
-
-    fn object_tos(&self, val: Value) -> String {
-        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.to_s(name)
-        } else {
-            format!(
-                "#<{}:0x{:016x}>",
-                self.get_class_name(val.real_class(self).id()),
-                val.rvalue().id()
-            )
-        }
-    }
-
-    fn object_inspect(&self, val: Value) -> String {
-        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.to_s(name)
-        } else {
-            let mut s = String::new();
-            for (id, v) in self.get_ivars(val).into_iter() {
-                s += &format!(" {id}={}", self.inspect(v));
-            }
-            format!(
-                "#<{}:0x{:016x}{s}>",
-                self.get_class_name(val.class()),
-                val.rvalue().id()
-            )
-        }
-    }
-
-    fn hash_tos(&self, val: Value) -> String {
-        let hash = val.as_hash();
-        match hash.len() {
-            0 => "{}".to_string(),
-            _ => {
-                let mut result = "".to_string();
-                let mut first = true;
-                for (k, v) in hash.iter() {
-                    let k_inspect = if k == val {
-                        "{...}".to_string()
-                    } else {
-                        self.inspect(k)
-                    };
-                    let v_inspect = if v == val {
-                        "{...}".to_string()
-                    } else {
-                        self.inspect(v)
-                    };
-                    result = if first {
-                        format!("{k_inspect}=>{v_inspect}")
-                    } else {
-                        format!("{result}, {k_inspect}=>{v_inspect}")
-                    };
-                    first = false;
-                }
-                format! {"{{{}}}", result}
-            }
-        }
-    }
-
-    fn hash_inspect2(&self, val: Value) -> String {
-        let hash = val.as_hash();
-        match hash.len() {
-            0 => "{}".to_string(),
-            _ => {
-                let mut result = "".to_string();
-                let mut first = true;
-                for (k, v) in hash.iter().take(3) {
-                    let k_inspect = if k == val {
-                        "{...}".to_string()
-                    } else {
-                        self.inspect2(k)
-                    };
-                    let v_inspect = if v == val {
-                        "{...}".to_string()
-                    } else {
-                        self.inspect2(v)
-                    };
-                    result = if first {
-                        format!("{k_inspect}=>{v_inspect}")
-                    } else {
-                        format!("{result}, {k_inspect}=>{v_inspect}")
-                    };
-                    first = false;
-                }
-                format! {"{{{} .. }}", result}
-            }
-        }
-    }
-
-    fn fiber_tos(&self, val: Value) -> String {
-        let fiber: Fiber = val.into();
-        let state = match fiber.state() {
-            FiberState::Created => "created",
-            FiberState::Terminated => "terminated",
-            FiberState::Suspended => "suspended",
-        };
-        let func_id = fiber.func_id();
-        format!(
-            "#<Fiber:0x{:016x} {} ({state})>",
-            val.id(),
-            self[func_id].as_ruby_func().get_location(),
-        )
-    }
-
-    fn enumerator_tos(&self, val: Value) -> String {
-        let e: Enumerator = val.into();
-        format!("#<Enumerator: {} {}>", self.to_s(e.obj), e.method)
-    }
-
-    fn regexp_tos(val: Value) -> String {
-        let regexp = val.is_regex().unwrap();
-        format!("/{}/", regexp.as_str())
-    }
-
-    fn range_tos(&self, val: Value) -> String {
-        let range = val.as_range();
-        format!(
-            "{}{}{}",
-            self.inspect(range.start),
-            if range.exclude_end() { "..." } else { ".." },
-            self.inspect(range.end),
-        )
     }
 }
 

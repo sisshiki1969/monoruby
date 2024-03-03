@@ -18,11 +18,11 @@ pub(crate) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let args = lfp.arg(0);
+    let args = Array::new(lfp.arg(0));
 
     let mut new_struct = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = new_struct.as_class_id();
-    let start_idx = if let Some(arg0) = args.as_array().get(0)
+    let start_idx = if let Some(arg0) = args.get(0)
         && let Some(s) = arg0.is_str()
     {
         if s.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -44,7 +44,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
 
-    let members = ArrayInner::from_iter(args.as_array().iter().skip(start_idx).cloned());
+    let members = ArrayInner::from_iter(args.iter().skip(start_idx).cloned());
 
     for arg in members.iter() {
         let name = arg.expect_symbol_or_string()?;
@@ -83,7 +83,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     let members_val = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap();
-    let members: Array = members_val.into();
+    let members = Array::new(members_val);
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
@@ -104,10 +104,11 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if let Some(name) = globals.store[class_id].get_name_id() {
         inspect += &format!("{name}");
     };
-    let name: Array = globals
-        .get_ivar(struct_class, IdentId::get_id("/members"))
-        .unwrap()
-        .into();
+    let name = Array::new(
+        globals
+            .get_ivar(struct_class, IdentId::get_id("/members"))
+            .unwrap(),
+    );
 
     if name.len() != 0 {
         for x in name.iter() {

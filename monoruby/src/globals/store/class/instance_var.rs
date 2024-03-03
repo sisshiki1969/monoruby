@@ -22,11 +22,9 @@ impl Globals {
     ///
     /// Get the value of a instance variable with *name* which belongs to *val*.
     ///
-    pub(crate) fn get_ivar(&self, mut val: Value, name: IdentId) -> Option<Value> {
-        let class_id = val.class();
-        let rval = val.try_rvalue_mut()?;
-        let id = self.store[class_id].ivar_names.get(&name)?;
-        rval.get_var(*id)
+    pub(crate) fn get_ivar(&self, val: Value, name: IdentId) -> Option<Value> {
+        let rval = val.try_rvalue()?;
+        rval.get_ivar(self, name)
     }
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
@@ -91,8 +89,8 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     if class_id == cache.class_id {
         return rval.get_var(cache.ivar_id).unwrap_or_default();
     }
-    let ivar_id = match globals.store[class_id].ivar_names.get(&name) {
-        Some(id) => *id,
+    let ivar_id = match globals.store[class_id].get_ivarid(name) {
+        Some(id) => id,
         None => return Value::nil(),
     };
     let new_cache = InstanceVarCache { class_id, ivar_id };

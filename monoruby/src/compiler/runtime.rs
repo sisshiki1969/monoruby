@@ -190,7 +190,7 @@ pub(super) extern "C" fn gen_array(
         if callsite.splat_pos.is_empty() {
             Some(Value::array_from_iter(iter))
         } else {
-            let mut ary = Array::new();
+            let mut ary = Array::new_empty();
             let to_a = IdentId::get_id("to_a");
             for (i, v) in iter.enumerate() {
                 if globals.store[callid].splat_pos.contains(&i) {

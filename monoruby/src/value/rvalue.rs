@@ -301,16 +301,201 @@ impl PartialEq for RValue {
 
 impl std::hash::Hash for RValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unsafe {
+            match self.ty() {
+                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+                ObjKind::BIGNUM => self.as_bignum().hash(state),
+                ObjKind::FLOAT => self.as_float().to_bits().hash(state),
+                ObjKind::BYTES => self.as_bytes().hash(state),
+                ObjKind::ARRAY => self.as_array().hash(state),
+                ObjKind::RANGE => self.as_range().hash(state),
+                ObjKind::HASH => self.as_hash().hash(state),
+                ObjKind::COMPLEX => self.as_complex().hash(state),
+                _ => self.hash(state),
+            }
+        }
+    }
+}
+
+impl RValue {
+    pub(crate) fn to_s(&self, globals: &Globals) -> String {
+        unsafe {
+            match self.ty() {
+                ObjKind::CLASS | ObjKind::MODULE => globals.get_class_name(self.as_class_id()),
+                ObjKind::TIME => self.as_time().to_string(),
+                ObjKind::ARRAY => self.as_array().to_s(globals),
+                ObjKind::OBJECT => self.object_tos(globals),
+                ObjKind::RANGE => self.range_tos(globals),
+                ObjKind::PROC => self.proc_tos(),
+                ObjKind::HASH => self.hash_tos(globals),
+                ObjKind::REGEXP => self.regexp_tos(),
+                ObjKind::IO => self.as_io().to_string(),
+                ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
+                ObjKind::METHOD => self.as_method().to_s(globals),
+                ObjKind::FIBER => self.fiber_tos(globals),
+                ObjKind::ENUMERATOR => self.enumerator_tos(globals),
+                ObjKind::GENERATOR => self.object_tos(globals),
+                ObjKind::COMPLEX => {
+                    let re = self.as_complex().re();
+                    let im = self.as_complex().im();
+                    format!("{}+{}i", globals.to_s(re), globals.to_s(im))
+                }
+                _ => format!("{:016x}", self.id()),
+            }
+        }
+    }
+
+    pub(crate) fn inspect(&self, globals: &Globals) -> String {
+        unsafe {
+            match self.ty() {
+                ObjKind::OBJECT => self.object_inspect(globals),
+                ObjKind::EXCEPTION => {
+                    let class_name = globals.get_class_name(self.class());
+                    let msg = self.as_exception().msg();
+                    format!("#<{class_name}: {msg}>")
+                }
+                ObjKind::GENERATOR => self.object_tos(globals),
+                ObjKind::COMPLEX => {
+                    let re = self.as_complex().re();
+                    let im = self.as_complex().im();
+                    format!("({}+{}i)", globals.to_s(re), globals.to_s(im))
+                }
+                _ => self.to_s(globals),
+            }
+        }
+    }
+
+    pub(crate) fn inspect2(&self, globals: &Globals) -> String {
         match self.ty() {
-            ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-            ObjKind::BIGNUM => self.as_bignum().hash(state),
-            ObjKind::FLOAT => self.as_float().to_bits().hash(state),
-            ObjKind::BYTES => self.as_bytes().hash(state),
-            ObjKind::ARRAY => self.as_array().hash(state),
-            ObjKind::RANGE => self.as_range().hash(state),
-            ObjKind::HASH => self.as_hash().hash(state),
-            ObjKind::COMPLEX => self.as_complex().hash(state),
-            _ => self.hash(state),
+            ObjKind::ARRAY => self.as_array().inspect2(globals),
+            ObjKind::HASH => self.hash_inspect2(globals),
+            _ => self.inspect(globals),
+        }
+    }
+
+    fn object_tos(&self, globals: &Globals) -> String {
+        if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
+            globals.to_s(name)
+        } else {
+            format!(
+                "#<{}:0x{:016x}>",
+                globals.get_class_name(self.real_class(globals).id()),
+                self.id()
+            )
+        }
+    }
+
+    fn object_inspect(&self, globals: &Globals) -> String {
+        if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
+            globals.to_s(name)
+        } else {
+            let mut s = String::new();
+            for (id, v) in self.get_ivars(globals).into_iter() {
+                s += &format!(" {id}={}", globals.inspect(v));
+            }
+            format!(
+                "#<{}:0x{:016x}{s}>",
+                globals.get_class_name(self.class()),
+                self.id()
+            )
+        }
+    }
+
+    fn fiber_tos(&self, globals: &Globals) -> String {
+        let fiber = unsafe { self.as_fiber() };
+        let state = match fiber.state() {
+            FiberState::Created => "created",
+            FiberState::Terminated => "terminated",
+            FiberState::Suspended => "suspended",
+        };
+        let func_id = fiber.func_id();
+        format!(
+            "#<Fiber:0x{:016x} {} ({state})>",
+            self.id(),
+            globals[func_id].as_ruby_func().get_location(),
+        )
+    }
+
+    fn enumerator_tos(&self, globals: &Globals) -> String {
+        let e = unsafe { self.as_enumerator() };
+        format!("#<Enumerator: {} {}>", globals.to_s(e.obj), e.method)
+    }
+
+    fn proc_tos(&self) -> String {
+        format!("#<Proc:0x{:016x}>", self.id())
+    }
+
+    fn regexp_tos(&self) -> String {
+        format!("/{}/", self.as_regex().as_str())
+    }
+
+    fn range_tos(&self, globals: &Globals) -> String {
+        let range = self.as_range();
+        format!(
+            "{}{}{}",
+            globals.inspect(range.start),
+            if range.exclude_end() { "..." } else { ".." },
+            globals.inspect(range.end),
+        )
+    }
+
+    fn hash_tos(&self, globals: &Globals) -> String {
+        let hash = self.as_hash();
+        match hash.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in hash.iter() {
+                    let k_inspect = if k.id() == self.id() {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect(k)
+                    };
+                    let v_inspect = if v.id() == self.id() {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect(v)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{}}}", result}
+            }
+        }
+    }
+
+    fn hash_inspect2(&self, globals: &Globals) -> String {
+        let hash = self.as_hash();
+        match hash.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in hash.iter().take(3) {
+                    let k_inspect = if k.id() == self.id() {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect2(k)
+                    };
+                    let v_inspect = if v.id() == self.id() {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect2(v)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{} .. }}", result}
+            }
         }
     }
 }
@@ -318,36 +503,38 @@ impl std::hash::Hash for RValue {
 impl RValue {
     // This type of equality is used for comparison for keys of Hash.
     pub(crate) fn eql(&self, other: &Self) -> bool {
-        match (self.ty(), other.ty()) {
-            (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
-            (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
-            (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
-            (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(&other.as_complex()),
-            (ObjKind::BYTES, ObjKind::BYTES) => self.as_bytes() == other.as_bytes(),
-            (ObjKind::ARRAY, ObjKind::ARRAY) => {
-                let lhs = self.as_array();
-                let rhs = other.as_array();
-                if lhs.len() != rhs.len() {
-                    return false;
-                }
-                lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
-                    // Support self-containing arrays.
-                    if self.id() == a1.id() && other.id() == a2.id() {
-                        true
-                    } else if self.id() == a1.id() || other.id() == a2.id() {
-                        false
-                    } else {
-                        a1.eql(a2)
+        unsafe {
+            match (self.ty(), other.ty()) {
+                (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
+                (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
+                (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
+                (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(&other.as_complex()),
+                (ObjKind::BYTES, ObjKind::BYTES) => self.as_bytes() == other.as_bytes(),
+                (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                    let lhs = self.as_array();
+                    let rhs = other.as_array();
+                    if lhs.len() != rhs.len() {
+                        return false;
                     }
-                })
+                    lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
+                        // Support self-containing arrays.
+                        if self.id() == a1.id() && other.id() == a2.id() {
+                            true
+                        } else if self.id() == a1.id() || other.id() == a2.id() {
+                            false
+                        } else {
+                            a1.eql(a2)
+                        }
+                    })
+                }
+                (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
+                (ObjKind::HASH, ObjKind::HASH) => self.as_hash() == other.as_hash(),
+                //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
+                //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
+                (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+                (_, ObjKind::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
+                _ => false,
             }
-            (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
-            (ObjKind::HASH, ObjKind::HASH) => self.as_hash() == other.as_hash(),
-            //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
-            //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
-            (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-            (_, ObjKind::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
-            _ => false,
         }
     }
 }
@@ -369,7 +556,7 @@ impl alloc::GC<RValue> for RValue {
             match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS | ObjKind::MODULE => {
-                    let module = self.as_class();
+                    let module = self.as_module();
                     if let Some(class) = module.superclass_value() {
                         class.mark(alloc)
                     }
@@ -484,16 +671,41 @@ impl RValue {
         self.header.ty()
     }
 
-    pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
+    ///
+    /// Get class object of *self.
+    ///
+    pub(crate) fn get_class_obj(&self, globals: &Globals) -> Module {
+        self.class().get_module(globals)
+    }
+
+    pub(crate) fn real_class(&self, globals: &Globals) -> Module {
+        self.get_class_obj(globals).get_real_class()
+    }
+
+    pub(crate) fn get_ivar(&self, globals: &Globals, name: IdentId) -> Option<Value> {
+        let class_id = self.class();
+        let id = globals.store[class_id].get_ivarid(name)?;
+        self.get_var(id)
+    }
+
+    pub(crate) fn get_ivars(&self, globals: &Globals) -> Vec<(IdentId, Value)> {
+        let class_id = self.class();
+        globals.store[class_id]
+            .ivar_names()
+            .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
+            .collect()
+    }
+
+    pub(crate) fn get_var(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
-                return self.as_object()[i];
+                return unsafe { self.as_object()[i] };
             } else {
                 i -= OBJECT_INLINE_IVAR;
             }
         }
-        if let Some(v) = &mut self.var_table {
+        if let Some(v) = &self.var_table {
             if v.len() > i {
                 return v[i];
             }
@@ -509,7 +721,7 @@ impl RValue {
         let mut i = id.into_usize();
         if self.ty() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
-                self.as_object_mut()[i] = Some(val);
+                unsafe { self.as_object_mut()[i] = Some(val) };
                 return;
             } else {
                 i -= OBJECT_INLINE_IVAR;
@@ -543,47 +755,49 @@ impl RValue {
         RValue {
             header: self.header,
             var_table: self.var_table.clone(),
-            kind: match self.ty() {
-                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::CLASS | ObjKind::MODULE => {
-                    let class = self.as_class();
-                    ObjKind::class(class.id(), class.superclass(), class.class_type())
-                }
-                ObjKind::OBJECT => ObjKind::object(),
-                ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
-                ObjKind::FLOAT => ObjKind {
-                    float: self.as_float(),
-                },
-                ObjKind::COMPLEX => ObjKind::complex(
-                    self.as_complex().re().deep_copy(),
-                    self.as_complex().im().deep_copy(),
-                ),
-                ObjKind::BYTES => ObjKind::bytes_from_slice(self.as_bytes()),
-                ObjKind::TIME => ObjKind::time(self.as_time().clone()),
-                ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
-                    self.as_array().iter().map(|v| v.deep_copy()),
-                )),
-                ObjKind::RANGE => {
-                    let lhs = self.as_range();
-                    ObjKind::range(
-                        lhs.start.deep_copy(),
-                        lhs.end.deep_copy(),
-                        lhs.exclude_end != 0,
-                    )
-                }
-                ObjKind::HASH => {
-                    let mut map = IndexMap::default();
-                    let hash = self.as_hash();
-                    for (k, v) in hash.iter() {
-                        map.insert(HashKey(k.deep_copy()), v.deep_copy());
+            kind: unsafe {
+                match self.ty() {
+                    ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                    ObjKind::CLASS | ObjKind::MODULE => {
+                        let class = self.as_module();
+                        ObjKind::class(class.id(), class.superclass(), class.class_type())
                     }
-                    ObjKind::hash(map)
+                    ObjKind::OBJECT => ObjKind::object(),
+                    ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
+                    ObjKind::FLOAT => ObjKind {
+                        float: self.as_float(),
+                    },
+                    ObjKind::COMPLEX => ObjKind::complex(
+                        self.as_complex().re().deep_copy(),
+                        self.as_complex().im().deep_copy(),
+                    ),
+                    ObjKind::BYTES => ObjKind::bytes_from_slice(self.as_bytes()),
+                    ObjKind::TIME => ObjKind::time(self.as_time().clone()),
+                    ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
+                        self.as_array().iter().map(|v| v.deep_copy()),
+                    )),
+                    ObjKind::RANGE => {
+                        let lhs = self.as_range();
+                        ObjKind::range(
+                            lhs.start.deep_copy(),
+                            lhs.end.deep_copy(),
+                            lhs.exclude_end != 0,
+                        )
+                    }
+                    ObjKind::HASH => {
+                        let mut map = IndexMap::default();
+                        let hash = self.as_hash();
+                        for (k, v) in hash.iter() {
+                            map.insert(HashKey(k.deep_copy()), v.deep_copy());
+                        }
+                        ObjKind::hash(map)
+                    }
+                    ObjKind::REGEXP => {
+                        let regexp = self.as_regex();
+                        ObjKind::regexp(regexp.clone())
+                    }
+                    _ => unreachable!("clone()"),
                 }
-                ObjKind::REGEXP => {
-                    let regexp = self.as_regex();
-                    ObjKind::regexp(regexp.clone())
-                }
-                _ => unreachable!("clone()"),
             },
         }
     }
@@ -646,7 +860,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn class(&self) -> ClassId {
+    pub(crate) fn class(&self) -> ClassId {
         self.header.class()
     }
 }
@@ -916,11 +1130,13 @@ impl RValue {
 
 impl RValue {
     pub fn unpack(&self) -> RV {
-        match self.ty() {
-            ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
-            ObjKind::FLOAT => RV::Float(self.as_float()),
-            ObjKind::BYTES => RV::String(self.as_bytes()),
-            _ => RV::Object(self),
+        unsafe {
+            match self.ty() {
+                ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
+                ObjKind::FLOAT => RV::Float(self.as_float()),
+                ObjKind::BYTES => RV::String(self.as_bytes()),
+                _ => RV::Object(self),
+            }
         }
     }
 }
@@ -928,66 +1144,68 @@ impl RValue {
 impl RValue {
     /// This function is only used for system assertion.
     pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
-        match (lhs.ty(), rhs.ty()) {
-            (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
-            (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
-            (ObjKind::COMPLEX, ObjKind::COMPLEX) => lhs.as_complex() == rhs.as_complex(),
-            (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
-            (ObjKind::ARRAY, ObjKind::ARRAY) => {
-                let lhs = lhs.as_array();
-                let rhs = rhs.as_array();
-                lhs.len() == rhs.len()
-                    && lhs
-                        .iter()
-                        .zip(rhs.iter())
-                        .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
+        unsafe {
+            match (lhs.ty(), rhs.ty()) {
+                (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+                (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
+                (ObjKind::COMPLEX, ObjKind::COMPLEX) => lhs.as_complex() == rhs.as_complex(),
+                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
+                (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                    let lhs = lhs.as_array();
+                    let rhs = rhs.as_array();
+                    lhs.len() == rhs.len()
+                        && lhs
+                            .iter()
+                            .zip(rhs.iter())
+                            .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
+                }
+                (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
+                (ObjKind::HASH, ObjKind::HASH) => {
+                    let lhs = lhs.as_hash();
+                    let rhs = rhs.as_hash();
+                    lhs.len() == rhs.len()
+                        && lhs
+                            .iter()
+                            .zip(rhs.iter())
+                            .all(|(lhs, rhs)| Value::eq(lhs.0, rhs.0) && Value::eq(lhs.1, rhs.1))
+                }
+                _ => false,
             }
-            (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
-            (ObjKind::HASH, ObjKind::HASH) => {
-                let lhs = lhs.as_hash();
-                let rhs = rhs.as_hash();
-                lhs.len() == rhs.len()
-                    && lhs
-                        .iter()
-                        .zip(rhs.iter())
-                        .all(|(lhs, rhs)| Value::eq(lhs.0, rhs.0) && Value::eq(lhs.1, rhs.1))
-            }
-            _ => false,
         }
     }
 }
 
 impl RValue {
-    fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
-        unsafe { &self.kind.object }
+    unsafe fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
+        &self.kind.object
     }
 
-    fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
-        unsafe { &mut self.kind.object }
+    unsafe fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
+        &mut self.kind.object
     }
 
-    pub(crate) fn as_class(&self) -> &ModuleInner {
-        unsafe { &self.kind.class }
+    pub(super) unsafe fn as_module(&self) -> &ModuleInner {
+        &self.kind.class
     }
 
-    pub(crate) fn as_class_id(&self) -> ClassId {
-        self.as_class().id()
+    pub(super) unsafe fn as_module_mut(&mut self) -> &mut ModuleInner {
+        &mut self.kind.class
     }
 
-    pub(crate) fn as_class_mut(&mut self) -> &mut ModuleInner {
-        unsafe { &mut self.kind.class }
+    pub(super) unsafe fn as_class_id(&self) -> ClassId {
+        self.as_module().id()
     }
 
-    pub(super) fn as_float(&self) -> f64 {
-        unsafe { self.kind.float }
+    pub(super) unsafe fn as_float(&self) -> f64 {
+        self.kind.float
     }
 
-    fn as_bignum(&self) -> &BigInt {
-        unsafe { &self.kind.bignum }
+    unsafe fn as_bignum(&self) -> &BigInt {
+        &self.kind.bignum
     }
 
-    pub(crate) fn as_complex(&self) -> &ComplexInner {
-        unsafe { &self.kind.complex }
+    pub(crate) unsafe fn as_complex(&self) -> &ComplexInner {
+        &self.kind.complex
     }
 
     pub(super) fn as_bytes(&self) -> &StringInner {
@@ -1022,7 +1240,7 @@ impl RValue {
         unsafe { &self.kind.exception }
     }
 
-    pub(super) fn as_hash(&self) -> &HashInner {
+    pub(crate) fn as_hash(&self) -> &HashInner {
         unsafe { &self.kind.hash }
     }
 
@@ -1050,7 +1268,7 @@ impl RValue {
         unsafe { &mut self.kind.proc }
     }
 
-    pub(crate) fn as_time(&self) -> &TimeInner {
+    pub(super) fn as_time(&self) -> &TimeInner {
         unsafe { &self.kind.time }
     }
 
@@ -1062,27 +1280,27 @@ impl RValue {
         unsafe { &self.kind.method }
     }
 
-    pub(crate) unsafe fn as_fiber(&self) -> &FiberInner {
+    pub(super) unsafe fn as_fiber(&self) -> &FiberInner {
         &self.kind.fiber
     }
 
-    pub(crate) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
+    pub(super) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
         &mut self.kind.fiber
     }
 
-    pub(crate) unsafe fn as_enumerator(&self) -> &EnumeratorInner {
+    pub(super) unsafe fn as_enumerator(&self) -> &EnumeratorInner {
         &self.kind.enumerator
     }
 
-    pub(crate) unsafe fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
+    pub(super) unsafe fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
         &mut self.kind.enumerator
     }
 
-    pub(crate) unsafe fn as_generator(&self) -> &GeneratorInner {
+    pub(super) unsafe fn as_generator(&self) -> &GeneratorInner {
         &self.kind.generator
     }
 
-    pub(crate) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
+    pub(super) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
         &mut self.kind.generator
     }
 }
@@ -1194,11 +1412,16 @@ impl RangeInner {
 pub struct Proc(Value);
 
 impl Proc {
-    pub(crate) fn new(block: ProcInner) -> Self {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::PROC));
+        Proc(val)
+    }
+
+    pub(crate) fn from(block: ProcInner) -> Self {
         Proc(Value::new_proc(block))
     }
 
-    pub(crate) fn from(outer_lfp: Lfp, func_id: FuncId) -> Self {
+    pub(crate) fn from_parts(outer_lfp: Lfp, func_id: FuncId) -> Self {
         Proc(Value::new_proc(ProcInner::from(outer_lfp, func_id)))
     }
 }

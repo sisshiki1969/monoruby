@@ -49,13 +49,13 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         &format!("as_{}_mut", base.to_string().to_lowercase()),
         Span::call_site(),
     );
-    let objkind = Ident::new(&base.to_string().to_uppercase(), Span::call_site());
+    //let objkind = Ident::new(&base.to_string().to_uppercase(), Span::call_site());
 
     let auto_deref: ItemImpl = parse_quote!(
         impl std::ops::Deref for #base {
             type Target = #inner;
             fn deref(&self) -> &Self::Target {
-                self.0.#as_ref()
+                unsafe { self.0.#as_ref() }
             }
         }
     );
@@ -63,12 +63,12 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let auto_deref_mut: ItemImpl = parse_quote!(
         impl std::ops::DerefMut for #base {
             fn deref_mut(&mut self) -> &mut Self::Target {
-                self.0.#as_ref_mut()
+                unsafe { self.0.#as_ref_mut() }
             }
         }
     );
 
-    let auto_from: ItemImpl = parse_quote!(
+    /*let auto_from: ItemImpl = parse_quote!(
         impl std::convert::From<Value> for #base {
             fn from(v: Value) -> Self {
                 assert_eq!(ObjKind::#objkind, v.rvalue().ty());
@@ -76,7 +76,7 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-    );
+    );*/
 
     let gen = quote! {
         #[repr(transparent)]
@@ -85,7 +85,7 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #auto_deref
         #auto_deref_mut
-        #auto_from
+        //#auto_from
 
         impl std::convert::Into<Value> for #base {
             fn into(self) -> Value {
@@ -102,6 +102,10 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #base {
             pub fn as_ptr(self) -> *mut RValue {
                 self.0.id() as _
+            }
+
+            pub fn as_val(self) -> Value {
+                self.0
             }
         }
     };

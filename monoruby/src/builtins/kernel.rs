@@ -9,7 +9,7 @@ use std::io::Write;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Kernel");
     let kernel_class = klass.id();
-    globals.include_module(OBJECT_CLASS.get_module(globals), klass);
+    OBJECT_CLASS.get_module(globals).include_module(klass);
     globals.define_builtin_inline_func(
         kernel_class,
         "nil?",

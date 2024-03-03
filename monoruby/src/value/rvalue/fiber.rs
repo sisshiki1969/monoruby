@@ -4,7 +4,12 @@ use super::*;
 pub struct Fiber(Value);
 
 impl Fiber {
-    pub(crate) fn new(proc: Proc) -> Self {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::FIBER));
+        Self(val)
+    }
+
+    pub(crate) fn from(proc: Proc) -> Self {
         Fiber(Value::new_fiber(proc))
     }
 }
@@ -49,36 +54,26 @@ impl FiberInner {
             stack: None,
         }
     }
-}
 
-impl Fiber {
     pub fn state(&self) -> FiberState {
         self.handle.fiber_state()
-    }
-
-    pub fn is_terminated(&self) -> bool {
-        self.handle.fiber_state() == FiberState::Terminated
     }
 
     pub fn func_id(&self) -> FuncId {
         self.proc.func_id()
     }
 
+    pub fn is_terminated(&self) -> bool {
+        self.handle.fiber_state() == FiberState::Terminated
+    }
+}
+
+impl Fiber {
     pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-        let arg0 = lfp.arg(0);
-        let len = arg0.as_array().len();
+        let arg0 = Array::new(lfp.arg(0));
         match self.state() {
-            FiberState::Created => self.invoke_fiber(vm, globals, &[arg0]),
-            FiberState::Suspended => {
-                let val = if len == 0 {
-                    Value::nil()
-                } else if len == 1 {
-                    arg0.as_array()[0]
-                } else {
-                    arg0
-                };
-                self.resume_fiber(vm, globals, val)
-            }
+            FiberState::Created => self.invoke_fiber(vm, globals, &[lfp.arg(0)]),
+            FiberState::Suspended => self.resume_fiber(vm, globals, arg0.peel()),
             FiberState::Terminated => Err(MonorubyErr::fibererr(
                 "attempt to resume a terminated fiber".to_string(),
             )),

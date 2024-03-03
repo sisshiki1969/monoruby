@@ -133,7 +133,7 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
 fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut ary = Array::new();
+    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
@@ -150,7 +150,7 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
 fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut ary = Array::new();
+    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
@@ -167,7 +167,7 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
 fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut ary = Array::new();
+    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in lfp.arg(0).as_array().iter() {
@@ -216,10 +216,10 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if arg0.as_array().len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let class = self_.as_class();
+    let mut class = self_.as_class();
     for v in arg0.as_array().iter().cloned().rev() {
         v.expect_module(globals)?;
-        globals.include_module(class, v.as_class());
+        class.include_module(v.as_class());
     }
     Ok(self_)
 }
