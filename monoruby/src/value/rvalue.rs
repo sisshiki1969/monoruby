@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 
 pub use array::*;
 pub use complex::ComplexInner;
-pub use complex::Real;
+pub use complex::{Real, RealKind};
 pub use enumerator::*;
 pub use fiber::*;
 pub use hash::*;

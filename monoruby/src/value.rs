@@ -983,9 +983,9 @@ impl Value {
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
             NodeKind::Float(num) => Value::float(*num),
             NodeKind::Imaginary(r) => match r {
-                NReal::Float(f) => Value::complex(0, Real::from_float(*f)),
+                NReal::Float(f) => Value::complex(0, *f),
                 NReal::Integer(i) => Value::complex(0, *i),
-                NReal::Bignum(b) => Value::complex(0, Real::from_bigint(b.clone())),
+                NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
@@ -1104,7 +1104,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    Complex(&'a ComplexInner),
+    Complex(&'a num::complex::Complex<Real>),
     String(&'a [u8]),
     Object(&'a RValue),
 }

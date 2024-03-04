@@ -1,4 +1,4 @@
-use num::Signed;
+use num::{Signed, ToPrimitive};
 use paste::paste;
 use ruruby_parse::NReal;
 
@@ -21,6 +21,24 @@ impl std::ops::DerefMut for ComplexInner {
     }
 }
 
+impl std::convert::From<i64> for ComplexInner {
+    fn from(i: i64) -> Self {
+        ComplexInner(Real::from(i).into())
+    }
+}
+
+impl std::convert::From<BigInt> for ComplexInner {
+    fn from(b: BigInt) -> Self {
+        ComplexInner(Real::from(b).into())
+    }
+}
+
+impl std::convert::From<f64> for ComplexInner {
+    fn from(f: f64) -> Self {
+        ComplexInner(Real::from(f).into())
+    }
+}
+
 impl std::convert::From<Real> for ComplexInner {
     fn from(re: Real) -> Self {
         ComplexInner(num::complex::Complex::new(re, 0.into()))
@@ -36,10 +54,6 @@ impl std::convert::From<num::complex::Complex<Real>> for ComplexInner {
 impl ComplexInner {
     pub fn new(re: Real, im: Real) -> Self {
         Self(num::complex::Complex { re, im })
-    }
-
-    pub fn get(&self) -> &num::complex::Complex<Real> {
-        &self.0
     }
 
     pub fn re(&self) -> Real {
@@ -69,33 +83,9 @@ impl std::cmp::PartialEq for Real {
     }
 }
 
-impl Real {
-    pub fn get(self) -> Value {
-        self.0
-    }
-
-    pub fn dup(&self) -> Self {
-        Real(self.0.dup())
-    }
-
-    pub fn deep_copy(&self) -> Self {
-        Real(self.0.deep_copy())
-    }
-
-    pub fn is_positive(&self) -> bool {
-        RealKind::from(*self).is_positive()
-    }
-
-    pub fn from_i64(i: i64) -> Self {
-        Real(Value::integer(i))
-    }
-
-    pub fn from_bigint(b: BigInt) -> Self {
-        Real(Value::bigint(b))
-    }
-
-    pub fn from_float(f: f64) -> Self {
-        Real(Value::float(f))
+impl std::cmp::PartialOrd for Real {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        RealKind::from(*self).partial_cmp(&RealKind::from(*other))
     }
 }
 
@@ -103,13 +93,25 @@ impl num::Num for Real {
     type FromStrRadixErr = std::num::ParseIntError;
 
     fn from_str_radix(str: &str, radix: u32) -> std::result::Result<Self, Self::FromStrRadixErr> {
-        Ok(Real::from_i64(i64::from_str_radix(str, radix)?))
+        Ok(i64::from_str_radix(str, radix)?.into())
     }
 }
 
 impl std::convert::From<i64> for Real {
     fn from(i: i64) -> Self {
         Real(Value::integer(i))
+    }
+}
+
+impl std::convert::From<BigInt> for Real {
+    fn from(b: BigInt) -> Self {
+        Real(Value::bigint(b))
+    }
+}
+
+impl std::convert::From<f64> for Real {
+    fn from(f: f64) -> Self {
+        Real(Value::float(f))
     }
 }
 
@@ -134,13 +136,13 @@ impl std::convert::From<RealKind> for Real {
 }
 
 impl std::convert::TryFrom<Value> for Real {
-    type Error = ();
-    fn try_from(value: Value) -> std::result::Result<Self, Self::Error> {
+    type Error = MonorubyErr;
+    fn try_from(value: Value) -> Result<Self> {
         match value.unpack() {
             RV::Fixnum(i) => Ok(Real(Value::integer(i))),
             RV::BigInt(b) => Ok(Real(Value::bigint(b.clone()))),
             RV::Float(f) => Ok(Real(Value::float(f))),
-            _ => Err(()),
+            _ => Err(MonorubyErr::cant_convert_into_float(value)),
         }
     }
 }
@@ -207,6 +209,24 @@ impl num::One for Real {
     }
 }
 
+impl Real {
+    pub fn get(self) -> Value {
+        self.0
+    }
+
+    pub fn dup(&self) -> Self {
+        Real(self.0.dup())
+    }
+
+    pub fn deep_copy(&self) -> Self {
+        Real(self.0.deep_copy())
+    }
+
+    pub fn is_positive(&self) -> bool {
+        RealKind::from(*self).is_positive()
+    }
+}
+
 pub enum RealKind {
     Integer(i64),
     BigInt(BigInt),
@@ -220,6 +240,22 @@ impl std::cmp::PartialEq for RealKind {
             (RealKind::BigInt(a), RealKind::BigInt(b)) => a == b,
             (RealKind::Float(a), RealKind::Float(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+impl std::cmp::PartialOrd for RealKind {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (RealKind::Integer(a), RealKind::Integer(b)) => a.partial_cmp(b),
+            (RealKind::Integer(a), RealKind::BigInt(b)) => BigInt::from(*a).partial_cmp(b),
+            (RealKind::Integer(a), RealKind::Float(b)) => (a.to_f64().unwrap()).partial_cmp(b),
+            (RealKind::BigInt(a), RealKind::Integer(b)) => a.partial_cmp(&BigInt::from(*b)),
+            (RealKind::BigInt(a), RealKind::BigInt(b)) => a.partial_cmp(b),
+            (RealKind::BigInt(a), RealKind::Float(b)) => a.to_f64().unwrap().partial_cmp(b),
+            (RealKind::Float(a), RealKind::Integer(b)) => a.partial_cmp(&(*b as f64)),
+            (RealKind::Float(a), RealKind::BigInt(b)) => a.partial_cmp(&b.to_f64().unwrap()),
+            (RealKind::Float(a), RealKind::Float(b)) => a.partial_cmp(b),
         }
     }
 }
@@ -256,13 +292,13 @@ impl std::convert::From<Real> for RealKind {
 }
 
 impl std::convert::TryFrom<Value> for RealKind {
-    type Error = ();
-    fn try_from(value: Value) -> std::result::Result<Self, Self::Error> {
+    type Error = MonorubyErr;
+    fn try_from(value: Value) -> Result<Self> {
         match value.unpack() {
             RV::Fixnum(i) => Ok(RealKind::Integer(i)),
             RV::BigInt(b) => Ok(RealKind::BigInt(b.clone())),
             RV::Float(f) => Ok(RealKind::Float(f)),
-            _ => Err(()),
+            _ => Err(MonorubyErr::cant_convert_into_float(value)),
         }
     }
 }
@@ -326,6 +362,14 @@ impl RealKind {
             RealKind::Integer(i) => i.is_positive(),
             RealKind::BigInt(b) => b.is_positive(),
             RealKind::Float(f) => f.is_sign_positive(),
+        }
+    }
+
+    pub fn to_f64(&self) -> f64 {
+        match self {
+            RealKind::Integer(i) => *i as f64,
+            RealKind::BigInt(b) => num::ToPrimitive::to_f64(b).unwrap(),
+            RealKind::Float(f) => *f,
         }
     }
 }
