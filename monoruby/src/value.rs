@@ -5,11 +5,13 @@ use crate::{
     alloc::{Allocator, GC},
     builtins::TimeInner,
 };
-use num::BigInt;
+use num::{BigInt, FromPrimitive};
 use ruruby_parse::{Loc, Node, NodeKind, SourceInfoRef};
 
+pub mod numeric;
 pub mod rvalue;
 
+pub use numeric::*;
 pub use rvalue::*;
 
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
@@ -581,12 +583,12 @@ impl Value {
         None
     }
 
-    /*fn as_complex(&self) -> &ComplexInner {
-        assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
+    pub fn as_complex(&self) -> &ComplexInner {
+        assert_eq!(Some(ObjKind::COMPLEX), self.ty());
         unsafe { self.rvalue().as_complex() }
     }
 
-    fn as_complex_mut(&mut self) -> &mut ComplexInner {
+    /*fn as_complex_mut(&mut self) -> &mut ComplexInner {
         assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_complex_mut() }
     }*/
@@ -667,6 +669,21 @@ impl Value {
                 "bignum too big to convert into `long'",
             )),
             _ => Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS)),
+        }
+    }
+
+    ///
+    /// Try to convert `f` to Integer.
+    ///
+    pub fn coerce_f64_to_int(f: f64) -> Result<Value> {
+        if f.is_nan() || f.is_infinite() {
+            Err(MonorubyErr::float_out_of_range_of_integer(f))
+        } else if (std::i64::MIN as f64) < f && f < (std::i64::MAX as f64) {
+            Ok(Value::integer(f as i64))
+        } else if let Some(b) = num::BigInt::from_f64(f) {
+            Ok(Value::bigint(b))
+        } else {
+            Err(MonorubyErr::float_out_of_range_of_integer(f))
         }
     }
 

@@ -6,7 +6,6 @@ use std::mem::ManuallyDrop;
 
 pub use array::*;
 pub use complex::ComplexInner;
-pub use complex::{Real, RealKind};
 pub use enumerator::*;
 pub use fiber::*;
 pub use hash::*;
@@ -115,7 +114,7 @@ impl ObjKind {
         Self { float }
     }
 
-    fn complex(re: complex::Real, im: complex::Real) -> Self {
+    fn complex(re: Real, im: Real) -> Self {
         Self {
             complex: ManuallyDrop::new(ComplexInner::new(re, im)),
         }
@@ -891,7 +890,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_complex(re: complex::Real, im: complex::Real) -> Self {
+    pub(super) fn new_complex(re: Real, im: Real) -> Self {
         RValue {
             header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
             kind: ObjKind::complex(re, im),

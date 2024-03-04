@@ -27,6 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
+    globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
     globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
@@ -280,6 +281,24 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         _ => {}
     };
     Err(MonorubyErr::no_implicit_conversion(arg0, INTEGER_CLASS))
+}
+
+///
+/// ### Kernel.#Complex
+///
+/// - Complex(r, i = 0, [NOT SUPPORTED] exception: true) -> Complex | nil
+/// - [NOT SUPPORTED] Complex(s, exception: true) -> Complex | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Complex.html]
+#[monoruby_builtin]
+fn kernel_complex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let r = Real::try_from(lfp.arg(0))?;
+    let i = if let Some(i) = lfp.try_arg(1) {
+        Real::try_from(i)?
+    } else {
+        Real::zero()
+    };
+    Ok(Value::complex(r, i))
 }
 
 fn load(

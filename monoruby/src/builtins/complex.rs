@@ -16,6 +16,8 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         false,
     );
+    globals.define_builtin_funcs(COMPLEX_CLASS, "abs", &["magnitude"], abs, 0);
+    globals.define_builtin_funcs(COMPLEX_CLASS, "rect", &["rectangular"], rect, 0);
 }
 
 ///
@@ -54,6 +56,34 @@ fn complex_rect(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::complex(r, i))
 }
 
+///
+/// ### Complex#abs
+///
+/// - abs -> Numeric
+/// - magnitude -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/abs.html]
+#[monoruby_builtin]
+fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let abs = lfp.self_val().as_complex().to_complex_f64().norm();
+    Ok(Value::float(abs))
+}
+
+///
+/// ### Complex#abs
+///
+/// - rect -> [Numeric, Numeric]
+/// - rectangular -> [Numeric, Numeric]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/rect.html]
+#[monoruby_builtin]
+fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let r = self_.as_complex().re();
+    let i = self_.as_complex().im();
+    Ok(Value::array2(r.get(), i.get()))
+}
+
 #[cfg(test)]
 mod test {
     use crate::tests::*;
@@ -77,5 +107,17 @@ mod test {
         run_test("Complex.rect(1)");
         run_test("Complex.rect(1, 2)");
         run_test("Complex.rectangular(1, 2)");
+    }
+
+    #[test]
+    fn abs() {
+        run_test("Complex(4, 5).abs");
+        run_test("Complex(4, 5).magnitude");
+    }
+
+    #[test]
+    fn rect() {
+        run_test("Complex(4, 5).rect");
+        run_test("Complex(4.7, 1.5).rect");
     }
 }
