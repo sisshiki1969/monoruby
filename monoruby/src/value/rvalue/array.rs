@@ -10,11 +10,16 @@ pub struct Array(Value);
 
 impl Default for Array {
     fn default() -> Self {
-        Self::new()
+        Self::new_empty()
     }
 }
 
 impl Array {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::ARRAY));
+        Self(val)
+    }
+
     pub fn id(self) -> u64 {
         self.0.id()
     }
@@ -29,7 +34,7 @@ impl Array {
         }
     }
 
-    pub fn new() -> Self {
+    pub fn new_empty() -> Self {
         Self(Value::array_empty())
     }
 

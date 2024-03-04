@@ -57,7 +57,7 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut e: Enumerator = lfp.self_val().into();
+    let mut e = Enumerator::new(lfp.self_val());
     e.next(vm, globals)
 }
 
@@ -69,7 +69,7 @@ fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next_values.html]
 #[monoruby_builtin]
 fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut e: Enumerator = lfp.self_val().into();
+    let mut e = Enumerator::new(lfp.self_val());
     Ok(e.next_values(vm, globals)?.into())
 }
 
@@ -94,18 +94,18 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             if internal.is_terminated() {
                 return Ok(v);
             }
-            let a: Array = v.into();
+            let a = Array::new(v);
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    let self_val: Enumerator = lfp.self_val().into();
+    let self_val: Enumerator = Enumerator::new(lfp.self_val());
     let data = if let Some(bh) = lfp.block() {
         vm.get_block_data(globals, bh)?
     } else {
         return Ok(self_val.into());
     };
 
-    let internal = Fiber::new(self_val.proc);
+    let internal = Fiber::from(self_val.proc);
     vm.temp_push(internal.into());
     let res = each_inner(vm, globals, internal, &data, self_val);
     vm.temp_pop();
@@ -136,7 +136,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 let res = vm.temp_pop();
                 return Ok(res);
             }
-            let a: Array = v.into();
+            let a = Array::new(v);
             let res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
             vm.temp_array_push(res);
             match count.unpack() {
@@ -160,7 +160,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             }
         }
     };
-    let self_val: Enumerator = lfp.self_val().into();
+    let self_val = Enumerator::new(lfp.self_val());
 
     let id = IdentId::get_id("with_index");
     let data = if let Some(bh) = lfp.block() {
@@ -169,7 +169,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         return vm.generate_enumerator(id, lfp.self_val(), vec![]);
     };
 
-    let internal = Fiber::new(self_val.proc);
+    let internal = Fiber::from(self_val.proc);
     vm.temp_push(internal.into());
     let res = with_index_inner(vm, globals, internal, &data, count, self_val);
     vm.temp_pop();
@@ -185,7 +185,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut e: Enumerator = lfp.self_val().into();
+    let mut e = Enumerator::new(lfp.self_val());
     e.peek(vm, globals)
 }
 
@@ -197,7 +197,7 @@ fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
 fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut e: Enumerator = lfp.self_val().into();
+    let mut e = Enumerator::new(lfp.self_val());
     e.rewind();
     Ok(e.into())
 }
@@ -255,11 +255,11 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             if internal.is_terminated() {
                 return Ok(v);
             }
-            let a: Array = v.into();
+            let a: Array = Array::new(v);
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
-    let self_val: Generator = lfp.self_val().into();
+    let self_val = Generator::new(lfp.self_val());
     let data = vm.get_block_data(globals, lfp.expect_block()?)?;
     let internal = self_val.create_internal();
     vm.temp_push(internal.into());

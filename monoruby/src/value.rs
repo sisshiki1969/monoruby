@@ -5,11 +5,13 @@ use crate::{
     alloc::{Allocator, GC},
     builtins::TimeInner,
 };
-use num::BigInt;
+use num::{BigInt, FromPrimitive};
 use ruruby_parse::{Loc, Node, NodeKind, SourceInfoRef};
 
+pub mod numeric;
 pub mod rvalue;
 
+pub use numeric::*;
 pub use rvalue::*;
 
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
@@ -239,8 +241,14 @@ impl Value {
         RValue::new_float(num).pack()
     }
 
-    pub fn complex(re: Value, im: Value) -> Self {
+    pub fn complex(re: impl Into<Real>, im: impl Into<Real>) -> Self {
+        let re = re.into();
+        let im = im.into();
         RValue::new_complex(re, im).pack()
+    }
+
+    pub fn complex_from(complex: num::complex::Complex<Real>) -> Self {
+        RValue::new_complex_from(complex).pack()
     }
 
     pub fn bigint(bigint: BigInt) -> Self {
@@ -569,11 +577,21 @@ impl Value {
             return Some(f);
         } else if let Some(rv) = self.try_rvalue() {
             if rv.ty() == ObjKind::FLOAT {
-                return Some(rv.as_float());
+                return Some(unsafe { rv.as_float() });
             }
         }
         None
     }
+
+    pub fn as_complex(&self) -> &ComplexInner {
+        assert_eq!(Some(ObjKind::COMPLEX), self.ty());
+        unsafe { self.rvalue().as_complex() }
+    }
+
+    /*fn as_complex_mut(&mut self) -> &mut ComplexInner {
+        assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
+        unsafe { self.rvalue_mut().as_complex_mut() }
+    }*/
 
     fn is_symbol(&self) -> bool {
         self.id() & 0xff == TAG_SYMBOL
@@ -589,6 +607,16 @@ impl Value {
         } else {
             None
         }
+    }
+
+    fn as_module(&self) -> &ModuleInner {
+        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        unsafe { self.rvalue().as_module() }
+    }
+
+    fn as_module_mut(&mut self) -> &mut ModuleInner {
+        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        unsafe { self.rvalue_mut().as_module_mut() }
     }
 
     ///
@@ -608,7 +636,7 @@ impl Value {
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::ARRAY => Some((*self).into()),
+            ObjKind::ARRAY => Some(Array::new(*self)),
             _ => None,
         }
     }
@@ -641,6 +669,21 @@ impl Value {
                 "bignum too big to convert into `long'",
             )),
             _ => Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS)),
+        }
+    }
+
+    ///
+    /// Try to convert `f` to Integer.
+    ///
+    pub fn coerce_f64_to_int(f: f64) -> Result<Value> {
+        if f.is_nan() || f.is_infinite() {
+            Err(MonorubyErr::float_out_of_range_of_integer(f))
+        } else if (std::i64::MIN as f64) < f && f < (std::i64::MAX as f64) {
+            Ok(Value::integer(f as i64))
+        } else if let Some(b) = num::BigInt::from_f64(f) {
+            Ok(Value::bigint(b))
+        } else {
+            Err(MonorubyErr::float_out_of_range_of_integer(f))
         }
     }
 
@@ -681,7 +724,7 @@ impl Value {
     pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::CLASS | ObjKind::MODULE => Some(rv.as_class_id()),
+            ObjKind::CLASS | ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }
@@ -689,7 +732,7 @@ impl Value {
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::CLASS => Some(rv.as_class_id()),
+            ObjKind::CLASS => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }
@@ -697,7 +740,7 @@ impl Value {
     pub(crate) fn is_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::MODULE => Some(rv.as_class_id()),
+            ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
             _ => None,
         }
     }
@@ -957,9 +1000,9 @@ impl Value {
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
             NodeKind::Float(num) => Value::float(*num),
             NodeKind::Imaginary(r) => match r {
-                NReal::Float(f) => Value::complex(Value::integer(0), Value::float(*f)),
-                NReal::Integer(i) => Value::complex(Value::integer(0), Value::integer(*i)),
-                NReal::Bignum(b) => Value::complex(Value::integer(0), Value::bigint(b.clone())),
+                NReal::Float(f) => Value::complex(0, *f),
+                NReal::Integer(i) => Value::complex(0, *i),
+                NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
@@ -1017,7 +1060,15 @@ impl Value {
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast(lhs, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
-                    Value::complex(lhs, Real::from(im.clone()).into())
+                    Value::complex(Real::try_from(lhs).unwrap(), im.clone())
+                } else {
+                    unreachable!()
+                }
+            }
+            NodeKind::BinOp(ruruby_parse::BinOp::Sub, box lhs, box rhs) => {
+                let lhs = Self::from_ast(lhs, globals);
+                if let NodeKind::Imaginary(im) = &rhs.kind {
+                    Value::complex(Real::try_from(lhs).unwrap(), -Real::from(im.clone()))
                 } else {
                     unreachable!()
                 }
@@ -1070,7 +1121,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    Complex { re: Value, im: Value },
+    Complex(&'a num::complex::Complex<Real>),
     String(&'a [u8]),
     Object(&'a RValue),
 }
@@ -1084,7 +1135,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
-            RV::Complex { re, im } => write!(f, "Complex({re:?}, {im:?})"),
+            RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{s}\""),

@@ -40,8 +40,13 @@ impl EnumeratorInner {
 }
 
 impl Enumerator {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::ENUMERATOR));
+        Self(val)
+    }
+
     pub fn rewind(&mut self) {
-        self.internal = Some(Fiber::new(self.proc));
+        self.internal = Some(Fiber::from(self.proc));
         self.buffer = None;
     }
 }
@@ -95,12 +100,19 @@ impl Enumerator {
                 "iteration reached an end".to_string(),
             ));
         }
-        Ok(v.into())
+        Ok(Array::new(v))
     }
 }
 
 #[monoruby_object]
 pub struct Generator(Value);
+
+impl Generator {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::GENERATOR));
+        Self(val)
+    }
+}
 
 #[derive(Debug)]
 pub struct GeneratorInner {
@@ -119,7 +131,7 @@ impl alloc::GC<RValue> for GeneratorInner {
 
 impl GeneratorInner {
     pub fn new(proc: Proc) -> Self {
-        let internal = Fiber::new(proc);
+        let internal = Fiber::from(proc);
         Self {
             internal,
             proc,
@@ -128,7 +140,7 @@ impl GeneratorInner {
     }
 
     pub fn create_internal(&self) -> Fiber {
-        Fiber::new(self.proc)
+        Fiber::from(self.proc)
     }
 
     pub fn yielder(&self) -> Value {

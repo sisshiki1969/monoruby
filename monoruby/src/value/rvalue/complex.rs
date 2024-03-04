@@ -1,120 +1,74 @@
-use num::ToPrimitive;
-use ruruby_parse::NReal;
-
 use super::*;
 
-#[derive(Clone, PartialEq, Hash, Debug)]
-pub struct ComplexInner {
-    re: Value,
-    im: Value,
+#[derive(Clone, Debug, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct ComplexInner(num::complex::Complex<Real>);
+
+impl std::ops::Deref for ComplexInner {
+    type Target = num::complex::Complex<Real>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ComplexInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl std::convert::From<i64> for ComplexInner {
+    fn from(i: i64) -> Self {
+        ComplexInner(Real::from(i).into())
+    }
+}
+
+impl std::convert::From<BigInt> for ComplexInner {
+    fn from(b: BigInt) -> Self {
+        ComplexInner(Real::from(b).into())
+    }
+}
+
+impl std::convert::From<f64> for ComplexInner {
+    fn from(f: f64) -> Self {
+        ComplexInner(Real::from(f).into())
+    }
+}
+
+impl std::convert::From<Real> for ComplexInner {
+    fn from(re: Real) -> Self {
+        ComplexInner(num::complex::Complex::new(re, 0.into()))
+    }
+}
+
+impl std::convert::From<num::complex::Complex<Real>> for ComplexInner {
+    fn from(complex: num::complex::Complex<Real>) -> Self {
+        ComplexInner(complex)
+    }
 }
 
 impl ComplexInner {
-    pub fn new(re: Value, im: Value) -> Self {
-        Self { re, im }
+    pub fn new(re: Real, im: Real) -> Self {
+        Self(num::complex::Complex { re, im })
     }
 
-    pub fn re(&self) -> Value {
-        self.re
+    pub fn re(&self) -> Real {
+        self.0.re
     }
 
-    pub fn im(&self) -> Value {
-        self.im
+    pub fn im(&self) -> Real {
+        self.0.im
     }
 
     pub fn eql(&self, other: &Self) -> bool {
-        self.re.eql(&other.re) && self.im.eql(&other.im)
+        self.0.re.eql(&other.0.re) && self.0.im.eql(&other.0.im)
     }
 
     pub fn dup(&self) -> Self {
-        Self::new(self.re.dup(), self.im.dup())
+        Self::new(self.0.re.dup(), self.0.im.dup())
     }
-}
 
-pub(crate) enum Real {
-    Integer(i64),
-    BigInt(BigInt),
-    Float(f64),
-}
-
-impl std::ops::Add for Real {
-    type Output = Real;
-    fn add(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Real::Integer(lhs), Real::Integer(rhs)) => Real::Integer(lhs + rhs),
-            (Real::Integer(lhs), Real::BigInt(rhs)) => Real::BigInt(BigInt::from(lhs) + rhs),
-            (Real::Integer(lhs), Real::Float(rhs)) => Real::Float(lhs as f64 + rhs),
-            (Real::BigInt(lhs), Real::Integer(rhs)) => Real::BigInt(lhs + BigInt::from(rhs)),
-            (Real::BigInt(lhs), Real::BigInt(rhs)) => Real::BigInt(lhs + rhs),
-            (Real::BigInt(lhs), Real::Float(rhs)) => Real::Float(lhs.to_f64().unwrap() + rhs),
-            (Real::Float(lhs), Real::Integer(rhs)) => Real::Float(lhs + rhs as f64),
-            (Real::Float(lhs), Real::BigInt(rhs)) => Real::Float(lhs + rhs.to_f64().unwrap()),
-            (Real::Float(lhs), Real::Float(rhs)) => Real::Float(lhs + rhs),
-        }
-    }
-}
-
-impl std::ops::Sub for Real {
-    type Output = Real;
-    fn sub(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Real::Integer(lhs), Real::Integer(rhs)) => Real::Integer(lhs - rhs),
-            (Real::Integer(lhs), Real::BigInt(rhs)) => Real::BigInt(BigInt::from(lhs) - rhs),
-            (Real::Integer(lhs), Real::Float(rhs)) => Real::Float(lhs as f64 - rhs),
-            (Real::BigInt(lhs), Real::Integer(rhs)) => Real::BigInt(lhs - BigInt::from(rhs)),
-            (Real::BigInt(lhs), Real::BigInt(rhs)) => Real::BigInt(lhs - rhs),
-            (Real::BigInt(lhs), Real::Float(rhs)) => Real::Float(lhs.to_f64().unwrap() - rhs),
-            (Real::Float(lhs), Real::Integer(rhs)) => Real::Float(lhs - rhs as f64),
-            (Real::Float(lhs), Real::BigInt(rhs)) => Real::Float(lhs - rhs.to_f64().unwrap()),
-            (Real::Float(lhs), Real::Float(rhs)) => Real::Float(lhs - rhs),
-        }
-    }
-}
-
-impl std::ops::Mul for Real {
-    type Output = Real;
-    fn mul(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Real::Integer(lhs), Real::Integer(rhs)) => Real::Integer(lhs * rhs),
-            (Real::Integer(lhs), Real::BigInt(rhs)) => Real::BigInt(BigInt::from(lhs) * rhs),
-            (Real::Integer(lhs), Real::Float(rhs)) => Real::Float(lhs as f64 * rhs),
-            (Real::BigInt(lhs), Real::Integer(rhs)) => Real::BigInt(lhs * BigInt::from(rhs)),
-            (Real::BigInt(lhs), Real::BigInt(rhs)) => Real::BigInt(lhs * rhs),
-            (Real::BigInt(lhs), Real::Float(rhs)) => Real::Float(lhs.to_f64().unwrap() * rhs),
-            (Real::Float(lhs), Real::Integer(rhs)) => Real::Float(lhs * rhs as f64),
-            (Real::Float(lhs), Real::BigInt(rhs)) => Real::Float(lhs * rhs.to_f64().unwrap()),
-            (Real::Float(lhs), Real::Float(rhs)) => Real::Float(lhs * rhs),
-        }
-    }
-}
-
-impl std::ops::Neg for Real {
-    type Output = Real;
-    fn neg(self) -> Self::Output {
-        match self {
-            Real::Integer(i) => Real::Integer(-i),
-            Real::BigInt(b) => Real::BigInt(-b),
-            Real::Float(f) => Real::Float(-f),
-        }
-    }
-}
-
-impl std::convert::From<Real> for Value {
-    fn from(real: Real) -> Self {
-        match real {
-            Real::Integer(i) => Value::integer(i),
-            Real::BigInt(b) => Value::bigint(b),
-            Real::Float(f) => Value::float(f),
-        }
-    }
-}
-
-impl std::convert::From<NReal> for Real {
-    fn from(r: NReal) -> Self {
-        match r {
-            NReal::Integer(i) => Real::Integer(i),
-            NReal::Bignum(b) => Real::BigInt(b),
-            NReal::Float(f) => Real::Float(f),
-        }
+    pub fn to_complex_f64(&self) -> num::complex::Complex<f64> {
+        num::complex::Complex::new(self.0.re.to_f64(), self.0.im.to_f64())
     }
 }

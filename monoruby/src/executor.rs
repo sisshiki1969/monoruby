@@ -770,10 +770,10 @@ impl Executor {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             outer_lfp.move_frame_to_heap();
-            let proc = Proc::new(self.get_block_data(globals, bh)?);
+            let proc = Proc::from(self.get_block_data(globals, bh)?);
             Ok(proc)
         } else if bh.try_proc().is_some() {
-            Ok(bh.0.into())
+            Ok(Proc::new(bh.0))
         } else {
             unimplemented!()
         }
@@ -797,7 +797,7 @@ impl Executor {
         args: Vec<Value>,
     ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
-        let proc = Proc::from(outer_lfp, FuncId::new(1));
+        let proc = Proc::from_parts(outer_lfp, FuncId::new(1));
         let e = Value::new_enumerator(obj, method, proc, args);
         Ok(e)
     }

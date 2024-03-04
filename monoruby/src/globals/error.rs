@@ -369,17 +369,10 @@ impl MonorubyErr {
     }
 
     ///
-    /// Set TypeError with message "{op}: *class of val* can't be coerced into Integer".
+    /// Set TypeError with message "{op}: *class of val* can't be coerced into {`msg`}".
     ///
-    pub(crate) fn cant_coerced_into_integer(op: IdentId, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::CantCoercedInteger { op, val })
-    }
-
-    ///
-    /// Set TypeError with message "{op}: *class of val* can't be coerced into Float".
-    ///
-    pub(crate) fn cant_coerced_into_float(op: IdentId, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::CantCoercedFloat { op, val })
+    pub(crate) fn cant_coerced_into(op: IdentId, val: Value, msg: &'static str) -> MonorubyErr {
+        MonorubyErr::typeerr("", TypeErrKind::CantCoerced { op, val, msg })
     }
 
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
@@ -529,13 +522,27 @@ impl NoMethodErrKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrKind {
-    NoImpricitConversion { val: Value, target_class: ClassId },
-    NotSymbolNorString { val: Value },
-    NotRegexpNorString { val: Value },
-    CantConverFloat { val: Value },
-    CantCoercedInteger { op: IdentId, val: Value },
-    CantCoercedFloat { op: IdentId, val: Value },
-    WrongArgumentTypeProc { val: Value },
+    NoImpricitConversion {
+        val: Value,
+        target_class: ClassId,
+    },
+    NotSymbolNorString {
+        val: Value,
+    },
+    NotRegexpNorString {
+        val: Value,
+    },
+    CantConverFloat {
+        val: Value,
+    },
+    CantCoerced {
+        op: IdentId,
+        val: Value,
+        msg: &'static str,
+    },
+    WrongArgumentTypeProc {
+        val: Value,
+    },
     Other,
 }
 
@@ -559,15 +566,9 @@ impl TypeErrKind {
                     val.get_real_class_name(globals)
                 )
             }
-            TypeErrKind::CantCoercedInteger { op, val } => {
+            TypeErrKind::CantCoerced { op, val, msg } => {
                 format!(
-                    "{op}: {} can't be coerced into Integer",
-                    val.get_real_class_name(globals)
-                )
-            }
-            TypeErrKind::CantCoercedFloat { op, val } => {
-                format!(
-                    "{op}: {} can't be coerced into Float",
+                    "{op}: {} can't be coerced into {msg}",
                     val.get_real_class_name(globals)
                 )
             }

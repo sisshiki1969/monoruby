@@ -1,25 +1,11 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(transparent)]
+#[monoruby_object]
 pub struct Module(Value);
 
-impl std::ops::Deref for Module {
-    type Target = ModuleInner;
-    fn deref(&self) -> &Self::Target {
-        self.as_ref_val().rvalue().as_class()
-    }
-}
-
-impl std::ops::DerefMut for Module {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_ref_val().rvalue_mut().as_class_mut()
-    }
-}
-
-impl alloc::GC<RValue> for Module {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.mark(alloc);
+impl std::cmp::PartialEq for Module {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 
@@ -31,20 +17,13 @@ impl Module {
         }
     }
 
-    pub fn as_val(&self) -> Value {
-        self.0
-    }
-
-    pub fn as_ref_val(&self) -> &Value {
-        &self.0
-    }
-
-    pub fn as_mut_ref_val(&mut self) -> &mut Value {
-        &mut self.0
-    }
-
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         self.0.change_class(new_class_id);
+    }
+
+    pub(crate) fn include_module(&mut self, module: Module) {
+        let module = module.make_iclass(self.superclass());
+        self.superclass = Some(module);
     }
 
     pub fn get_real_class(&self) -> Module {
@@ -53,10 +32,6 @@ impl Module {
             class = class.superclass().unwrap();
         }
         class
-    }
-
-    pub fn make_iclass(&self, superclass: Option<Module>) -> Module {
-        Value::iclass(self.id(), superclass).as_class()
     }
 
     pub fn is_exception(&self) -> bool {
@@ -72,6 +47,10 @@ impl Module {
             }
         }
         false
+    }
+
+    fn make_iclass(&self, superclass: Option<Module>) -> Module {
+        Value::iclass(self.id(), superclass).as_class()
     }
 }
 
@@ -114,10 +93,6 @@ impl ModuleInner {
 
     pub fn superclass_id(&self) -> Option<ClassId> {
         self.superclass.map(|m| m.id())
-    }
-
-    pub fn change_superclass(&mut self, superclass: Module) {
-        self.superclass = Some(superclass);
     }
 
     pub fn class_type(&self) -> ModuleType {

@@ -80,11 +80,7 @@ fn strftime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 #[monoruby_builtin]
 fn sub(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs_rv = self_.try_rvalue().unwrap();
-    let lhs = match lhs_rv.ty() {
-        ObjKind::TIME => lhs_rv.as_time().clone(),
-        _ => unreachable!(),
-    };
+    let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
     let rhs = match rhs_rv.try_rvalue().unwrap().ty() {
         ObjKind::TIME => rhs_rv.as_time().clone(),

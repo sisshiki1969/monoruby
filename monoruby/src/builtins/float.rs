@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(FLOAT_CLASS, "-", sub, 1);
     globals.define_builtin_func(FLOAT_CLASS, "*", mul, 1);
     globals.define_builtin_func(FLOAT_CLASS, "/", div, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "%", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "==", eq, 1);
@@ -126,6 +127,20 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             Err(err)
         }
     }
+}
+
+///
+/// ### Float#div
+///
+/// - div(other) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/div.html]
+#[monoruby_builtin]
+fn div_floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let lhs = lfp.self_val().try_float().unwrap();
+    let rhs = RealKind::try_from(lfp.arg(0))?.to_f64();
+    let div_floor = (lhs / rhs).floor();
+    Value::coerce_f64_to_int(div_floor)
 }
 
 ///
@@ -287,5 +302,9 @@ mod test {
         run_test("-725.11.to_f");
         run_test("1.2.floor");
         run_test("(-1.2).floor");
+        run_test("3.0.div(2)");
+        run_test("3.0.div(-2)");
+        run_test("(-3.0).div(2)");
+        run_test("(-3.0).div(-2)");
     }
 }

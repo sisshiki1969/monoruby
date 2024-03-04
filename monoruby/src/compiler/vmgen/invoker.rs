@@ -400,7 +400,7 @@ fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> u
 }
 
 fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
-    let ary: Array = src.into();
+    let ary = Array::new(src);
     let len = ary.len();
     for i in 0..len {
         unsafe { *dst.sub(i) = ary[i] }

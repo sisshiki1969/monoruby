@@ -238,7 +238,7 @@ impl RegexpInner {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
                     vm.invoke_block_once(globals, bh, &[matched])
                 } else {
-                    let mut ary = Array::new();
+                    let mut ary = Array::new_empty();
                     for i in 0..captures.len() {
                         ary.push(Value::string_from_str(captures.get(i).unwrap().as_str()));
                     }

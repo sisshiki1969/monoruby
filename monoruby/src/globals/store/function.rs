@@ -306,7 +306,7 @@ impl std::default::Default for Funcs {
 
 #[monoruby_builtin]
 fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let e: Enumerator = lfp.self_val().into();
+    let e = Enumerator::new(lfp.self_val());
     let receiver = e.obj;
     let method = e.method;
     let args = &*e.args;
