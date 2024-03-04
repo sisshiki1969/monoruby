@@ -384,7 +384,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn negative_argument() -> MonorubyErr {
-        MonorubyErr::argumenterr("negativeargument")
+        MonorubyErr::argumenterr("negative argument")
     }
 
     pub(crate) fn negative_array_size() -> MonorubyErr {

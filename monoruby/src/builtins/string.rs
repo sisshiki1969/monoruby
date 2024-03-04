@@ -52,6 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
+    globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
@@ -1419,6 +1420,26 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let to = lfp.arg(1).expect_string()?;
     let res = rec.replace(&from, &to);
     Ok(Value::string(res))
+}
+
+///
+/// ### String#count
+///
+/// - count(*chars) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
+#[monoruby_builtin]
+fn count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let args = Array::new(lfp.arg(0));
+    let target = lfp.self_val().as_str().to_string();
+    let mut c = 0;
+    for arg in args.iter() {
+        let arg = arg.expect_string()?;
+        for ch in arg.chars() {
+            c += target.rmatches(|x| ch == x).count();
+        }
+    }
+    Ok(Value::integer(c as i64))
 }
 
 ///
