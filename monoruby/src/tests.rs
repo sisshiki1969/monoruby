@@ -23,8 +23,9 @@ pub fn run_test(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped, false);
-    let ruby_res = run_ruby(code, &mut globals);
+    let mut globals = Globals::new(1, false);
+    let interp_val = run_test_main(&mut globals, &wrapped, false);
+    let ruby_res = run_ruby(&mut globals, code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -43,7 +44,7 @@ pub fn run_test(code: &str) {
     );
     eprintln!("{}", wrapped);
     let (interp_val, mut globals) = run_test_main(&wrapped, true);
-    let ruby_res = run_ruby(code, &mut globals);
+    let ruby_res = run_ruby(&mut globals, code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }*/
@@ -56,8 +57,9 @@ pub fn run_test_once(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped, false);
-    let ruby_res = run_ruby(code, &mut globals);
+    let mut globals = Globals::new(1, false);
+    let interp_val = run_test_main(&mut globals, &wrapped, false);
+    let ruby_res = run_ruby(&mut globals, code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -80,8 +82,9 @@ pub fn run_tests(codes: &[String]) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped, false);
-    let ruby_res = run_ruby(&code, &mut globals);
+    let mut globals = Globals::new(1, false);
+    let interp_val = run_test_main(&mut globals, &wrapped, false);
+    let ruby_res = run_ruby(&mut globals, &code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -140,8 +143,9 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
   "##
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped, false);
-    let ruby_res = run_ruby(&format!("{prelude}\n{code}"), &mut globals);
+    let mut globals = Globals::new(1, false);
+    let interp_val = run_test_main(&mut globals, &wrapped, false);
+    let ruby_res = run_ruby(&mut globals, &format!("{prelude}\n{code}"));
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -161,8 +165,9 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
 }*/
 
 pub fn run_test2(code: &str) {
-    let (interp_val, mut globals) = run_test_main(code, false);
-    let ruby_res = run_ruby(code, &mut globals);
+    let mut globals = Globals::new(1, false);
+    let interp_val = run_test_main(&mut globals, code, false);
+    let ruby_res = run_ruby(&mut globals, code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -170,7 +175,8 @@ pub fn run_test2(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     eprintln!("{code}");
-    run_test_main(code, false).0
+    let mut globals = Globals::new(1, false);
+    run_test_main(&mut globals, code, false)
 }
 
 pub fn run_test_error(code: &str) {
@@ -183,10 +189,9 @@ pub fn run_test_error(code: &str) {
     }
 }
 
-fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
+fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
     #[cfg(not(debug_assertions))]
     let now = std::time::Instant::now();
-    let mut globals = Globals::new(1, false);
     Globals::gc_enable(!no_gc);
     let res = match globals.run(code, std::path::Path::new("")) {
         Ok(res) => res,
@@ -196,16 +201,16 @@ fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
         }
     };
 
-    let jit_str = globals.inspect(res);
+    let jit_str = res.inspect(&globals);
     #[cfg(not(debug_assertions))]
     eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("monoruby:  {jit_str}");
 
-    (res, globals)
+    res
 }
 
-fn run_ruby(code: &str, globals: &mut Globals) -> Value {
+fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     use std::process::Command;
     let mut tmp_file = NamedTempFile::new().unwrap();
     tmp_file
@@ -249,7 +254,7 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", globals.inspect(res));
+    eprintln!("ruby: {}", res.inspect(globals));
     res
 }
 

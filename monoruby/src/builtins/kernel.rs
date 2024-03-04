@@ -198,7 +198,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
     for v in lfp.arg(0).as_array().iter().cloned() {
-        buf += &globals.inspect(v);
+        buf += &v.inspect(globals);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
@@ -215,8 +215,8 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let actual = lfp.arg(1);
     eprintln!(
         "expected:{} actual:{}",
-        globals.inspect(expected),
-        globals.inspect(actual)
+        expected.inspect(globals),
+        actual.inspect(globals)
     );
     assert!(Value::eq(expected, actual));
     Ok(Value::nil())
@@ -269,7 +269,7 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
                 match s.parse::<i64>() {
                     Ok(num) => return Ok(Value::integer(num)),
                     Err(_) => {
-                        let s = globals.to_s(arg0);
+                        let s = arg0.to_s(globals);
                         return Err(MonorubyErr::argumenterr(format!(
                             "invalid value for Integer(): {}",
                             s

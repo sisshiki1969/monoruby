@@ -48,7 +48,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };
-    let bytes = globals.to_s(lfp.arg(1)).into_bytes();
+    let bytes = lfp.arg(1).to_s(globals).into_bytes();
     match file.write_all(&bytes) {
         Ok(_) => {}
         Err(err) => return Err(MonorubyErr::runtimeerr(err)),

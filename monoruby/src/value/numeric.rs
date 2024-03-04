@@ -1,4 +1,4 @@
-use num::{Signed, ToPrimitive};
+use num::{Signed, ToPrimitive, Zero};
 use paste::paste;
 use ruruby_parse::NReal;
 
@@ -157,6 +157,14 @@ impl Real {
         RealKind::from(*self).is_positive()
     }
 
+    pub fn is_negative(&self) -> bool {
+        RealKind::from(*self).is_negative()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        RealKind::from(*self).is_zero()
+    }
+
     pub fn eql(&self, other: &Self) -> bool {
         self.0.eql(&other.0)
     }
@@ -301,6 +309,22 @@ impl RealKind {
             RealKind::Integer(i) => i.is_positive(),
             RealKind::BigInt(b) => b.is_positive(),
             RealKind::Float(f) => f.is_sign_positive(),
+        }
+    }
+
+    fn is_negative(&self) -> bool {
+        match self {
+            RealKind::Integer(i) => i.is_negative(),
+            RealKind::BigInt(b) => b.is_negative(),
+            RealKind::Float(f) => f.is_sign_negative(),
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        match self {
+            RealKind::Integer(i) => i.is_zero(),
+            RealKind::BigInt(b) => b.is_zero(),
+            RealKind::Float(f) => f.is_zero(),
         }
     }
 

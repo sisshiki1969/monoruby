@@ -332,7 +332,7 @@ impl RValue {
                 ObjKind::OBJECT => self.object_tos(globals),
                 ObjKind::RANGE => self.range_tos(globals),
                 ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.hash_tos(globals),
+                ObjKind::HASH => self.as_hash().to_s(globals),
                 ObjKind::REGEXP => self.regexp_tos(),
                 ObjKind::IO => self.as_io().to_string(),
                 ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
@@ -340,11 +340,7 @@ impl RValue {
                 ObjKind::FIBER => self.fiber_tos(globals),
                 ObjKind::ENUMERATOR => self.enumerator_tos(globals),
                 ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::COMPLEX => {
-                    let re = self.as_complex().re();
-                    let im = self.as_complex().im();
-                    format!("{}+{}i", globals.to_s(re.get()), globals.to_s(im.get()))
-                }
+                ObjKind::COMPLEX => self.as_complex().to_s(globals),
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -360,11 +356,7 @@ impl RValue {
                     format!("#<{class_name}: {msg}>")
                 }
                 ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::COMPLEX => {
-                    let re = self.as_complex().re();
-                    let im = self.as_complex().im();
-                    format!("({}+{}i)", globals.to_s(re.get()), globals.to_s(im.get()))
-                }
+                ObjKind::COMPLEX => self.as_complex().inspect(globals),
                 _ => self.to_s(globals),
             }
         }
@@ -373,14 +365,14 @@ impl RValue {
     pub(crate) fn inspect2(&self, globals: &Globals) -> String {
         match self.ty() {
             ObjKind::ARRAY => self.as_array().inspect2(globals),
-            ObjKind::HASH => self.hash_inspect2(globals),
+            ObjKind::HASH => self.as_hash().inspect2(globals),
             _ => self.inspect(globals),
         }
     }
 
     fn object_tos(&self, globals: &Globals) -> String {
         if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
-            globals.to_s(name)
+            name.to_s(globals)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
@@ -392,11 +384,11 @@ impl RValue {
 
     fn object_inspect(&self, globals: &Globals) -> String {
         if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
-            globals.to_s(name)
+            name.to_s(globals)
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(globals).into_iter() {
-                s += &format!(" {id}={}", globals.inspect(v));
+                s += &format!(" {id}={}", v.inspect(globals));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
@@ -423,7 +415,7 @@ impl RValue {
 
     fn enumerator_tos(&self, globals: &Globals) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", globals.to_s(e.obj), e.method)
+        format!("#<Enumerator: {} {}>", e.obj.to_s(globals), e.method)
     }
 
     fn proc_tos(&self) -> String {
@@ -438,70 +430,10 @@ impl RValue {
         let range = self.as_range();
         format!(
             "{}{}{}",
-            globals.inspect(range.start),
+            range.start.inspect(globals),
             if range.exclude_end() { "..." } else { ".." },
-            globals.inspect(range.end),
+            range.end.inspect(globals),
         )
-    }
-
-    fn hash_tos(&self, globals: &Globals) -> String {
-        let hash = self.as_hash();
-        match hash.len() {
-            0 => "{}".to_string(),
-            _ => {
-                let mut result = "".to_string();
-                let mut first = true;
-                for (k, v) in hash.iter() {
-                    let k_inspect = if k.id() == self.id() {
-                        "{...}".to_string()
-                    } else {
-                        globals.inspect(k)
-                    };
-                    let v_inspect = if v.id() == self.id() {
-                        "{...}".to_string()
-                    } else {
-                        globals.inspect(v)
-                    };
-                    result = if first {
-                        format!("{k_inspect}=>{v_inspect}")
-                    } else {
-                        format!("{result}, {k_inspect}=>{v_inspect}")
-                    };
-                    first = false;
-                }
-                format! {"{{{}}}", result}
-            }
-        }
-    }
-
-    fn hash_inspect2(&self, globals: &Globals) -> String {
-        let hash = self.as_hash();
-        match hash.len() {
-            0 => "{}".to_string(),
-            _ => {
-                let mut result = "".to_string();
-                let mut first = true;
-                for (k, v) in hash.iter().take(3) {
-                    let k_inspect = if k.id() == self.id() {
-                        "{...}".to_string()
-                    } else {
-                        globals.inspect2(k)
-                    };
-                    let v_inspect = if v.id() == self.id() {
-                        "{...}".to_string()
-                    } else {
-                        globals.inspect2(v)
-                    };
-                    result = if first {
-                        format!("{k_inspect}=>{v_inspect}")
-                    } else {
-                        format!("{result}, {k_inspect}=>{v_inspect}")
-                    };
-                    first = false;
-                }
-                format! {"{{{} .. }}", result}
-            }
-        }
     }
 }
 
