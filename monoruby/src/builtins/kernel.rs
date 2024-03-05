@@ -33,6 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
+    globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
@@ -440,6 +441,28 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
         }
         Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
     }
+}
+
+///
+/// Kernel.#sleep
+///
+/// - sleep -> Integer
+/// - sleep(sec) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
+#[monoruby_builtin]
+fn sleep(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let now = std::time::Instant::now();
+    if let Some(sec) = lfp.try_arg(0) {
+        let sec = sec.coerce_to_f64()?;
+        std::thread::sleep(std::time::Duration::from_secs_f64(sec));
+    } else {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(100));
+        }
+    }
+    let elapsed = now.elapsed().as_secs();
+    Ok(Value::integer(elapsed as i64))
 }
 
 ///

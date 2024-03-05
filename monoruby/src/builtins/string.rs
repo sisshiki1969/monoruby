@@ -28,6 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
@@ -37,8 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
-    globals.define_builtin_func(STRING_CLASS, "length", length, 0);
-    globals.define_builtin_func(STRING_CLASS, "size", length, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
@@ -47,8 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
-    globals.define_builtin_func(STRING_CLASS, "intern", to_sym, 0);
-    globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
@@ -518,6 +517,11 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(res)
 }
 
+///
+/// Convert `i` to the position of the char in the string with `len` chars.
+///
+/// Return None if `i` is out of range.
+///
 fn conv_index(i: i64, len: usize) -> Option<usize> {
     if i >= 0 {
         if i <= len as i64 {
@@ -531,6 +535,13 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
             n => Some(n as usize),
         }
     }
+}
+
+fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
+    let mut iter = s.char_indices().skip(index).peekable();
+    let start = iter.peek().map(|(i, _)| *i).unwrap_or(s.len());
+    let end = iter.nth(len).map(|(i, _)| i).unwrap_or(s.len());
+    start..end
 }
 
 ///
@@ -558,32 +569,34 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
-            let ch: String = lhs.chars().skip(index).take(len).collect();
-            Ok(Value::string_from_vec(ch.into_bytes()))
+            let r = get_range(&lhs, index, len);
+            Ok(Value::string_from_str(&lhs[r]))
         } else {
-            let len = 1usize;
-            let ch: String = lhs.chars().skip(index).take(len).collect();
-            if !ch.is_empty() {
-                Ok(Value::string_from_vec(ch.into_bytes()))
+            let r = get_range(&lhs, index, 1);
+            if !r.is_empty() {
+                Ok(Value::string_from_str(&lhs[r]))
             } else {
                 Ok(Value::nil())
             }
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
         let len = lhs.chars().count();
-        // TODO: exclude?
-        let (start, end) = match (info.start.try_fixnum(), info.end.try_fixnum()) {
-            (Some(start), Some(end)) => match (conv_index(start, len), conv_index(end, len)) {
-                (Some(start), Some(end)) if start > end => return Ok(Value::string_from_str("")),
-                (Some(start), Some(end)) => (start, end),
-                _ => return Ok(Value::nil()),
-            },
-            _ => {
-                return Err(MonorubyErr::argumenterr("Index must be Integer."));
+        let (start, end) = (
+            info.start.expect_integer()?,
+            info.end.expect_integer()? - info.exclude_end() as i64,
+        );
+        let (start, len) = match (conv_index(start, len), conv_index(end, len)) {
+            (Some(start), Some(end)) => {
+                if start > end {
+                    (start, 0)
+                } else {
+                    (start, end - start + 1)
+                }
             }
+            _ => return Ok(Value::nil()),
         };
-        let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
-        Ok(Value::string(s))
+        let r = get_range(&lhs, start, len);
+        Ok(Value::string_from_str(&lhs[r]))
     } else if let Some(info) = lfp.arg(0).is_regex() {
         let nth = if lfp.try_arg(1).is_none() {
             0
@@ -595,20 +608,17 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             Ok(Some(captures)) => {
                 vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
-                if nth == 0 {
-                    Ok(Value::string_from_str(captures.get(0).unwrap().as_str()))
-                } else if nth > 0 {
-                    match captures.get(nth as usize) {
-                        Some(m) => Ok(Value::string_from_str(m.as_str())),
-                        None => Ok(Value::nil()),
-                    }
+                let nth = if nth >= 0 {
+                    nth as usize
                 } else {
                     match len + nth {
-                        i if i > 0 => Ok(Value::string_from_str(
-                            captures.get(i as usize).unwrap().as_str(),
-                        )),
-                        _ => Ok(Value::nil()),
+                        i if i > 0 => i as usize,
+                        _ => return Ok(Value::nil()),
                     }
+                };
+                match captures.get(nth) {
+                    Some(m) => Ok(Value::string_from_str(m.as_str())),
+                    None => Ok(Value::nil()),
                 }
             }
             Err(err) => Err(MonorubyErr::internalerr(format!(
@@ -906,6 +916,123 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     } else {
         Err(MonorubyErr::is_not_regexp_nor_string(lfp.arg(0)))
+    }
+}
+
+fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
+    let res = Value::string_from_str(&lhs[r.clone()]);
+    lhs.replace_range(r, "");
+    *lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+    res
+}
+
+///
+/// ### String#slice!
+/// - slice!(nth) -> String
+/// - slice!(pos, len) -> String
+/// - [NOT SUPPRTED] slice!(substr) -> String
+/// - slice!(regexp, nth = 0) -> String
+/// - slice!(first..last) -> String
+/// - slice!(first...last) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/slice=21.html]
+#[monoruby_builtin]
+fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let lhs = self_.expect_string()?;
+    if let Some(i) = lfp.arg(0).try_fixnum() {
+        let index = match conv_index(i, lhs.chars().count()) {
+            Some(i) => i,
+            None => return Ok(Value::nil()),
+        };
+        if let Some(arg1) = lfp.try_arg(1) {
+            let len = match arg1.coerce_to_i64()? {
+                i if i < 0 => return Ok(Value::nil()),
+                i => i as usize,
+            };
+            let r = get_range(&lhs, index, len);
+            //let res = Value::string_from_str(&lhs[r.clone()]);
+            //lhs.replace_range(r, "");
+            //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+            Ok(slice_sub(lfp, lhs, r))
+        } else {
+            let r = get_range(&lhs, index, 1);
+            if !r.is_empty() {
+                //let res = Value::string_from_str(&lhs[r.clone()]);
+                //lhs.replace_range(r, "");
+                //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+                Ok(slice_sub(lfp, lhs, r))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    } else if let Some(info) = lfp.arg(0).is_range() {
+        let len = lhs.chars().count();
+        let (start, end) = (
+            info.start.expect_integer()?,
+            info.end.expect_integer()? - info.exclude_end() as i64,
+        );
+        let (start, len) = match (
+            conv_index(start, len),
+            if end >= 0 {
+                Some(end as usize)
+            } else if len as i64 + end >= 0 {
+                Some((len as i64 + end) as usize)
+            } else {
+                None
+            },
+        ) {
+            (Some(start), Some(end)) => {
+                if start > end {
+                    (start, 0)
+                } else {
+                    (start, end - start + 1)
+                }
+            }
+            _ => return Ok(Value::nil()),
+        };
+        let r = get_range(&lhs, start, len);
+        //let res = Value::string_from_str(&lhs[r.clone()]);
+        //lhs.replace_range(r, "");
+        //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+        Ok(slice_sub(lfp, lhs, r))
+    } else if let Some(info) = lfp.arg(0).is_regex() {
+        let nth = if lfp.try_arg(1).is_none() {
+            0
+        } else {
+            lfp.arg(1).coerce_to_i64()?
+        };
+        match info.captures(&lhs) {
+            Ok(None) => return Ok(Value::nil()),
+            Ok(Some(captures)) => {
+                vm.save_captures(&captures, &lhs);
+                let len = captures.len() as i64;
+                let nth = if nth >= 0 {
+                    nth as usize
+                } else {
+                    match len + nth {
+                        i if i > 0 => i as usize,
+                        _ => return Ok(Value::nil()),
+                    }
+                };
+                match captures.get(nth) {
+                    Some(m) => {
+                        let r = m.range();
+                        //let res = Value::string_from_str(&lhs[r.clone()]);
+                        //lhs.replace_range(r, "");
+                        //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+                        Ok(slice_sub(lfp, lhs, r))
+                    }
+                    None => Ok(Value::nil()),
+                }
+            }
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
+        }
+    } else {
+        Err(MonorubyErr::argumenterr("Bad type for index."))
     }
 }
 
@@ -1431,12 +1558,16 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let args = Array::new(lfp.arg(0));
-    let target = lfp.self_val().as_str().to_string();
+    let self_ = lfp.self_val();
+    let target = self_.as_str();
     let mut c = 0;
-    for arg in args.iter() {
-        let arg = arg.expect_string()?;
-        for ch in arg.chars() {
-            c += target.rmatches(|x| ch == x).count();
+    for ch in target.chars() {
+        for arg in args.iter() {
+            let s = arg.expect_string()?;
+            if s.chars().any(|c2| c2 == ch) {
+                c += 1;
+                break;
+            }
         }
     }
     Ok(Value::integer(c as i64))
@@ -1639,6 +1770,27 @@ mod test {
         run_test(
             r##"['abcd'[1..2], 'abcd'[2..2], 'abcd'[3..2], 'abcd'[4..2], 'abcd'[5..2], 'abcd'[-3..2], 'abcd'[-4..2], 'abcd'[-5..2]]"##,
         );
+    }
+
+    #[test]
+    fn slice() {
+        run_test(r##"s = "this is a string"; [s.slice!(2), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-2), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-20), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(20), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(3..6), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(3...6), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-3...6), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-12...1), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-12...6), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(-12...50), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(30...50), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s.*t/), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s/), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s/, 2), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s/, 5), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s/, -1), s]"##);
+        run_test(r##"s = "this is a string"; [s.slice!(/s/, -10), s]"##);
     }
 
     #[test]
@@ -1978,6 +2130,13 @@ mod test {
         ["hello world".chars do |c| x << c.upcase end, x]
         "#,
         );
+    }
+
+    #[test]
+    fn count() {
+        run_test(r#"'abcdefg'.count('c') "#);
+        run_test(r#"'123456789'.count('2378') "#);
+        run_test(r#"'123456789'.count('2378', '2378') "#);
     }
 
     #[test]

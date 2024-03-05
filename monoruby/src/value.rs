@@ -1,3 +1,4 @@
+use num::ToPrimitive;
 use std::borrow::Cow;
 
 use super::*;
@@ -705,6 +706,27 @@ impl Value {
                 "bignum too big to convert into `long'",
             )),
             _ => Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS)),
+        }
+    }
+
+    ///
+    /// Try to convert `self` to i64.
+    ///
+    /// - if `self` is a Fixnum or a Bignum, convert it to f64.
+    /// - if `self` is a Float, return it as f64.
+    ///
+    pub fn coerce_to_f64(&self) -> Result<f64> {
+        match self.unpack() {
+            RV::Fixnum(i) => Ok(i as f64),
+            RV::Float(f) => Ok(f),
+            RV::BigInt(b) => {
+                if let Some(f) = b.to_f64() {
+                    Ok(f)
+                } else {
+                    Err(MonorubyErr::cant_convert_into_float(*self))
+                }
+            }
+            _ => Err(MonorubyErr::no_implicit_conversion(*self, FLOAT_CLASS)),
         }
     }
 
