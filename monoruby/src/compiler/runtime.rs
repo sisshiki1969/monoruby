@@ -255,7 +255,7 @@ pub(super) extern "C" fn concatenate_string(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += &globals.to_s(v);
+        res += &v.to_s(globals);
     }
     Value::string(res)
 }
@@ -269,7 +269,7 @@ pub(super) extern "C" fn concatenate_regexp(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += &globals.to_s(v);
+        res += &v.to_s(globals);
     }
     let inner = match RegexpInner::from_string(globals, res) {
         Ok(inner) => inner,

@@ -19,12 +19,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
-    globals.define_builtin_func(HASH_CLASS, "has_key?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "include?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "key?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "member?", include, 1);
-    globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
-    globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_funcs(
+        HASH_CLASS,
+        "include?",
+        &["has_key?", "key?", "member?"],
+        include,
+        1,
+    );
+    globals.define_builtin_funcs(HASH_CLASS, "inspect", &["to_s"], inspect, 0);
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
@@ -226,7 +228,7 @@ fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = globals.inspect(lfp.self_val());
+    let s = lfp.self_val().as_hash().to_s(globals);
     Ok(Value::string(s))
 }
 
@@ -347,7 +349,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
-                    globals.to_s(lfp.arg(0))
+                    lfp.arg(0).to_s(globals)
                 )))
             }
         }

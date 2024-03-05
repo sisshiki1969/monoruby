@@ -155,7 +155,7 @@ fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = globals.to_s(lfp.self_val());
+    let s = lfp.self_val().to_s(globals);
     Ok(Value::string(s))
 }
 
@@ -185,7 +185,7 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = globals.inspect(lfp.self_val());
+    let s = lfp.self_val().inspect(globals);
     Ok(Value::string(s))
 }
 

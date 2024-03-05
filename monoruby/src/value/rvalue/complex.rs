@@ -71,4 +71,22 @@ impl ComplexInner {
     pub fn to_complex_f64(&self) -> num::complex::Complex<f64> {
         num::complex::Complex::new(self.0.re.to_f64(), self.0.im.to_f64())
     }
+
+    pub fn to_s(&self, globals: &Globals) -> String {
+        format!(
+            "{}{}{}i",
+            self.re.get().to_s(globals),
+            if self.im.is_negative() { "" } else { "+" },
+            self.im.get().to_s(globals)
+        )
+    }
+
+    pub fn inspect(&self, globals: &Globals) -> String {
+        format!(
+            "({}{}{}i)",
+            self.re.get().to_s(globals),
+            if self.im.is_negative() { "" } else { "+" },
+            self.im.get().to_s(globals)
+        )
+    }
 }

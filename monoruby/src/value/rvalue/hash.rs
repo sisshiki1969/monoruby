@@ -2,6 +2,9 @@ use super::*;
 use std::hash::Hash;
 use std::ops::Deref;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HashId(usize);
+
 #[derive(Debug, Clone)]
 pub enum HashInner {
     Map(Box<IndexMap<HashKey, Value>>),
@@ -49,10 +52,80 @@ impl PartialEq for HashInner {
 }
 
 impl HashInner {
+    fn id(&self) -> HashId {
+        HashId(&self as *const _ as usize)
+    }
+
     pub fn remove(&mut self, k: Value) -> Option<Value> {
         match self {
             HashInner::Map(map) => map.shift_remove(&HashKey(k)),
             HashInner::IdentMap(map) => map.shift_remove(&IdentKey(k)),
+        }
+    }
+
+    pub fn to_s(&self, globals: &Globals) -> String {
+        match self.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in self.iter() {
+                    let k_inspect = if let Some(h) = k.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        k.inspect(globals)
+                    };
+                    let v_inspect = if let Some(h) = v.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        v.inspect(globals)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{}}}", result}
+            }
+        }
+    }
+
+    pub fn inspect2(&self, globals: &Globals) -> String {
+        match self.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in self.iter().take(3) {
+                    let k_inspect = if let Some(h) = k.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect2(k)
+                    };
+                    let v_inspect = if let Some(h) = v.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        globals.inspect2(v)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{} .. }}", result}
+            }
         }
     }
 }

@@ -514,7 +514,7 @@ impl Globals {
                 }
                 None => match class_obj.is_singleton() {
                     None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", self.to_s(base)),
+                    Some(base) => format!("#<Class:{}>", base.to_s(self)),
                 },
             }
         } else {
@@ -522,49 +522,10 @@ impl Globals {
         }
     }
 
-    pub(crate) fn to_s(&self, val: Value) -> String {
-        match val.unpack() {
-            RV::None => "Undef".to_string(),
-            RV::Nil => "".to_string(),
-            RV::Bool(b) => format!("{:?}", b),
-            RV::Fixnum(n) => format!("{}", n),
-            RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Complex(c) => {
-                let im = c.im;
-                format!(
-                    "{}{}{}i",
-                    self.to_s(c.re.get()),
-                    if im.is_positive() { "+" } else { "" },
-                    self.to_s(im.get())
-                )
-            }
-            RV::Symbol(id) => id.to_string(),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => s,
-                Err(_) => format!("{:?}", s),
-            },
-            RV::Object(rvalue) => rvalue.to_s(self),
-        }
-    }
-
-    pub fn inspect(&self, val: Value) -> String {
-        match val.unpack() {
-            RV::Nil => "nil".to_string(),
-            RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("{:?}", s),
-                Err(_) => format!("{:?}", s),
-            },
-            RV::Object(rvalue) => rvalue.inspect(self),
-            _ => self.to_s(val),
-        }
-    }
-
     pub(crate) fn inspect2(&self, val: Value) -> String {
         match val.unpack() {
             RV::Object(rvalue) => rvalue.inspect2(self),
-            _ => self.inspect(val),
+            _ => val.inspect(self),
         }
     }
 
@@ -572,7 +533,7 @@ impl Globals {
         if let RV::String(s) = val.unpack() {
             return s.to_vec();
         }
-        self.to_s(val).into_bytes()
+        val.to_s(self).into_bytes()
     }
 
     pub(crate) fn generate_range(

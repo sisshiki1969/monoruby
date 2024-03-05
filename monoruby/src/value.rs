@@ -443,6 +443,42 @@ impl Value {
     }
 }
 
+// display
+
+impl Value {
+    pub fn to_s(&self, globals: &Globals) -> String {
+        match self.unpack() {
+            RV::None => "Undef".to_string(),
+            RV::Nil => "".to_string(),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Fixnum(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Complex(_) => self.as_complex().to_s(globals),
+            RV::Symbol(id) => id.to_string(),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => s,
+                Err(_) => format!("{:?}", s),
+            },
+            RV::Object(rvalue) => rvalue.to_s(globals),
+        }
+    }
+
+    pub fn inspect(&self, globals: &Globals) -> String {
+        match self.unpack() {
+            RV::Nil => "nil".to_string(),
+            RV::Complex(_) => self.as_complex().inspect(globals),
+            RV::Symbol(id) => format!(":{id}"),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => format!("{:?}", s),
+                Err(_) => format!("{:?}", s),
+            },
+            RV::Object(rvalue) => rvalue.inspect(globals),
+            _ => self.to_s(globals),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct F2 {
@@ -790,7 +826,7 @@ impl Value {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.to_s(*self);
+                let name = self.to_s(globals);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
@@ -807,7 +843,7 @@ impl Value {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.to_s(*self);
+                let name = self.to_s(globals);
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -817,7 +853,7 @@ impl Value {
         match self.is_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.to_s(*self);
+                let name = self.to_s(globals);
                 Err(MonorubyErr::is_not_class(name))
             }
         }

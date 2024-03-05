@@ -1001,11 +1001,11 @@ impl BytecodeGen {
             }
             NodeKind::Index { box base, index } => {
                 if index.len() == 1 {
-                    let base = self.gen_expr_reg(base.clone())?;
-                    let index = self.gen_expr_reg(index[0].clone())?;
+                    let base = self.push_expr(base.clone())?.into();
+                    let index = self.push_expr(index[0].clone())?.into();
                     LvalueKind::Index { base, index }
                 } else if index.len() == 2 {
-                    let base = self.gen_expr_reg(base.clone())?;
+                    let base = self.push_expr(base.clone())?.into();
                     let index1 = self.push_expr(index[0].clone())?;
                     self.push_expr(index[1].clone())?;
                     self.push(); // register for src.
