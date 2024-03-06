@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
+    globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_inline_func(
         INTEGER_CLASS,
         "to_f",
@@ -151,6 +152,37 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let iter = NegStep { cur, step, limit };
         vm.invoke_block_iter1(globals, bh, iter)?;
     }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Integer#upto
+///
+/// - upto(max) {|n| ... } -> Integer
+/// - upto(max) -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/upto.html]
+#[monoruby_builtin]
+fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("upto");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
+    let cur = lfp.self_val().as_fixnum();
+    let limit = lfp.arg(0).coerce_to_i64()?;
+    if cur > limit {
+        return Ok(lfp.self_val());
+    }
+
+    let iter = PosStep {
+        cur,
+        limit,
+        step: 1,
+    };
+    vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -651,6 +683,28 @@ mod test {
           b = 0
           3.step(12, 3) do |y|
             5.step(25, 5) do |x|
+              a += x
+              b += x + y
+            end
+            a += y
+          end
+          a += z
+          a -= b
+        end
+        [a, x]
+        "##,
+        );
+    }
+
+    #[test]
+    fn upto() {
+        run_test(
+            r##"
+        a = 0
+        x = 0.upto(10) do |z|
+          b = 0
+          13.step(12) do |y|
+            15.step(25) do |x|
               a += x
               b += x + y
             end

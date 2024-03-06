@@ -40,6 +40,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let s = vm.to_s(globals, lfp.arg(0))?;
         lfp.self_val().as_io_mut().write(s.as_bytes())?;
     };
+    globals.flush_stdout();
     Ok(lfp.self_val())
 }
 

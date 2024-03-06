@@ -1405,20 +1405,22 @@ fn lines(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// ### String#bytes
 ///
 /// - bytes -> [Integer]
-/// - [NOT SUPPORTED] bytes {|byte| ... } -> self
+/// - bytes {|byte| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/bytes.html]
 #[monoruby_builtin]
-fn bytes(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    if lfp.block().is_some() {
-        return Err(MonorubyErr::runtimeerr("block is not supported."));
-    }
+fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let receiver = lfp.self_val();
     let iter = receiver
         .as_bytes()
         .iter()
         .map(|b| Value::integer(*b as i64));
-    Ok(Value::array_from_iter(iter))
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, iter)?;
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::array_from_iter(iter))
+    }
 }
 
 ///
