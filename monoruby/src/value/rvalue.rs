@@ -160,10 +160,10 @@ impl ObjKind {
         }
     }
 
-    fn exception(kind: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
+    fn exception(class_name: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                class_name: kind,
+                class_name,
                 msg,
                 trace,
             })),
@@ -171,15 +171,9 @@ impl ObjKind {
     }
 
     fn exception_from(mut err: MonorubyErr, globals: &Globals) -> Self {
-        let kind = IdentId::get_id(err.get_class_name());
+        let class_name = IdentId::get_id(err.get_class_name());
         let msg = err.show(globals);
-        Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                class_name: kind,
-                msg,
-                trace: err.take_trace(),
-            })),
-        }
+        Self::exception(class_name, msg, err.take_trace())
     }
 
     fn hash(map: IndexMap<HashKey, Value>) -> Self {

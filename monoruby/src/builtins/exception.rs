@@ -7,6 +7,12 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
     let standarderr = globals.define_class_by_str("StandardError", exception_class, OBJECT_CLASS);
+
+    let system_exit_id = globals
+        .define_class_by_str("SystemExit", exception_class, OBJECT_CLASS)
+        .id();
+    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
+
     globals.define_class_by_str("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SecurityError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SignalException", standarderr, OBJECT_CLASS);
@@ -34,10 +40,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("TypeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("ZeroDivisionError", standarderr, OBJECT_CLASS);
 
-    globals.define_builtin_class_func_with(EXCEPTION_CLASS, "new", exception_new, 0, 1, false);
-    globals.define_builtin_class_func_with(
+    globals.define_builtin_class_funcs_with(
         EXCEPTION_CLASS,
-        "exception",
+        "new",
+        &["exception"],
         exception_new,
         0,
         1,
@@ -62,6 +68,31 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     };
     let kind = class_id.get_name_id(globals).unwrap();
     Ok(Value::new_exception(kind, msg, vec![], class_id))
+}
+
+///
+/// ### SystemExit.new
+///
+/// - new(status = 0, error_message = "") -> SystemExit
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
+#[monoruby_builtin]
+fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().expect_class(globals)?;
+    let name = class_id.get_name_id(globals).unwrap();
+    let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
+        let status = arg0.expect_integer()?;
+        if let Some(arg1) = lfp.try_arg(1) {
+            (status, arg1.expect_string()?)
+        } else {
+            (status, format!("{}", name))
+        }
+    } else {
+        (0, format!("{}", name))
+    };
+    let mut ex = Value::new_exception(name, msg, vec![], class_id);
+    ex.set_instance_var(globals, "status", Value::integer(status))?;
+    Ok(ex)
 }
 
 #[cfg(test)]

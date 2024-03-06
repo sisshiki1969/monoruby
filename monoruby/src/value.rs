@@ -844,7 +844,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Result<ClassId> {
+    pub(crate) fn expect_class_or_module(&self, globals: &Globals) -> Result<ClassId> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
@@ -861,7 +861,7 @@ impl Value {
         }
     }*/
 
-    pub(crate) fn expect_class(&self, globals: &mut Globals) -> Result<ClassId> {
+    pub(crate) fn expect_class(&self, globals: &Globals) -> Result<ClassId> {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
@@ -871,7 +871,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_module(&self, globals: &mut Globals) -> Result<ClassId> {
+    pub(crate) fn expect_module(&self, globals: &Globals) -> Result<ClassId> {
         match self.is_module() {
             Some(class) => Ok(class),
             None => {

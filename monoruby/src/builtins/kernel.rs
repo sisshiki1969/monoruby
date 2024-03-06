@@ -474,14 +474,11 @@ fn sleep(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
 #[monoruby_builtin]
 fn abort(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    if lfp.try_arg(1).is_none() {
-        match lfp.arg(0).is_str() {
+    if let Some(arg0) = lfp.try_arg(0) {
+        match arg0.is_str() {
             Some(s) => eprintln!("{}", s),
             None => {
-                return Err(MonorubyErr::no_implicit_conversion(
-                    lfp.arg(0),
-                    STRING_CLASS,
-                ));
+                return Err(MonorubyErr::no_implicit_conversion(arg0, STRING_CLASS));
             }
         }
     }
@@ -527,14 +524,6 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn torigonometric() {
-        run_test("Math.cos 149");
-        run_test("Math.cos -14.97522");
-        run_test("Math.sin 149");
-        run_test("Math.sin -14.97522");
-    }
-
-    #[test]
     fn eval() {
         run_test(r##"eval "1+2+3""##);
         run_test(
@@ -550,5 +539,14 @@ mod test {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+    }
+
+    #[test]
+    fn kernel() {
+        run_test_no_result_check("sleep 1");
+        run_test_error("abort 1");
+        run_test_no_result_check("exit");
+        run_test_no_result_check("exit 0");
+        run_test_no_result_check("__dir__");
     }
 }

@@ -120,6 +120,7 @@ impl MonorubyErr {
             MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::StopIteration => "StopIteration",
+            MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
     }
@@ -480,6 +481,7 @@ pub enum MonorubyErrKind {
     Fiber,
     StopIteration,
     Exception,
+    SystemExit(u8),
 }
 
 impl MonorubyErrKind {
