@@ -1,1 +1,5 @@
-raise SystemExit.new(1, "way")
+module Foo
+  def self.foo; end
+end
+
+Foo.foo

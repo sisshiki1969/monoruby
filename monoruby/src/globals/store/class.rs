@@ -616,7 +616,7 @@ impl Globals {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    fn search_method(&mut self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
+    fn search_method(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let mut visi = None;
         let mut module = class_id.get_module(self);
         loop {
@@ -644,8 +644,9 @@ impl Globals {
         class_id: ClassId,
         names: &[IdentId],
         visi: Visibility,
-    ) {
+    ) -> Result<()> {
         for name in names {
+            self.find_method_entry_for_class(class_id, *name)?;
             match self.store[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visi;
@@ -656,6 +657,7 @@ impl Globals {
             };
         }
         self.class_version_inc();
+        Ok(())
     }
 
     ///
