@@ -202,6 +202,23 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
+    pub fn load_and_execute(
+        &mut self,
+        globals: &mut Globals,
+        file_name: std::path::PathBuf,
+        is_relative: bool,
+    ) -> Result<bool> {
+        if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
+            self.enter_class_context();
+            let res = self.exec_script(globals, file_body, &path);
+            self.exit_class_context();
+            res?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub(crate) fn enter_class_context(&mut self) {
         self.lexical_class.push(vec![]);
     }

@@ -477,6 +477,14 @@ impl Globals {
         self.codegen.class_version()
     }
 
+    ///
+    /// Load the library if it has never been loaded before.
+    ///
+    /// If the library was loaded, return the code and canonical path.
+    /// Otherwise, returns Ok(None).
+    ///
+    /// When an error occured in loading, returns Err.
+    ///
     fn load_file(
         &mut self,
         path: std::path::PathBuf,

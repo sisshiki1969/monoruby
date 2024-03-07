@@ -302,23 +302,6 @@ fn kernel_complex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
     Ok(Value::complex(r, i))
 }
 
-fn load(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    file_name: std::path::PathBuf,
-    is_relative: bool,
-) -> Result<Value> {
-    if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
-        vm.enter_class_context();
-        let res = vm.exec_script(globals, file_body, &path);
-        vm.exit_class_context();
-        res?;
-        Ok(Value::bool(true))
-    } else {
-        Ok(Value::bool(false))
-    }
-}
-
 ///
 /// ### Kernel.#require
 ///
@@ -329,7 +312,8 @@ fn load(
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let feature = lfp.arg(0).expect_string()?;
     let file_name = std::path::PathBuf::from(feature);
-    load(vm, globals, file_name, false)
+    let b = vm.load_and_execute(globals, file_name, false)?;
+    Ok(Value::bool(b))
 }
 
 ///
@@ -345,14 +329,15 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     let feature = std::path::PathBuf::from(lfp.arg(0).expect_string()?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
-    load(vm, globals, file_name, true)
+    let b = vm.load_and_execute(globals, file_name, true)?;
+    Ok(Value::bool(b))
 }
 
 ///
 /// ### Kernel.#eval
 ///
 /// - eval(expr) -> object
-/// - [NOT SUPPORTED]eval(expr, bind, fname = "(eval)", lineno = 1) -> object
+/// - [NOT SUPPORTED] eval(expr, bind, fname = "(eval)", lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
