@@ -163,6 +163,10 @@ pub(crate) struct ClassInfo {
     ///
     constants: HashMap<IdentId, Value>,
     ///
+    /// class variable table.
+    ///
+    class_variables: Option<HashMap<IdentId, Value>>,
+    ///
     /// instance variable table.
     ///
     ivar_names: HashMap<IdentId, IvarId>,
@@ -174,6 +178,9 @@ impl alloc::GC<RValue> for ClassInfo {
             v.as_val().mark(alloc);
         }
         self.constants.values().for_each(|v| v.mark(alloc));
+        if let Some(cv) = &self.class_variables {
+            cv.values().for_each(|v| v.mark(alloc));
+        }
     }
 }
 
@@ -185,6 +192,7 @@ impl ClassInfo {
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            class_variables: None,
             ivar_names: HashMap::default(),
         }
     }
@@ -196,6 +204,7 @@ impl ClassInfo {
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            class_variables: None,
             ivar_names: self.ivar_names.clone(),
         }
     }
@@ -218,6 +227,20 @@ impl ClassInfo {
 
     pub(crate) fn get_name_id(&self) -> Option<IdentId> {
         self.name
+    }
+
+    fn set_cvar(&mut self, name: IdentId, val: Value) {
+        if let Some(cv) = &mut self.class_variables {
+            cv.insert(name, val);
+        } else {
+            let mut cv = HashMap::default();
+            cv.insert(name, val);
+            self.class_variables = Some(cv);
+        }
+    }
+
+    fn get_cvar(&self, name: IdentId) -> Option<Value> {
+        self.class_variables.as_ref()?.get(&name).cloned()
     }
 }
 

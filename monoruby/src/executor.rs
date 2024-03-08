@@ -386,6 +386,9 @@ impl Executor {
         globals.set_constant(parent, name, val);
     }
 
+    ///
+    /// Find and return a class variable with `name`.
+    ///
     pub(crate) fn find_class_variable(
         &self,
         globals: &mut Globals,
@@ -395,6 +398,9 @@ impl Executor {
         globals.get_class_variable(parent, name).map(|(_, v)| v)
     }
 
+    ///
+    /// Set a class variable with `name` to `value`.
+    ///
     pub(crate) fn set_class_variable(
         &self,
         globals: &mut Globals,
@@ -402,7 +408,7 @@ impl Executor {
         val: Value,
     ) -> Result<()> {
         let parent = self.get_parent(globals)?;
-        let parent = match globals.search_constant_superclass(parent, name) {
+        let parent = match globals.search_class_variables_superclass(parent, name) {
             Some((module, _)) => module,
             None => parent,
         };
@@ -410,6 +416,9 @@ impl Executor {
         Ok(())
     }
 
+    ///
+    /// Get the parent module of the current context.
+    ///
     fn get_parent(&self, globals: &Globals) -> Result<Module> {
         let fid = self.cfp().method_func_id();
         let parent = globals.store[fid].as_ruby_func().lexical_context.last();

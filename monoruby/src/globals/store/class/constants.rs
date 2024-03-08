@@ -13,7 +13,7 @@ impl Globals {
     }*/
 
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        self.store[class_id].constants.insert(name, val);
+        self.store[class_id].set_cvar(name, val);
     }
 
     pub(crate) fn get_class_variable(
@@ -24,7 +24,7 @@ impl Globals {
         let mut module = parent;
         let mut res: Option<(Module, Value)> = None;
         loop {
-            if let Some(v) = self.get_constant(module.id(), name) {
+            if let Some(v) = self.store[module.id()].get_cvar(name) {
                 match res {
                     Some((under, _)) => {
                         return Err(MonorubyErr::runtimeerr(format!(
@@ -50,6 +50,29 @@ impl Globals {
                 parent.id().get_name_id(self).unwrap(),
             )),
         }
+    }
+
+    ///
+    /// Search a class variable with *name* in the class of *module* and its superclasses.
+    ///
+    /// If found, return the value and the module which the class variable belongs to.
+    /// If not found, return None.
+    ///
+    pub(crate) fn search_class_variables_superclass(
+        &self,
+        mut module: Module,
+        name: IdentId,
+    ) -> Option<(Module, Value)> {
+        loop {
+            match self.store[module.id()].get_cvar(name) {
+                Some(v) => return Some((module, v)),
+                None => match module.superclass() {
+                    Some(superclass) => module = superclass,
+                    None => break,
+                },
+            };
+        }
+        None
     }
 }
 
