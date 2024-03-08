@@ -286,6 +286,157 @@ impl Executor {
             .unwrap()
             .visibility = visi;
     }
+
+    fn resolve_const_state(&mut self, globals: &mut Globals, state: ConstState) -> Value {
+        match state {
+            ConstState::Loaded(v) => v,
+            ConstState::Autoload(file_name) => {
+                //self.load_and_execute(globals, file_name, false);
+                unreachable!("");
+            }
+        }
+    }
+
+    pub(crate) fn get_constant(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<Value> {
+        let state = globals.get_constant(class_id, name)?.clone();
+        Some(self.resolve_const_state(globals, state))
+    }
+
+    ///
+    /// Get a value of a constant specified by ConstSiteId *id*.
+    ///
+    /// If not found, return uninitialized constant error.
+    ///
+    pub(crate) fn find_constant2(
+        &mut self,
+        globals: &mut Globals,
+        id: ConstSiteId,
+        current_func: FuncId,
+        base: Option<Value>,
+    ) -> Result<(Value, Option<Value>)> {
+        let ConstSiteInfo {
+            name,
+            toplevel,
+            mut prefix,
+            ..
+        } = globals.store[id].clone();
+        let mut parent = if let Some(base) = base {
+            base.expect_class_or_module(globals)?
+        } else if toplevel {
+            OBJECT_CLASS
+        } else if prefix.is_empty() {
+            let v = self.search_constant_checked(globals, name, current_func)?;
+            return Ok((v, None));
+        } else {
+            let parent = prefix.remove(0);
+            self.search_constant_checked(globals, parent, current_func)?
+                .expect_class_or_module(globals)?
+        };
+        for constant in prefix {
+            parent = self
+                .get_constant_checked(globals, parent, constant)?
+                .expect_class_or_module(globals)?;
+        }
+        let v = self.get_constant_checked(globals, parent, name)?;
+        Ok((v, base))
+    }
+
+    fn search_constant_checked(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        current_func: FuncId,
+    ) -> Result<Value> {
+        if let Some(v) = self.search_lexical_stack(globals, name, current_func) {
+            return Ok(v);
+        }
+        let module = globals[current_func]
+            .as_ruby_func()
+            .lexical_context
+            .last()
+            .unwrap_or(&OBJECT_CLASS.get_module(globals))
+            .to_owned();
+
+        match self.search_constant_superclass(globals, module, name) {
+            Some((_, v)) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
+        }
+    }
+
+    fn search_lexical_stack(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        current_func: FuncId,
+    ) -> Option<Value> {
+        let state = globals.store[current_func]
+            .as_ruby_func()
+            .lexical_context
+            .iter()
+            .rev()
+            .cloned()
+            .find_map(|module| globals.get_constant(module.id(), name))?
+            .clone();
+        Some(self.resolve_const_state(globals, state))
+    }
+
+    ///
+    /// Get constant with *name* and parent class *class_id*.
+    ///
+    /// If not found, set uninitialized constant error and return None.
+    ///
+    fn get_constant_checked(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Result<Value> {
+        match self.get_constant(globals, class_id, name) {
+            Some(v) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
+        }
+    }
+
+    pub fn search_constant_superclass(
+        &mut self,
+        globals: &mut Globals,
+        mut module: Module,
+        name: IdentId,
+    ) -> Option<(Module, Value)> {
+        loop {
+            match self.get_constant(globals, module.id(), name) {
+                Some(v) => return Some((module, v)),
+                None => match module.superclass() {
+                    Some(superclass) => module = superclass,
+                    None => break,
+                },
+            };
+        }
+        None
+    }
+
+    pub(crate) fn get_qualified_constant(
+        &mut self,
+        globals: &mut Globals,
+        base: ClassId,
+        name: &[&str],
+    ) -> Result<Value> {
+        let mut class = base;
+        for name in name {
+            let name = IdentId::get_id(name);
+            class = match self.get_constant(globals, class, name) {
+                Some(val) => Ok(val),
+                None => Err(MonorubyErr::uninitialized_constant(name)),
+            }?
+            .expect_class_or_module(globals)?;
+        }
+        Ok(class.get_obj(globals))
+    }
 }
 
 //
@@ -305,7 +456,7 @@ impl Executor {
         self.exception.as_ref()
     }
 
-    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+    pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
         self.exception_to_val(globals, err)
     }
@@ -330,9 +481,16 @@ impl Executor {
         };
     }
 
-    fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
-        let class_id = globals.get_error_class(&err);
+    fn exception_to_val(&mut self, globals: &mut Globals, err: MonorubyErr) -> Value {
+        let class_id = self.get_error_class(globals, &err);
         Value::new_exception_from_err(globals, err, class_id)
+    }
+
+    pub(crate) fn get_error_class(&mut self, globals: &mut Globals, err: &MonorubyErr) -> ClassId {
+        let name = err.get_class_name();
+        self.get_constant(globals, OBJECT_CLASS, IdentId::get_id(name))
+            .expect(name)
+            .as_class_id()
     }
 }
 
@@ -370,7 +528,7 @@ impl Executor {
     /// It is necessary to check the base class for keeping cache consistency.
     ///
     pub(crate) fn find_constant(
-        &self,
+        &mut self,
         globals: &mut Globals,
         site_id: ConstSiteId,
     ) -> Result<(Value, Option<Value>)> {
@@ -378,7 +536,7 @@ impl Executor {
             .base
             .map(|base| unsafe { self.get_slot(base) }.unwrap());
         let current_func = self.method_func_id();
-        globals.find_constant(site_id, current_func, base)
+        self.find_constant2(globals, site_id, current_func, base)
     }
 
     pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
@@ -762,7 +920,7 @@ impl Executor {
             Some(base) => base.expect_class_or_module(globals)?,
             None => self.context_class_id(),
         };
-        let self_val = match globals.get_constant(parent, name) {
+        let self_val = match self.get_constant(globals, parent, name) {
             Some(val) => {
                 val.expect_class_or_module(globals)?;
                 if let Some(superclass) = superclass {

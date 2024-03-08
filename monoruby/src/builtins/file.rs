@@ -10,7 +10,7 @@ use std::{
 
 pub(super) fn init(globals: &mut Globals) {
     let io_class = globals
-        .get_constant(OBJECT_CLASS, IdentId::get_id("IO"))
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))
         .unwrap()
         .as_class();
     let klass = globals

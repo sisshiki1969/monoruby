@@ -140,6 +140,12 @@ impl ClassId {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ConstState {
+    Loaded(Value),
+    Autoload(std::path::PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassInfo {
     ///
     /// the constant name which this class object is bound.
@@ -161,7 +167,7 @@ pub(crate) struct ClassInfo {
     ///
     /// constants table.
     ///
-    constants: HashMap<IdentId, Value>,
+    constants: HashMap<IdentId, ConstState>,
     ///
     /// class variable table.
     ///
@@ -177,7 +183,11 @@ impl alloc::GC<RValue> for ClassInfo {
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
-        self.constants.values().for_each(|v| v.mark(alloc));
+        self.constants.values().for_each(|v| {
+            if let ConstState::Loaded(v) = v {
+                v.mark(alloc)
+            }
+        });
         if let Some(cv) = &self.class_variables {
             cv.values().for_each(|v| v.mark(alloc));
         }
@@ -418,13 +428,6 @@ impl Globals {
             assert_eq!(singleton.id(), obj.class());
         }
         singleton
-    }
-
-    pub(crate) fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
-        let name = err.get_class_name();
-        self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .expect(name)
-            .as_class_id()
     }
 
     ///

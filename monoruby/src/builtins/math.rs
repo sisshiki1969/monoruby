@@ -8,7 +8,7 @@ use num::ToPrimitive;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Math").id();
     let standarderr = globals
-        .get_constant(OBJECT_CLASS, IdentId::get_id("StandardError"))
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("StandardError"))
         .unwrap()
         .as_class();
     globals.define_class_by_str("DomainError", standarderr, klass);
