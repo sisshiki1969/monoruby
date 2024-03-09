@@ -141,10 +141,10 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
     let v = if lfp.try_arg(1).is_none() || lfp.arg(1).as_bool() {
-        vm.search_constant_superclass(globals, module, name)
+        vm.search_constant_superclass(globals, module, name)?
             .map(|(_, v)| v)
     } else {
-        vm.get_constant(globals, module.id(), name)
+        vm.get_constant(globals, module.id(), name)?
     };
     match v {
         Some(v) => Ok(v),

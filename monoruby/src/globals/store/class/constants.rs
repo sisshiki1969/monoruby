@@ -115,7 +115,7 @@ impl Globals {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<Value> {
-        match self.store[class_id].constants.get(&name)? {
+        match self.get_constant(class_id, name)? {
             ConstState::Loaded(v) => Some(*v),
             _ => unreachable!(),
         }
