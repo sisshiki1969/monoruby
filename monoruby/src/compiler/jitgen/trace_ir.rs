@@ -50,7 +50,7 @@ pub(crate) enum TraceIr {
         idx: SlotId,
     },
     LoadConst(SlotId, ConstSiteId),
-    StoreConst(SlotId, IdentId),
+    StoreConst(SlotId, ConstSiteId),
     LoadDynVar(SlotId, DynVar),
     StoreDynVar(DynVar, SlotId),
     BlockArgProxy(SlotId, usize),

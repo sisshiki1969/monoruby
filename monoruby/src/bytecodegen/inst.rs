@@ -82,7 +82,13 @@ pub(super) enum BcIr {
         prefix: Vec<IdentId>,
         name: IdentId,
     },
-    StoreConst(BcReg, IdentId),
+    StoreConst {
+        src: BcReg,
+        toplevel: bool,
+        base: Option<BcReg>,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
     LoadGvar {
         dst: BcReg,
         name: IdentId,

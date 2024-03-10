@@ -463,10 +463,10 @@ pub(super) extern "C" fn get_constant(
 pub(super) extern "C" fn set_constant(
     vm: &mut Executor,
     globals: &mut Globals,
-    name: IdentId,
+    id: ConstSiteId,
     val: Value,
 ) {
-    vm.set_constant(globals, name, val)
+    vm.set_constant(globals, id, val).unwrap();
 }
 
 ///

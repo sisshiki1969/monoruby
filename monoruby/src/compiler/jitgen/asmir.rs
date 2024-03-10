@@ -1191,7 +1191,7 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     StoreConstant {
-        name: IdentId,
+        id: ConstSiteId,
         using_xmm: UsingXmm,
     },
 

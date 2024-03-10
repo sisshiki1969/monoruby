@@ -37,7 +37,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            movq rdx, rdi;  // name: ConstSiteId
+            movq rdx, rdi;  // ConstSiteId
             movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
@@ -55,7 +55,7 @@ impl Codegen {
 
     //
     // +---+---+---+---++---+---+---+---+
-    // | op|src|identId||               |
+    // | op|src|ConstId||               |
     // +---+---+---+---++---+---+---+---+
     //
     pub(super) fn vm_store_const(&mut self) -> CodePtr {
@@ -64,7 +64,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
         monoasm! { &mut self.jit,
-            movq rdx, rdi;  // name: IdentId
+            movq rdx, rdi;  // ConstSiteId
             movq rcx, r15;  // val: Value
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals

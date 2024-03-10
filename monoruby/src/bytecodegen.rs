@@ -196,15 +196,34 @@ fn is_smi(node: &Node) -> Option<i16> {
 
 #[derive(Debug, Clone, PartialEq)]
 enum LvalueKind {
-    Const(IdentId),
+    Const {
+        toplevel: bool,
+        parent: Option<BcReg>,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
     InstanceVar(IdentId),
     ClassVar(IdentId),
     GlobalVar(IdentId),
-    DynamicVar { outer: usize, dst: BcReg },
-    Index { base: BcReg, index: BcReg },
-    Index2 { base: BcReg, index1: BcTemp },
-    Send { recv: BcReg, method: IdentId },
-    LocalVar { dst: BcReg },
+    DynamicVar {
+        outer: usize,
+        dst: BcReg,
+    },
+    Index {
+        base: BcReg,
+        index: BcReg,
+    },
+    Index2 {
+        base: BcReg,
+        index1: BcTemp,
+    },
+    Send {
+        recv: BcReg,
+        method: IdentId,
+    },
+    LocalVar {
+        dst: BcReg,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -972,9 +991,20 @@ impl BytecodeGen {
                 name,
                 parent,
                 prefix,
-            } if !toplevel && parent.is_none() && prefix.is_empty() => {
+            } => {
                 let name = IdentId::get_id(name);
-                LvalueKind::Const(name)
+                let prefix = prefix.iter().map(|s| IdentId::get_id(s)).collect();
+                let parent = if let Some(box parent) = parent {
+                    Some(self.push_expr(parent.clone())?.into())
+                } else {
+                    None
+                };
+                LvalueKind::Const {
+                    toplevel: *toplevel,
+                    parent,
+                    prefix,
+                    name,
+                }
             }
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_id(name);
@@ -1049,9 +1079,23 @@ impl BytecodeGen {
 
     fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, old_temp: Option<u16>, loc: Loc) {
         match lhs {
-            LvalueKind::Const(name) => {
+            LvalueKind::Const {
+                toplevel,
+                name,
+                parent,
+                prefix,
+            } => {
                 self.set_temp(old_temp);
-                self.emit(BcIr::StoreConst(src, name), loc);
+                self.emit(
+                    BcIr::StoreConst {
+                        src,
+                        toplevel,
+                        base: parent,
+                        prefix,
+                        name,
+                    },
+                    loc,
+                );
             }
             LvalueKind::InstanceVar(name) => {
                 self.set_temp(old_temp);

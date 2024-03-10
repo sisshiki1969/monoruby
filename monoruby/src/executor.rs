@@ -409,9 +409,38 @@ impl Executor {
         Ok((v, base))
     }
 
-    pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
-        let parent = self.context_class_id();
+    pub(crate) fn set_constant(
+        &mut self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+        val: Value,
+    ) -> Result<()> {
+        let ConstSiteInfo {
+            name,
+            toplevel,
+            mut prefix,
+            ..
+        } = globals.store[site_id].clone();
+        let mut parent = if let Some(base) = globals.store[site_id].base {
+            let base = unsafe { self.get_slot(base) }.unwrap();
+            base.expect_class_or_module(globals)?
+        } else if toplevel {
+            OBJECT_CLASS
+        } else if prefix.is_empty() {
+            self.context_class_id()
+        } else {
+            let parent = prefix.remove(0);
+            let current_func = self.method_func_id();
+            self.search_constant_checked(globals, parent, current_func)?
+                .expect_class_or_module(globals)?
+        };
+        for constant in prefix {
+            parent = self
+                .get_constant_checked(globals, parent, constant)?
+                .expect_class_or_module(globals)?;
+        }
         globals.set_constant(parent, name, val);
+        Ok(())
     }
 
     ///
@@ -1260,7 +1289,7 @@ impl BcPc {
                 8 => TraceIr::Nil(SlotId::new(op1)),
                 9 => TraceIr::Symbol(SlotId::new(op1), IdentId::from(op2)),
                 10 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
-                11 => TraceIr::StoreConst(SlotId::new(op1), IdentId::from(op2)),
+                11 => TraceIr::StoreConst(SlotId::new(op1), ConstSiteId(op2)),
                 12..=13 => TraceIr::CondBr(
                     SlotId::new(op1),
                     op2 as i32,

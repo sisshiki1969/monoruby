@@ -275,10 +275,18 @@ impl BytecodeGen {
                 let op2 = store.add_constsite(base, name, prefix, toplevel);
                 Bc::from(enc_wl(10, op1.0, op2.0))
             }
-            BcIr::StoreConst(reg, name) => {
+            BcIr::StoreConst {
+                src,
+                toplevel,
+                base: parent,
+                prefix,
+                name,
+            } => {
                 // 11
-                let op1 = self.slot_id(&reg);
-                Bc::from(enc_wl(11, op1.0, name.get()))
+                let op1 = self.slot_id(&src);
+                let base = parent.map(|base| self.slot_id(&base));
+                let op2 = store.add_constsite(base, name, prefix, toplevel);
+                Bc::from(enc_wl(11, op1.0, op2.0))
             }
             BcIr::LoadIvar(reg, name) => {
                 // 16

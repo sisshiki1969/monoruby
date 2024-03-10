@@ -278,29 +278,8 @@ impl Globals {
                 format!("{:?}:.[{:?}:] = {:?}", base, idx, src,)
             }
             TraceIr::LoadConst(reg, id) => {
-                let ConstSiteInfo {
-                    name,
-                    base,
-                    prefix,
-                    toplevel,
-                    ..
-                } = &self.store[id];
-                let mut const_name = if *toplevel { "::" } else { "" }.to_string();
-                for c in prefix {
-                    c.append_to(&mut const_name);
-                    const_name += "::";
-                }
-                name.append_to(&mut const_name);
-                let op1 = format!(
-                    "{:?} = {}const[{}]",
-                    reg,
-                    if let Some(base) = base {
-                        format!("{:?}::", base)
-                    } else {
-                        "".to_string()
-                    },
-                    const_name
-                );
+                let op = self.store[id].format();
+                let op1 = format!("{:?} = {op}", reg);
                 format!(
                     "{:36} [{}]",
                     op1,
@@ -311,7 +290,8 @@ impl Globals {
                 )
             }
             TraceIr::StoreConst(src, id) => {
-                format!("const[{id}] = {:?}", src)
+                let op = self.store[id].format();
+                format!("{op} = {:?}", src)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
                 format!("{:?} = block_proxy({outer})", dst)
