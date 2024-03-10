@@ -1,6 +1,7 @@
 use super::*;
 use crate::bytecodegen::*;
 
+mod constants;
 pub mod frame;
 pub mod inline;
 pub mod op;
@@ -202,10 +203,10 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
-    pub fn load_and_execute(
+    pub fn require(
         &mut self,
         globals: &mut Globals,
-        file_name: std::path::PathBuf,
+        file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
         if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
@@ -285,120 +286,6 @@ impl Executor {
             .last_mut()
             .unwrap()
             .visibility = visi;
-    }
-
-    pub(crate) fn get_constant(
-        &mut self,
-        globals: &mut Globals,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Result<Option<Value>> {
-        match globals.get_constant(class_id, name) {
-            None => return Ok(None),
-            Some(ConstState::Loaded(v)) => return Ok(Some(*v)),
-            Some(ConstState::Autoload(file_name)) => {
-                self.load_and_execute(globals, file_name.clone(), false)?;
-            }
-        };
-        match globals.get_constant(class_id, name) {
-            None => Ok(None),
-            Some(ConstState::Loaded(v)) => Ok(Some(*v)),
-            Some(ConstState::Autoload(_)) => Ok(None),
-        }
-    }
-
-    fn search_constant_checked(
-        &mut self,
-        globals: &mut Globals,
-        name: IdentId,
-        current_func: FuncId,
-    ) -> Result<Value> {
-        if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
-            return Ok(v);
-        }
-        let module = globals[current_func]
-            .as_ruby_func()
-            .lexical_context
-            .last()
-            .unwrap_or(&OBJECT_CLASS.get_module(globals))
-            .to_owned();
-
-        match self.search_constant_superclass(globals, module, name)? {
-            Some((_, v)) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    fn search_lexical_stack(
-        &mut self,
-        globals: &mut Globals,
-        name: IdentId,
-        current_func: FuncId,
-    ) -> Result<Option<Value>> {
-        let stack: Vec<_> = globals.store[current_func]
-            .as_ruby_func()
-            .lexical_context
-            .iter()
-            .rev()
-            .cloned()
-            .collect();
-        for m in stack {
-            if let Some(v) = self.get_constant(globals, m.id(), name)? {
-                return Ok(Some(v));
-            }
-        }
-        Ok(None)
-    }
-
-    ///
-    /// Get constant with *name* and parent class *class_id*.
-    ///
-    /// If not found, set uninitialized constant error and return None.
-    ///
-    fn get_constant_checked(
-        &mut self,
-        globals: &mut Globals,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Result<Value> {
-        match self.get_constant(globals, class_id, name)? {
-            Some(v) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    pub fn search_constant_superclass(
-        &mut self,
-        globals: &mut Globals,
-        mut module: Module,
-        name: IdentId,
-    ) -> Result<Option<(Module, Value)>> {
-        loop {
-            match self.get_constant(globals, module.id(), name)? {
-                Some(v) => return Ok(Some((module, v))),
-                None => match module.superclass() {
-                    Some(superclass) => module = superclass,
-                    None => break,
-                },
-            };
-        }
-        Ok(None)
-    }
-
-    pub(crate) fn get_qualified_constant(
-        &mut self,
-        globals: &mut Globals,
-        base: ClassId,
-        name: &[&str],
-    ) -> Result<Value> {
-        let mut class = base;
-        for name in name {
-            let name = IdentId::get_id(name);
-            class = self
-                .get_constant_checked(globals, class, name)?
-                .expect_class_or_module(globals)?;
-        }
-        Ok(class.get_obj(globals))
     }
 }
 

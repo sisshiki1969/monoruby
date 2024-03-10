@@ -1,17 +1,6 @@
 use super::*;
 
 impl Globals {
-    /*pub fn dump_superclass(&self, mut module: Module) {
-        loop {
-            eprint!("{} ", module.id().get_name_id(self).unwrap());
-            match module.superclass() {
-                Some(superclass) => module = superclass,
-                None => break,
-            }
-        }
-        eprintln!();
-    }*/
-
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
         self.store[class_id].set_cvar(name, val);
     }
@@ -83,16 +72,36 @@ impl Globals {
     }
 
     pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        if self.store[class_id]
+        if let Some(ConstState::Loaded(_)) = self.store[class_id]
             .constants
             .insert(name, ConstState::Loaded(val))
-            .is_some()
             && self.warning >= 1
         {
             eprintln!("warning: already initialized constant {name}")
         }
         if let Some(id) = val.is_class() {
             self.store[id].set_name_id(name)
+        }
+    }
+
+    pub(crate) fn set_constant_autoload(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        file_name: String,
+    ) {
+        match self.store[class_id].constants.get_mut(&name) {
+            Some(state) => match state {
+                ConstState::Loaded(_) => {}
+                ConstState::Autoload(path) => {
+                    *path = file_name.into();
+                }
+            },
+            None => {
+                self.store[class_id]
+                    .constants
+                    .insert(name, ConstState::Autoload(file_name.into()));
+            }
         }
     }
 

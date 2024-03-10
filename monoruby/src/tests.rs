@@ -7,6 +7,7 @@ use tempfile::NamedTempFile;
 mod case;
 mod literal;
 mod method_call;
+mod require;
 mod rescue;
 mod variables;
 
@@ -183,7 +184,7 @@ pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{code}");
     let mut globals = Globals::new(1, false);
-    match globals.run(code, std::path::Path::new("")) {
+    match globals.run(code, std::path::Path::new(".")) {
         Ok(_) => panic!(),
         Err(err) => err.show_error_message_and_all_loc(&globals),
     }
@@ -193,7 +194,7 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
     #[cfg(not(debug_assertions))]
     let now = std::time::Instant::now();
     Globals::gc_enable(!no_gc);
-    let res = match globals.run(code, std::path::Path::new("")) {
+    let res = match globals.run(code, std::path::Path::new(".")) {
         Ok(res) => res,
         Err(err) => {
             err.show_error_message_and_all_loc(&globals);
