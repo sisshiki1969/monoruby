@@ -1,17 +1,6 @@
 use super::*;
 
 impl Globals {
-    /*pub fn dump_superclass(&self, mut module: Module) {
-        loop {
-            eprint!("{} ", module.id().get_name_id(self).unwrap());
-            match module.superclass() {
-                Some(superclass) => module = superclass,
-                None => break,
-            }
-        }
-        eprintln!();
-    }*/
-
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
         self.store[class_id].set_cvar(name, val);
     }
@@ -83,11 +72,36 @@ impl Globals {
     }
 
     pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        if self.store[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
+        if let Some(ConstState::Loaded(_)) = self.store[class_id]
+            .constants
+            .insert(name, ConstState::Loaded(val))
+            && self.warning >= 1
+        {
             eprintln!("warning: already initialized constant {name}")
         }
         if let Some(id) = val.is_class() {
             self.store[id].set_name_id(name)
+        }
+    }
+
+    pub(crate) fn set_constant_autoload(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        file_name: String,
+    ) {
+        match self.store[class_id].constants.get_mut(&name) {
+            Some(state) => match state {
+                ConstState::Loaded(_) => {}
+                ConstState::Autoload(path) => {
+                    *path = file_name.into();
+                }
+            },
+            None => {
+                self.store[class_id]
+                    .constants
+                    .insert(name, ConstState::Autoload(file_name.into()));
+            }
         }
     }
 
@@ -96,38 +110,24 @@ impl Globals {
     ///
     /// If not found, return None.
     ///
-    pub(crate) fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
-        self.store[class_id].constants.get(&name).cloned()
+    pub(crate) fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<&ConstState> {
+        self.store[class_id].constants.get(&name)
     }
 
-    pub fn search_constant_superclass(
+    ///
+    /// Get a value of a constant with *name* in the class of *class_id*.
+    ///
+    /// If not found, return None.
+    ///
+    pub(crate) fn get_constant_noautoload(
         &self,
-        mut module: Module,
+        class_id: ClassId,
         name: IdentId,
-    ) -> Option<(Module, Value)> {
-        loop {
-            match self.get_constant(module.id(), name) {
-                Some(v) => return Some((module, v)),
-                None => match module.superclass() {
-                    Some(superclass) => module = superclass,
-                    None => break,
-                },
-            };
+    ) -> Option<Value> {
+        match self.get_constant(class_id, name)? {
+            ConstState::Loaded(v) => Some(*v),
+            _ => unreachable!(),
         }
-        None
-    }
-
-    pub(crate) fn get_qualified_constant(&mut self, base: ClassId, name: &[&str]) -> Result<Value> {
-        let mut class = base;
-        for name in name {
-            let name = IdentId::get_id(name);
-            class = match self.get_constant(class, name) {
-                Some(val) => Ok(val),
-                None => Err(MonorubyErr::uninitialized_constant(name)),
-            }?
-            .expect_class_or_module(self)?;
-        }
-        Ok(class.get_obj(self))
     }
 
     ///
@@ -155,81 +155,5 @@ impl Globals {
             }
         }
         names
-    }
-
-    ///
-    /// Get a value of a constant specified by ConstSiteId *id*.
-    ///
-    /// If not found, return uninitialized constant error.
-    ///
-    pub(crate) fn find_constant(
-        &mut self,
-        id: ConstSiteId,
-        current_func: FuncId,
-        base: Option<Value>,
-    ) -> Result<(Value, Option<Value>)> {
-        let ConstSiteInfo {
-            name,
-            toplevel,
-            mut prefix,
-            ..
-        } = self.store[id].clone();
-        let mut parent = if let Some(base) = base {
-            base.expect_class_or_module(self)?
-        } else if toplevel {
-            OBJECT_CLASS
-        } else if prefix.is_empty() {
-            let v = self.search_constant_checked(name, current_func)?;
-            return Ok((v, None));
-        } else {
-            let parent = prefix.remove(0);
-            self.search_constant_checked(parent, current_func)?
-                .expect_class_or_module(self)?
-        };
-        for constant in prefix {
-            parent = self
-                .get_constant_checked(parent, constant)?
-                .expect_class_or_module(self)?;
-        }
-        let v = self.get_constant_checked(parent, name)?;
-        Ok((v, base))
-    }
-
-    ///
-    /// Get constant with *name* and parent class *class_id*.
-    ///
-    /// If not found, set uninitialized constant error and return None.
-    ///
-    fn get_constant_checked(&self, class_id: ClassId, name: IdentId) -> Result<Value> {
-        match self.get_constant(class_id, name) {
-            Some(v) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    fn search_constant_checked(&self, name: IdentId, current_func: FuncId) -> Result<Value> {
-        if let Some(v) = self.search_lexical_stack(name, current_func) {
-            return Ok(v);
-        }
-        let module = self[current_func]
-            .as_ruby_func()
-            .lexical_context
-            .last()
-            .unwrap_or(&OBJECT_CLASS.get_module(self))
-            .to_owned();
-
-        match self.search_constant_superclass(module, name) {
-            Some((_, v)) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    fn search_lexical_stack(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
-        self.store[current_func]
-            .as_ruby_func()
-            .lexical_context
-            .iter()
-            .rev()
-            .find_map(|module| self.get_constant(module.id(), name))
     }
 }

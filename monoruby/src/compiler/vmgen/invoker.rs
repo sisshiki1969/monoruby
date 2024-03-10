@@ -316,7 +316,7 @@ impl Codegen {
             shrq rsi, 56;
             testq rsi, 0b1_0000;
             jz  generic;
-            //check if req == pos_num
+            // check if req == pos_num
             cmpw rdi, [r15 + (FUNCDATA_MIN)];
             jeq exit;
         generic:

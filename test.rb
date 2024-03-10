@@ -1,5 +1,6 @@
-module Foo
-  def self.foo; end
-end
+puts __FILE__
 
-Foo.foo
+class C
+  autoload :D, File.expand_path("./monoruby/a.rb")
+end
+puts C::D

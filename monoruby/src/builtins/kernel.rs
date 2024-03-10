@@ -312,7 +312,7 @@ fn kernel_complex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let feature = lfp.arg(0).expect_string()?;
     let file_name = std::path::PathBuf::from(feature);
-    let b = vm.load_and_execute(globals, file_name, false)?;
+    let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
 }
 
@@ -329,7 +329,7 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     let feature = std::path::PathBuf::from(lfp.arg(0).expect_string()?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
-    let b = vm.load_and_execute(globals, file_name, true)?;
+    let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
 }
 

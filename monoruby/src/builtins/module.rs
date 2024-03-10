@@ -9,10 +9,11 @@ pub(super) fn init(globals: &mut Globals) {
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
-    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
+    globals.define_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
+    globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
@@ -132,25 +133,29 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 }
 
 ///
+/// ### Module#autoload
+/// - autoload(const_name, feature) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
+#[monoruby_builtin]
+fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let const_name = lfp.arg(0).expect_symbol_or_string()?;
+    let feature = lfp.arg(1).expect_string()?;
+    globals.set_constant_autoload(lfp.self_val().as_class_id(), const_name, feature);
+    Ok(Value::nil())
+}
+
+///
 /// ### Module#const_get
 /// - const_get(name, inherit = true) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
-fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
-    let v = if lfp.try_arg(1).is_none() || lfp.arg(1).as_bool() {
-        globals
-            .search_constant_superclass(module, name)
-            .map(|(_, v)| v)
-    } else {
-        globals.get_constant(module.id(), name)
-    };
-    match v {
-        Some(v) => Ok(v),
-        None => Err(MonorubyErr::uninitialized_constant(name)),
-    }
+    let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
+    vm.const_get(globals, module, name, inherit)
 }
 
 ///

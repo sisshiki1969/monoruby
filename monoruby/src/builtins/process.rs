@@ -26,9 +26,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
 #[monoruby_builtin]
-fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
-    let tms_class = globals
-        .get_qualified_constant(OBJECT_CLASS, &["Process", "Tms"])?
+fn times(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+    let tms_class = vm
+        .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Tms"])?
         .as_class();
     let mut val = Value::object(tms_class.id());
     let mut self_rusage = rusage::Rusage::default();

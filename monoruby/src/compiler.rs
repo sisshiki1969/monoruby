@@ -284,11 +284,6 @@ impl Codegen {
             pushq r13;
             pushq r14;
             pushq r15;
-            pushq rbp;
-            subq rsp, 8;
-        }
-        self.set_lfp();
-        monoasm! { &mut self.jit,
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
         }
@@ -296,18 +291,18 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set meta func_id
             movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
-            movq [r14 - (LBP_META)], rax;
+            movq [rsp - (16 + LBP_META)], rax;
             // set block
-            movq [r14 - (LBP_BLOCK)], 0;
-            movq [r14 - (LBP_OUTER)], 0;
-            movq [r14 - (BP_PREV_CFP)], 0;
-            lea  rax, [r14 - (BP_PREV_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rax;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_OUTER)], 0;
+            // set self
+            movq rax, (main_object.id());
+            movq [rsp - (16 + LBP_SELF)], rax;
         };
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LBP_ARG0)];
+            lea  rax, [rsp - (16 + LBP_ARG0)];
             movzxw rdi, [r15 + (FUNCDATA_REGNUM)];
         l1:
             subq rdi, 1;
@@ -317,20 +312,15 @@ impl Codegen {
             jmp  l1;
         l2:
         };
+        self.push_frame();
+        self.set_lfp();
         monoasm! { &mut self.jit,
-            // set self
-            movq rax, (main_object.id());
-            movq [r14 - (LBP_SELF)], rax;
-            movq rax, [r15 + (FUNCDATA_CODEPTR)];
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
-            // set arg len
-            xorq rdx, rdx;
-            call rax;
+            call [r15 + (FUNCDATA_CODEPTR)];
             // pop frame
-            movq [rbx + (EXECUTOR_CFP)], 0;
-            addq rsp, 8;
-            popq rbp;
+            movq rdi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rdi;
             popq r15;
             popq r14;
             popq r13;

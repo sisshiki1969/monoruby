@@ -489,19 +489,24 @@ impl Globals {
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
-        let path = path.canonicalize().unwrap();
-        if !self.loaded_canonicalized_files.insert(path.clone()) {
+        fn load(
+            globals: &mut Globals,
+            path: std::path::PathBuf,
+        ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
+            let mut file_body = String::new();
+            let mut file = std::fs::OpenOptions::new().read(true).open(&path)?;
+            file.read_to_string(&mut file_body)?;
+            globals.loaded_canonicalized_files.insert(path.clone());
+            Ok(Some((file_body, path)))
+        }
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => return Err(MonorubyErr::cant_load(Some(err), &path)),
+        };
+        if self.loaded_canonicalized_files.get(&path).is_some() {
             return Ok(None);
         }
-        let mut file_body = String::new();
-        let err = match std::fs::OpenOptions::new().read(true).open(&path) {
-            Ok(mut file) => match file.read_to_string(&mut file_body) {
-                Ok(_) => return Ok(Some((file_body, path))),
-                Err(err) => err,
-            },
-            Err(err) => err,
-        };
-        Err(MonorubyErr::cant_load(Some(err), &path))
+        load(self, path.clone()).map_err(|err| MonorubyErr::cant_load(Some(err), &path))
     }
 }
 

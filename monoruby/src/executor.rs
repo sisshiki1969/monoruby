@@ -1,6 +1,7 @@
 use super::*;
 use crate::bytecodegen::*;
 
+mod constants;
 pub mod frame;
 pub mod inline;
 pub mod op;
@@ -202,10 +203,10 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
-    pub fn load_and_execute(
+    pub fn require(
         &mut self,
         globals: &mut Globals,
-        file_name: std::path::PathBuf,
+        file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
         if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
@@ -305,9 +306,17 @@ impl Executor {
         self.exception.as_ref()
     }
 
-    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+    pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
-        self.exception_to_val(globals, err)
+
+        let name = err.get_class_name();
+        let class_id = self
+            .get_constant(globals, OBJECT_CLASS, IdentId::get_id(name))
+            .unwrap()
+            .expect(name)
+            .as_class_id();
+
+        Value::new_exception_from_err(globals, err, class_id)
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {
@@ -328,11 +337,6 @@ impl Executor {
             }
             None => unreachable!(),
         };
-    }
-
-    fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
-        let class_id = globals.get_error_class(&err);
-        Value::new_exception_from_err(globals, err, class_id)
     }
 }
 
@@ -370,7 +374,7 @@ impl Executor {
     /// It is necessary to check the base class for keeping cache consistency.
     ///
     pub(crate) fn find_constant(
-        &self,
+        &mut self,
         globals: &mut Globals,
         site_id: ConstSiteId,
     ) -> Result<(Value, Option<Value>)> {
@@ -378,7 +382,31 @@ impl Executor {
             .base
             .map(|base| unsafe { self.get_slot(base) }.unwrap());
         let current_func = self.method_func_id();
-        globals.find_constant(site_id, current_func, base)
+        let ConstSiteInfo {
+            name,
+            toplevel,
+            mut prefix,
+            ..
+        } = globals.store[site_id].clone();
+        let mut parent = if let Some(base) = base {
+            base.expect_class_or_module(globals)?
+        } else if toplevel {
+            OBJECT_CLASS
+        } else if prefix.is_empty() {
+            let v = self.search_constant_checked(globals, name, current_func)?;
+            return Ok((v, None));
+        } else {
+            let parent = prefix.remove(0);
+            self.search_constant_checked(globals, parent, current_func)?
+                .expect_class_or_module(globals)?
+        };
+        for constant in prefix {
+            parent = self
+                .get_constant_checked(globals, parent, constant)?
+                .expect_class_or_module(globals)?;
+        }
+        let v = self.get_constant_checked(globals, parent, name)?;
+        Ok((v, base))
     }
 
     pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
@@ -762,7 +790,7 @@ impl Executor {
             Some(base) => base.expect_class_or_module(globals)?,
             None => self.context_class_id(),
         };
-        let self_val = match globals.get_constant(parent, name) {
+        let self_val = match self.get_constant(globals, parent, name)? {
             Some(val) => {
                 val.expect_class_or_module(globals)?;
                 if let Some(superclass) = superclass {
