@@ -43,11 +43,11 @@ impl Codegen {
         }
     }
 
-    pub(super) fn store_constant(&mut self, name: IdentId, using_xmm: UsingXmm) {
+    pub(super) fn store_constant(&mut self, id: ConstSiteId, using_xmm: UsingXmm) {
         let const_version = self.const_version;
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-          movq rdx, (name.get());  // name: IdentId
+          movq rdx, (id.0);  // name: IdentId
           movq rcx, rax;  // val: Value
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals

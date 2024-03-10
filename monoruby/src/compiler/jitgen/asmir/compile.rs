@@ -422,8 +422,8 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.load_generic_constant(deopt, cached_val, cached_version);
             }
-            AsmInst::StoreConstant { name, using_xmm } => {
-                self.store_constant(name, using_xmm);
+            AsmInst::StoreConstant { id, using_xmm } => {
+                self.store_constant(id, using_xmm);
             }
 
             AsmInst::GenericIndex {

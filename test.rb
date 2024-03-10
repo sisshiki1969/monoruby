@@ -1,6 +1,11 @@
-puts __FILE__
-
 class C
-  autoload :D, File.expand_path("./monoruby/a.rb")
+  class D
+    E = 1
+    def self.e
+      E
+    end
+  end
 end
-puts C::D
+
+C::D::E = 100
+puts C::D.e

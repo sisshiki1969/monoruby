@@ -109,4 +109,30 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn constant() {
+        run_test_with_prelude(
+            r#"
+          C::D::E = 100
+          C::D.e
+          "#,
+            r#"
+          class C
+            class D
+              E = 1
+              def self.e
+                E
+              end
+            end
+          end
+      "#,
+        );
+        run_test(
+            r#"
+          ::E = 100
+          Object::E
+            "#,
+        );
+    }
 }

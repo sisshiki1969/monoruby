@@ -372,6 +372,34 @@ pub(crate) struct ConstSiteInfo {
     pub cache: (usize, Option<Value>, Option<Value>), //(version, base_class, value)
 }
 
+impl ConstSiteInfo {
+    #[cfg(feature = "dump-bc")]
+    pub fn format(&self) -> String {
+        let ConstSiteInfo {
+            name,
+            base,
+            prefix,
+            toplevel,
+            ..
+        } = self;
+        let mut const_name = if *toplevel { "::" } else { "" }.to_string();
+        for c in prefix {
+            (*c).append_to(&mut const_name);
+            const_name += "::";
+        }
+        (*name).append_to(&mut const_name);
+        format!(
+            "{}const[{}]",
+            if let Some(base) = base {
+                format!("{:?}::", base)
+            } else {
+                "".to_string()
+            },
+            const_name
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);

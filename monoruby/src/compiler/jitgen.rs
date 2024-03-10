@@ -479,12 +479,10 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
             }
-            TraceIr::StoreConst(src, name) => {
+            TraceIr::StoreConst(src, id) => {
                 self.ir.fetch_to_reg(bb, src, GP::Rax);
                 let using_xmm = bb.get_using_xmm();
-                self.ir
-                    .inst
-                    .push(AsmInst::StoreConstant { name, using_xmm });
+                self.ir.inst.push(AsmInst::StoreConstant { id, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 self.ir.unlink(bb, ret);
