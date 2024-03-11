@@ -17,6 +17,10 @@ impl Module {
         }
     }
 
+    pub(crate) fn get(self) -> Value {
+        self.0
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         self.0.change_class(new_class_id);
     }

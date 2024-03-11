@@ -443,6 +443,15 @@ impl Lfp {
             Some(Value::from(v))
         }
     }
+
+    pub fn args_count(&self, max: usize) -> usize {
+        for i in 0..max {
+            if self.try_arg(i).is_none() {
+                return i;
+            }
+        }
+        max
+    }
 }
 
 ///

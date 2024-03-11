@@ -14,6 +14,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
+    globals.define_builtin_funcs_with(
+        MODULE_CLASS,
+        "class_eval",
+        &["module_eval"],
+        class_eval,
+        0,
+        2,
+        false,
+    );
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
@@ -38,6 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
 
 ///
 /// ### Module#==
+///
 /// - self == obj -> bool
 ///
 /// []
@@ -53,6 +63,7 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 ///
 /// ### Module#===
+///
 /// - self === obj -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
@@ -64,6 +75,7 @@ fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 ///
 /// ### Module#alias_method
+///
 /// - alias_method(new, original) -> Symbol
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
@@ -78,6 +90,7 @@ fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 
 ///
 /// ### Module#attr_accessor
+///
 /// - attr_accessor(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
@@ -98,6 +111,7 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 
 ///
 /// ### Module#attr_reader
+///
 /// - attr_reader(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
@@ -116,6 +130,7 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 
 ///
 /// ### Module#attr_writer
+///
 /// - attr_writer(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
@@ -134,6 +149,7 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 
 ///
 /// ### Module#autoload
+///
 /// - autoload(const_name, feature) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
@@ -146,7 +162,53 @@ fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 }
 
 ///
+/// ### Module#class_eval
+///
+/// - module_eval(expr, fname = "(eval)", [NOT SUPPORTED] lineno = 1) -> object
+/// - module_eval {|mod| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/class_eval.html]
+#[monoruby_builtin]
+fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let module = lfp.self_val().as_class();
+
+    if let Some(bh) = lfp.block() {
+        if lfp.try_arg(0).is_some() {
+            return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
+        }
+        let data = vm.get_block_data(globals, bh)?;
+        vm.push_class_context(module.id());
+        let res = vm.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
+        vm.pop_class_context();
+        res
+    } else {
+        if let Some(arg0) = lfp.try_arg(0) {
+            let expr = arg0.expect_string()?;
+            let cfp = vm.cfp();
+            let caller_cfp = cfp.prev().unwrap();
+            let path = if let Some(arg1) = lfp.try_arg(1) {
+                arg1.expect_string()?
+            } else {
+                "(eval)".into()
+            };
+
+            let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+            #[cfg(feature = "emit-bc")]
+            globals.dump_bc();
+            let proc = ProcInner::from(caller_cfp.lfp(), fid);
+            vm.push_class_context(module.id());
+            let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
+            vm.pop_class_context();
+            res
+        } else {
+            Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
+        }
+    }
+}
+
+///
 /// ### Module#const_get
+///
 /// - const_get(name, inherit = true) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
@@ -465,6 +527,40 @@ mod test {
         a.v = 7
         a.v *= 3
         a.v
+        "#,
+        );
+    }
+
+    #[test]
+    fn module_eval() {
+        run_test_with_prelude(
+            r#"
+        a = 1
+        C.class_eval %Q{
+          def m                   # メソッドを動的に定義できる。
+            return :m, #{a}, self.class
+          end
+        }
+        C.new.m
+        "#,
+            r#"
+        class C
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        a = 1
+        C.class_eval do |m|
+            def f
+                self.class
+            end
+        end
+        C.new.f
+        "#,
+            r#"
+        class C
+        end
         "#,
         );
     }

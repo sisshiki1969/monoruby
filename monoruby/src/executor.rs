@@ -416,12 +416,13 @@ impl Executor {
         val: Value,
     ) -> Result<()> {
         let ConstSiteInfo {
-            name,
             toplevel,
+            base,
             mut prefix,
+            name,
             ..
         } = globals.store[site_id].clone();
-        let mut parent = if let Some(base) = globals.store[site_id].base {
+        let mut parent = if let Some(base) = base {
             let base = unsafe { self.get_slot(base) }.unwrap();
             base.expect_class_or_module(globals)?
         } else if toplevel {
