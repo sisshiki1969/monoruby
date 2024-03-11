@@ -1,11 +1,4 @@
-class C
-  class D
-    E = 1
-    def self.e
-      E
-    end
-  end
+for i in 0..20
+  @a = 1
+  @b = 2
 end
-
-C::D::E = 100
-puts C::D.e

@@ -12,6 +12,11 @@ pub(super) fn init(globals: &mut Globals) {
         .define_class_by_str("SystemExit", exception_class, OBJECT_CLASS)
         .id();
     globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
+    globals.define_attr_reader(
+        system_exit_id,
+        IdentId::get_id("status"),
+        Visibility::Public,
+    );
 
     globals.define_class_by_str("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SecurityError", standarderr, OBJECT_CLASS);
@@ -91,7 +96,8 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         (0, format!("{}", name))
     };
     let mut ex = Value::new_exception(name, msg, vec![], class_id);
-    ex.set_instance_var(globals, "status", Value::integer(status))?;
+    ex.set_instance_var(globals, "@status", Value::integer(status))?;
+
     Ok(ex)
 }
 
@@ -110,6 +116,15 @@ mod test {
             r##"
             raise StopIteration.new
         "##,
+        );
+    }
+
+    #[test]
+    fn system_exit() {
+        run_test(
+            r#"
+         SystemExit.new(15, "woo").status
+        "#,
         );
     }
 }
