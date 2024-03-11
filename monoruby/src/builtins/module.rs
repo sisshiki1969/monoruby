@@ -220,17 +220,16 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
 fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let arg0 = lfp.arg(0);
-    if arg0.as_array().len() == 0 {
+    let args = Array::new(lfp.arg(0));
+    if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let mut class = self_.as_class();
-    for v in arg0.as_array().iter().cloned().rev() {
+    let mut class = lfp.self_val().as_class();
+    for v in args.iter().cloned().rev() {
         v.expect_module(globals)?;
         class.include_module(v.as_class());
     }
-    Ok(self_)
+    Ok(lfp.self_val())
 }
 
 ///

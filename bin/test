@@ -32,10 +32,10 @@ monoruby benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/
 ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
 
 monoruby benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
-ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
 monoruby --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
-diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
-diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
+ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mande.ppm
+diff -s benchmark/mandel.ppm benchmark/mandel.ppm
+diff -s benchmark/mandel.ppm benchmark/mandel.ppm
 rm benchmark/*.ppm
 
 monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log

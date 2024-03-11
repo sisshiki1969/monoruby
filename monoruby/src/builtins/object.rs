@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
         analysis::v_v,
         0,
     );
+    globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
@@ -76,6 +77,25 @@ fn object_object_id(
         gen.xmm_restore(using);
     });
     ir.rax2acc(bb, ret);
+}
+
+///
+/// ### Object#extend
+/// - extend(*modules) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/extend.html]
+#[monoruby_builtin]
+fn extend(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let args = Array::new(lfp.arg(0));
+    if args.len() == 0 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+    }
+    let mut class = globals.get_singleton(lfp.self_val());
+    for v in args.iter().cloned().rev() {
+        v.expect_module(globals)?;
+        class.include_module(v.as_class());
+    }
+    Ok(lfp.self_val())
 }
 
 ///
@@ -347,6 +367,40 @@ mod test {
             a = -49.52
             id = a.object_id
             "##,
+        );
+    }
+
+    #[test]
+    fn extend() {
+        run_test_with_prelude(
+            r#"
+        res = []
+        obj = Object.new
+        obj.extend Foo, Bar
+        res << obj.a #=> "ok Foo"
+        res << obj.b #=> "ok Bar"
+        res << Klass.new.a #=> "ok Foo"
+        res << Klass.b     #=> "ok Bar"
+        res
+        "#,
+            r#"
+        module Foo
+          def a
+            'ok Foo'
+          end
+        end
+
+        module Bar
+          def b
+            'ok Bar'
+          end
+        end
+
+        class Klass
+          include Foo
+          extend Bar
+        end
+        "#,
         );
     }
 
