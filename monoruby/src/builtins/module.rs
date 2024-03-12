@@ -14,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
-    globals.define_builtin_funcs_with(
+    globals.define_builtin_funcs_eval_with(
         MODULE_CLASS,
         "class_eval",
         &["module_eval"],
