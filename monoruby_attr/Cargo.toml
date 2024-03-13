@@ -12,4 +12,4 @@ proc-macro = true
 paste = "1.0.12"
 proc-macro2 = "1.0.52"
 quote = "1.0.24"
-syn = { version = "2.0.48", features = ["full", "extra-traits"] }
+syn = { version = "2.0.52", features = ["full", "extra-traits"] }
