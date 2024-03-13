@@ -193,8 +193,6 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             };
 
             let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-            #[cfg(feature = "emit-bc")]
-            globals.dump_bc();
             let proc = ProcInner::from(caller_cfp.lfp(), fid);
             vm.push_class_context(module.id());
             let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);

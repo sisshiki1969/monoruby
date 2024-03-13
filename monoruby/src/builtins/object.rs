@@ -9,6 +9,13 @@ pub(crate) use send::{object_send, send};
 
 pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
+
+    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
+    globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_inline_func(
         OBJECT_CLASS,
         "object_id",
@@ -17,23 +24,17 @@ pub(super) fn init(globals: &mut Globals) {
         analysis::v_v,
         0,
     );
-    globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
-    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     /*globals.define_builtin_inline_func_with(
         OBJECT_CLASS,
         &["send", "__send__"],
@@ -44,6 +45,15 @@ pub(super) fn init(globals: &mut Globals) {
         0,
         true,
     );*/
+    globals.define_builtin_funcs_eval_with(
+        OBJECT_CLASS,
+        "instance_eval",
+        &[],
+        instance_eval,
+        0,
+        2,
+        false,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
 }
 
@@ -256,6 +266,45 @@ fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn singleton_class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val().get_singleton(globals))
+}
+
+///
+/// ### BasicObject#instance_eval
+///
+/// - instance_eval(expr, filename = "(eval)", lineno = 1) -> object
+/// - instance_eval {|obj| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/BasicObject/i/instance_eval.html]
+#[monoruby_builtin]
+fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+
+    if let Some(bh) = lfp.block() {
+        if lfp.try_arg(0).is_some() {
+            return Err(MonorubyErr::wrong_number_of_arg(0, lfp.args_count(3)));
+        }
+        let data = vm.get_block_data(globals, bh)?;
+        let res = vm.invoke_block_with_self(globals, &data, self_val, &[self_val]);
+        res
+    } else {
+        if let Some(arg0) = lfp.try_arg(0) {
+            let expr = arg0.expect_string()?;
+            let cfp = vm.cfp();
+            let caller_cfp = cfp.prev().unwrap();
+            let path = if let Some(arg1) = lfp.try_arg(1) {
+                arg1.expect_string()?
+            } else {
+                "(eval)".into()
+            };
+
+            let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+            let proc = ProcInner::from(caller_cfp.lfp(), fid);
+            let res = vm.invoke_block_with_self(globals, &proc, self_val, &[]);
+            res
+        } else {
+            Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
+        }
+    }
 }
 
 ///
@@ -509,6 +558,30 @@ mod test {
         "#,
         );
         run_test_error(r#"5.instance_of?(7)"#);
+    }
+
+    #[test]
+    fn instance_eval() {
+        run_test_with_prelude(
+            r#"
+        some = Foo.new 'XXX'
+        res = []
+        res << some.instance_eval { p @key} #=> "XXX"
+        res << some.instance_eval { do_fuga } #=> "secret" # private メソッドも呼び出せる
+        res
+        "#,
+            r#"
+        class Foo
+          def initialize data
+            @key = data
+          end
+          private
+          def do_fuga
+            p 'secret'
+          end
+        end
+        "#,
+        );
     }
 
     #[test]
