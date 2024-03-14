@@ -20,12 +20,62 @@ impl Globals {
         func_id
     }
 
-    fn define_builtin_module_fn(
+    fn new_builtin_fn_eval(
         &mut self,
         class_id: ClassId,
         name: &str,
-        func_id: FuncId,
+        address: BuiltinFn,
+        visi: Visibility,
+        min: usize,
+        max: usize,
+        rest: bool,
     ) -> FuncId {
+        let func_id = self
+            .store
+            .add_builtin_func_eval(name.to_string(), address, min, max, rest);
+        let method_name = IdentId::get_id(name);
+        self.gen_wrapper(func_id);
+        self.add_method(class_id, method_name, func_id, visi);
+        func_id
+    }
+
+    fn new_builtin_fns(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        visi: Visibility,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(class_id, name, address, visi, min, max, rest);
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, visi);
+        }
+        fid
+    }
+
+    fn new_builtin_fns_eval(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        visi: Visibility,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn_eval(class_id, name, address, visi, min, max, rest);
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, visi);
+        }
+        fid
+    }
+
+    fn new_builtin_module_fn(&mut self, class_id: ClassId, name: &str, func_id: FuncId) -> FuncId {
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, Visibility::Private);
@@ -60,19 +110,38 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        let fid = self.new_builtin_fn(
+        self.new_builtin_fns(
             class_id,
             name,
+            alias,
             address,
             Visibility::Public,
             arg_num,
             arg_num,
             false,
-        );
-        for alias in alias {
-            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
-        }
-        fid
+        )
+    }
+
+    pub(crate) fn define_builtin_funcs_eval_with(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.new_builtin_fns_eval(
+            class_id,
+            name,
+            alias,
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+        )
     }
 
     pub(crate) fn define_builtin_func_rest(
@@ -91,28 +160,16 @@ impl Globals {
         alias: &[&str],
         address: BuiltinFn,
     ) -> FuncId {
-        let fid = self.new_builtin_fn(class_id, name, address, Visibility::Public, 0, 0, true);
-        for alias in alias {
-            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
-        }
-        fid
-    }
-
-    pub(crate) fn define_builtin_funcs_with(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        alias: &[&str],
-        address: BuiltinFn,
-        min: usize,
-        max: usize,
-        rest: bool,
-    ) -> FuncId {
-        let fid = self.new_builtin_fn(class_id, name, address, Visibility::Public, min, max, rest);
-        for alias in alias {
-            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
-        }
-        fid
+        self.new_builtin_fns(
+            class_id,
+            name,
+            alias,
+            address,
+            Visibility::Public,
+            0,
+            0,
+            true,
+        )
     }
 
     pub(crate) fn define_builtin_func_with(
@@ -146,7 +203,7 @@ impl Globals {
         let func_id =
             self.store
                 .add_builtin_func(name.to_string(), address, arg_num, arg_num, false);
-        self.define_builtin_module_fn(class_id, name, func_id);
+        self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
 
@@ -159,7 +216,7 @@ impl Globals {
         let func_id = self
             .store
             .add_builtin_func(name.to_string(), address, 0, 0, true);
-        self.define_builtin_module_fn(class_id, name, func_id);
+        self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
 
@@ -175,7 +232,7 @@ impl Globals {
         let func_id = self
             .store
             .add_builtin_func(name.to_string(), address, min, max, rest);
-        self.define_builtin_module_fn(class_id, name, func_id);
+        self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
 
@@ -191,7 +248,7 @@ impl Globals {
         let func_id = self
             .store
             .add_builtin_func_eval(name.to_string(), address, min, max, rest);
-        self.define_builtin_module_fn(class_id, name, func_id);
+        self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
 
@@ -309,11 +366,16 @@ impl Globals {
         rest: bool,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
-        let fid = self.new_builtin_fn(class_id, name, address, Visibility::Public, min, max, rest);
-        for alias in alias {
-            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
-        }
-        fid
+        self.new_builtin_fns(
+            class_id,
+            name,
+            alias,
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+        )
     }
 
     pub(crate) fn define_builtin_class_inline_func_with(

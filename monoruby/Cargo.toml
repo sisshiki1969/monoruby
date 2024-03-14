@@ -33,7 +33,7 @@ test = []
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
-rustyline = "13.0.0"
+rustyline = "14.0.0"
 paste = "1.0.7"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }

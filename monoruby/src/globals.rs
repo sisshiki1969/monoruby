@@ -281,14 +281,19 @@ impl Globals {
         external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
-            Ok(res) => bytecodegen::compile_eval(
-                self,
-                res.node,
-                mother,
-                (outer_fid, external_context),
-                Loc::default(),
-                res.source_info,
-            ),
+            Ok(res) => {
+                let res = bytecodegen::compile_eval(
+                    self,
+                    res.node,
+                    mother,
+                    (outer_fid, external_context),
+                    Loc::default(),
+                    res.source_info,
+                );
+                #[cfg(feature = "emit-bc")]
+                self.dump_bc();
+                res
+            }
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }

@@ -14,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
-    globals.define_builtin_funcs_with(
+    globals.define_builtin_funcs_eval_with(
         MODULE_CLASS,
         "class_eval",
         &["module_eval"],
@@ -193,8 +193,6 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             };
 
             let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-            #[cfg(feature = "emit-bc")]
-            globals.dump_bc();
             let proc = ProcInner::from(caller_cfp.lfp(), fid);
             vm.push_class_context(module.id());
             let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
