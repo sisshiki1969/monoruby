@@ -1,6 +1,38 @@
 use super::*;
 
 impl Codegen {
+    pub(super) fn gen_entry_point(
+        &mut self,
+        main_object: Value,
+    ) -> extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value> {
+        // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+
+        let entry = self.jit.get_current_address();
+
+        self.invoker_prologue();
+        self.get_func_data();
+        monoasm! { &mut self.jit,
+            // set meta func_id
+            movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
+            movq [rsp - (16 + LBP_META)], rax;
+            // set block
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_OUTER)], 0;
+            // set self
+            movq rax, (main_object.id());
+            movq [rsp - (16 + LBP_SELF)], rax;
+        };
+        self.invoker_call();
+        self.invoker_epilogue();
+
+        #[cfg(feature = "perf")]
+        self.perf_info(pair, "entry-point");
+
+        unsafe { std::mem::transmute(entry.as_ptr()) }
+    }
+
     pub(super) fn gen_invoker(&mut self) {
         self.method_invoker = self.method_invoker();
         self.method_invoker2 = self.method_invoker2();
@@ -8,12 +40,16 @@ impl Codegen {
         self.block_invoker_with_self = self.block_invoker_with_self();
         self.fiber_invoker = self.fiber_invoker();
         self.fiber_invoker_with_self = self.fiber_invoker_with_self();
+        self.resume_fiber = self.resume_fiber();
+        self.yield_fiber = self.yield_fiber();
     }
 
     fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: FuncId
@@ -27,6 +63,7 @@ impl Codegen {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep();
+        self.invoker_args();
         self.invoker_call();
         self.invoker_epilogue();
 
@@ -38,8 +75,10 @@ impl Codegen {
 
     fn method_invoker2(&mut self) -> MethodInvoker2 {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: FuncId
@@ -53,6 +92,7 @@ impl Codegen {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep2();
+        self.invoker_args();
         self.invoker_call();
         self.invoker_epilogue();
 
@@ -64,8 +104,10 @@ impl Codegen {
 
     fn block_invoker(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -75,6 +117,7 @@ impl Codegen {
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
+        self.invoker_args();
         self.invoker_call();
         self.invoker_epilogue();
 
@@ -86,8 +129,10 @@ impl Codegen {
 
     fn block_invoker_with_self(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockData
@@ -97,6 +142,7 @@ impl Codegen {
         self.invoker_prologue();
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
+        self.invoker_args();
         self.invoker_call();
         self.invoker_epilogue();
 
@@ -108,8 +154,10 @@ impl Codegen {
 
     fn fiber_invoker(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -130,6 +178,7 @@ impl Codegen {
         }
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
+        self.invoker_args();
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -149,8 +198,10 @@ impl Codegen {
 
     fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
+
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
@@ -171,6 +222,7 @@ impl Codegen {
         }
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
+        self.invoker_args();
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -184,6 +236,56 @@ impl Codegen {
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "fiber-invoker-with-self");
+
+        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    }
+
+    fn resume_fiber(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+            movq [rsi + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rdx;
+            ret;
+        };
+
+        #[cfg(feature = "perf")]
+        self.perf_info(pair, "resume-fiber");
+
+        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    }
+
+    fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
+            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rsi;
+            ret;
+        };
+
+        #[cfg(feature = "perf")]
+        self.perf_info(pair, "yield-fiber");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
@@ -300,7 +402,7 @@ impl Codegen {
     /// - r15: &FuncData
     /// - r8:  args: *const Value
     ///
-    fn invoker_call(&mut self) {
+    fn invoker_args(&mut self) {
         // In invoker call, CallSiteInfo is not available.
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
         // So several conditions are met, we can optimize this.
@@ -331,6 +433,18 @@ impl Codegen {
         }
         self.vm_handle_error();
         self.jit.bind_label(exit);
+    }
+
+    ///
+    /// Invoke the function.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn invoker_call(&mut self) {
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,

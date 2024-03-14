@@ -220,8 +220,7 @@ impl Codegen {
                 file
             },
         };
-        codegen.construct_vm(no_jit);
-        codegen.gen_entry_point(main_object);
+        codegen.construct_vm(no_jit, main_object);
         codegen.jit.finalize();
 
         codegen.class_version_addr =
@@ -271,68 +270,6 @@ impl Codegen {
             movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
             cmovltq rax, rdx;
         };
-    }
-
-    fn gen_entry_point(&mut self, main_object: Value) {
-        // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-        let entry = self.jit.get_current_address();
-        monoasm! { &mut self.jit,
-            pushq rbx;
-            pushq r12;
-            pushq r13;
-            pushq r14;
-            pushq r15;
-            movq rbx, rdi;  // rdi: &mut Interp
-            movq r12, rsi;  // rsi: &mut Globals
-        }
-        self.get_func_data();
-        monoasm! { &mut self.jit,
-            // set meta func_id
-            movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
-            movq [rsp - (16 + LBP_META)], rax;
-            // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_OUTER)], 0;
-            // set self
-            movq rax, (main_object.id());
-            movq [rsp - (16 + LBP_SELF)], rax;
-        };
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
-        monoasm! { &mut self.jit,
-            lea  rax, [rsp - (16 + LBP_ARG0)];
-            movzxw rdi, [r15 + (FUNCDATA_REGNUM)];
-        l1:
-            subq rdi, 1;
-            je   l2;
-            movq [rax], (NIL_VALUE);
-            subq rax, 8;
-            jmp  l1;
-        l2:
-        };
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];
-            // pop frame
-            movq rdi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-            popq r15;
-            popq r14;
-            popq r13;
-            popq r12;
-            popq rbx;
-            ret;
-        }
-
-        self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "entry-point");
     }
 
     ///

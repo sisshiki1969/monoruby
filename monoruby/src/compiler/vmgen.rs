@@ -63,7 +63,8 @@ impl Codegen {
     ///
     /// Generate interpreter.
     ///
-    pub(super) fn construct_vm(&mut self, no_jit: bool) {
+    pub(super) fn construct_vm(&mut self, no_jit: bool, main_object: Value) {
+        self.entry_point = self.gen_entry_point(main_object);
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
@@ -364,46 +365,6 @@ impl Codegen {
         self.perf_info(pair, "monoruby-vm");
 
         self.gen_invoker();
-
-        // extern "C" fn(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value>
-        let codeptr = self.jit.get_current_address();
-        self.resume_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-        self.push_callee_save();
-        monoasm! { &mut self.jit,
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [rsi + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-        }
-        self.pop_callee_save();
-        monoasm! { &mut self.jit,
-            movq rax, rdx;
-            ret;
-        };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "resume-fiber");
-
-        // extern "C" fn(vm: *mut Executor, val: Value) -> Option<Value>
-        let codeptr = self.jit.get_current_address();
-        self.yield_fiber = unsafe { std::mem::transmute(codeptr.as_ptr()) };
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-        self.push_callee_save();
-        monoasm! { &mut self.jit,
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rdi, [rdi + (EXECUTOR_PARENT_FIBER)]; // rdi <- [vm.parent_fiber]
-            movq rsp, [rdi + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
-        }
-        self.pop_callee_save();
-        monoasm! { &mut self.jit,
-            movq rax, rsi;
-            ret;
-        };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "yield-fiber");
     }
 
     #[cfg(feature = "perf")]
