@@ -24,60 +24,70 @@ impl Codegen {
     /// - R(*reg*): Value
     ///
     pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, deopt: DestLabel) {
-        if reg != GP::Rdi {
+        assert_eq!(self.jit.get_page(), 0);
+        self.jit.select_page(1);
+
+        let deopt = if reg != GP::Rdi {
+            let label = self.jit.label();
             monoasm!( &mut self.jit,
-                xchgq R(reg as _), rdi;
+            label:
+                movq rdi, R(reg as _);
+                jmp deopt;
             );
-        }
+            label
+        } else {
+            deopt
+        };
+        self.jit.select_page(0);
         match class_id {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,
-                    testq rdi, 0b001;
+                    testq R(reg as _), 0b001;
                     jz deopt;
                 );
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
-                    testq rdi, 0b001;
+                    testq R(reg as _), 0b001;
                     jnz deopt;
-                    testq rdi, 0b010;
+                    testq R(reg as _), 0b010;
                     jnz exit;
                 );
-                self.guard_rvalue(GP::Rdi, FLOAT_CLASS, deopt);
+                self.guard_rvalue(reg, FLOAT_CLASS, deopt);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (NIL_VALUE);
+                    cmpq R(reg as _), (NIL_VALUE);
                     jnz deopt;
                 );
             }
             SYMBOL_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpb rdi, (TAG_SYMBOL);
+                    cmpb R(reg as _), (TAG_SYMBOL);
                     jnz deopt;
                 );
             }
             TRUE_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (TRUE_VALUE);
+                    cmpq R(reg as _), (TRUE_VALUE);
                     jnz deopt;
                 );
             }
             FALSE_CLASS => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (FALSE_VALUE);
+                    cmpq R(reg as _), (FALSE_VALUE);
                     jnz deopt;
                 );
             }
-            _ => self.guard_rvalue(GP::Rdi, class_id, deopt),
+            _ => self.guard_rvalue(reg, class_id, deopt),
         }
-        if reg != GP::Rdi {
-            monoasm!( &mut self.jit,
-                xchgq R(reg as _), rdi;
-            );
-        }
+        //if reg != GP::Rdi {
+        //    monoasm!( &mut self.jit,
+        //        xchgq R(reg as _), rdi;
+        //    );
+        //}
     }
 
     ///
