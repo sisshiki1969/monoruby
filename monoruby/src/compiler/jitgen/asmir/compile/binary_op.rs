@@ -123,7 +123,29 @@ impl Codegen {
                 self.xmm_restore(using_xmm);
             }
             BinOpK::Div => {
-                self.generic_binop(kind, using_xmm, error);
+                let zero_div = self.jit.label();
+                monoasm!( &mut self.jit,
+                    sarq rsi, 1;
+                    testq rsi, rsi;
+                    jeq  zero_div;
+                    movq rax, rdi;
+                    sarq rax, 1;
+                    cqo;
+                    idiv rsi;
+                    salq rax, 1;
+                    orq  rax, 1;
+                );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                zero_div:
+                    movq rdi, rbx;
+                    movq rax, (runtime::err_divide_by_zero);
+                    call rax;
+                    xorq rax, rax;
+                    jmp error;
+                );
+                self.jit.select_page(0);
+                //self.generic_binop(kind, using_xmm, error);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(_, rhs) if *rhs > 0 && (*rhs as u64).is_power_of_two() => {
@@ -132,7 +154,30 @@ impl Codegen {
                     );
                 }
                 _ => {
-                    self.generic_binop(kind, using_xmm, error);
+                    let zero_div = self.jit.label();
+                    monoasm!( &mut self.jit,
+                        sarq rsi, 1;
+                        testq rsi, rsi;
+                        jeq  zero_div;
+                        movq rax, rdi;
+                        sarq rax, 1;
+                        cqo;
+                        idiv rsi;
+                        movq rax, rdx;
+                        salq rax, 1;
+                        orq  rax, 1;
+                    );
+                    self.jit.select_page(1);
+                    monoasm!( &mut self.jit,
+                    zero_div:
+                        movq rdi, rbx;
+                        movq rax, (runtime::err_divide_by_zero);
+                        call rax;
+                        xorq rax, rax;
+                        jmp error;
+                    );
+                    self.jit.select_page(0);
+                    //self.generic_binop(kind, using_xmm, error);
                 }
             },
             BinOpK::BitOr => match mode {

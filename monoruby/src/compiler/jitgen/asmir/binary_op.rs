@@ -41,11 +41,17 @@ impl AsmIr {
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc_fixnum(bb, GP::Rdi, dst);
             }
-            BinOpK::Exp | BinOpK::Div => {
+            BinOpK::Exp => {
                 self.fetch_fixnum_mode(bb, &mode, pc);
                 self.unlink(bb, dst);
                 self.integer_binop(bb, pc, kind, mode);
                 self.reg2acc(bb, GP::Rax, dst);
+            }
+            BinOpK::Div => {
+                self.fetch_fixnum_mode(bb, &mode, pc);
+                self.unlink(bb, dst);
+                self.integer_binop(bb, pc, kind, mode);
+                self.reg2acc_fixnum(bb, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
@@ -98,8 +104,8 @@ impl AsmIr {
                 self.lit2reg(Value::i32(*rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
-                self.fetch_guard_fixnum(bb, *rhs, GP::Rsi, deopt);
                 self.lit2reg(Value::i32(*lhs as i32), GP::Rdi);
+                self.fetch_guard_fixnum(bb, *rhs, GP::Rsi, deopt);
             }
         }
     }

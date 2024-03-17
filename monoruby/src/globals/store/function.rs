@@ -3,7 +3,7 @@ use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, Op
 
 pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
-pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
+//pub(crate) const FUNCDATA_REGNUM: u64 = FUNCDATA_META + META_REGNUM;
 pub(crate) const FUNCDATA_PC: u64 = std::mem::offset_of!(FuncData, pc) as _;
 pub(crate) const FUNCDATA_OFS: u64 = std::mem::offset_of!(FuncData, ofs) as _;
 pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
