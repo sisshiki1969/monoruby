@@ -286,14 +286,8 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
-        monoasm!( &mut self.jit,
-            // push cfp
-            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-            // set lfp
-            lea  r14, [rsp - 16];
-            movq [r14 - (BP_LFP)], r14;
-        );
+        self.set_lfp();
+        self.push_frame();
 
         if native {
             self.call_codeptr(codeptr);
@@ -330,38 +324,50 @@ impl Codegen {
     ///
     fn setup_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
         monoasm! { &mut self.jit,
+            subq rsp, 32;
             // set prev_cfp
-            movq rax, [rbx + (EXECUTOR_CFP)];
-            movq [rsp - (16 + BP_PREV_CFP)], rax;
+            //movq rax, [rbx + (EXECUTOR_CFP)];
+            //pushq rax;
+            //movq [rsp - (16 + BP_PREV_CFP)], rax;
             // set lfp
-            lea   rax, [rsp - 16];
-            movq [rsp - (16 + BP_LFP)], rax;
+            //lea   rax, [rsp - 16];
+            //pushq rax;
+            //movq [rsp - (16 + BP_LFP)], rax;
             // set outer
-            movq [rsp - (16 + LBP_OUTER)], 0;
+            xorq rax, rax;
+            pushq rax;
+            //movq [rsp - (16 + LBP_OUTER)], 0;
             // set meta.
             movq rax, (meta.get());
-            movq [rsp - (16 + LBP_META)], rax;
+            pushq rax;
+            //movq [rsp - (16 + LBP_META)], rax;
         }
         // set block
         if let Some(func_id) = callsite.block_fid {
             let bh = BlockHandler::from_caller(func_id);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
-                movq [rsp - (16 + LBP_BLOCK)], rax;
+                pushq rax;
+                //movq [rsp - (16 + LBP_BLOCK)], rax;
             );
         } else if let Some(block) = callsite.block_arg {
             monoasm!( &mut self.jit,
                 movq rax, [r14 - (conv(block))];
-                movq [rsp - (16 + LBP_BLOCK)], rax;
+                pushq rax;
+                //movq [rsp - (16 + LBP_BLOCK)], rax;
             );
         } else {
             monoasm!( &mut self.jit,
-                movq [rsp - (16 + LBP_BLOCK)], 0;
+                xorq rax, rax;
+                pushq rax;
+                //movq [rsp - (16 + LBP_BLOCK)], 0;
             );
         }
         // set self
         monoasm! { &mut self.jit,
-            movq [rsp - (16 + LBP_SELF)], r13;
+            //movq [rsp - (16 + LBP_SELF)], r13;
+            pushq r13;
+            addq rsp, 64;
         }
     }
 

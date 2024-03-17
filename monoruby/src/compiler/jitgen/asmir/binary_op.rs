@@ -53,13 +53,13 @@ impl AsmIr {
                     self.fetch_guard_fixnum(bb, lhs, GP::Rdi, deopt);
                     self.unlink(bb, dst);
                     self.integer_binop(bb, pc, kind, mode);
-                    self.reg2acc(bb, GP::Rdi, dst);
+                    self.reg2acc_fixnum(bb, GP::Rdi, dst);
                 }
                 _ => {
                     self.fetch_fixnum_mode(bb, &mode, pc);
                     self.unlink(bb, dst);
                     self.integer_binop(bb, pc, kind, mode);
-                    self.reg2acc(bb, GP::Rax, dst);
+                    self.reg2acc_fixnum(bb, GP::Rax, dst);
                 }
             },
         }
