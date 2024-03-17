@@ -1288,7 +1288,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = Array::new(lfp.self_val());
     if let Some(arg0) = lfp.try_arg(0)
-        && arg0.expect_string()? != "C*"
+        && arg0.expect_str()? != "C*"
     {
         unimplemented!()
     }

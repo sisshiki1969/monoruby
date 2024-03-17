@@ -152,7 +152,7 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 if !path.is_empty() && !path.ends_with('/') {
                     path.push('/');
                 }
-                let s = val.expect_string()?;
+                let s = val.expect_str()?;
                 path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
                     &s[1..]
                 } else if path.is_empty() && s.is_empty() {

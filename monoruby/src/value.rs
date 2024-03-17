@@ -901,6 +901,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_str(&self) -> Result<&str> {
+        if let RV::String(s) = self.unpack() {
+            std::str::from_utf8(s).map_err(|err| MonorubyErr::runtimeerr(err))
+        } else {
+            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+        }
+    }
+
     pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Result<RegexpInner> {
         if let Some(re) = self.is_regex() {
             Ok(re.clone())
