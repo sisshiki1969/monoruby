@@ -844,6 +844,17 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_method(&self) -> Option<&MethodInner> {
+        if let Some(rvalue) = self.try_rvalue() {
+            match rvalue.ty() {
+                ObjKind::METHOD => Some(self.rvalue().as_method()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn expect_class_or_module(&self, globals: &Globals) -> Result<ClassId> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),

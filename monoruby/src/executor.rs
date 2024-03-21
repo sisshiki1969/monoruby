@@ -968,6 +968,16 @@ impl BlockHandler {
         self.0
     }
 
+    pub fn func_id(&self) -> FuncId {
+        if let Some((fid, _)) = self.try_proxy() {
+            fid
+        } else if let Some(proc) = self.try_proc() {
+            proc.func_id()
+        } else {
+            unimplemented!()
+        }
+    }
+
     pub fn from_caller(func_id: FuncId) -> Self {
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         let bh = Value::integer(block_handler);

@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
+    globals.define_builtin_func_with(MODULE_CLASS, "define_method", define_method, 1, 2, false);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_builtin_func_with(
         MODULE_CLASS,
@@ -233,6 +234,36 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     };
     let iter = v.into_iter().map(Value::symbol);
     Ok(Value::array_from_iter(iter))
+}
+
+///
+/// ### Module#define_method
+/// - define_method(name, method) -> Symbol
+/// - define_method(name) { ... } -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/define_method.html]
+#[monoruby_builtin]
+fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let name = lfp.arg(0).expect_symbol_or_string()?;
+    let func_id = if let Some(method) = lfp.try_arg(1) {
+        if let Some(proc) = method.is_proc() {
+            proc.func_id()
+        } else if let Some(method) = method.is_method() {
+            method.func_id()
+        } else {
+            return Err(MonorubyErr::typeerr(
+                "Method, Proc, or UnboundMethod was expected.",
+                TypeErrKind::Other,
+            ));
+        }
+    } else if let Some(bh) = lfp.block() {
+        bh.func_id()
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
+    };
+    globals.add_public_method(class_id, name, func_id);
+    Ok(Value::symbol(name))
 }
 
 ///
