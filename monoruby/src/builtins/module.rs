@@ -253,8 +253,11 @@ fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             method.func_id()
         } else {
             return Err(MonorubyErr::typeerr(
-                "Method, Proc, or UnboundMethod was expected.",
-                TypeErrKind::Other,
+                "",
+                TypeErrKind::WrongArgumentType {
+                    val: method,
+                    expected: "Proc/Method/UnboundMethod",
+                },
             ));
         }
     } else if let Some(bh) = lfp.block() {
@@ -262,6 +265,7 @@ fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
+    globals.store[func_id].set_method_style();
     globals.add_public_method(class_id, name, func_id);
     Ok(Value::symbol(name))
 }
@@ -557,6 +561,36 @@ mod test {
         a.v *= 3
         a.v
         "#,
+        );
+    }
+
+    #[test]
+    fn define_method() {
+        run_test_with_prelude(
+            r#"
+            C.new.foo(17)
+        "#,
+            r#"
+            class C
+              def bar
+                "bar"
+              end
+              p = Proc.new { |a| a * 100 }
+              define_method "foo", p
+            end
+            "#,
+        );
+        run_test_with_prelude(
+            r#"
+            3.baz(4)
+        "#,
+            r#"
+            class Integer
+              define_method "baz" do |other|
+                self * other
+              end
+            end
+            "#,
         );
     }
 

@@ -197,11 +197,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
 fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let name = match lfp.arg(0).unpack() {
-        RV::Symbol(id) => id,
-        RV::String(b) => IdentId::get_id(String::from_utf8_lossy(b).as_ref()),
-        _ => unimplemented!(),
-    };
+    let name = lfp.arg(0).expect_symbol_or_string()?;
     Ok(Value::bool(
         globals.check_method(lfp.self_val(), name).is_some(),
     ))

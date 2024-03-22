@@ -2,8 +2,8 @@ class C
   def bar
     "bar"
   end
-  p = Proc.new { return "foo" }
-  define_method "foo", p
+  p = Proc.new { |a| a }
+  define_method "foo",7
 end
 
 puts C.new.foo

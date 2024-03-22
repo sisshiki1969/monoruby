@@ -804,7 +804,10 @@ impl Executor {
         };
         Err(MonorubyErr::typeerr(
             "",
-            TypeErrKind::WrongArgumentTypeProc { val },
+            TypeErrKind::WrongArgumentType {
+                val,
+                expected: "Proc",
+            },
         ))
     }
 

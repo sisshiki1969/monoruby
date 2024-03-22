@@ -542,8 +542,9 @@ pub enum TypeErrKind {
         val: Value,
         msg: &'static str,
     },
-    WrongArgumentTypeProc {
+    WrongArgumentType {
         val: Value,
+        expected: &'static str,
     },
     Other,
 }
@@ -574,9 +575,9 @@ impl TypeErrKind {
                     val.get_real_class_name(globals)
                 )
             }
-            TypeErrKind::WrongArgumentTypeProc { val } => {
+            TypeErrKind::WrongArgumentType { val, expected } => {
                 format!(
-                    "wrong argument type {} (expected Proc)",
+                    "wrong argument type {} (expected {expected})",
                     val.get_real_class_name(globals)
                 )
             }

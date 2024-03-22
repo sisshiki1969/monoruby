@@ -223,6 +223,10 @@ impl Meta {
         (self.kind & 0b100) != 0
     }
 
+    pub fn set_method_style(&mut self) {
+        self.kind &= !0b100
+    }
+
     pub fn is_native(&self) -> bool {
         (self.kind & 0b10) != 0
     }
@@ -769,6 +773,10 @@ impl FuncInfo {
     ///
     pub(crate) fn meta(&self) -> Meta {
         self.data.meta()
+    }
+
+    pub(crate) fn set_method_style(&mut self) {
+        self.data.meta.set_method_style();
     }
 
     ///
