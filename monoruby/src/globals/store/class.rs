@@ -588,6 +588,17 @@ impl Globals {
     }
 
     ///
+    /// Check whether a public method *name* for object *obj* exists.
+    ///
+    pub(crate) fn check_public_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
+        let class_id = obj.class();
+        match self.check_method_for_class(class_id, name) {
+            Some(entry) if entry.visibility == Visibility::Public => Some(entry.func_id()),
+            _ => None,
+        }
+    }
+
+    ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
     pub(crate) fn check_super(

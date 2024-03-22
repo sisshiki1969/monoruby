@@ -24,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
         analysis::v_v,
         0,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
+    globals.define_builtin_func_with(OBJECT_CLASS, "respond_to?", respond_to, 1, 2, false);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
@@ -192,15 +192,22 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// ### Object#respond_to?
 ///
-/// - respond_to?(name, [NOT SUPPORTED] include_all = false) -> bool
+/// - respond_to?(name, include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
 fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string()?;
-    Ok(Value::bool(
-        globals.check_method(lfp.self_val(), name).is_some(),
-    ))
+    let include_all = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.as_bool()
+    } else {
+        false
+    };
+    Ok(Value::bool(if include_all {
+        globals.check_method(lfp.self_val(), name).is_some()
+    } else {
+        globals.check_public_method(lfp.self_val(), name).is_some()
+    }))
 }
 
 ///
@@ -523,6 +530,33 @@ mod test {
             a.instance_variable_set("@k", 10);
             a.instance_variables.sort
             "#,
+        );
+    }
+
+    #[test]
+    fn respond_to() {
+        run_test_with_prelude(
+            r#"
+        list = [F.new, D.new]
+        res = []
+        list.each{|it| res << it.hello if it.respond_to?(:hello)}
+        list.each{|it| it.instance_eval("res << hello if it.respond_to?(:hello, true)")}
+        res
+        "#,
+            r#"
+        class F
+          def hello
+            "Bonjour"
+          end
+        end
+
+        class D
+          private
+          def hello
+            "Guten Tag"
+          end
+        end
+        "#,
         );
     }
 

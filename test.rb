@@ -1,17 +1,19 @@
-class C
-  def bar
-    "bar"
-  end
-  p = Proc.new { |a| a }
-  define_method "foo",7
-end
-
-puts C.new.foo
-
-class Integer
-  define_method "baz" do |other|
-    self * other
+class F
+  def hello
+    "Bonjour"
   end
 end
 
-puts 3.baz(4)
+class D
+  private
+  def hello
+    "Guten Tag"
+  end
+end
+list = [F.new, D.new]
+res = []
+
+list.each{|it| res << it.hello if it.respond_to?(:hello)}
+list.each{|it| it.instance_eval("res << hello if it.respond_to?(:hello, true)")}
+
+puts res.inspect
