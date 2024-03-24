@@ -1219,9 +1219,9 @@ impl RValue {
         unsafe { &self.kind.time }
     }
 
-    /*pub(crate) fn as_time_mut(&mut self) -> &mut TimeInfo {
+    pub(crate) fn as_time_mut(&mut self) -> &mut TimeInner {
         unsafe { &mut *self.kind.time }
-    }*/
+    }
 
     pub(crate) fn as_method(&self) -> &MethodInner {
         unsafe { &self.kind.method }

@@ -710,17 +710,29 @@ impl Executor {
     pub(crate) fn invoke_proc(
         &mut self,
         globals: &mut Globals,
-        proc: Value,
+        proc: Proc,
         args: &[Value],
     ) -> Result<Value> {
-        (globals.codegen.block_invoker)(
-            self,
-            globals,
-            proc.as_proc(),
-            Value::nil(),
-            args.as_ptr(),
-            args.len(),
-        )
+        if globals.store[proc.func_id()].is_block_style() {
+            (globals.codegen.block_invoker)(
+                self,
+                globals,
+                &proc,
+                Value::nil(),
+                args.as_ptr(),
+                args.len(),
+            )
+        } else {
+            (globals.codegen.method_invoker)(
+                self,
+                globals,
+                proc.func_id(),
+                Value::nil(),
+                args.as_ptr(),
+                args.len(),
+                None,
+            )
+        }
         .ok_or_else(|| self.take_error())
     }
 
@@ -804,7 +816,10 @@ impl Executor {
         };
         Err(MonorubyErr::typeerr(
             "",
-            TypeErrKind::WrongArgumentTypeProc { val },
+            TypeErrKind::WrongArgumentType {
+                val,
+                expected: "Proc",
+            },
         ))
     }
 
@@ -966,6 +981,16 @@ impl BlockHandler {
 
     pub fn get(self) -> Value {
         self.0
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        if let Some((fid, _)) = self.try_proxy() {
+            fid
+        } else if let Some(proc) = self.try_proc() {
+            proc.func_id()
+        } else {
+            unimplemented!()
+        }
     }
 
     pub fn from_caller(func_id: FuncId) -> Self {

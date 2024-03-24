@@ -822,6 +822,13 @@ impl Value {
         }
     }
 
+    pub(crate) fn as_time_mut(&mut self) -> &mut TimeInner {
+        match self.rvalue().ty() {
+            ObjKind::TIME => self.rvalue_mut().as_time_mut(),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
@@ -837,6 +844,17 @@ impl Value {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
                 ObjKind::PROC => Some(self.rvalue().as_proc()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_method(&self) -> Option<&MethodInner> {
+        if let Some(rvalue) = self.try_rvalue() {
+            match rvalue.ty() {
+                ObjKind::METHOD => Some(self.rvalue().as_method()),
                 _ => None,
             }
         } else {
