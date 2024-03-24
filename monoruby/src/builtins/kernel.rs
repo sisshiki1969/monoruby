@@ -20,6 +20,8 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
+    globals.define_builtin_module_func(kernel_class, "proc", proc, 0);
+    globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with(kernel_class, "raise", raise, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 1, 2, false);
@@ -120,6 +122,35 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         globals.write_stdout(&v.to_bytes(globals));
     }
     Ok(Value::nil())
+}
+
+///
+/// ### Kernel.#lambda
+///
+/// - proc { ... } -> Proc
+/// - lambda { ... } -> Proc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/lambda.html]
+#[monoruby_builtin]
+fn proc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        let p = vm.generate_proc(globals, bh)?;
+        Ok(p.into())
+    } else {
+        Err(MonorubyErr::create_proc_no_block())
+    }
+}
+
+#[monoruby_builtin]
+fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        let func_id = bh.func_id();
+        globals.store[func_id].set_method_style();
+        let p = vm.generate_proc(globals, bh)?;
+        Ok(p.into())
+    } else {
+        Err(MonorubyErr::create_proc_no_block())
+    }
 }
 
 ///
@@ -531,5 +562,17 @@ mod test {
         run_test_no_result_check("exit");
         run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
+    }
+
+    #[test]
+    fn lambda() {
+        run_test("proc {|x| x * 2}.call(1)");
+        run_test("proc {|x, y| x * y}.call(7,2)");
+        run_test("proc {|x, y| [x, y]}.call(7)");
+        run_test("proc {|x, y| [x, y]}.call(7, 5)");
+        run_test("proc {|x, y| [x, y]}.call(7, 5, 15)");
+        run_test("lambda {|x| x * 2}.call(1)");
+        run_test("lambda {|x, y| x * y}.call(7,2)");
+        run_test_error("lambda {|x| puts x}.call(1,2)");
     }
 }

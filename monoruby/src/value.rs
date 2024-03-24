@@ -822,6 +822,13 @@ impl Value {
         }
     }
 
+    pub(crate) fn as_time_mut(&mut self) -> &mut TimeInner {
+        match self.rvalue().ty() {
+            ObjKind::TIME => self.rvalue_mut().as_time_mut(),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {

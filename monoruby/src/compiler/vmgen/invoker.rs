@@ -10,6 +10,7 @@ impl Codegen {
         let pair = self.get_address_pair();
 
         let entry = self.jit.get_current_address();
+        let error_exit = self.jit.label();
 
         self.invoker_prologue();
         self.get_func_data();
@@ -25,7 +26,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
         };
         self.invoker_call();
-        self.invoker_epilogue();
+        self.invoker_epilogue(error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "entry-point");
@@ -57,15 +58,16 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         // r11: Option<BlockHandler>
+        let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
-        self.invoker_epilogue();
+        self.invoker_epilogue(error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "method-invoker");
@@ -86,15 +88,16 @@ impl Codegen {
         // r8:  args: Arg
         // r9:  len: usize
         // r11: Option<BlockHandler>
+        let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep2();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
-        self.invoker_epilogue();
+        self.invoker_epilogue(error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "method-invoker2");
@@ -114,12 +117,13 @@ impl Codegen {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
+        let error_exit = self.jit.label();
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
-        self.invoker_epilogue();
+        self.invoker_epilogue(error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "block-invoker");
@@ -139,12 +143,13 @@ impl Codegen {
         // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
+        let error_exit = self.jit.label();
         self.invoker_prologue();
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
-        self.invoker_epilogue();
+        self.invoker_epilogue(error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "block-invoker-with-self");
@@ -165,6 +170,7 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         // [rsp + 8]: *mut Executor
+        let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r10, [rsp + 8];
         };
@@ -178,12 +184,13 @@ impl Codegen {
         }
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
             movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        error_exit:
         }
         self.pop_callee_save();
         monoasm! { &mut self.jit,
@@ -209,6 +216,7 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         // [rsp + 8]: *mut Executor
+        let error_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r10, [rsp + 8];
         };
@@ -222,12 +230,13 @@ impl Codegen {
         }
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
-        self.invoker_args();
+        self.invoker_args(error_exit);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
             movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
+        error_exit:
         }
         self.pop_callee_save();
         monoasm! { &mut self.jit,
@@ -402,7 +411,7 @@ impl Codegen {
     /// - r15: &FuncData
     /// - r8:  args: *const Value
     ///
-    fn invoker_args(&mut self) {
+    fn invoker_args(&mut self, error_exit: DestLabel) {
         // In invoker call, CallSiteInfo is not available.
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
         // So several conditions are met, we can optimize this.
@@ -430,8 +439,9 @@ impl Codegen {
             movq rax, (handle_invoker_arguments);
             call rax;
             addq rsp, 4096;
+            testq rax, rax;
+            jz  error_exit;
         }
-        self.vm_handle_error();
         self.jit.bind_label(exit);
     }
 
@@ -457,8 +467,9 @@ impl Codegen {
         };
     }
 
-    fn invoker_epilogue(&mut self) {
+    fn invoker_epilogue(&mut self, error_exit: DestLabel) {
         monoasm! { &mut self.jit,
+        error_exit:
             popq r15;
             popq r14;
             popq r13;

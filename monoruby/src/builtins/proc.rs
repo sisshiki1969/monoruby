@@ -38,7 +38,8 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d=3d.html]
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    vm.invoke_proc(globals, lfp.self_val(), &lfp.arg(0).as_array())
+    let p = Proc::new(lfp.self_val());
+    vm.invoke_proc(globals, p, &lfp.arg(0).as_array())
 }
 
 #[cfg(test)]

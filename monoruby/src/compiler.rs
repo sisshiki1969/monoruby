@@ -112,6 +112,7 @@ pub struct Codegen {
     ///
     /// ### in
     /// - r13: PC + 1
+    /// - r14: LFP
     ///
     /// ### destroy
     /// - caller saved registers
