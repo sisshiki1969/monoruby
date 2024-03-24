@@ -713,26 +713,26 @@ impl Executor {
         proc: Proc,
         args: &[Value],
     ) -> Result<Value> {
-        if globals.store[proc.func_id()].is_block_style() {
-            (globals.codegen.block_invoker)(
-                self,
-                globals,
-                &proc,
-                Value::nil(),
-                args.as_ptr(),
-                args.len(),
-            )
-        } else {
-            (globals.codegen.method_invoker)(
-                self,
-                globals,
-                proc.func_id(),
-                Value::nil(),
-                args.as_ptr(),
-                args.len(),
-                None,
-            )
-        }
+        //if globals.store[proc.func_id()].is_block_style() {
+        (globals.codegen.block_invoker)(
+            self,
+            globals,
+            &proc,
+            Value::nil(),
+            args.as_ptr(),
+            args.len(),
+        )
+        //} else {
+        //    (globals.codegen.method_invoker)(
+        //        self,
+        //        globals,
+        //        proc.func_id(),
+        //        Value::nil(),
+        //        args.as_ptr(),
+        //        args.len(),
+        //        None,
+        //    )
+        //}
         .ok_or_else(|| self.take_error())
     }
 

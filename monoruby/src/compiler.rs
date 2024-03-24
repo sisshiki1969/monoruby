@@ -10,12 +10,6 @@ use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
 
-#[cfg(feature = "test")]
-const COUNT_START_COMPILE: i32 = 5;
-#[cfg(not(feature = "test"))]
-const COUNT_START_COMPILE: i32 = 10;
-const COUNT_START_RECOMPILE: i32 = 10;
-
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
 
 type MethodInvoker = extern "C" fn(
@@ -56,6 +50,13 @@ type FiberInvoker = extern "C" fn(
     usize,
     &mut Executor,
 ) -> Option<Value>;
+
+#[cfg(feature = "test")]
+const COUNT_START_COMPILE: i32 = 5;
+#[cfg(not(feature = "test"))]
+const COUNT_START_COMPILE: i32 = 20;
+const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
+const COUNT_DEOPT_RECOMPILE: i32 = 5;
 
 ///
 /// General purpose registers.
@@ -580,7 +581,7 @@ impl Codegen {
     ) {
         let exit = self.jit_class_guard_fail;
         let exit_patch_point = self.jit.label();
-        let counter = self.jit.const_i32(COUNT_START_RECOMPILE);
+        let counter = self.jit.const_i32(COUNT_RECOMPILE_ARECV_CLASS);
 
         monoasm! { &mut self.jit,
         guard:
