@@ -47,6 +47,15 @@ class Symbol
   end
 end
 
+class String
+  def +@
+    self
+  end
+  def -@
+    self
+  end
+end
+
 class Object
   def freeze
     self

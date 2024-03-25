@@ -506,9 +506,9 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let given = self_val.as_str();
+    let given = self_val.expect_str()?;
     let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
-    let res = match RegexpInner::find_one(vm, regex, &given)? {
+    let res = match regex.find_one(vm, given)? {
         Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
     };
@@ -595,15 +595,15 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         };
         let r = get_range(&lhs, start, len);
         Ok(Value::string_from_str(&lhs[r]))
-    } else if let Some(info) = lfp.arg(0).is_regex() {
+    } else if let Some(re) = lfp.arg(0).is_regex() {
         let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
             lfp.arg(1).coerce_to_i64()?
         };
-        match info.captures(&lhs) {
-            Ok(None) => return Ok(Value::nil()),
-            Ok(Some(captures)) => {
+        match re.captures(lhs)? {
+            None => return Ok(Value::nil()),
+            Some(captures) => {
                 vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 let nth = if nth >= 0 {
@@ -619,10 +619,6 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     None => Ok(Value::nil()),
                 }
             }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
         }
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
@@ -919,13 +915,6 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
-    let res = Value::string_from_str(&lhs[r.clone()]);
-    lhs.replace_range(r, "");
-    *lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
-    res
-}
-
 ///
 /// ### String#slice!
 /// - slice!(nth) -> String
@@ -938,6 +927,12 @@ fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/slice=21.html]
 #[monoruby_builtin]
 fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
+        let res = Value::string_from_str(&lhs[r.clone()]);
+        lhs.replace_range(r, "");
+        *lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
+        res
+    }
     let self_ = lfp.self_val();
     let lhs = self_.expect_string()?;
     if let Some(i) = lfp.arg(0).try_fixnum() {
@@ -986,9 +981,6 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             _ => return Ok(Value::nil()),
         };
         let r = get_range(&lhs, start, len);
-        //let res = Value::string_from_str(&lhs[r.clone()]);
-        //lhs.replace_range(r, "");
-        //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
         Ok(slice_sub(lfp, lhs, r))
     } else if let Some(info) = lfp.arg(0).is_regex() {
         let nth = if lfp.try_arg(1).is_none() {
@@ -996,9 +988,9 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         } else {
             lfp.arg(1).coerce_to_i64()?
         };
-        match info.captures(&lhs) {
-            Ok(None) => return Ok(Value::nil()),
-            Ok(Some(captures)) => {
+        match info.captures(&lhs)? {
+            None => return Ok(Value::nil()),
+            Some(captures) => {
                 vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 let nth = if nth >= 0 {
@@ -1012,18 +1004,11 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
                 match captures.get(nth) {
                     Some(m) => {
                         let r = m.range();
-                        //let res = Value::string_from_str(&lhs[r.clone()]);
-                        //lhs.replace_range(r, "");
-                        //*lfp.self_val().as_bytes_mut() = StringInner::from_vec(lhs.into_bytes());
                         Ok(slice_sub(lfp, lhs, r))
                     }
                     None => Ok(Value::nil()),
                 }
             }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
         }
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
@@ -1224,9 +1209,9 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let given = self_.expect_str()?;
     let vec = if let Some(s) = lfp.arg(0).is_str() {
         let re = RegexpInner::from_escaped(globals, &s)?;
-        RegexpInner::find_all(vm, &re, &given)?
+        re.find_all(vm, &given)?
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        RegexpInner::find_all(vm, re, &given)?
+        re.find_all(vm, &given)?
     } else {
         return Err(MonorubyErr::argumenterr(
             "1st arg must be RegExp or String.",

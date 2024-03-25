@@ -66,10 +66,10 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?;
-    let msg = if lfp.try_arg(0).is_none() {
-        globals.get_class_name(class_id)
+    let msg = if let Some(msg) = lfp.try_arg(0) {
+        msg.expect_string()?
     } else {
-        lfp.arg(0).expect_string()?
+        globals.get_class_name(class_id)
     };
     let kind = class_id.get_name_id(globals).unwrap();
     Ok(Value::new_exception(kind, msg, vec![], class_id))

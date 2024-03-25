@@ -655,13 +655,14 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
 fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let sep = if lfp.try_arg(0).is_none() {
-        "".to_string()
+    let arg0 = lfp.try_arg(0);
+    let sep = if let Some(sep) = &arg0 {
+        sep.expect_str()?
     } else {
-        lfp.arg(0).expect_string()?
+        ""
     };
     let ary = Array::new(lfp.self_val());
-    let res = array_join(globals, ary, &sep);
+    let res = array_join(globals, ary, sep);
     Ok(Value::string(res))
 }
 

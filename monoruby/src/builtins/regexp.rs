@@ -20,6 +20,7 @@ pub(crate) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
     globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
+    globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
 }
 
 // Class methods
@@ -48,8 +49,8 @@ fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 #[monoruby_builtin]
 fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let string = arg0.expect_string()?;
-    let val = Value::string(regex::escape(&string));
+    let string = arg0.expect_str()?;
+    let val = Value::string(regex::escape(string));
     Ok(val)
 }
 
@@ -81,7 +82,7 @@ fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(s) => s.to_string(),
         Err(_) => return Ok(Value::bool(false)),
     };
-    let res = Value::bool(RegexpInner::find_one(vm, regex, &given)?.is_some());
+    let res = Value::bool(regex.find_one(vm, &given)?.is_some());
     Ok(res)
 }
 
@@ -98,11 +99,59 @@ fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given = lfp.arg(0).expect_symbol_or_string()?.to_string();
-    let res = match RegexpInner::find_one(vm, regex, &given)? {
+    let res = match regex.find_one(vm, &given)? {
         Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
     };
     Ok(res)
+}
+
+///
+/// Convert `i` to the position of the char in the string with `len` chars.
+///
+/// Return None if `i` is out of range.
+///
+fn conv_index(i: i64, len: usize) -> Option<usize> {
+    if i >= 0 {
+        if i <= len as i64 {
+            Some(i as usize)
+        } else {
+            None
+        }
+    } else {
+        match len as i64 + i {
+            n if n < 0 => None,
+            n => Some(n as usize),
+        }
+    }
+}
+
+///
+/// ### Regexp#match?
+/// - match?(str, pos = 0) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
+#[monoruby_builtin]
+fn match_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let given_val = lfp.arg(0);
+    let given = given_val.expect_str()?;
+    let char_pos = if let Some(pos) = lfp.try_arg(1) {
+        match conv_index(pos.expect_integer()?, given.chars().count()) {
+            Some(pos) => pos,
+            None => return Ok(Value::bool(false)),
+        }
+    } else {
+        0
+    };
+    let byte_pos = match given.char_indices().nth(char_pos) {
+        Some((pos, _)) => pos,
+        None => return Ok(Value::bool(false)),
+    };
+    Ok(Value::bool(
+        regex.captures_from_pos(given, byte_pos)?.is_some(),
+    ))
 }
 
 #[cfg(test)]
@@ -225,5 +274,18 @@ mod test {
     #[test]
     fn regexp_error2() {
         run_test_error(r#"Regexp.new("+")"#);
+    }
+
+    #[test]
+    fn match_() {
+        run_test(
+            r#"
+        res = [/R.../.match?("-Ruby")]
+        for i in -6...6
+            res << /R.../.match?("-Ruby", 0)
+        end
+        res
+        "#,
+        );
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use fancy_regex::{Captures, Match, Regex};
+use fancy_regex::{CaptureMatches, Captures, Match, Regex};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
@@ -14,16 +14,20 @@ impl PartialEq for RegexpInner {
     }
 }
 
-impl std::ops::Deref for RegexpInner {
+/*impl std::ops::Deref for RegexpInner {
     type Target = Regex;
     fn deref(&self) -> &Regex {
         &self.0
     }
-}
+}*/
 
 impl RegexpInner {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
-    pub(crate) fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Result<Self> {
+    pub fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Result<Self> {
         let string = regex::escape(escaped_str);
         RegexpInner::from_string(globals, string)
     }
@@ -31,7 +35,7 @@ impl RegexpInner {
     /// Create `RegexpInfo` from `reg_str`.
     /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
     /// between fancy_regex crate and Regexp class of Ruby.
-    pub(crate) fn from_string(globals: &mut Globals, reg_str: impl Into<String>) -> Result<Self> {
+    pub fn from_string(globals: &mut Globals, reg_str: impl Into<String>) -> Result<Self> {
         let mut reg_str = reg_str.into();
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
@@ -50,7 +54,7 @@ impl RegexpInner {
         }
     }
 
-    pub(crate) fn new(mut reg_str: String) -> std::result::Result<Self, String> {
+    pub fn new(mut reg_str: String) -> std::result::Result<Self, String> {
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
@@ -61,6 +65,46 @@ impl RegexpInner {
                 Ok(RegexpInner(regex))
             }
             Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn captures<'a>(&self, given: &'a str) -> Result<Option<Captures<'a>>> {
+        match self.0.captures(given) {
+            Ok(res) => Ok(res),
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
+        }
+    }
+
+    pub fn captures_from_pos<'a>(
+        &self,
+        given: &'a str,
+        pos: usize,
+    ) -> Result<Option<Captures<'a>>> {
+        match self.0.captures_from_pos(given, pos) {
+            Ok(res) => Ok(res),
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
+        }
+    }
+
+    pub fn captures_iter<'a>(&self, given: &'a str) -> CaptureMatches<'_, 'a> {
+        self.0.captures_iter(given)
+    }
+
+    /// Find the leftmost-first match for `given`.
+    /// Returns `Match`s.
+    pub fn find_one<'a>(&self, vm: &mut Executor, given: &'a str) -> Result<Option<Match<'a>>> {
+        match self.captures(given)? {
+            None => Ok(None),
+            Some(captures) => {
+                vm.save_captures(&captures, given);
+                Ok(captures.get(0))
+            }
         }
     }
 }
@@ -104,18 +148,12 @@ impl RegexpInner {
             given: &str,
             bh: BlockHandler,
         ) -> Result<(String, bool)> {
-            let (start, end, matched_str) = match re.captures_from_pos(given, 0) {
-                Ok(None) => return Ok((given.to_string(), false)),
-                Ok(Some(captures)) => {
+            let (start, end, matched_str) = match re.captures_from_pos(given, 0)? {
+                None => return Ok((given.to_string(), false)),
+                Some(captures) => {
                     let m = captures.get(0).unwrap();
                     vm.save_captures(&captures, given);
                     (m.start(), m.end(), m.as_str())
-                }
-                Err(err) => {
-                    return Err(MonorubyErr::internalerr(format!(
-                        "Capture failed. {:?}",
-                        err
-                    )));
                 }
             };
 
@@ -178,19 +216,13 @@ impl RegexpInner {
             let mut i = 0;
             let data = vm.get_block_data(globals, bh)?;
             loop {
-                let (start, end, matched_str) = match re.captures_from_pos(given, i) {
-                    Ok(None) => break,
-                    Ok(Some(captures)) => {
+                let (start, end, matched_str) = match re.captures_from_pos(given, i)? {
+                    None => break,
+                    Some(captures) => {
                         let m = captures.get(0).unwrap();
                         i = m.end() + usize::from(m.start() == m.end());
                         vm.save_captures(&captures, given);
                         (m.start(), m.end(), m.as_str())
-                    }
-                    Err(err) => {
-                        return Err(MonorubyErr::internalerr(format!(
-                            "Capture failed. {:?}",
-                            err
-                        )));
                     }
                 };
                 let matched = Value::string_from_str(matched_str);
@@ -221,7 +253,7 @@ impl RegexpInner {
     pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
-        re: &Regex,
+        re: &RegexpInner,
         given: &str,
         block: Option<BlockHandler>,
         char_pos: usize,
@@ -230,9 +262,9 @@ impl RegexpInner {
             Some((pos, _)) => pos,
             None => return Ok(Value::nil()),
         };
-        match re.captures_from_pos(given, byte_pos) {
-            Ok(None) => Ok(Value::nil()),
-            Ok(Some(captures)) => {
+        match re.captures_from_pos(given, byte_pos)? {
+            None => Ok(Value::nil()),
+            Some(captures) => {
                 vm.save_captures(&captures, given);
                 if let Some(bh) = block {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
@@ -245,41 +277,17 @@ impl RegexpInner {
                     Ok(ary.into())
                 }
             }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
         }
     }
 
-    /// Find the leftmost-first match for `given`.
-    /// Returns `Match`s.
-    pub(crate) fn find_one<'a>(
-        vm: &mut Executor,
-        re: &Regex,
-        given: &'a str,
-    ) -> Result<Option<Match<'a>>> {
-        match re.captures(given) {
-            Ok(None) => Ok(None),
-            Ok(Some(captures)) => {
-                vm.save_captures(&captures, given);
-                Ok(captures.get(0))
-            }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
-        }
-    }
-
-    pub(crate) fn find_all(vm: &mut Executor, re: &Regex, given: &str) -> Result<Vec<Value>> {
+    pub(crate) fn find_all(&self, vm: &mut Executor, given: &str) -> Result<Vec<Value>> {
         let mut ary = vec![];
         let mut idx = 0;
         let mut last_captures = None;
         loop {
-            match re.captures_from_pos(given, idx) {
-                Ok(None) => break,
-                Ok(Some(captures)) => {
+            match self.captures_from_pos(given, idx)? {
+                None => break,
+                Some(captures) => {
                     let m = captures.get(0).unwrap();
                     idx = m.end();
                     match captures.len() {
@@ -305,12 +313,6 @@ impl RegexpInner {
                     }
                     last_captures = Some(captures);
                 }
-                Err(err) => {
-                    return Err(MonorubyErr::internalerr(format!(
-                        "Capture failed. {:?}",
-                        err
-                    )));
-                }
             };
         }
         if let Some(c) = last_captures {
@@ -325,7 +327,7 @@ impl RegexpInner {
     ///
     /// ### return
     /// (replaced:String, is_replaced?:bool)
-    pub(crate) fn replace_repeat(
+    fn replace_repeat(
         &self,
         vm: &mut Executor,
         given: &str,
@@ -338,9 +340,9 @@ impl RegexpInner {
             if i >= given.len() {
                 break;
             }
-            match self.captures_from_pos(given, i) {
-                Ok(None) => break,
-                Ok(Some(captures)) => {
+            match self.captures_from_pos(given, i)? {
+                None => break,
+                Some(captures) => {
                     let m = captures.get(0).unwrap();
                     // the length of matched string can be 0.
                     // this is neccesary to avoid infinite loop.
@@ -351,12 +353,6 @@ impl RegexpInner {
                     };
                     range.push((m.start(), m.end()));
                     last_captures = Some(captures);
-                }
-                Err(err) => {
-                    return Err(MonorubyErr::internalerr(format!(
-                        "Capture failed. {:?}",
-                        err
-                    )));
                 }
             };
         }
@@ -376,15 +372,15 @@ impl RegexpInner {
     ///
     /// ### return
     /// replaced:String
-    pub(crate) fn replace_once<'a>(
-        &'a self,
+    fn replace_once<'a>(
+        &self,
         vm: &mut Executor,
         given: &'a str,
         replace: &str,
-    ) -> Result<(String, Option<Captures>)> {
-        match self.captures(given) {
-            Ok(None) => Ok((given.to_string(), None)),
-            Ok(Some(captures)) => {
+    ) -> Result<(String, Option<Captures<'a>>)> {
+        match self.captures(given)? {
+            None => Ok((given.to_string(), None)),
+            Some(captures) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
                 vm.save_captures(&captures, given);
@@ -411,10 +407,6 @@ impl RegexpInner {
                 res.replace_range(m.start()..m.end(), &rep);
                 Ok((res, Some(captures)))
             }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
         }
     }
 }
