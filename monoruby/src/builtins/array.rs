@@ -79,6 +79,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "pack", pack, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
 }
 
 ///
@@ -1301,6 +1302,50 @@ fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bytes(v))
 }
 
+///
+/// ### Array#flatten
+///
+/// - flatten(lv = nil) -> Array
+/// - flatten!(lv = nil) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/flatten.html]
+#[monoruby_builtin]
+fn flatten(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn flatten_inner(ary: &Array, res: &mut Array, lv: Option<usize>) {
+        for v in ary.iter() {
+            if let Some(ary) = v.try_array_ty() {
+                if let Some(lv) = lv {
+                    if lv == 0 {
+                        res.push(*v);
+                    } else {
+                        flatten_inner(&ary, res, Some(lv - 1));
+                    }
+                } else {
+                    flatten_inner(&ary, res, None);
+                }
+            } else {
+                res.push(*v);
+            }
+        }
+    }
+    let ary = Array::new(lfp.self_val());
+    let lv = if let Some(arg0) = lfp.try_arg(0) {
+        if arg0.is_nil() {
+            None
+        } else {
+            match arg0.expect_integer()? {
+                i if i >= 0 => Some(i as usize),
+                _ => None,
+            }
+        }
+    } else {
+        None
+    };
+    let mut res = Array::new_empty();
+    flatten_inner(&ary, &mut res, lv);
+    Ok(res.into())
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1982,5 +2027,14 @@ mod test {
     #[test]
     fn pack() {
         run_test(r#"[*(0..100)].pack("C*")"#);
+    }
+
+    #[test]
+    fn flatten() {
+        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten"##);
+        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(nil)"##);
+        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(-1)"##);
+        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(0)"##);
+        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(1)"##);
     }
 }
