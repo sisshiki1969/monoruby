@@ -1008,6 +1008,11 @@ impl Value {
         *self.rvalue_mut() = RValue::new_string(replace);
     }
 
+    pub(crate) fn replace_str(&mut self, replace: &str) {
+        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        *self.rvalue_mut().as_bytes_mut() = StringInner::from_slice(replace.as_bytes());
+    }
+
     pub(crate) fn as_range(&self) -> &RangeInner {
         assert_eq!(ObjKind::RANGE, self.rvalue().ty());
         self.rvalue().as_range()

@@ -29,6 +29,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
+    globals.define_builtin_func(STRING_CLASS, "strip", strip, 0);
+    globals.define_builtin_func(STRING_CLASS, "strip!", strip_, 0);
+    globals.define_builtin_func(STRING_CLASS, "rstrip", rstrip, 0);
+    globals.define_builtin_func(STRING_CLASS, "rstrip!", rstrip_, 0);
+    globals.define_builtin_func(STRING_CLASS, "lstrip", lstrip, 0);
+    globals.define_builtin_func(STRING_CLASS, "lstrip!", lstrip_, 0);
     globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub!", sub_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "gsub", gsub, 1, 2, false);
@@ -100,7 +106,7 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let b = match lfp.arg(0).is_str() {
-        Some(rhs) => rhs == lhs,
+        Some(rhs) => &rhs == &lhs,
         None => false,
     };
     Ok(Value::bool(b))
@@ -117,7 +123,7 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let b = match lfp.arg(0).is_str() {
-        Some(rhs) => rhs == lhs,
+        Some(rhs) => &rhs == &lhs,
         None => false,
     };
     Ok(Value::bool(!b))
@@ -1015,6 +1021,28 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     }
 }
 
+fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
+    if rs.is_empty() {
+        let mut s = self_;
+        let mut len = s.len();
+        loop {
+            s = s.trim_end_matches("\r\n");
+            if s.ends_with('\n') {
+                s = &s[0..s.len() - 1];
+            }
+            if len == s.len() {
+                break;
+            }
+            len = s.len();
+        }
+        s
+    } else if rs == "\n" {
+        self_.trim_end_matches(&['\n', '\r'])
+    } else {
+        self_.trim_end_matches(rs)
+    }
+}
+
 ///
 /// ### String#chomp
 /// - chomp(rs = $/) -> String
@@ -1066,26 +1094,103 @@ fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
 }
 
-fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
-    if rs.is_empty() {
-        let mut s = self_;
-        let mut len = s.len();
-        loop {
-            s = s.trim_end_matches("\r\n");
-            if s.ends_with('\n') {
-                s = &s[0..s.len() - 1];
-            }
-            if len == s.len() {
-                break;
-            }
-            len = s.len();
-        }
-        s
-    } else if rs == "\n" {
-        self_.trim_end_matches(&['\n', '\r'])
-    } else {
-        self_.trim_end_matches(rs)
+//const STRIP_START: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b'];
+const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
+
+///
+/// ### String#strip
+///
+/// - strip -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip.html]
+#[monoruby_builtin]
+fn strip(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let self_ = self_val
+        .expect_str()?
+        .trim_end_matches(STRIP)
+        .trim_start_matches(STRIP);
+    Ok(Value::string_from_str(self_))
+}
+
+///
+/// ### String#strip!
+///
+/// - strip! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip=21.html]
+#[monoruby_builtin]
+fn strip_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let orig = self_val.expect_str()?;
+    let self_ = orig.trim_end_matches(STRIP).trim_start_matches(STRIP);
+    if self_.len() == orig.len() {
+        return Ok(Value::nil());
     }
+    lfp.self_val().replace_str(self_);
+    Ok(lfp.self_val())
+}
+
+///
+/// ### String#rstrip
+///
+/// - rstrip -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip.html]
+#[monoruby_builtin]
+fn rstrip(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let self_ = self_val.expect_str()?.trim_end_matches(STRIP);
+    Ok(Value::string_from_str(self_))
+}
+
+///
+/// ### String#rstrip!
+///
+/// - rstrip! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip=21.html]
+#[monoruby_builtin]
+fn rstrip_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let orig = self_val.expect_str()?;
+    let self_ = orig.trim_end_matches(STRIP);
+    if self_.len() == orig.len() {
+        return Ok(Value::nil());
+    }
+    lfp.self_val().replace_str(self_);
+    Ok(lfp.self_val())
+}
+
+///
+/// ### String#lstrip
+///
+/// - lstrip -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip.html]
+#[monoruby_builtin]
+fn lstrip(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let self_ = self_val.expect_str()?.trim_start_matches(STRIP);
+    Ok(Value::string_from_str(self_))
+}
+
+///
+/// ### String#lstrip!
+///
+/// - lstrip! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip=21.html]
+#[monoruby_builtin]
+fn lstrip_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let orig = self_val.expect_str()?;
+    let self_ = orig.trim_start_matches(STRIP);
+    if self_.len() == orig.len() {
+        return Ok(Value::nil());
+    }
+    lfp.self_val().replace_str(self_);
+    Ok(lfp.self_val())
 }
 
 ///
@@ -1587,8 +1692,7 @@ fn sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/replace.html]
 #[monoruby_builtin]
 fn replace(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg0 = lfp.arg(0).expect_string()?;
-    lfp.self_val().replace_string(arg0);
+    lfp.self_val().replace_str(lfp.arg(0).expect_str()?);
     Ok(lfp.self_val())
 }
 
@@ -1884,6 +1988,97 @@ mod test {
             r##"
         s = "abcdefghdefr"
         s.sub!(/def1/, "!!")
+        "##,
+        );
+    }
+
+    #[test]
+    fn strip() {
+        run_test(r##""  abc  \r\n".strip"##);
+        run_test(r##""abc\n".strip"##);
+        run_test(r##""  abc".strip"##);
+        run_test(r##""abc".strip"##);
+        run_test(r##""  \0  abc  \0".strip"##);
+        run_test(
+            r##"
+        str = "abc\n"
+        str.strip
+        str
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  abc\r\n"
+        [str.strip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "abc"
+        [str.strip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  \0  abc  \0"
+        [str.strip!, str]
+        "##,
+        );
+        run_test(r##""  abc\n".lstrip"##);
+        run_test(r##""\t abc\n".lstrip"##);
+        run_test(r##""abc\n".lstrip"##);
+        run_test(
+            r##"
+        str = "abc\n"
+        str.lstrip
+        str
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  abc\r\n"
+        [str.lstrip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "abc"
+        [str.lstrip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  \0  abc  \0"
+        [str.lstrip!, str]
+        "##,
+        );
+        run_test(r##""  abc\n".rstrip"##);
+        run_test(r##""  abc \t\r\n\0".rstrip"##);
+        run_test(r##""  abc".rstrip"##);
+        run_test(r##""  abc\0 ".rstrip"##);
+        run_test(
+            r##"
+        str = "abc\n"
+        str.rstrip
+        str
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  abc\r\n"
+        [str.rstrip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "abc"
+        [str.rstrip!, str]
+        "##,
+        );
+        run_test(
+            r##"
+        str = "  \0  abc  \0"
+        [str.rstrip!, str]
         "##,
         );
     }
