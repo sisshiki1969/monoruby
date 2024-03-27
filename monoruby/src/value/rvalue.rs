@@ -317,6 +317,10 @@ impl std::hash::Hash for RValue {
 }
 
 impl RValue {
+    pub fn swap_kind(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.kind, &mut other.kind);
+    }
+
     pub(crate) fn to_s(&self, globals: &Globals) -> String {
         unsafe {
             match self.ty() {

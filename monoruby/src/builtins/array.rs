@@ -62,7 +62,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "map", map, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
@@ -80,6 +81,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "pack", pack, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
+    globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
 }
 
 ///
@@ -151,10 +154,8 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 eprintln!("warning: block supersedes default value argument");
             }
             let iter = (0..size).map(|i| Value::integer(i as i64));
-            *self_val = vm
-                .invoke_block_map1(globals, bh, iter, size)?
-                .as_array()
-                .clone();
+            let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
+            RValue::swap_kind(&mut lfp.self_val().rvalue_mut(), &mut res.rvalue_mut());
         } else {
             let val = if lfp.try_arg(1).is_none() {
                 Value::nil()
@@ -922,6 +923,29 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
+/// ### Array#map!
+///
+/// - collect! {|item| ..} -> self
+/// - map! {|item| ..} -> self
+/// - collect! -> Enumerator
+/// - map! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect=21.html]
+#[monoruby_builtin]
+fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = Array::new(lfp.self_val());
+    let size_hint = ary.len();
+    let iter = ary.iter().cloned();
+    if let Some(bh) = lfp.block() {
+        let mut res = vm.invoke_block_map1(globals, bh, iter, size_hint)?;
+        RValue::swap_kind(&mut lfp.self_val().rvalue_mut(), &mut res.rvalue_mut());
+        Ok(lfp.self_val())
+    } else {
+        let id = IdentId::get_id("map!");
+        vm.generate_enumerator(id, lfp.self_val(), vec![])
+    }
+}
+
 /// ### Enumerable#collect_concat
 ///
 /// - flat_map {| obj | block } -> Array
@@ -1344,6 +1368,30 @@ fn flatten(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut res = Array::new_empty();
     flatten_inner(&ary, &mut res, lv);
     Ok(res.into())
+}
+
+///
+/// ### Array#compact
+///
+/// - compact -> Array
+/// - compact! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/compact.html]
+#[monoruby_builtin]
+fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = Array::new(lfp.self_val().dup());
+    ary.retain(|v| Ok(!v.is_nil()))?;
+    Ok(ary.into())
+}
+
+#[monoruby_builtin]
+fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = Array::new(lfp.self_val());
+    Ok(if ary.retain(|v| Ok(!v.is_nil()))? {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 #[cfg(test)]
@@ -1799,9 +1847,21 @@ mod test {
         run_test(
             r##"
         x = 10
-        [2, 3, 4, 5, 6, 7, 8].map do |y|
+        a = [2, 3, 4, 5, 6, 7, 8]
+        res = a.map do |y|
           x + y
         end
+        [res, a]
+        "##,
+        );
+        run_test(
+            r##"
+        x = 10
+        a = [2, 3, 4, 5, 6, 7, 8]
+        res = a.map! do |y|
+          x + y
+        end
+        [res, a]
         "##,
         );
     }
@@ -2036,5 +2096,27 @@ mod test {
         run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(-1)"##);
         run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(0)"##);
         run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(1)"##);
+    }
+
+    #[test]
+    fn compact() {
+        run_test(
+            r##"
+        ary = [1, nil, 2, nil, 3, nil]
+        [ary.compact, ary]
+        "##,
+        );
+        run_test(
+            r##"
+        ary = [1, nil, 2, nil, 3, nil]
+        [ary.compact!, ary]
+        "##,
+        );
+        run_test(
+            r##"
+        ary = [1, 2, 3]
+        [ary.compact!, ary]
+        "##,
+        );
     }
 }
