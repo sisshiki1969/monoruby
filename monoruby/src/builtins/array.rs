@@ -41,7 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
         analysis::v_v_v,
         1,
     );
-    globals.define_builtin_func(ARRAY_CLASS, "==", eq, 1);
+    globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]=", index_assign, 2, 3, false);
@@ -439,7 +439,11 @@ fn array_shl(
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = Array::new(lfp.self_val());
-    let rhs = Array::new(lfp.arg(0));
+    let rhs = if let Some(rhs) = lfp.arg(0).try_array_ty() {
+        rhs
+    } else {
+        return Ok(Value::bool(false));
+    };
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
@@ -1585,8 +1589,13 @@ mod test {
     #[test]
     fn eq() {
         run_test(r##"["a","c"] == ["a","c",7]"##);
+        run_test(r##"["a","c"] === ["a","c",7]"##);
         run_test(r##"["a","c",7] == ["a","c",7]"##);
+        run_test(r##"["a","c",7] === ["a","c",7]"##);
         run_test(r##"["a","c",7] == ["a","c","7"]"##);
+        run_test(r##"["a","c",7] === ["a","c","7"]"##);
+        run_test(r##"["a","c",7] == "a""##);
+        run_test(r##"["a","c",7] === "a""##);
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 3, 2 ] "##);
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2, 3 ] "##);
         run_test(r##"[ 1, 2, 3 ] <=> [ 1, 2 ] "##);

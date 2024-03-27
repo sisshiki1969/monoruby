@@ -7,8 +7,8 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
     globals.define_builtin_class_func(HASH_CLASS, "new", new, 0);
-    globals.define_builtin_func(HASH_CLASS, "size", size, 0);
-    globals.define_builtin_func(HASH_CLASS, "length", size, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
@@ -86,6 +86,39 @@ fn new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.self_val().as_hash().len();
     Ok(Value::integer(len as i64))
+}
+
+///
+/// ### Hash#==
+///
+/// - self == other -> bool
+/// - self === other -> bool
+/// - self.eql?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
+#[monoruby_builtin]
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let lhs_v = lfp.self_val();
+    let rhs_v = lfp.arg(0);
+    let lhs = lhs_v.as_hash();
+    let rhs = if let Some(rhs) = rhs_v.is_hash() {
+        rhs
+    } else {
+        return Ok(Value::bool(false));
+    };
+    if lhs.len() != rhs.len() {
+        return Ok(Value::bool(false));
+    }
+    for (k, lhs_value) in lhs.iter() {
+        if let Some(rhs_value) = rhs.get(k)
+            && vm.eq_values_bool(globals, lhs_value, rhs_value)?
+        {
+            continue;
+        } else {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::bool(true))
 }
 
 ///
@@ -394,6 +427,16 @@ mod test {
         );
         run_test("{}");
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
+    }
+
+    #[test]
+    fn eq() {
+        run_test(r##"{} == {}"##);
+        run_test(r##"{a:4} == {a:4}"##);
+        run_test(r##"{a:4} == {a:4.0}"##);
+        run_test(r##"{a:4} == {a:5}"##);
+        run_test(r##"{a:4} == {a:5, b:7}"##);
+        run_test(r##"{a:4} == :a"##);
     }
 
     #[test]
