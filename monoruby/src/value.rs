@@ -252,6 +252,10 @@ impl Value {
         RValue::new_complex_from(complex).pack()
     }
 
+    pub fn complex_from_inner(inner: ComplexInner) -> Self {
+        RValue::new_complex_from_inner(inner).pack()
+    }
+
     pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::integer(i)

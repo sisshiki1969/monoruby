@@ -6,8 +6,8 @@ use super::*;
 // Float class
 //
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Float", FLOAT_CLASS);
+pub(super) fn init(globals: &mut Globals, numeric: Module) {
+    globals.define_builtin_class_by_str("Float", FLOAT_CLASS, numeric, OBJECT_CLASS);
     globals.set_constant_by_str(FLOAT_CLASS, "NAN", Value::float(f64::NAN));
     globals.set_constant_by_str(FLOAT_CLASS, "INFINITY", Value::float(f64::INFINITY));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX", Value::float(f64::MAX));
@@ -62,74 +62,6 @@ fn toi(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
-/// ### Float#+
-///
-/// - self + other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2b.html]
-#[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::add_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Float#-
-///
-/// - self - other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2d.html]
-#[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::sub_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Float#*
-///
-/// - self * other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2a.html]
-#[monoruby_builtin]
-fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::mul_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Float#/
-///
-/// - self / other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=2f.html]
-#[monoruby_builtin]
-fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::div_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
 /// ### Float#div
 ///
 /// - div(other) -> Integer
@@ -141,24 +73,6 @@ fn div_floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Val
     let rhs = RealKind::try_from(lfp.arg(0))?.to_f64();
     let div_floor = (lhs / rhs).floor();
     Value::coerce_f64_to_int(div_floor)
-}
-
-///
-/// ### Float#%
-///
-/// - self % other -> Numeric
-/// - modulo(other) -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/=25.html]
-#[monoruby_builtin]
-fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
 }
 
 ///

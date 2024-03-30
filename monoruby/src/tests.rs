@@ -98,9 +98,9 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
                 test.extend_from_slice(&[
                     format!("{lhs} {op} {rhs}"),
                     format!("{lhs}.{op}({rhs})"),
-                    format!("{lhs} {op} (-{rhs})"),
-                    format!("-{lhs} {op} {rhs}"),
-                    format!("-{lhs} {op} (-{rhs})"),
+                    format!("{lhs} {op} (-({rhs}))"),
+                    format!("-({lhs}) {op} {rhs}"),
+                    format!("-({lhs}) {op} -({rhs})"),
                 ]);
             }
         }
@@ -478,6 +478,9 @@ mod test {
             "1.9e24",
         ];
         run_binop_tests(&lhs, &["+", "-", "*", "/"], &rhs);
+        let lhs = ["6926", "6.7", "4+6.5i"];
+        let rhs = ["2508", "3.7", "5.3+7i"];
+        run_binop_tests(&lhs, &["+", "-"], &rhs);
         run_test_error("3.1 + :aaa");
         run_test_error("3.1 - :aaa");
         run_test_error("3.1 * :aaa");

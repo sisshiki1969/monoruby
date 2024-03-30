@@ -5,8 +5,8 @@ use num::{BigInt, ToPrimitive, Zero};
 // Integer class
 //
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Integer", INTEGER_CLASS);
+pub(super) fn init(globals: &mut Globals, numeric: Module) {
+    globals.define_builtin_class_by_str("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
@@ -21,12 +21,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "-", sub, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "*", mul, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "/", div, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "%", rem, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(INTEGER_CLASS, "&", band, 1);
     globals.define_builtin_func(INTEGER_CLASS, "|", bor, 1);
     globals.define_builtin_func(INTEGER_CLASS, "^", bxor, 1);
@@ -244,92 +238,6 @@ fn integer_tof(
 #[monoruby_builtin]
 fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
-}
-
-///
-/// ### Integer#+
-///
-/// - self + other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
-#[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::add_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#-
-///
-/// - self - other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2d.html]
-#[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::sub_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#*
-///
-/// - self * other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a.html]
-#[monoruby_builtin]
-fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::mul_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#/
-///
-/// - self / other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2f.html]
-#[monoruby_builtin]
-fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::div_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#%
-///
-/// - self % other -> Numeric
-/// - modulo(other) -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
-#[monoruby_builtin]
-fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
 }
 
 ///

@@ -4,8 +4,8 @@ use super::*;
 // Complex class
 //
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Complex", COMPLEX_CLASS);
+pub(super) fn init(globals: &mut Globals, numeric: Module) {
+    globals.define_builtin_class_by_str("Complex", COMPLEX_CLASS, numeric, OBJECT_CLASS);
     globals.define_builtin_class_func_with(COMPLEX_CLASS, "polar", complex_polar, 1, 2, false);
     globals.define_builtin_class_funcs_with(
         COMPLEX_CLASS,

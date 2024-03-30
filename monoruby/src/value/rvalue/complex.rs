@@ -52,6 +52,10 @@ impl ComplexInner {
         Self(num::complex::Complex { re, im })
     }
 
+    pub fn neg(&self) -> Self {
+        Self(-self.0)
+    }
+
     pub fn re(&self) -> Real {
         self.0.re
     }

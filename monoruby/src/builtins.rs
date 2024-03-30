@@ -2,19 +2,17 @@ use super::*;
 
 mod array;
 mod class;
-mod complex;
 pub(crate) mod enumerator;
 mod exception;
 mod fiber;
 mod file;
-mod float;
 mod hash;
-mod integer;
 mod io;
 mod kernel;
 mod math;
 mod method;
 mod module;
+mod numeric;
 mod object;
 mod proc;
 mod process;
@@ -41,21 +39,19 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
+    globals.define_builtin_class_under_obj("NilClass", NIL_CLASS);
+    globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS);
+    globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS);
     module::init(globals);
     class::init(globals);
     kernel::init(globals);
     exception::init(globals);
-    integer::init(globals);
-    float::init(globals);
-    complex::init(globals);
+    numeric::init(globals);
     string::init(globals);
     array::init(globals);
     hash::init(globals);
     regexp::init(globals);
     range::init(globals);
-    globals.define_builtin_class_under_obj("NilClass", NIL_CLASS);
-    globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS);
-    globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS);
     proc::init(globals);
     method::init(globals);
     fiber::init(globals);
@@ -87,9 +83,3 @@ impl std::ops::Add<usize> for Arg {
         Arg(unsafe { self.0.sub(rhs) })
     }
 }
-
-/*impl Arg {
-    pub fn new(lfp: Lfp) -> Self {
-        Self(unsafe { lfp.register_ptr(1) as _ })
-    }
-}*/

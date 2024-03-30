@@ -731,6 +731,7 @@ pub(crate) extern "C" fn neg_value(
         },
         RV::BigInt(lhs) => Value::bigint(-lhs),
         RV::Float(lhs) => Value::float(-lhs),
+        RV::Complex(lhs) => Value::complex(-lhs.re, -lhs.im),
         _ => {
             return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[], None);
         }

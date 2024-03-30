@@ -126,6 +126,12 @@ impl ObjKind {
         }
     }
 
+    fn complex_from_inner(inner: ComplexInner) -> Self {
+        Self {
+            complex: ManuallyDrop::new(inner),
+        }
+    }
+
     fn bytes(s: StringInner) -> Self {
         Self {
             string: ManuallyDrop::new(s),
@@ -832,6 +838,14 @@ impl RValue {
         RValue {
             header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
             kind: ObjKind::complex_from(complex),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_complex_from_inner(inner: ComplexInner) -> Self {
+        RValue {
+            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            kind: ObjKind::complex_from_inner(inner),
             var_table: None,
         }
     }
