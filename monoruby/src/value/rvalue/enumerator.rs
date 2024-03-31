@@ -94,7 +94,7 @@ impl Enumerator {
             self.rewind();
         }
         let mut internal = self.internal.unwrap();
-        let v = internal.enum_yield_values(vm, globals, *self)?;
+        let v = internal.enum_yield_values(vm, globals, *self, Value::nil())?;
         if internal.is_terminated() {
             return Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),

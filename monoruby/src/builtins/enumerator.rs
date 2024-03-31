@@ -90,7 +90,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         self_val: Enumerator,
     ) -> Result<Value> {
         loop {
-            let v = internal.enum_yield_values(vm, globals, self_val)?;
+            let v = internal.enum_yield_values(vm, globals, self_val, Value::nil())?;
             if internal.is_terminated() {
                 return Ok(v);
             }
@@ -106,10 +106,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
 
     let internal = Fiber::from(self_val.proc);
-    vm.temp_push(internal.into());
-    let res = each_inner(vm, globals, internal, &data, self_val);
-    vm.temp_pop();
-    res
+    each_inner(vm, globals, internal, &data, self_val)
 }
 
 ///
@@ -129,16 +126,14 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         mut count: Value,
         self_val: Enumerator,
     ) -> Result<Value> {
-        vm.temp_array_new(None);
+        let mut res = Value::nil();
         loop {
-            let v = internal.enum_yield_values(vm, globals, self_val)?;
+            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
             if internal.is_terminated() {
-                let res = vm.temp_pop();
-                return Ok(res);
+                return Ok(v);
             }
             let a = Array::new(v);
-            let res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
-            vm.temp_array_push(res);
+            res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
             match count.unpack() {
                 RV::Fixnum(i) => count = Value::integer(i + 1),
                 RV::BigInt(i) => count = Value::bigint(i + 1),
@@ -170,11 +165,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     };
 
     let internal = Fiber::from(self_val.proc);
-    vm.temp_push(internal.into());
-    let res = with_index_inner(vm, globals, internal, &data, count, self_val);
-    vm.temp_pop();
-
-    res
+    with_index_inner(vm, globals, internal, &data, count, self_val)
 }
 
 ///
@@ -380,7 +371,7 @@ mod test {
         );
     }
 
-    /*#[test]
+    #[test]
     fn fib_each2() {
         run_test_with_prelude(
             r##"
@@ -414,7 +405,7 @@ mod test {
                 end
             end"##,
         );
-    }*/
+    }
 
     #[test]
     fn each() {

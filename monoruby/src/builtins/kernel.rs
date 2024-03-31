@@ -376,13 +376,13 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
-    let path = globals.store[cfp.get_source_pos()]
-        .as_ruby_func()
-        .sourceinfo
-        .path
-        .clone();
+    /*let path = globals.store[cfp.get_source_pos()]
+    .as_ruby_func()
+    .sourceinfo
+    .path
+    .clone();*/
 
-    let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
+    let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
     let proc = ProcInner::from(caller_cfp.lfp(), fid);
     vm.invoke_block(globals, &proc, &[])
 }

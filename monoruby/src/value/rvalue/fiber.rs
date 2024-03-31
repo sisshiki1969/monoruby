@@ -85,12 +85,13 @@ impl Fiber {
         vm: &mut Executor,
         globals: &mut Globals,
         self_val: Enumerator,
+        val: Value,
     ) -> Result<Value> {
         let v = match self.state() {
             FiberState::Created => {
                 self.invoke_fiber_with_self(vm, globals, &[], self_val.into())?
             }
-            FiberState::Suspended => self.resume_fiber(vm, globals, Value::nil())?,
+            FiberState::Suspended => self.resume_fiber(vm, globals, val)?,
             FiberState::Terminated => {
                 return Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
