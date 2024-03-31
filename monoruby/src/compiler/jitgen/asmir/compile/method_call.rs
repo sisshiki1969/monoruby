@@ -121,7 +121,7 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        self.generic_call(callid, callsite, error);
+        self.generic_call(callid, callsite.args, callsite.pos_num, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
 
@@ -409,7 +409,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        self.generic_call(callid, callsite, error);
+        self.generic_call(callid, callsite.args, callsite.pos_num, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
     }
@@ -516,11 +516,11 @@ impl Codegen {
         self.handle_error(error);
     }
 
-    fn generic_call(&mut self, callid: CallSiteId, callsite: &CallSiteInfo, error: DestLabel) {
+    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, pos_num: usize, error: DestLabel) {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (conv(callsite.args))];
-            movl r9, (callsite.pos_num);
+            lea  rdx, [r14 - (conv(args))];
+            movl r9, (pos_num);
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);

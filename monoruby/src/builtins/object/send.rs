@@ -92,7 +92,7 @@ pub(crate) fn object_send(
     ir.reg2acc(bb, GP::Rax, dst);
 }
 
-const CACHE_SIZE: usize = 8;
+const CACHE_SIZE: usize = 2;
 
 #[repr(C)]
 struct CacheEntry {
@@ -101,7 +101,22 @@ struct CacheEntry {
     counter: usize,
 }
 
+impl std::fmt::Debug for CacheEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(method) = self.method {
+            write!(
+                f,
+                "method: {:?}, fid: {:?}, counter: {}",
+                method, self.fid, self.counter
+            )
+        } else {
+            write!(f, "method: None")
+        }
+    }
+}
+
 #[repr(C)]
+#[derive(Debug)]
 struct Cache([CacheEntry; CACHE_SIZE]);
 
 impl Cache {
@@ -130,6 +145,7 @@ impl Cache {
                 }
             }
         }
+        //eprintln!("{:#?}", self);
         let fid = globals.find_method(recv, method, false)?;
         self.0[min_i].method = Some(method);
         self.0[min_i].fid = fid;

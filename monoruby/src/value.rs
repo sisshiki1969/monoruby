@@ -904,18 +904,17 @@ impl Value {
     }
 
     pub(crate) fn expect_symbol_or_string(&self) -> Result<IdentId> {
-        match self.unpack() {
-            RV::Symbol(sym) => return Ok(sym),
-            RV::String(s) => {
-                return Ok(IdentId::get_id(String::from_utf8_lossy(s).as_ref()));
-            }
-            _ => {}
+        if let Some(sym) = self.try_symbol() {
+            Ok(sym)
+        } else if let Some(s) = self.is_str() {
+            Ok(IdentId::get_id(&s))
+        } else {
+            Err(MonorubyErr::is_not_symbol_nor_string(*self))
         }
-        Err(MonorubyErr::is_not_symbol_nor_string(*self))
     }
 
     pub(crate) fn expect_string(&self) -> Result<String> {
-        if let RV::String(s) = self.unpack() {
+        if let Some(s) = self.is_bytes() {
             let s = String::from_utf8_lossy(s).into_owned();
             Ok(s)
         } else {
@@ -924,8 +923,12 @@ impl Value {
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
-        if let RV::String(s) = self.unpack() {
-            std::str::from_utf8(s).map_err(|err| MonorubyErr::runtimeerr(err))
+        if let Some(s) = self.is_bytes() {
+            let s = match std::str::from_utf8(s) {
+                Ok(s) => s,
+                Err(_) => return Err(MonorubyErr::runtimeerr("invalid_byte_sequence")),
+            };
+            Ok(s)
         } else {
             Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
         }
