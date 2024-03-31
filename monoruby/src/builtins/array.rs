@@ -405,16 +405,10 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
     ary.into()
 }
 
-fn array_shl(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
+fn array_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
     let CallSiteInfo {
         recv, dst, args, ..
-    } = *callsite;
+    } = store[callid];
     ir.fetch_to_reg(bb, args, GP::Rsi);
     let deopt = ir.new_deopt(bb, pc);
     let using_xmm = bb.get_using_xmm();

@@ -56,11 +56,12 @@ fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 
 fn fiber_yield_inline(
     ir: &mut AsmIr,
-    _store: &Store,
+    store: &Store,
     bb: &mut BBContext,
-    callsite: &CallSiteInfo,
+    callid: CallSiteId,
     pc: BcPc,
 ) {
+    let callsite = &store[callid];
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;

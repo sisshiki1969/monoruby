@@ -60,14 +60,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-fn object_nil(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    _pc: BcPc,
-) {
-    let CallSiteInfo { dst, .. } = *callsite;
+fn object_nil(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, _pc: BcPc) {
     //bb.link_stack(dst);
     ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,
@@ -77,7 +70,7 @@ fn object_nil(
             cmoveqq rax, rsi;
         }
     });
-    ir.rax2acc(bb, dst);
+    ir.rax2acc(bb, store[callid].dst);
 }
 
 ///

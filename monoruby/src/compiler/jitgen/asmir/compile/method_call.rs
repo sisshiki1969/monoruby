@@ -114,7 +114,7 @@ impl Codegen {
             pushq [r15 + (FUNCDATA_META)];
         };
         // set block
-        self.push_block(callsite);
+        self.push_block(callsite.block_fid, callsite.block_arg);
         // set self
         monoasm!( &mut self.jit,
             pushq [r14 - (conv(callsite.recv))];
@@ -147,6 +147,75 @@ impl Codegen {
             jmp resolved;
         }
         self.jit.select_page(0);
+    }
+
+    pub(crate) fn object_send_inline(
+        &mut self,
+        callid: CallSiteId,
+        recv: SlotId,
+        args: SlotId,
+        pos_num: usize,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    ) {
+        /*let cache = self
+            .jit
+            .bytes(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
+        let version = self.jit.const_i32(-1);*/
+        // argument registers:
+        //   rdi: args len
+        self.xmm_save(using_xmm);
+        // r15 <- recv's class
+        self.load_rdi(recv);
+        let get_class = self.get_class;
+        monoasm!( &mut self.jit,
+            call get_class;
+            movl r15, rax;  // r15: receiver's ClassId
+        );
+
+        // r15: receiver's ClassId
+        // we must check inline cache.
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, (callid.get()); // CallSiteId
+            movq rax, (runtime::find_method);
+            call rax;
+        }
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            // FuncId was returned to rax.
+            movl rdx, rax;
+        }
+        self.get_func_data();
+        // r15 <- &FuncData
+
+        monoasm! { &mut self.jit,
+            subq  rsp, 16;
+            // set prev_cfp
+            pushq [rbx + (EXECUTOR_CFP)];
+            // set lfp
+            lea   rax, [rsp + 8];
+            pushq rax;
+            // set outer
+            xorq rax, rax;
+            pushq rax;
+            // set meta.
+            pushq [r15 + (FUNCDATA_META)];
+        };
+        // set block
+        self.push_block(block_fid, block_arg);
+        // set self
+        monoasm!( &mut self.jit,
+            pushq [r14 - (conv(recv))];
+            addq  rsp, 64;
+        );
+
+        self.generic_call(callid, args, pos_num, error);
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
     }
 
     ///
@@ -420,14 +489,14 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn push_block(&mut self, callsite: &CallSiteInfo) {
-        if let Some(func_id) = callsite.block_fid {
+    fn push_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
+        if let Some(func_id) = block_fid {
             let bh = BlockHandler::from_caller(func_id);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
             );
-        } else if let Some(block) = callsite.block_arg {
+        } else if let Some(block) = block_arg {
             monoasm!( &mut self.jit,
                 pushq [r14 - (conv(block))];
             );

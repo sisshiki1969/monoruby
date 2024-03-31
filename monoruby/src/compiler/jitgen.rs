@@ -683,7 +683,7 @@ impl JitContext {
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.guard_version(pc, using_xmm, deopt, error);
-                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, &store[callid], pc);
+                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, callid, pc);
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);

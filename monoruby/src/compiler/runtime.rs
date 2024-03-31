@@ -22,7 +22,7 @@ pub(super) extern "C" fn find_method(
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
         let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
-        let is_func_call = globals.store[callid].recv.is_self();
+        let is_func_call = recv_reg.is_self();
         match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => Some(id),
             Err(err) => {
