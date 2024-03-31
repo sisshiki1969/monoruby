@@ -163,17 +163,26 @@ impl Codegen {
         /*let cache = self
             .jit
             .bytes(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
-        let version = self.jit.const_i32(-1);*/
-        // argument registers:
-        //   rdi: args len
+        let version = self.jit.const_i32(-1);
+        let global_version = self.class_version;
+        let l1 = self.jit.label();
+        monoasm! {&mut self.jit,
+            movl rax, [rip + version];
+            cmpl rax, [rip + global_version];
+            je   l1;
+            movl [rip + version], rax;
+            xorq rax, rax;
+            lea  rdi, [rip + cache];
+            movq [rdi], rax;
+            movq [rdi + 16], rax;
+            movq [rdi + 32], rax;
+            movq [rdi + 48], rax;
+        l1:
+        }*/
+
         self.xmm_save(using_xmm);
         // r15 <- recv's class
-        self.load_rdi(recv);
-        let get_class = self.get_class;
-        monoasm!( &mut self.jit,
-            call get_class;
-            movl r15, rax;  // r15: receiver's ClassId
-        );
+        //self.load_rdi(recv);
 
         // r15: receiver's ClassId
         // we must check inline cache.
@@ -615,4 +624,107 @@ extern "C" fn jit_handle_hash_splat_kw_rest(
             None
         }
     }
+}
+
+const CACHE_SIZE: usize = 4;
+const CACHE_METHOD: usize = std::mem::offset_of!(CacheEntry, method);
+const CACHE_FID: usize = std::mem::offset_of!(CacheEntry, fid);
+const CACHE_COUNTER: usize = std::mem::offset_of!(CacheEntry, counter);
+
+#[repr(C)]
+struct CacheEntry {
+    method: Option<IdentId>,
+    fid: FuncId,
+    counter: usize,
+}
+
+impl std::fmt::Debug for CacheEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(method) = self.method {
+            write!(
+                f,
+                "method: {:?}, fid: {:?}, counter: {}",
+                method, self.fid, self.counter
+            )
+        } else {
+            write!(f, "method: None")
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct Cache([CacheEntry; CACHE_SIZE]);
+
+impl Cache {
+    fn search(&mut self, globals: &mut Globals, recv: Value, method: IdentId) -> Result<FuncId> {
+        let mut min_i = 0;
+        let mut min_count = self.0[min_i].counter;
+        for (i, entry) in self.0.iter_mut().enumerate() {
+            match entry.method {
+                Some(cached_method) if cached_method == method => {
+                    let fid = entry.fid;
+                    entry.counter += 1;
+                    if i != min_i && entry.counter > min_count {
+                        self.0.swap(min_i, i);
+                    }
+                    return Ok(fid);
+                }
+                Some(_) => {
+                    if entry.counter < min_count {
+                        min_count = entry.counter;
+                        min_i = i;
+                    }
+                }
+                None => {
+                    min_i = i;
+                    break;
+                }
+            }
+        }
+        //eprintln!("{:#?}", self);
+        let fid = globals.find_method(recv, method, false)?;
+        self.0[min_i].method = Some(method);
+        self.0[min_i].fid = fid;
+        self.0[min_i].counter = 1;
+        Ok(fid)
+    }
+
+    /*fn clear(&mut self) {
+        for entry in self.0.iter_mut() {
+            entry.method = None;
+        }
+    }*/
+}
+
+extern "C" fn send_dispatch(
+    vm: &mut Executor,     // rdi
+    globals: &mut Globals, // rsi
+    recv: Value,           // rdx
+    args: Arg,             // rcx
+    pos_num: usize,        // r8
+    cache: &mut Cache,
+) -> Option<FuncId> {
+    fn call_send(
+        globals: &mut Globals,
+        recv: Value,
+        args: Arg,
+        len: usize,
+        cache: &mut Cache,
+    ) -> Result<FuncId> {
+        if len < 1 {
+            return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
+        }
+        let method = args[0].unwrap().expect_symbol_or_string()?;
+        cache.search(globals, recv, method)
+    }
+
+    let fid = match call_send(globals, recv, args, pos_num, cache) {
+        Ok(res) => res,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    Some(fid)
 }
