@@ -121,7 +121,7 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        self.generic_call(callid, callsite.args, callsite.pos_num, error);
+        self.generic_call(callid, callsite.args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
 
@@ -160,15 +160,15 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: DestLabel,
     ) {
-        /*let cache = self
+        let cache = self
             .jit
             .bytes(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
         let version = self.jit.const_i32(-1);
         let global_version = self.class_version;
         let l1 = self.jit.label();
         monoasm! {&mut self.jit,
-            movl rax, [rip + version];
-            cmpl rax, [rip + global_version];
+            movl rax, [rip + global_version];
+            cmpl rax, [rip + version];
             je   l1;
             movl [rip + version], rax;
             xorq rax, rax;
@@ -178,19 +178,21 @@ impl Codegen {
             movq [rdi + 32], rax;
             movq [rdi + 48], rax;
         l1:
-        }*/
+        }
 
         self.xmm_save(using_xmm);
         // r15 <- recv's class
-        //self.load_rdi(recv);
 
         // r15: receiver's ClassId
         // we must check inline cache.
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, (callid.get()); // CallSiteId
-            movq rax, (runtime::find_method);
+            movq rdx, [r14 - (conv(recv))];
+            lea  rcx, [r14 - (conv(args))];
+            movq r8, (pos_num);
+            lea  r9, [rip + cache];
+            movq rax, (send_dispatch);
             call rax;
         }
         self.handle_error(error);
@@ -222,7 +224,13 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        self.generic_call(callid, args, pos_num, error);
+        monoasm! { &mut self.jit,
+            movl r8, (callid.get()); // CallSiteId
+            lea  rdx, [r14 - (conv(args))];
+        }
+        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send);
+        self.handle_error(error);
+        self.call_funcdata();
         self.xmm_restore(using_xmm);
         self.handle_error(error);
     }
@@ -487,7 +495,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        self.generic_call(callid, callsite.args, callsite.pos_num, error);
+        self.generic_call(callid, callsite.args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
     }
@@ -594,11 +602,11 @@ impl Codegen {
         self.handle_error(error);
     }
 
-    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, pos_num: usize, error: DestLabel) {
+    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
             lea  rdx, [r14 - (conv(args))];
-            movl r9, (pos_num);
+            //movl r9, (pos_num);
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);
@@ -634,7 +642,7 @@ const CACHE_COUNTER: usize = std::mem::offset_of!(CacheEntry, counter);
 #[repr(C)]
 struct CacheEntry {
     method: Option<IdentId>,
-    fid: FuncId,
+    fid: Option<FuncId>,
     counter: usize,
 }
 
@@ -668,7 +676,7 @@ impl Cache {
                     if i != min_i && entry.counter > min_count {
                         self.0.swap(min_i, i);
                     }
-                    return Ok(fid);
+                    return Ok(fid.unwrap());
                 }
                 Some(_) => {
                     if entry.counter < min_count {
@@ -683,9 +691,9 @@ impl Cache {
             }
         }
         //eprintln!("{:#?}", self);
-        let fid = globals.find_method(recv, method, false)?;
+        let fid = globals.find_method(recv, method, true)?;
         self.0[min_i].method = Some(method);
-        self.0[min_i].fid = fid;
+        self.0[min_i].fid = Some(fid);
         self.0[min_i].counter = 1;
         Ok(fid)
     }

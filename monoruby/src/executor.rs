@@ -559,7 +559,7 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
-        let func_id = globals.find_method(receiver, method, false)?;
+        let func_id = globals.find_method(receiver, method, true)?;
         match self.invoke_func(globals, func_id, receiver, args, bh) {
             Some(res) => Ok(res),
             None => Err(self.take_error()),

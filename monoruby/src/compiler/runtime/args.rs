@@ -77,11 +77,12 @@ pub(crate) fn set_frame_arguments(
     caller_lfp: Lfp,
     callid: CallSiteId,
     src: *const Value,
+    pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
     let callee = &globals[callee_fid];
     let caller = &globals.store[callid];
-    positional(caller, callee, src, callee_lfp, caller_lfp)?;
+    positional(caller, callee, src, pos_num, callee_lfp, caller_lfp)?;
 
     if !callee.no_keyword() || !caller.kw_may_exists() {
         handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
@@ -123,7 +124,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let caller = &globals.store[caller];
     let callee_fid = meta.func_id();
     let callee = &globals.store[callee_fid];
-    match positional(caller, callee, src, callee_lfp, caller_lfp) {
+    match positional(caller, callee, src, caller.pos_num, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -139,13 +140,14 @@ fn positional(
     caller: &CallSiteInfo,
     callee: &FuncInfo,
     src: *const Value,
+    pos_num: usize,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
-    let pos_num = caller.pos_num;
+    //let pos_num = caller.pos_num;
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
