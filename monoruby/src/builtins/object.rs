@@ -1,6 +1,6 @@
 use super::*;
 mod send;
-pub(crate) use send::{object_send, send};
+pub(crate) use send::{object_send, object_send_splat, send};
 
 //
 // Object class

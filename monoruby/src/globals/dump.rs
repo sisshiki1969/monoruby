@@ -527,7 +527,9 @@ impl Globals {
             }
             TraceIr::InlineCall {
                 inline_id, callid, ..
-            } => {
+            }
+            | TraceIr::InlineObjectSend { inline_id, callid }
+            | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
                 let CallSiteInfo {
                     recv,
                     args,

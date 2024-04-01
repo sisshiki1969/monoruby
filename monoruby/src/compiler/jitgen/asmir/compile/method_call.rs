@@ -159,6 +159,7 @@ impl Codegen {
         block_arg: Option<SlotId>,
         using_xmm: UsingXmm,
         error: DestLabel,
+        no_splat: bool,
     ) {
         let cache = self
             .jit
@@ -179,12 +180,7 @@ impl Codegen {
             movq [rdi + 48], rax;
         l1:
         }
-
         self.xmm_save(using_xmm);
-        // r15 <- recv's class
-
-        // r15: receiver's ClassId
-        // we must check inline cache.
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -192,7 +188,7 @@ impl Codegen {
             lea  rcx, [r14 - (conv(args))];
             movq r8, (pos_num);
             lea  r9, [rip + cache];
-            movq rax, (send_dispatch);
+            movq rax, (if no_splat { send_dispatch } else { send_dispatch_splat });
             call rax;
         }
         self.handle_error(error);
@@ -228,7 +224,11 @@ impl Codegen {
             movl r8, (callid.get()); // CallSiteId
             lea  rdx, [r14 - (conv(args))];
         }
-        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send);
+        self.generic_handle_arguments(if no_splat {
+            runtime::jit_handle_arguments_no_block_for_send
+        } else {
+            runtime::jit_handle_arguments_no_block_for_send_splat
+        });
         self.handle_error(error);
         self.call_funcdata();
         self.xmm_restore(using_xmm);
@@ -717,13 +717,43 @@ extern "C" fn send_dispatch(
         globals: &mut Globals,
         recv: Value,
         args: Arg,
-        len: usize,
+        pos_num: usize,
         cache: &mut Cache,
     ) -> Result<FuncId> {
-        if len < 1 {
-            return Err(MonorubyErr::wrong_number_of_arg_min(len, 1));
+        if pos_num < 1 {
+            return Err(MonorubyErr::wrong_number_of_arg_min(pos_num, 1));
         }
         let method = args[0].unwrap().expect_symbol_or_string()?;
+        cache.search(globals, recv, method)
+    }
+
+    let fid = match call_send(globals, recv, args, pos_num, cache) {
+        Ok(res) => res,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    Some(fid)
+}
+
+extern "C" fn send_dispatch_splat(
+    vm: &mut Executor,     // rdi
+    globals: &mut Globals, // rsi
+    recv: Value,           // rdx
+    args: Arg,             // rcx
+    pos_num: usize,        // r8
+    cache: &mut Cache,
+) -> Option<FuncId> {
+    fn call_send(
+        globals: &mut Globals,
+        recv: Value,
+        args: Arg,
+        pos_num: usize,
+        cache: &mut Cache,
+    ) -> Result<FuncId> {
+        assert_eq!(1, pos_num);
+        let method = args[0].unwrap().as_array()[0].expect_symbol_or_string()?;
         cache.search(globals, recv, method)
     }
 

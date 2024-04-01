@@ -403,9 +403,9 @@ impl JitContext {
                     }
                     info.def(dst);
                 }
-                TraceIr::InlineCall {
-                    inline_id, callid, ..
-                } => {
+                TraceIr::InlineCall { inline_id, callid }
+                | TraceIr::InlineObjectSend { inline_id, callid }
+                | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
                     store.get_inline_info(inline_id).1(&mut info, &store[callid]);
                 }
                 TraceIr::InlineCache => {}

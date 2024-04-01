@@ -1370,13 +1370,23 @@ impl BcPc {
                     if let Some(fid) = cached_fid
                         && let Some(inline_id) =
                             crate::executor::inline::InlineTable::get_inline(fid)
-                        && (is_simple
-                            || (fid == OBJECT_SEND_FUNCID
-                                && store[callid].splat_pos.len() == 1
-                                && store[callid].pos_num == 1
-                                && !store[callid].kw_may_exists()))
                     {
-                        TraceIr::InlineCall { inline_id, callid }
+                        if fid == OBJECT_SEND_FUNCID {
+                            if store[callid].splat_pos.len() == 1
+                                && store[callid].pos_num == 1
+                                && !store[callid].kw_may_exists()
+                            {
+                                TraceIr::InlineObjectSendSplat { inline_id, callid }
+                            } else if is_simple {
+                                TraceIr::InlineObjectSend { inline_id, callid }
+                            } else {
+                                TraceIr::MethodCall { callid }
+                            }
+                        } else if is_simple {
+                            TraceIr::InlineCall { inline_id, callid }
+                        } else {
+                            TraceIr::MethodCall { callid }
+                        }
                     } else {
                         TraceIr::MethodCall { callid }
                     }

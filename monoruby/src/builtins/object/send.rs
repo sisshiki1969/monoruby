@@ -42,7 +42,37 @@ pub(crate) fn object_send(
     ir.inline(move |gen, labels| {
         let error = labels[error];
         gen.object_send_inline(
-            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error,
+            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, true,
+        );
+    });
+    ir.reg2acc(bb, GP::Rax, dst);
+}
+
+pub(crate) fn object_send_splat(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BcPc,
+) {
+    let callsite = &store[callid];
+    let CallSiteInfo {
+        recv,
+        dst,
+        args,
+        pos_num,
+        block_fid,
+        block_arg,
+        ..
+    } = *callsite;
+    ir.write_back_callargs(bb, callsite);
+    ir.unlink(bb, dst);
+    let using_xmm = bb.get_using_xmm();
+    let error = ir.new_error(bb, pc);
+    ir.inline(move |gen, labels| {
+        let error = labels[error];
+        gen.object_send_inline(
+            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, false,
         );
     });
     ir.reg2acc(bb, GP::Rax, dst);

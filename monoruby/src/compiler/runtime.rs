@@ -389,6 +389,30 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     }
 }
 
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments_send_splat(
+        globals,
+        callee_lfp,
+        caller_lfp,
+        callid,
+        src,
+        globals.store[callid].pos_num,
+    ) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 #[repr(C)]
 pub(super) struct ClassIdSlot {
     base: ClassId,
