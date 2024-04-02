@@ -25,27 +25,7 @@ pub(crate) fn object_send(
     callid: CallSiteId,
     pc: BcPc,
 ) {
-    let callsite = &store[callid];
-    let CallSiteInfo {
-        recv,
-        dst,
-        args,
-        pos_num,
-        block_fid,
-        block_arg,
-        ..
-    } = *callsite;
-    ir.write_back_callargs(bb, callsite);
-    ir.unlink(bb, dst);
-    let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
-    ir.inline(move |gen, labels| {
-        let error = labels[error];
-        gen.object_send_inline(
-            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, true,
-        );
-    });
-    ir.reg2acc(bb, GP::Rax, dst);
+    object_send_inner(ir, store, bb, callid, pc, true)
 }
 
 pub(crate) fn object_send_splat(
@@ -54,6 +34,17 @@ pub(crate) fn object_send_splat(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BcPc,
+) {
+    object_send_inner(ir, store, bb, callid, pc, false)
+}
+
+fn object_send_inner(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BcPc,
+    no_splat: bool,
 ) {
     let callsite = &store[callid];
     let CallSiteInfo {
@@ -72,7 +63,7 @@ pub(crate) fn object_send_splat(
     ir.inline(move |gen, labels| {
         let error = labels[error];
         gen.object_send_inline(
-            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, false,
+            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, no_splat,
         );
     });
     ir.reg2acc(bb, GP::Rax, dst);

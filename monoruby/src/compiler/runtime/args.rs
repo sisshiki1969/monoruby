@@ -94,19 +94,13 @@ pub(crate) fn set_frame_arguments(
 pub(crate) fn set_frame_arguments_send_splat(
     globals: &mut Globals,
     callee_lfp: Lfp,
-    caller_lfp: Lfp,
-    callid: CallSiteId,
     src: *const Value,
-    pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
     let callee = &globals[callee_fid];
-    let caller = &globals.store[callid];
-    positional_send_splat(caller, callee, src, pos_num, callee_lfp, caller_lfp)?;
 
-    if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
-    }
+    positional_send_splat(callee, src, callee_lfp)?;
+    handle_keyword_splat(callee, callee_lfp)?;
 
     Ok(())
 }
@@ -302,45 +296,11 @@ fn positional(
     Ok(())
 }
 
-fn positional_send_splat(
-    caller: &CallSiteInfo,
-    callee: &FuncInfo,
-    src: *const Value,
-    pos_num: usize,
-    mut callee_lfp: Lfp,
-    caller_lfp: Lfp,
-) -> Result<()> {
+fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: Lfp) -> Result<()> {
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
-    let splat_pos = &caller.splat_pos;
-    assert_eq!(splat_pos, &[0]);
-    assert_eq!(pos_num, 1);
-    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
-    let ex = if callee.no_keyword() && caller.kw_may_exists() {
-        // handle excessive keyword arguments
-        let mut h = IndexMap::default();
-        for (k, id) in caller.kw_args.iter() {
-            let v = unsafe { caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap() };
-            h.insert(HashKey(Value::symbol(*k)), v);
-        }
-        for v in caller
-            .hash_splat_pos
-            .iter()
-            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
-        {
-            for (k, v) in v.expect_hash()? {
-                h.insert(HashKey(k), v);
-            }
-        }
-        if h.is_empty() {
-            None
-        } else {
-            Some(Value::hash(h))
-        }
-    } else {
-        None
-    };
+    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
     let mut arg_num = 0;
     let mut rest = vec![];
@@ -353,15 +313,10 @@ fn positional_send_splat(
     }
 
     let req_num = callee.req_num();
-    let ex_num = ex.is_some() as usize;
     let is_rest = callee.is_rest();
-    let total_pos_args = arg_num + rest.len() + ex_num;
-    //let is_block_style = callee.is_block_style();
+    let total_pos_args = arg_num + rest.len();
     if total_pos_args > max_pos {
         if is_rest {
-            if let Some(h) = ex {
-                rest.push(h);
-            }
             unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
             return Ok(());
         } else {
@@ -380,9 +335,6 @@ fn positional_send_splat(
             total_pos_args,
             req_num..=max_pos,
         ));
-    }
-    if let Some(ex) = ex {
-        unsafe { callee_lfp.set_register(1 + arg_num, Some(ex)) };
     }
 
     if is_rest {
@@ -403,6 +355,21 @@ fn handle_keyword(
 ) -> Result<()> {
     ordinary_keyword(callee, caller, callee_lfp, caller_lfp)?;
     hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
+}
+
+fn handle_keyword_splat(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
+    let callee_kw_pos = callee.pos_num() + 1;
+    for (id, _) in callee.kw_names().iter().enumerate() {
+        unsafe {
+            callee_lfp.set_register(callee_kw_pos + id, None);
+        }
+    }
+
+    if let Some(rest) = callee.kw_rest() {
+        let kw_rest = IndexMap::default();
+        unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
+    }
+    Ok(())
 }
 
 fn ordinary_keyword(

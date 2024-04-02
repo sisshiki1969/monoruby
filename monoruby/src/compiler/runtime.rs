@@ -396,15 +396,8 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments_send_splat(
-        globals,
-        callee_lfp,
-        caller_lfp,
-        callid,
-        src,
-        globals.store[callid].pos_num,
-    ) {
+    assert_eq!(globals.store[callid].pos_num, 1);
+    match set_frame_arguments_send_splat(globals, callee_lfp, src) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
