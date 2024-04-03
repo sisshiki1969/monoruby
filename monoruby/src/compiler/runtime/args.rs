@@ -222,9 +222,7 @@ fn positional(
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
                 if let Some(ary) = v.try_array_ty() {
-                    for v in ary.iter() {
-                        push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-                    }
+                    push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
                 } else if let Some(_range) = v.is_range() {
                     unimplemented!()
                 } else if let Some(_hash) = v.is_hash() {
@@ -244,9 +242,7 @@ fn positional(
         let v = unsafe { *dst };
         if let Some(ary) = v.try_array_ty() {
             arg_num = 0;
-            for v in ary.iter() {
-                push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-            }
+            push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
         }
     }
 
@@ -307,9 +303,7 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
     if let Some(ary) = unsafe { *src }.try_array_ty()
         && ary.len() > 1
     {
-        for v in ary[1..].iter() {
-            push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-        }
+        push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary[1..], no_push);
     }
 
     let req_num = callee.req_num();
@@ -500,6 +494,34 @@ fn push(
     } else {
         unsafe { *dst.sub(*arg_num) = v };
         *arg_num += 1;
+    }
+}
+
+fn push_ary(
+    arg_num: &mut usize,
+    rest: &mut Vec<Value>,
+    max_pos: usize,
+    dst: *mut Value,
+    ary: &[Value],
+    no_push: bool,
+) {
+    if *arg_num >= max_pos {
+        if !no_push {
+            rest.extend_from_slice(ary);
+        }
+    } else if *arg_num + ary.len() <= max_pos {
+        for (i, v) in ary.iter().enumerate() {
+            unsafe { *dst.sub(*arg_num + i) = *v };
+        }
+        *arg_num += ary.len();
+    } else {
+        for (i, v) in ary[0..max_pos - *arg_num].iter().enumerate() {
+            unsafe { *dst.sub(*arg_num + i) = *v };
+        }
+        if !no_push {
+            rest.extend_from_slice(&ary[max_pos - *arg_num..]);
+        }
+        *arg_num = max_pos;
     }
 }
 
