@@ -185,7 +185,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, [r14 - (conv(recv))];
-            lea  rcx, [r14 - (conv(args))];
+            movq rcx, [r14 - (conv(args))];
             movq r8, (pos_num);
             lea  r9, [rip + cache];
             movq rax, (if no_splat { send_dispatch } else { send_dispatch_splat });
@@ -606,7 +606,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
             lea  rdx, [r14 - (conv(args))];
-            //movl r9, (pos_num);
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);
@@ -709,25 +708,25 @@ extern "C" fn send_dispatch(
     vm: &mut Executor,     // rdi
     globals: &mut Globals, // rsi
     recv: Value,           // rdx
-    args: Arg,             // rcx
+    arg0: Value,           // rcx
     pos_num: usize,        // r8
     cache: &mut Cache,
 ) -> Option<FuncId> {
     fn call_send(
         globals: &mut Globals,
         recv: Value,
-        args: Arg,
+        arg0: Value,
         pos_num: usize,
         cache: &mut Cache,
     ) -> Result<FuncId> {
         if pos_num < 1 {
             return Err(MonorubyErr::wrong_number_of_arg_min(pos_num, 1));
         }
-        let method = args[0].unwrap().expect_symbol_or_string()?;
+        let method = arg0.expect_symbol_or_string()?;
         cache.search(globals, recv, method)
     }
 
-    let fid = match call_send(globals, recv, args, pos_num, cache) {
+    let fid = match call_send(globals, recv, arg0, pos_num, cache) {
         Ok(res) => res,
         Err(err) => {
             vm.set_error(err);
@@ -741,23 +740,28 @@ extern "C" fn send_dispatch_splat(
     vm: &mut Executor,     // rdi
     globals: &mut Globals, // rsi
     recv: Value,           // rdx
-    args: Arg,             // rcx
+    arg0: Value,           // rcx
     pos_num: usize,        // r8
     cache: &mut Cache,
 ) -> Option<FuncId> {
     fn call_send(
         globals: &mut Globals,
         recv: Value,
-        args: Arg,
+        arg0: Value,
         pos_num: usize,
         cache: &mut Cache,
     ) -> Result<FuncId> {
         assert_eq!(1, pos_num);
-        let method = args[0].unwrap().as_array()[0].expect_symbol_or_string()?;
+        let method = if let Some(ary) = arg0.try_array_ty() {
+            ary[0]
+        } else {
+            arg0
+        }
+        .expect_symbol_or_string()?;
         cache.search(globals, recv, method)
     }
 
-    let fid = match call_send(globals, recv, args, pos_num, cache) {
+    let fid = match call_send(globals, recv, arg0, pos_num, cache) {
         Ok(res) => res,
         Err(err) => {
             vm.set_error(err);

@@ -7,5 +7,5 @@
   m = :m
 
   for i in 1..10_000_000
-    o.__send__ m
+    o.__send__ *m
   end

@@ -373,7 +373,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments(
+    match set_frame_arguments_simple(
         globals,
         callee_lfp,
         caller_lfp,
