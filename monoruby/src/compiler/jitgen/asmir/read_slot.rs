@@ -87,7 +87,7 @@ impl AsmIr {
         }
     }
 
-    pub(in crate::compiler::jitgen) fn writeback_acc(&mut self, bb: &mut BBContext) {
+    pub(crate) fn writeback_acc(&mut self, bb: &mut BBContext) {
         if let Some(slot) = self.clear_r15(bb)
             && slot < bb.sp
         {

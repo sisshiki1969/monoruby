@@ -58,6 +58,7 @@ fn object_send_inner(
     } = *callsite;
     ir.write_back_callargs(bb, callsite);
     ir.unlink(bb, dst);
+    ir.writeback_acc(bb);
     let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {
@@ -77,7 +78,8 @@ mod test {
     fn object_send() {
         run_test_with_prelude(
             r##"
-        [C.new.send(:foo), C.new.send("foo"), C.new.send(:bar, 2)]
+        o = C.new
+        [o.send(:foo), o.send("foo"), o.send(:bar, 20), o.send(*[:foo]), o.send(*["bar", 100])]
         "##,
             r##"
         class C
@@ -118,6 +120,16 @@ mod test {
             end
         end
         C.new.send(:foo, 100)
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(*[])
         "##,
         );
     }

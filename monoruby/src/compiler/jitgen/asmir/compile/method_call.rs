@@ -185,128 +185,41 @@ impl Codegen {
             if pos_num < 1 {
                 monoasm! { &mut self.jit,
                     movq rdi, rbx;
-                    movq rsi, (pos_num);
-                    movq rax, (check_pos_num);
+                    movq rax, (no_method_name);
                     call rax;
+                    jmp error;
                 }
-                self.handle_error(error);
             } else {
-                let not_symbol = self.jit.label();
-                let l1 = self.jit.label();
-                let found = self.jit.label();
-                let not_found = self.jit.label();
-                let exit = self.jit.label();
                 monoasm! { &mut self.jit,
                     movq rcx, [r14 - (conv(args))];
-                    cmpb rcx, (TAG_SYMBOL);
-                    jne  not_symbol;
-                    shrq rcx, 32;
-                l1:
-                // rdi: &Cache
-                // rcx: IdentId
-                // rdx: min &Cache
-                    lea  rdi, [rip + cache];
-                    movq rdx, rdi;
-                    movl rax, [rdi + (CACHE_METHOD)];
-                    testq rax, rax;
-                    jz   not_found;
-                    cmpl rcx, rax;
-                    jeq  found;
-                    movq rax, [rdi + (CACHE_COUNTER)];
-                    cmpq rax, [rdx + (CACHE_COUNTER)];
-                    cmovltq rdx, rdi;
-
-                    addq rdi, 16;
-                    movl rax, [rdi + (CACHE_METHOD)];
-                    testq rax, rax;
-                    jz   not_found;
-                    cmpl rcx, rax;
-                    jeq  found;
-                    movq rax, [rdi + (CACHE_COUNTER)];
-                    cmpq rax, [rdx + (CACHE_COUNTER)];
-                    cmovltq rdx, rdi;
-
-                    addq rdi, 16;
-                    movl rax, [rdi + (CACHE_METHOD)];
-                    testq rax, rax;
-                    jz   not_found;
-                    cmpl rcx, rax;
-                    jeq  found;
-                    movq rax, [rdi + (CACHE_COUNTER)];
-                    cmpq rax, [rdx + (CACHE_COUNTER)];
-                    cmovltq rdx, rdi;
-
-                    addq rdi, 16;
-                    movl rax, [rdi + (CACHE_METHOD)];
-                    testq rax, rax;
-                    jz   not_found;
-                    cmpl rcx, rax;
-                    jeq  found;
-                // rdi: &Cache
-                // rdx: min &Cache
-                not_found:
-                    pushq rdi;
-                    pushq rcx;
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rdx, [r14 - (conv(recv))];
-                    lea  r8, [rip + cache];
-                    movq rax, (find);
-                    call rax;
-                    popq rcx;
-                    popq rdi;
-                    // rax: Option<FuncId>
-                    movl rax, rax;
-                    testq rax, rax;
-                    jz   exit;
-                    movl [rdi + (CACHE_FID)], rax;
-                    movl [rdi + (CACHE_METHOD)], rcx;
-                    movq [rdi + (CACHE_COUNTER)], 1;
-                    jmp  exit;
-                found:
-                // rdi: cur &mut Cache
-                // rdx: min &mut Cache
-                    movl rax, [rdi + (CACHE_FID)];
-                    addq [rdi + (CACHE_COUNTER)], 1;
-                    movq rsi, [rdi + (CACHE_COUNTER)];
-                    cmpq rsi, [rdx + (CACHE_COUNTER)];
-                    jle  exit;
-                // swap cur, min,
-                    movq rsi, [rdi];
-                    xchgq rsi, [rdx];
-                    movq [rdi], rsi;
-                    movq rsi, [rdi + 8];
-                    xchgq rsi, [rdx + 8];
-                    movq [rdi + 8], rsi;
-                exit:
                 }
-                self.jit.select_page(1);
-                monoasm! { &mut self.jit,
-                not_symbol:
-                    movq rdi, rbx;
-                    movq rsi, rcx;
-                    movq rax, (expect_string);
-                    call rax;
-                    movl rax, rax;
-                }
-                self.handle_error(error);
-                monoasm! { &mut self.jit,
-                    movq rcx, rax;
-                    jmp  l1;
-                }
-                self.jit.select_page(0);
+                self.object_send_inner(recv, cache, error);
             }
         } else {
+            let exit = self.jit.label();
+            let heap = self.jit.label();
             monoasm! { &mut self.jit,
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rdx, [r14 - (conv(recv))];
                 movq rcx, [r14 - (conv(args))];
-                movq r8, (pos_num);
-                lea  r9, [rip + cache];
-                movq rax, (send_dispatch_splat);
+                testq rcx, 0b111;
+                jnz  exit;
+                cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+                jne  exit;
+                movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (ARRAY_INLINE_CAPA);
+                jgt  heap;
+                movq rcx, [rcx + (RVALUE_OFFSET_INLINE)];
+                testq rcx, rcx;
+                jne  exit;
+                movq rdi, rbx;
+                movq rax, (no_method_name);
                 call rax;
+                jmp error;
+            heap:
+                movq rcx, [rcx + (RVALUE_OFFSET_HEAP_PTR)];
+                movq rcx, [rcx];
+            exit:
             }
+            self.object_send_inner(recv, cache, error);
         }
         self.handle_error(error);
         monoasm! { &mut self.jit,
@@ -350,6 +263,105 @@ impl Codegen {
         self.call_funcdata();
         self.xmm_restore(using_xmm);
         self.handle_error(error);
+    }
+
+    ///
+    /// ### in
+    /// - rcx: arg0
+    ///
+    /// ### out
+    /// - rax: Some(FuncId)
+    ///
+    fn object_send_inner(&mut self, recv: SlotId, cache: DestLabel, error: DestLabel) {
+        let not_symbol = self.jit.label();
+        let l1 = self.jit.label();
+        let found = self.jit.label();
+        let not_found = self.jit.label();
+        let loop0 = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            cmpb rcx, (TAG_SYMBOL);
+            jne  not_symbol;
+            shrq rcx, 32;
+        l1:
+        // rdi: &Cache
+        // rcx: IdentId
+        // rdx: min &Cache
+            lea  rdi, [rip + cache];
+            movq rdx, rdi;
+            movl rax, [rdi + (CACHE_METHOD)];
+            testq rax, rax;
+            jz   not_found;
+            cmpl rcx, rax;
+            jeq  found;
+            movq r8, (CACHE_SIZE - 1);
+
+        loop0:
+            movq rax, [rdi + (CACHE_COUNTER)];
+            cmpq rax, [rdx + (CACHE_COUNTER)];
+            cmovltq rdx, rdi;
+            addq rdi, 16;
+            movl rax, [rdi + (CACHE_METHOD)];
+            testq rax, rax;
+            jz   not_found;
+            cmpl rcx, rax;
+            jeq  found;
+            subq r8, 1;
+            jnz  loop0;
+
+        // rdi: &Cache
+        // rdx: min &Cache
+        not_found:
+            pushq rdi;
+            pushq rcx;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (conv(recv))];
+            lea  r8, [rip + cache];
+            movq rax, (find);
+            call rax;
+            popq rcx;
+            popq rdi;
+            // rax: Option<FuncId>
+            movl rax, rax;
+            testq rax, rax;
+            jz   exit;
+            movl [rdi + (CACHE_FID)], rax;
+            movl [rdi + (CACHE_METHOD)], rcx;
+            movq [rdi + (CACHE_COUNTER)], 1;
+            jmp  exit;
+        found:
+        // rdi: cur &mut Cache
+        // rdx: min &mut Cache
+            movl rax, [rdi + (CACHE_FID)];
+            addq [rdi + (CACHE_COUNTER)], 1;
+            movq rsi, [rdi + (CACHE_COUNTER)];
+            cmpq rsi, [rdx + (CACHE_COUNTER)];
+            jle  exit;
+        // swap cur, min,
+            movq rsi, [rdi];
+            xchgq rsi, [rdx];
+            movq [rdi], rsi;
+            movq rsi, [rdi + 8];
+            xchgq rsi, [rdx + 8];
+            movq [rdi + 8], rsi;
+        exit:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        not_symbol:
+            movq rdi, rbx;
+            movq rsi, rcx;
+            movq rax, (expect_string);
+            call rax;
+            movl rax, rax;
+        }
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            movq rcx, rax;
+            jmp  l1;
+        }
+        self.jit.select_page(0);
     }
 
     ///
@@ -780,76 +792,6 @@ impl std::fmt::Debug for CacheEntry {
 #[derive(Debug)]
 struct Cache([CacheEntry; CACHE_SIZE]);
 
-impl Cache {
-    fn search(&mut self, globals: &mut Globals, recv: Value, method: IdentId) -> Result<FuncId> {
-        let mut min_i = 0;
-        let mut min_count = self.0[min_i].counter;
-        for (i, entry) in self.0.iter_mut().enumerate() {
-            match entry.method {
-                Some(cached_method) if cached_method == method => {
-                    let fid = entry.fid;
-                    entry.counter += 1;
-                    if i != min_i && entry.counter > min_count {
-                        self.0.swap(min_i, i);
-                    }
-                    return Ok(fid.unwrap());
-                }
-                Some(_) => {
-                    if entry.counter < min_count {
-                        min_count = entry.counter;
-                        min_i = i;
-                    }
-                }
-                None => {
-                    min_i = i;
-                    break;
-                }
-            }
-        }
-        //eprintln!("{:#?}", self);
-        let fid = globals.find_method(recv, method, true)?;
-        self.0[min_i].method = Some(method);
-        self.0[min_i].fid = Some(fid);
-        self.0[min_i].counter = 1;
-        Ok(fid)
-    }
-}
-
-extern "C" fn send_dispatch_splat(
-    vm: &mut Executor,     // rdi
-    globals: &mut Globals, // rsi
-    recv: Value,           // rdx
-    arg0: Value,           // rcx
-    pos_num: usize,        // r8
-    cache: &mut Cache,
-) -> Option<FuncId> {
-    fn call_send(
-        globals: &mut Globals,
-        recv: Value,
-        arg0: Value,
-        pos_num: usize,
-        cache: &mut Cache,
-    ) -> Result<FuncId> {
-        assert_eq!(1, pos_num);
-        let method = if let Some(ary) = arg0.try_array_ty() {
-            ary[0]
-        } else {
-            arg0
-        }
-        .expect_symbol_or_string()?;
-        cache.search(globals, recv, method)
-    }
-
-    let fid = match call_send(globals, recv, arg0, pos_num, cache) {
-        Ok(res) => res,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    };
-    Some(fid)
-}
-
 extern "C" fn expect_string(
     vm: &mut Executor, // rdi
     v: Value,          // rcx
@@ -863,11 +805,8 @@ extern "C" fn expect_string(
     }
 }
 
-extern "C" fn check_pos_num(
-    vm: &mut Executor, // rdi
-    pos_num: usize,
-) -> Option<Value> {
-    let err = MonorubyErr::wrong_number_of_arg_min(pos_num, 1);
+extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
+    let err = MonorubyErr::argumenterr("no method name given.");
     vm.set_error(err);
     None
 }
@@ -877,7 +816,7 @@ extern "C" fn find(
     globals: &mut Globals,
     recv: Value,
     func_name: IdentId,
-    cache: &Cache,
+    //cache: &Cache,
 ) -> Option<FuncId> {
     //eprintln!("{:#?}", cache);
     match globals.find_method(recv, func_name, true) {
