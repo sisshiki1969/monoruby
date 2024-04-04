@@ -193,18 +193,92 @@ impl Codegen {
             } else {
                 let not_symbol = self.jit.label();
                 let l1 = self.jit.label();
+                let found = self.jit.label();
+                let not_found = self.jit.label();
+                let exit = self.jit.label();
                 monoasm! { &mut self.jit,
                     movq rcx, [r14 - (conv(args))];
                     cmpb rcx, (TAG_SYMBOL);
                     jne  not_symbol;
                     shrq rcx, 32;
                 l1:
+                // rdi: &Cache
+                // rcx: IdentId
+                // rdx: min &Cache
+                    lea  rdi, [rip + cache];
+                    movq rdx, rdi;
+                    movl rax, [rdi + (CACHE_METHOD)];
+                    testq rax, rax;
+                    jz   not_found;
+                    cmpl rcx, rax;
+                    jeq  found;
+                    movq rax, [rdi + (CACHE_COUNTER)];
+                    cmpq rax, [rdx + (CACHE_COUNTER)];
+                    cmovltq rdx, rdi;
+
+                    addq rdi, 16;
+                    movl rax, [rdi + (CACHE_METHOD)];
+                    testq rax, rax;
+                    jz   not_found;
+                    cmpl rcx, rax;
+                    jeq  found;
+                    movq rax, [rdi + (CACHE_COUNTER)];
+                    cmpq rax, [rdx + (CACHE_COUNTER)];
+                    cmovltq rdx, rdi;
+
+                    addq rdi, 16;
+                    movl rax, [rdi + (CACHE_METHOD)];
+                    testq rax, rax;
+                    jz   not_found;
+                    cmpl rcx, rax;
+                    jeq  found;
+                    movq rax, [rdi + (CACHE_COUNTER)];
+                    cmpq rax, [rdx + (CACHE_COUNTER)];
+                    cmovltq rdx, rdi;
+
+                    addq rdi, 16;
+                    movl rax, [rdi + (CACHE_METHOD)];
+                    testq rax, rax;
+                    jz   not_found;
+                    cmpl rcx, rax;
+                    jeq  found;
+                // rdi: &Cache
+                // rdx: min &Cache
+                not_found:
+                    pushq rdi;
+                    pushq rcx;
                     movq rdi, rbx;
                     movq rsi, r12;
                     movq rdx, [r14 - (conv(recv))];
                     lea  r8, [rip + cache];
-                    movq rax, (send_dispatch);
+                    movq rax, (find);
                     call rax;
+                    popq rcx;
+                    popq rdi;
+                    // rax: Option<FuncId>
+                    movl rax, rax;
+                    testq rax, rax;
+                    jz   exit;
+                    movl [rdi + (CACHE_FID)], rax;
+                    movl [rdi + (CACHE_METHOD)], rcx;
+                    movq [rdi + (CACHE_COUNTER)], 1;
+                    jmp  exit;
+                found:
+                // rdi: cur &mut Cache
+                // rdx: min &mut Cache
+                    movl rax, [rdi + (CACHE_FID)];
+                    addq [rdi + (CACHE_COUNTER)], 1;
+                    movq rsi, [rdi + (CACHE_COUNTER)];
+                    cmpq rsi, [rdx + (CACHE_COUNTER)];
+                    jle  exit;
+                // swap cur, min,
+                    movq rsi, [rdi];
+                    xchgq rsi, [rdx];
+                    movq [rdi], rsi;
+                    movq rsi, [rdi + 8];
+                    xchgq rsi, [rdx + 8];
+                    movq [rdi + 8], rsi;
+                exit:
                 }
                 self.jit.select_page(1);
                 monoasm! { &mut self.jit,
@@ -739,29 +813,6 @@ impl Cache {
         self.0[min_i].counter = 1;
         Ok(fid)
     }
-
-    /*fn clear(&mut self) {
-        for entry in self.0.iter_mut() {
-            entry.method = None;
-        }
-    }*/
-}
-
-extern "C" fn send_dispatch(
-    vm: &mut Executor,     // rdi
-    globals: &mut Globals, // rsi
-    recv: Value,           // rdx
-    method: IdentId,       // rcx
-    cache: &mut Cache,     // r8
-) -> Option<FuncId> {
-    let fid = match cache.search(globals, recv, method) {
-        Ok(res) => res,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    };
-    Some(fid)
 }
 
 extern "C" fn send_dispatch_splat(
@@ -819,4 +870,21 @@ extern "C" fn check_pos_num(
     let err = MonorubyErr::wrong_number_of_arg_min(pos_num, 1);
     vm.set_error(err);
     None
+}
+
+extern "C" fn find(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    func_name: IdentId,
+    cache: &Cache,
+) -> Option<FuncId> {
+    //eprintln!("{:#?}", cache);
+    match globals.find_method(recv, func_name, true) {
+        Ok(fid) => Some(fid),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
