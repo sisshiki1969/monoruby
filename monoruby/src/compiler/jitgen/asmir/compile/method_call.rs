@@ -181,15 +181,58 @@ impl Codegen {
         l1:
         }
         self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (conv(recv))];
-            movq rcx, [r14 - (conv(args))];
-            movq r8, (pos_num);
-            lea  r9, [rip + cache];
-            movq rax, (if no_splat { send_dispatch } else { send_dispatch_splat });
-            call rax;
+        if no_splat {
+            if pos_num < 1 {
+                monoasm! { &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, (pos_num);
+                    movq rax, (check_pos_num);
+                    call rax;
+                }
+                self.handle_error(error);
+            } else {
+                let not_symbol = self.jit.label();
+                let l1 = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movq rcx, [r14 - (conv(args))];
+                    cmpb rcx, (TAG_SYMBOL);
+                    jne  not_symbol;
+                    shrq rcx, 32;
+                l1:
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    movq rdx, [r14 - (conv(recv))];
+                    lea  r8, [rip + cache];
+                    movq rax, (send_dispatch);
+                    call rax;
+                }
+                self.jit.select_page(1);
+                monoasm! { &mut self.jit,
+                not_symbol:
+                    movq rdi, rbx;
+                    movq rsi, rcx;
+                    movq rax, (expect_string);
+                    call rax;
+                    movl rax, rax;
+                }
+                self.handle_error(error);
+                monoasm! { &mut self.jit,
+                    movq rcx, rax;
+                    jmp  l1;
+                }
+                self.jit.select_page(0);
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, [r14 - (conv(recv))];
+                movq rcx, [r14 - (conv(args))];
+                movq r8, (pos_num);
+                lea  r9, [rip + cache];
+                movq rax, (send_dispatch_splat);
+                call rax;
+            }
         }
         self.handle_error(error);
         monoasm! { &mut self.jit,
@@ -708,25 +751,10 @@ extern "C" fn send_dispatch(
     vm: &mut Executor,     // rdi
     globals: &mut Globals, // rsi
     recv: Value,           // rdx
-    arg0: Value,           // rcx
-    pos_num: usize,        // r8
-    cache: &mut Cache,
+    method: IdentId,       // rcx
+    cache: &mut Cache,     // r8
 ) -> Option<FuncId> {
-    fn call_send(
-        globals: &mut Globals,
-        recv: Value,
-        arg0: Value,
-        pos_num: usize,
-        cache: &mut Cache,
-    ) -> Result<FuncId> {
-        if pos_num < 1 {
-            return Err(MonorubyErr::wrong_number_of_arg_min(pos_num, 1));
-        }
-        let method = arg0.expect_symbol_or_string()?;
-        cache.search(globals, recv, method)
-    }
-
-    let fid = match call_send(globals, recv, arg0, pos_num, cache) {
+    let fid = match cache.search(globals, recv, method) {
         Ok(res) => res,
         Err(err) => {
             vm.set_error(err);
@@ -769,4 +797,26 @@ extern "C" fn send_dispatch_splat(
         }
     };
     Some(fid)
+}
+
+extern "C" fn expect_string(
+    vm: &mut Executor, // rdi
+    v: Value,          // rcx
+) -> Option<IdentId> {
+    match v.expect_symbol_or_string() {
+        Ok(sym) => Some(sym),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+extern "C" fn check_pos_num(
+    vm: &mut Executor, // rdi
+    pos_num: usize,
+) -> Option<Value> {
+    let err = MonorubyErr::wrong_number_of_arg_min(pos_num, 1);
+    vm.set_error(err);
+    None
 }

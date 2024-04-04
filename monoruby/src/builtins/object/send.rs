@@ -68,3 +68,57 @@ fn object_send_inner(
     });
     ir.reg2acc(bb, GP::Rax, dst);
 }
+
+#[cfg(test)]
+mod test {
+    use super::tests::*;
+
+    #[test]
+    fn object_send() {
+        run_test_with_prelude(
+            r##"
+        [C.new.send(:foo), C.new.send("foo"), C.new.send(:bar, 2)]
+        "##,
+            r##"
+        class C
+            def foo
+                1
+            end
+            def bar(x)
+                x
+            end
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(200, 100)
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(:foo, 100)
+        "##,
+        );
+    }
+}
