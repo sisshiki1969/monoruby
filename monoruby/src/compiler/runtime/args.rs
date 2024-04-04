@@ -278,10 +278,10 @@ fn positional(
             }
             unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
         } else if !is_block_style {
-            return Err(dbg!(MonorubyErr::wrong_number_of_arg_range(
+            return Err(MonorubyErr::wrong_number_of_arg_range(
                 total_pos_args,
                 req_num..=max_pos,
-            )));
+            ));
         }
         return Ok(());
     }
@@ -342,10 +342,10 @@ fn positional_simple(
         if is_rest {
             unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
         } else {
-            return Err(dbg!(MonorubyErr::wrong_number_of_arg_range(
+            return Err(MonorubyErr::wrong_number_of_arg_range(
                 total_pos_args,
                 req_num..=max_pos,
-            )));
+            ));
         }
         return Ok(());
     }
@@ -389,10 +389,10 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
             unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
             return Ok(());
         } else {
-            return Err(dbg!(MonorubyErr::wrong_number_of_arg_range(
+            return Err(MonorubyErr::wrong_number_of_arg_range(
                 total_pos_args,
                 req_num..=max_pos,
-            )));
+            ));
         }
     }
 
