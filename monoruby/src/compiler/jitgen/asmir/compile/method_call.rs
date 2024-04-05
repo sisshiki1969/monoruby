@@ -250,16 +250,43 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        monoasm! { &mut self.jit,
-            movl r8, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (conv(args))];
-        }
-        self.generic_handle_arguments(if no_splat {
-            runtime::jit_handle_arguments_no_block_for_send
+        if no_splat {
+            let loop0 = self.jit.label();
+            let not_simple = self.jit.label();
+            let exit = self.jit.label();
+            monoasm! { &mut self.jit,
+                movzxb rax, [r15 + ((FUNCDATA_META + META_KIND) as i32)];
+                testq rax, 0b1_0000;
+                jz   not_simple;
+                lea  rdi, [r14 - (conv(args + 1usize))];
+                lea  rdx, [rsp - (16 + LBP_ARG0)];
+                movq r8, (pos_num);
+                // src: rdi, dst: rdx
+            loop0:
+                subq r8, 1;
+                jz  exit;
+                movq rax, [rdi];
+                movq [rdx], rax;
+                subq rdi, 8;
+                subq rdx, 8;
+                jmp  loop0;
+            }
+            monoasm! { &mut self.jit,
+            not_simple:
+                lea  rdx, [r14 - (conv(args))];
+                movl r8, (callid.get()); // CallSiteId
+            }
+            self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send);
+            self.handle_error(error);
+            self.jit.bind_label(exit);
         } else {
-            runtime::jit_handle_arguments_no_block_for_send_splat
-        });
-        self.handle_error(error);
+            monoasm! { &mut self.jit,
+                movl r8, (callid.get()); // CallSiteId
+                lea  rdx, [r14 - (conv(args))];
+            }
+            self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send_splat);
+            self.handle_error(error);
+        }
         self.call_funcdata();
         self.xmm_restore(using_xmm);
         self.handle_error(error);

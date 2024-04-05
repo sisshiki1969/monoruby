@@ -11,7 +11,7 @@ pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
 
 pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
-//pub(crate) const META_KIND: u64 = std::mem::offset_of!(Meta, kind) as _;
+pub(crate) const META_KIND: u64 = std::mem::offset_of!(Meta, kind) as _;
 
 ///
 /// ID of function.
@@ -37,6 +37,7 @@ impl FuncId {
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
+#[repr(C)]
 pub(crate) struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,
@@ -106,13 +107,14 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {} {} {:?} reg_num:{}",
-            if self.is_native() { "NATIVE" } else { "Ruby" },
+            "{}{}{}{} {:?} reg_num:{}",
+            if self.is_native() { "NATIVE " } else { "" },
             if self.is_class_def() {
-                "class_def"
+                "class_def "
             } else {
-                "method"
+                ""
             },
+            if self.is_simple() { "SIMPLE " } else { "" },
             if self.on_stack() { "stack" } else { "heap" },
             self.func_id(),
             self.reg_num()
@@ -201,7 +203,6 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
-    /*
     ///
     /// If `self` is "simple", return true.
     ///
@@ -210,7 +211,6 @@ impl Meta {
     pub fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
     }
-    */
 
     ///
     /// Returns true if this function possibly manipulates outer local variables.
