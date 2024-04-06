@@ -174,9 +174,9 @@ pub struct Codegen {
 impl Codegen {
     pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
-        let class_version = jit.const_i32(1);
-        let const_version = jit.const_i64(1);
-        let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
+        let class_version = jit.data_i32(1);
+        let const_version = jit.data_i64(1);
+        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
         let entry_panic = entry_panic(&mut jit);
         let get_class = get_class(&mut jit);
@@ -581,7 +581,7 @@ impl Codegen {
     ) {
         let exit = self.jit_class_guard_fail;
         let exit_patch_point = self.jit.label();
-        let counter = self.jit.const_i32(COUNT_RECOMPILE_ARECV_CLASS);
+        let counter = self.jit.data_i32(COUNT_RECOMPILE_ARECV_CLASS);
 
         monoasm! { &mut self.jit,
         guard:

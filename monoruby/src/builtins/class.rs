@@ -101,8 +101,8 @@ pub(super) fn gen_class_new(
         let using = bb.get_using_xmm();
         let error = ir.new_error(bb, pc);
         ir.inline(move |gen, labels| {
-            let cached_version = gen.jit.const_i32(-1);
-            let cached_funcid = gen.jit.const_i32(-1);
+            let cached_version = gen.jit.data_i32(-1);
+            let cached_funcid = gen.jit.data_i32(-1);
             let class_version = gen.class_version_label();
             let slow_path = gen.jit.label();
             let checked = gen.jit.label();

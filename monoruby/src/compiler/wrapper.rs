@@ -40,7 +40,7 @@ impl Codegen {
     /// ```
     fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry;
-        let counter = self.jit.const_i32(COUNT_START_COMPILE);
+        let counter = self.jit.data_i32(COUNT_START_COMPILE);
         let entry = self.jit.label();
         let next = self.jit.label();
         monoasm!( &mut self.jit,
@@ -131,7 +131,7 @@ impl Codegen {
     /// Generate attr_reader.
     ///
     fn gen_attr_reader(&mut self, ivar_name: IdentId) {
-        let cache = self.jit.const_i64(-1);
+        let cache = self.jit.data_i64(-1);
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
@@ -149,7 +149,7 @@ impl Codegen {
     /// Generate attr_writer.
     ///
     fn gen_attr_writer(&mut self, ivar_name: IdentId) {
-        let cache = self.jit.const_i64(-1);
+        let cache = self.jit.data_i64(-1);
         monoasm!( &mut self.jit,
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
