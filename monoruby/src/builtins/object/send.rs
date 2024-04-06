@@ -48,9 +48,7 @@ pub(crate) fn object_send(
     };
     let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {
-        let cache = gen
-            .jit
-            .bytes(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
+        let cache = gen.jit.data(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
         let version = gen.jit.const_i32(-1);
         let error = labels[error];
         gen.xmm_save(using);
