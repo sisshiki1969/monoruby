@@ -517,9 +517,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.12"
+version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "190092ea657667030ac6a35e305e62fc4dd69fd98ac98631e5d3a2b1575a12b5"
+checksum = "a06fddc2749e0528d2813f95e050e87e52c8cbbae56223b9babf73b3e53b0cc6"
 dependencies = [
  "cfg-if",
  "libc",
@@ -791,7 +791,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#b15af6170229a27e24e7cb8127c1ac104c284ded"
+source = "git+https://github.com/sisshiki1969/monoasm.git#dd1341af95d6aaced9c16b4a203e872325c021db"
 dependencies = [
  "chrono",
  "libc",
@@ -804,7 +804,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#b15af6170229a27e24e7cb8127c1ac104c284ded"
+source = "git+https://github.com/sisshiki1969/monoasm.git#dd1341af95d6aaced9c16b4a203e872325c021db"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -163,7 +163,7 @@ impl Codegen {
     ) {
         let cache = self
             .jit
-            .bytes(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
+            .data(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
         let version = self.jit.const_i32(-1);
         let global_version = self.class_version;
         let l1 = self.jit.label();
