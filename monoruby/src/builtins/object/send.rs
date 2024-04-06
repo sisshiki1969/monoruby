@@ -132,5 +132,22 @@ mod test {
         C.new.send(*[])
         "##,
         );
+        run_test_error(
+            r##"
+          class C
+            def b(x, y, z)
+              puts "x=#{[x, y, z]}"
+            end
+          end
+          
+          o = C.new
+          30.times do |x|
+            if x == 28 then
+              eval('class C; def b(x); puts "x=#{x}" ;end; end')
+            end
+            o.send(:b, x, 2, 3)
+          end 
+            "##,
+        );
     }
 }

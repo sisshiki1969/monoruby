@@ -253,11 +253,15 @@ impl Codegen {
         if no_splat {
             let loop0 = self.jit.label();
             let not_simple = self.jit.label();
+            let arg_error = self.jit.label();
             let exit = self.jit.label();
             monoasm! { &mut self.jit,
                 movzxb rax, [r15 + ((FUNCDATA_META + META_KIND) as i32)];
                 testq rax, 0b1_0000;
                 jz   not_simple;
+                movzxw rax, [r15 + (FUNCDATA_MIN)];
+                cmpw  rax, (pos_num - 1);
+                jne  arg_error;
                 lea  rdi, [r14 - (conv(args + 1usize))];
                 lea  rdx, [rsp - (16 + LBP_ARG0)];
                 movq r8, (pos_num);
@@ -270,6 +274,13 @@ impl Codegen {
                 subq rdi, 8;
                 subq rdx, 8;
                 jmp  loop0;
+            arg_error:
+                movq rdi, rbx;
+                movq rsi, (pos_num - 1);
+                movq rdx, rax;
+                movq rax, (wrong_number_of_arg);
+                call rax;
+                jmp  error;
             }
             monoasm! { &mut self.jit,
             not_simple:
@@ -834,6 +845,16 @@ extern "C" fn expect_string(
 
 extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
     let err = MonorubyErr::argumenterr("no method name given.");
+    vm.set_error(err);
+    None
+}
+
+extern "C" fn wrong_number_of_arg(
+    vm: &mut Executor,
+    expected: usize,
+    given: usize,
+) -> Option<Value> {
+    let err = MonorubyErr::wrong_number_of_arg(expected, given);
     vm.set_error(err);
     None
 }
