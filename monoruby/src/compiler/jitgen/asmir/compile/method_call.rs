@@ -164,7 +164,7 @@ impl Codegen {
         let cache = self
             .jit
             .data(std::mem::size_of::<CacheEntry>() * CACHE_SIZE);
-        let version = self.jit.const_i32(-1);
+        let version = self.jit.data_i32(-1);
         let global_version = self.class_version;
         let l1 = self.jit.label();
         monoasm! {&mut self.jit,

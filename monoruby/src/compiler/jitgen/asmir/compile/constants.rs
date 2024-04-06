@@ -59,7 +59,7 @@ impl Codegen {
     }
 
     fn guard_const_version(&mut self, cached_version: usize, deopt: DestLabel) {
-        let cached_const_version = self.jit.const_i64(cached_version as _);
+        let cached_const_version = self.jit.data_i64(cached_version as _);
         let global_const_version = self.const_version;
         monoasm! { &mut self.jit,
             movq rax, [rip + global_const_version];

@@ -1273,7 +1273,7 @@ impl Codegen {
     fn recompile_and_deopt(&mut self, position: Option<BcPc>, deopt: DestLabel) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
-        let counter = self.jit.const_i32(COUNT_DEOPT_RECOMPILE);
+        let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
 
         monoasm!( &mut self.jit,
             xorq rdi, rdi;

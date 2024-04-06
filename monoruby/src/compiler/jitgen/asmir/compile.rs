@@ -723,7 +723,7 @@ impl Codegen {
         let unmatch = self.jit.label();
         let exit = self.jit.label();
         let fail = self.jit.label();
-        let cached_version = self.jit.const_i32((pc + 1).cached_version() as i32);
+        let cached_version = self.jit.data_i32((pc + 1).cached_version() as i32);
         let cached_fid = if let Some(fid) = pc.cached_fid() {
             fid.get()
         } else {
