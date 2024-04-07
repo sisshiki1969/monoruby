@@ -856,8 +856,27 @@ impl Codegen {
             cmpl rcx, rax;
             jeq  found;
             subq r8, 1;
-            jnz  loop0;
-
+            jz   not_found;
+            jmp  loop0;
+        found:
+        // rdi: cur &mut Cache
+        // rdx: min &mut Cache
+            movl rax, [rdi + (CACHE_FID)];
+            addq [rdi + (CACHE_COUNTER)], 1;
+            movq rsi, [rdi + (CACHE_COUNTER)];
+            cmpq rsi, [rdx + (CACHE_COUNTER)];
+            jle  exit;
+        // swap cur, min,
+            movq rsi, [rdi];
+            xchgq rsi, [rdx];
+            movq [rdi], rsi;
+            movq rsi, [rdi + 8];
+            xchgq rsi, [rdx + 8];
+            movq [rdi + 8], rsi;
+        exit:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
         // rdi: &Cache
         // rdx: min &Cache
         not_found:
@@ -879,25 +898,6 @@ impl Codegen {
             movl [rdi + (CACHE_METHOD)], rcx;
             movq [rdi + (CACHE_COUNTER)], 1;
             jmp  exit;
-        found:
-        // rdi: cur &mut Cache
-        // rdx: min &mut Cache
-            movl rax, [rdi + (CACHE_FID)];
-            addq [rdi + (CACHE_COUNTER)], 1;
-            movq rsi, [rdi + (CACHE_COUNTER)];
-            cmpq rsi, [rdx + (CACHE_COUNTER)];
-            jle  exit;
-        // swap cur, min,
-            movq rsi, [rdi];
-            xchgq rsi, [rdx];
-            movq [rdi], rsi;
-            movq rsi, [rdi + 8];
-            xchgq rsi, [rdx + 8];
-            movq [rdi + 8], rsi;
-        exit:
-        }
-        self.jit.select_page(1);
-        monoasm! { &mut self.jit,
         not_symbol:
             movq rdi, rbx;
             movq rsi, rcx;
