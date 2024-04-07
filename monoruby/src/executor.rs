@@ -1376,20 +1376,15 @@ impl BcPc {
                                 && store[callid].pos_num == 1
                                 && !store[callid].kw_may_exists()
                             {
-                                TraceIr::InlineObjectSendSplat { inline_id, callid }
+                                return TraceIr::InlineObjectSendSplat { inline_id, callid };
                             } else if is_simple {
-                                TraceIr::InlineObjectSend { inline_id, callid }
-                            } else {
-                                TraceIr::MethodCall { callid }
+                                return TraceIr::InlineObjectSend { inline_id, callid };
                             }
                         } else if is_simple {
-                            TraceIr::InlineCall { inline_id, callid }
-                        } else {
-                            TraceIr::MethodCall { callid }
+                            return TraceIr::InlineCall { inline_id, callid };
                         }
-                    } else {
-                        TraceIr::MethodCall { callid }
                     }
+                    TraceIr::MethodCall { callid }
                 }
                 32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
                 34 => TraceIr::Yield { callid: op2.into() },
