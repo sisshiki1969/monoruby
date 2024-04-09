@@ -559,7 +559,7 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
-        let func_id = globals.find_method(receiver, method, false)?;
+        let func_id = globals.find_method(receiver, method, true)?;
         match self.invoke_func(globals, func_id, receiver, args, bh) {
             Some(res) => Ok(res),
             None => Err(self.take_error()),
@@ -1370,16 +1370,21 @@ impl BcPc {
                     if let Some(fid) = cached_fid
                         && let Some(inline_id) =
                             crate::executor::inline::InlineTable::get_inline(fid)
-                        && (is_simple
-                            || (fid == OBJECT_SEND_FUNCID
-                                && store[callid].splat_pos.len() == 1
-                                && store[callid].pos_num == 1
-                                && !store[callid].kw_may_exists()))
                     {
-                        TraceIr::InlineCall { inline_id, callid }
-                    } else {
-                        TraceIr::MethodCall { callid }
+                        if fid == OBJECT_SEND_FUNCID {
+                            if store[callid].splat_pos.len() == 1
+                                && store[callid].pos_num == 1
+                                && !store[callid].kw_may_exists()
+                            {
+                                return TraceIr::InlineObjectSendSplat { inline_id, callid };
+                            } else if is_simple {
+                                return TraceIr::InlineObjectSend { inline_id, callid };
+                            }
+                        } else if is_simple {
+                            return TraceIr::InlineCall { inline_id, callid };
+                        }
                     }
+                    TraceIr::MethodCall { callid }
                 }
                 32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
                 34 => TraceIr::Yield { callid: op2.into() },

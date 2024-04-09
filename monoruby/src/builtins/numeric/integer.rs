@@ -205,14 +205,8 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::float(f))
 }
 
-fn integer_tof(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
-    let CallSiteInfo { recv, dst, .. } = *callsite;
+fn integer_tof(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+    let CallSiteInfo { recv, dst, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     if !recv.is_self() {
         ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
@@ -449,16 +443,10 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-fn integer_shr(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
+fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
     let CallSiteInfo {
         recv, dst, args, ..
-    } = *callsite;
+    } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
     if let Some(rhs) = bb.is_u8_literal(args) {
@@ -487,16 +475,10 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-fn integer_shl(
-    ir: &mut AsmIr,
-    _store: &Store,
-    bb: &mut BBContext,
-    callsite: &CallSiteInfo,
-    pc: BcPc,
-) {
+fn integer_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
     let CallSiteInfo {
         recv, dst, args, ..
-    } = *callsite;
+    } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
     if let Some(rhs) = bb.is_u8_literal(args)

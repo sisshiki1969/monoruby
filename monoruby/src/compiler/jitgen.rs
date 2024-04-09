@@ -6,6 +6,7 @@ use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::BasicBlockInfo;
 use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
+use self::builtins::{object_send, object_send_splat};
 use self::slot::Guarded;
 
 use super::*;
@@ -675,15 +676,29 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
             }
-            TraceIr::InlineCall {
-                inline_id, callid, ..
-            } => {
+            TraceIr::InlineCall { inline_id, callid } => {
                 let recv = store[callid].recv;
                 self.ir.fetch_to_reg(bb, recv, GP::Rdi);
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.guard_version(pc, using_xmm, deopt, error);
-                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, &store[callid], pc);
+                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, callid, pc);
+            }
+            TraceIr::InlineObjectSend { callid, .. } => {
+                let recv = store[callid].recv;
+                self.ir.fetch_to_reg(bb, recv, GP::Rdi);
+                let (deopt, error) = self.ir.new_deopt_error(bb, pc);
+                let using_xmm = bb.get_using_xmm();
+                self.ir.guard_version(pc, using_xmm, deopt, error);
+                object_send(&mut self.ir, store, bb, callid, pc);
+            }
+            TraceIr::InlineObjectSendSplat { callid, .. } => {
+                let recv = store[callid].recv;
+                self.ir.fetch_to_reg(bb, recv, GP::Rdi);
+                let (deopt, error) = self.ir.new_deopt_error(bb, pc);
+                let using_xmm = bb.get_using_xmm();
+                self.ir.guard_version(pc, using_xmm, deopt, error);
+                object_send_splat(&mut self.ir, store, bb, callid, pc);
             }
             TraceIr::Yield { callid } => {
                 self.ir.write_back_callargs(bb, &store[callid]);

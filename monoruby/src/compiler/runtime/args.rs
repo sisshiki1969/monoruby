@@ -77,16 +77,52 @@ pub(crate) fn set_frame_arguments(
     caller_lfp: Lfp,
     callid: CallSiteId,
     src: *const Value,
+    pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
     let callee = &globals[callee_fid];
     let caller = &globals.store[callid];
-    positional(caller, callee, src, callee_lfp, caller_lfp)?;
 
+    positional(caller, callee, src, pos_num, callee_lfp, caller_lfp)?;
     if !callee.no_keyword() || !caller.kw_may_exists() {
         handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
     }
 
+    Ok(())
+}
+
+pub(crate) fn set_frame_arguments_simple(
+    globals: &mut Globals,
+    callee_lfp: Lfp,
+    caller_lfp: Lfp,
+    callid: CallSiteId,
+    src: *const Value,
+    pos_num: usize,
+) -> Result<()> {
+    let callee_fid = callee_lfp.meta().func_id();
+    let callee = &globals[callee_fid];
+    let caller = &globals.store[callid];
+
+    positional_simple(callee, src, pos_num, callee_lfp)?;
+    if !callee.no_keyword() {
+        handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn set_frame_arguments_send_splat(
+    globals: &mut Globals,
+    callee_lfp: Lfp,
+    src: *const Value,
+) -> Result<()> {
+    let callee_fid = callee_lfp.meta().func_id();
+    let callee = &globals[callee_fid];
+
+    positional_send_splat(callee, src, callee_lfp)?;
+    if !callee.no_keyword() {
+        handle_keyword_simple(callee, callee_lfp)?;
+    }
     Ok(())
 }
 
@@ -123,7 +159,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let caller = &globals.store[caller];
     let callee_fid = meta.func_id();
     let callee = &globals.store[callee_fid];
-    match positional(caller, callee, src, callee_lfp, caller_lfp) {
+    match positional(caller, callee, src, caller.pos_num, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -139,13 +175,13 @@ fn positional(
     caller: &CallSiteInfo,
     callee: &FuncInfo,
     src: *const Value,
+    pos_num: usize,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
-    let pos_num = caller.pos_num;
     let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
@@ -206,9 +242,7 @@ fn positional(
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
                 if let Some(ary) = v.try_array_ty() {
-                    for v in ary.iter() {
-                        push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-                    }
+                    push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
                 } else if let Some(_range) = v.is_range() {
                     unimplemented!()
                 } else if let Some(_hash) = v.is_hash() {
@@ -228,9 +262,7 @@ fn positional(
         let v = unsafe { *dst };
         if let Some(ary) = v.try_array_ty() {
             arg_num = 0;
-            for v in ary.iter() {
-                push(&mut arg_num, &mut rest, max_pos, dst, *v, no_push);
-            }
+            push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
         }
     }
 
@@ -280,6 +312,107 @@ fn positional(
     Ok(())
 }
 
+fn positional_simple(
+    callee: &FuncInfo,
+    src: *const Value,
+    pos_num: usize,
+    mut callee_lfp: Lfp,
+) -> Result<()> {
+    let max_pos = callee.max_positional_args();
+    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+
+    let (arg_num, rest) = if pos_num <= max_pos {
+        memcpy(src, dst, pos_num);
+        (pos_num, vec![])
+    } else {
+        memcpy(src, dst, max_pos);
+        // handle the rest arguments.
+        let rest = unsafe { std::slice::from_raw_parts(src.sub(pos_num - 1), pos_num - max_pos) }
+            .iter()
+            .cloned()
+            .rev()
+            .collect();
+        (max_pos, rest)
+    };
+
+    let req_num = callee.req_num();
+    let is_rest = callee.is_rest();
+    let total_pos_args = arg_num + rest.len();
+    if total_pos_args > max_pos {
+        if is_rest {
+            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
+        } else {
+            return Err(MonorubyErr::wrong_number_of_arg_range(
+                total_pos_args,
+                req_num..=max_pos,
+            ));
+        }
+        return Ok(());
+    }
+
+    if total_pos_args >= req_num {
+        let len = max_pos - arg_num;
+        fill(callee_lfp, max_pos, len, None);
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg_range(
+            total_pos_args,
+            req_num..=max_pos,
+        ));
+    }
+
+    if is_rest {
+        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+    }
+
+    Ok(())
+}
+
+fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: Lfp) -> Result<()> {
+    let max_pos = callee.max_positional_args();
+    let no_push = callee.discard_excess_positional_args();
+
+    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+
+    let mut arg_num = 0;
+    let mut rest = vec![];
+    if let Some(ary) = unsafe { *src }.try_array_ty()
+        && ary.len() > 1
+    {
+        push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary[1..], no_push);
+    }
+
+    let req_num = callee.req_num();
+    let is_rest = callee.is_rest();
+    let total_pos_args = arg_num + rest.len();
+    if total_pos_args > max_pos {
+        if is_rest {
+            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
+            return Ok(());
+        } else {
+            return Err(MonorubyErr::wrong_number_of_arg_range(
+                total_pos_args,
+                req_num..=max_pos,
+            ));
+        }
+    }
+
+    if total_pos_args >= req_num {
+        let len = max_pos - arg_num;
+        fill(callee_lfp, max_pos, len, None);
+    } else {
+        return Err(MonorubyErr::wrong_number_of_arg_range(
+            total_pos_args,
+            req_num..=max_pos,
+        ));
+    }
+
+    if is_rest {
+        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+    }
+
+    Ok(())
+}
+
 ///
 /// Handle keyword arguments.
 ///
@@ -291,6 +424,21 @@ fn handle_keyword(
 ) -> Result<()> {
     ordinary_keyword(callee, caller, callee_lfp, caller_lfp)?;
     hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
+}
+
+fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
+    let callee_kw_pos = callee.pos_num() + 1;
+    for (id, _) in callee.kw_names().iter().enumerate() {
+        unsafe {
+            callee_lfp.set_register(callee_kw_pos + id, None);
+        }
+    }
+
+    if let Some(rest) = callee.kw_rest() {
+        let kw_rest = IndexMap::default();
+        unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
+    }
+    Ok(())
 }
 
 fn ordinary_keyword(
@@ -421,6 +569,34 @@ fn push(
     } else {
         unsafe { *dst.sub(*arg_num) = v };
         *arg_num += 1;
+    }
+}
+
+fn push_ary(
+    arg_num: &mut usize,
+    rest: &mut Vec<Value>,
+    max_pos: usize,
+    dst: *mut Value,
+    ary: &[Value],
+    no_push: bool,
+) {
+    if *arg_num >= max_pos {
+        if !no_push {
+            rest.extend_from_slice(ary);
+        }
+    } else if *arg_num + ary.len() <= max_pos {
+        for (i, v) in ary.iter().enumerate() {
+            unsafe { *dst.sub(*arg_num + i) = *v };
+        }
+        *arg_num += ary.len();
+    } else {
+        for (i, v) in ary[0..max_pos - *arg_num].iter().enumerate() {
+            unsafe { *dst.sub(*arg_num + i) = *v };
+        }
+        if !no_push {
+            rest.extend_from_slice(&ary[max_pos - *arg_num..]);
+        }
+        *arg_num = max_pos;
     }
 }
 

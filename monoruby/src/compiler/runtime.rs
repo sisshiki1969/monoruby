@@ -22,7 +22,7 @@ pub(super) extern "C" fn find_method(
     if let Some(func_name) = globals.store[callid].name {
         let recv_reg = globals.store[callid].recv;
         let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
-        let is_func_call = globals.store[callid].recv.is_self();
+        let is_func_call = recv_reg.is_self();
         match globals.find_method(recv, func_name, is_func_call) {
             Ok(id) => Some(id),
             Err(err) => {
@@ -322,7 +322,14 @@ pub(super) extern "C" fn vm_handle_arguments(
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
+    match set_frame_arguments(
+        globals,
+        callee_lfp,
+        caller_lfp,
+        callid,
+        src,
+        globals.store[callid].pos_num,
+    ) {
         Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::nil())
@@ -342,7 +349,55 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid, src) {
+    match set_frame_arguments(
+        globals,
+        callee_lfp,
+        caller_lfp,
+        callid,
+        src,
+        globals.store[callid].pos_num,
+    ) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    let caller_lfp = vm.cfp().lfp();
+    match set_frame_arguments_simple(
+        globals,
+        callee_lfp,
+        caller_lfp,
+        callid,
+        unsafe { src.sub(1) },
+        globals.store[callid].pos_num - 1,
+    ) {
+        Ok(_) => Some(Value::nil()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    assert_eq!(globals.store[callid].pos_num, 1);
+    match set_frame_arguments_send_splat(globals, callee_lfp, src) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);

@@ -1,7 +1,6 @@
 use super::*;
-use crate::jitgen::conv;
 mod send;
-pub(crate) use send::{object_send, send};
+pub(crate) use send::{object_send, object_send_splat, send};
 
 //
 // Object class
@@ -70,12 +69,12 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 fn object_object_id(
     ir: &mut AsmIr,
-    _store: &Store,
+    store: &Store,
     bb: &mut BBContext,
-    callsite: &CallSiteInfo,
+    callid: CallSiteId,
     _pc: BcPc,
 ) {
-    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
+    let CallSiteInfo { recv, dst: ret, .. } = store[callid];
     ir.fetch_to_reg(bb, recv, GP::Rdi);
     let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {

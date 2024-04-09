@@ -30,7 +30,7 @@ pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
-pub(crate) use object::{object_send, send};
+pub(crate) use object::{object_send, object_send_splat, send};
 pub use time::TimeInner;
 
 //
