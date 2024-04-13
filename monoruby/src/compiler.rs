@@ -974,6 +974,7 @@ impl Globals {
         &mut self,
         func_id: FuncId,
         self_value: Value,
+        given_block: Option<FuncId>,
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) {
@@ -983,12 +984,8 @@ impl Globals {
             let start_pos = func.get_pc_index(position);
             let name = self.func_description(func_id);
             eprintln!(
-                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
-                if position.is_some() {
-                    "partial"
-                } else {
-                    "whole"
-                },
+                "==> start {}compile: {:?} <{}> {}self_class: {} block_literal: {:?} {}:{}",
+                if position.is_some() { "partial " } else { "" },
                 func.id(),
                 name,
                 if position.is_some() {
@@ -997,6 +994,7 @@ impl Globals {
                     String::new()
                 },
                 self.get_class_name(self_value.class()),
+                given_block,
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
@@ -1005,9 +1003,14 @@ impl Globals {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
 
-        let _sourcemap =
-            self.codegen
-                .compile(&self.store, func_id, self_value, position, entry_label);
+        let _sourcemap = self.codegen.compile(
+            &self.store,
+            func_id,
+            self_value,
+            given_block,
+            position,
+            entry_label,
+        );
         #[cfg(feature = "perf")]
         {
             let desc = format!("JIT:<{}>", self.func_description(func_id));
@@ -1024,8 +1027,9 @@ impl Globals {
         &mut self,
         func_id: FuncId,
         self_value: Value,
+        given_block: Option<FuncId>,
         jit_entry: DestLabel,
     ) {
-        self.exec_jit_compile(func_id, self_value, None, jit_entry)
+        self.exec_jit_compile(func_id, self_value, given_block, None, jit_entry)
     }
 }

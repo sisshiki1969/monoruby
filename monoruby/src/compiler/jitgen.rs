@@ -90,6 +90,10 @@ struct JitContext {
     ///
     self_value: Value,
     ///
+    /// given block literal for this method.
+    ///
+    given_block: Option<FuncId>,
+    ///
     /// source map.
     ///
     sourcemap: Vec<(BcIndex, usize)>,
@@ -171,6 +175,7 @@ impl JitContext {
         codegen: &mut Codegen,
         is_loop: bool,
         self_value: Value,
+        given_block: Option<FuncId>,
     ) -> Self {
         let mut inst_labels = HashMap::default();
         for i in 0..func.bytecode_len() {
@@ -201,6 +206,7 @@ impl JitContext {
             total_reg_num,
             local_num,
             self_value,
+            given_block,
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
@@ -704,10 +710,12 @@ impl JitContext {
                 self.ir.write_back_callargs(bb, &store[callid]);
                 self.ir.unlink(bb, store[callid].dst);
                 self.ir.writeback_acc(bb);
+                let block_hint = self.given_block;
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
                 self.ir.inst.push(AsmInst::Yield {
                     callid,
+                    block_hint,
                     using_xmm,
                     error,
                 });
@@ -1079,6 +1087,7 @@ impl Codegen {
         store: &Store,
         func_id: FuncId,
         self_value: Value,
+        given_block: Option<FuncId>,
         position: Option<BcPc>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
@@ -1090,7 +1099,14 @@ impl Codegen {
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
-        let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
+        let mut ctx = JitContext::new(
+            func,
+            store,
+            self,
+            position.is_some(),
+            self_value,
+            given_block,
+        );
         for (loop_start, loop_end) in func.bb_info.loops() {
             let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
             ctx.loop_backedges.insert(*loop_start, backedge);

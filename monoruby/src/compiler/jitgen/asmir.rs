@@ -1076,6 +1076,7 @@ pub(super) enum AsmInst {
     },
     Yield {
         callid: CallSiteId,
+        block_hint: Option<FuncId>,
         using_xmm: UsingXmm,
         error: AsmError,
     },

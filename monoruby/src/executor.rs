@@ -993,6 +993,14 @@ impl BlockHandler {
         }
     }
 
+    pub fn block_literal(&self) -> Option<FuncId> {
+        if let Some((fid, _)) = self.try_proxy() {
+            Some(fid)
+        } else {
+            None
+        }
+    }
+
     pub fn from_caller(func_id: FuncId) -> Self {
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         let bh = Value::integer(block_handler);
@@ -1734,14 +1742,14 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     let func_id = lfp.meta().func_id();
     let self_value = lfp.self_val();
     let self_class = self_value.class();
-    //eprintln!("{:?}", lfp.outermost().block());
+    let given_block = lfp.given_block_literal();
     globals
         .codegen
         .class_guard_stub(self_class, patch_point, jit_entry, guard);
 
     let old_entry = globals[func_id].add_jit_code(self_class, patch_point);
     assert!(old_entry.is_none());
-    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
+    globals.exec_jit_compile_method(func_id, self_value, given_block, jit_entry);
 
     globals
         .codegen
@@ -1753,8 +1761,9 @@ pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &
     let lfp = vm.cfp().lfp();
     let self_value = lfp.self_val();
     let func_id = lfp.meta().func_id();
+    let given_block = lfp.given_block_literal();
     let jit_entry = globals.codegen.jit.label();
-    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
+    globals.exec_jit_compile_method(func_id, self_value, given_block, jit_entry);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
     globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
 }
@@ -1768,9 +1777,11 @@ pub(crate) extern "C" fn exec_jit_partial_compile(
     pc: BcPc,
 ) {
     let entry_label = globals.codegen.jit.label();
-    let self_value = vm.cfp().lfp().self_val();
-    let func_id = vm.cfp().lfp().meta().func_id();
-    globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
+    let lfp = vm.cfp().lfp();
+    let self_value = lfp.self_val();
+    let func_id = lfp.meta().func_id();
+    let given_block = lfp.given_block_literal();
+    globals.exec_jit_compile(func_id, self_value, given_block, Some(pc), entry_label);
     let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);
 }

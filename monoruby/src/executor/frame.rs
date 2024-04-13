@@ -323,6 +323,13 @@ impl Lfp {
         }
     }
 
+    pub fn given_block_literal(self) -> Option<FuncId> {
+        self.outermost()
+            .block()
+            .map(|bh| bh.block_literal())
+            .flatten()
+    }
+
     ///
     /// Get Meta.
     ///

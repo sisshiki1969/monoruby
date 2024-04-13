@@ -319,11 +319,12 @@ impl Codegen {
             }
             AsmInst::Yield {
                 callid,
+                block_hint,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
-                self.gen_yield(store, callid, using_xmm, error);
+                self.gen_yield(store, callid, block_hint, using_xmm, error);
             }
 
             AsmInst::Not => {
