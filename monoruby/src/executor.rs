@@ -27,7 +27,7 @@ pub(crate) const LBP_META: i64 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
 pub(crate) const LBP_META_REGNUM: i64 = LBP_META - META_REGNUM as i64;
 /// Meta::FuncId 4bytes
-pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
+//pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
 pub(crate) const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
 pub(crate) const LBP_SELF: i64 = 24 + LFP_OFFSET;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
@@ -1725,14 +1725,16 @@ pub enum Visibility {
 
 pub(crate) extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
+    lfp: Lfp,
     entry_patch_point: monoasm::DestLabel,
 ) {
     let patch_point = globals.codegen.jit.label();
     let jit_entry = globals.codegen.jit.label();
     let guard = globals.codegen.jit.label();
+    let func_id = lfp.meta().func_id();
+    let self_value = lfp.self_val();
     let self_class = self_value.class();
+    //eprintln!("{:?}", lfp.outermost().block());
     globals
         .codegen
         .class_guard_stub(self_class, patch_point, jit_entry, guard);

@@ -50,9 +50,8 @@ impl Codegen {
             subl [rip + counter], 1;
             jne vm_entry;
             movq rdi, r12;
-            movl rsi, [r14 - (LBP_META_FUNCID)];
-            movq rdx, [r14 - (LBP_SELF)];
-            movq rcx, (entry.to_usize());
+            movq rsi, r14;
+            movl rdx, (entry.to_usize());
             subq rsp, 4088;
             movq rax, (exec_jit_compile_patch);
             call rax;

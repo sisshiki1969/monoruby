@@ -9,7 +9,7 @@ pub(crate) const FUNCDATA_OFS: u64 = std::mem::offset_of!(FuncData, ofs) as _;
 pub(crate) const FUNCDATA_MIN: u64 = std::mem::offset_of!(FuncData, min) as _;
 //pub(crate) const FUNCDATA_MAX: u64 = std::mem::offset_of!(FuncData, max) as _;
 
-pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
+//pub(crate) const META_FUNCID: u64 = std::mem::offset_of!(Meta, func_id) as _;
 pub(crate) const META_REGNUM: u64 = std::mem::offset_of!(Meta, reg_num) as _;
 pub(crate) const META_KIND: u64 = std::mem::offset_of!(Meta, kind) as _;
 

@@ -603,9 +603,8 @@ impl Codegen {
             jne exit;
 
             movq rdi, r12;
-            movl rsi, [r14 - (LBP_META_FUNCID)];
-            movq rdx, [r14 - (LBP_SELF)];
-            movq rcx, (exit_patch_point.to_usize());
+            movq rsi, r14;
+            movl rdx, (exit_patch_point.to_usize());
             subq rsp, 4088;
             movq rax, (exec_jit_compile_patch);
             call rax;

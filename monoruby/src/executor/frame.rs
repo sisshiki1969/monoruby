@@ -56,10 +56,7 @@ impl Cfp {
     /// Get outermost LFP.
     ///
     pub(crate) fn outermost_lfp(&self) -> Lfp {
-        match self.lfp().outer() {
-            Some(dfp) => dfp.outermost().0.lfp(),
-            None => self.lfp(),
-        }
+        self.lfp().outermost()
     }
 
     ///
@@ -220,7 +217,7 @@ impl Lfp {
     ///
     /// Get the address of outer.
     ///
-    fn outer_address(&self) -> Dfp {
+    fn outer_address(self) -> Dfp {
         unsafe { Dfp::new(self.sub(LBP_OUTER) as _) }
     }
 
@@ -228,11 +225,11 @@ impl Lfp {
         unsafe { &mut *(self.sub(LBP_META) as *mut Meta) }
     }
 
-    fn on_stack(&self) -> bool {
+    fn on_stack(self) -> bool {
         self.meta().on_stack()
     }
 
-    fn frame_bytes(&self) -> usize {
+    fn frame_bytes(self) -> usize {
         LBP_SELF as usize + 8 * self.meta().reg_num() as usize
     }
 
@@ -312,8 +309,18 @@ impl Lfp {
     ///
     /// Get outer DFP.
     ///
-    pub fn outer(&self) -> Option<Dfp> {
+    pub fn outer(self) -> Option<Dfp> {
         self.outer_address().outer()
+    }
+
+    ///
+    /// Get outermost LFP.
+    ///
+    pub fn outermost(self) -> Lfp {
+        match self.outer() {
+            Some(dfp) => dfp.outermost().0.lfp(),
+            None => self,
+        }
     }
 
     ///
