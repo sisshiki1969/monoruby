@@ -878,6 +878,12 @@ impl Executor {
         }
     }
 
+    pub fn generate_lambda(&mut self, func_id: FuncId) -> Proc {
+        let outer_lfp = self.cfp().lfp();
+        outer_lfp.move_frame_to_heap();
+        Proc::from(ProcInner::from(outer_lfp, func_id))
+    }
+
     ///
     /// Generate a proc object for Enumerator.
     ///
@@ -1397,6 +1403,10 @@ impl BcPc {
                     optid: OptCaseId::from(op2),
                 },
                 37 => TraceIr::NilBr(SlotId::new(op1), op2 as i32),
+                38 => TraceIr::Lambda {
+                    dst: SlotId::new(op1),
+                    func_id: FuncId::new(op2),
+                },
                 _ => unreachable!("{:016x}", op),
             }
         } else {

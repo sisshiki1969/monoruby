@@ -204,7 +204,8 @@ impl JitContext {
                 | TraceIr::DefinedIvar { dst, .. }
                 | TraceIr::Integer(dst, ..)
                 | TraceIr::Symbol(dst, ..)
-                | TraceIr::Nil(dst) => {
+                | TraceIr::Nil(dst)
+                | TraceIr::Lambda { dst, .. } => {
                     info.def(dst);
                 }
                 TraceIr::DefinedMethod { dst, recv, .. } => {

@@ -240,6 +240,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Hash { .. }
         | NodeKind::Command(_)
         | NodeKind::Array(..)
+        | NodeKind::Lambda(_)
         | NodeKind::AliasMethod(..)
         | NodeKind::Defined(..)
         | NodeKind::If { .. }
@@ -282,6 +283,5 @@ fn defined_str(node: &Node) -> &'static str {
             Some(node) => defined_str(node),
             None => "nil",
         },
-        NodeKind::Lambda(_) => unreachable!(),
     }
 }

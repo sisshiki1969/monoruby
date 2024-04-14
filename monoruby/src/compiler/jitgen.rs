@@ -411,6 +411,11 @@ impl JitContext {
                 self.ir.new_array(bb, callid);
                 self.ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
             }
+            TraceIr::Lambda { dst, func_id } => {
+                self.ir.unlink(bb, dst);
+                self.ir.new_lambda(bb, func_id);
+                self.ir.rax2acc(bb, dst);
+            }
             TraceIr::Hash { dst, args, len } => {
                 self.ir.write_back_range(bb, args, len * 2);
                 self.ir.unlink(bb, dst);

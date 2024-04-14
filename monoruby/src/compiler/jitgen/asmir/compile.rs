@@ -469,6 +469,9 @@ impl Codegen {
             AsmInst::NewArray(callid, using_xmm) => {
                 self.new_array(callid, using_xmm);
             }
+            AsmInst::NewLambda(func_id, using_xmm) => {
+                self.new_lambda(func_id, using_xmm);
+            }
             AsmInst::NewHash(args, len, using_xmm) => {
                 self.new_hash(args, len, using_xmm);
             }
@@ -807,6 +810,18 @@ impl Codegen {
             movq rax, (runtime::gen_array);
             call rax;
         );
+        self.xmm_restore(using_xmm);
+    }
+
+    fn new_lambda(&mut self, func_id: FuncId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movl rdx, (func_id.get());
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::gen_lambda);
+            call rax;
+        };
         self.xmm_restore(using_xmm);
     }
 

@@ -217,6 +217,10 @@ pub(super) extern "C" fn gen_array(
     }
 }
 
+pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id: FuncId) -> Value {
+    vm.generate_lambda(func_id).into()
+}
+
 pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
     let mut map = IndexMap::default();
     if len > 0 {

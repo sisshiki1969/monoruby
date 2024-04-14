@@ -242,9 +242,15 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
-            BcIr::Integer(reg, num) => {
+            BcIr::Lambda { dst, box func } => {
+                // 38
+                let op1 = self.slot_id(&dst);
+                let func_id = self.new_function(store, func, loc)?;
+                Bc::from(enc_wl(38, op1.0, func_id.get()))
+            }
+            BcIr::Integer(dst, num) => {
                 // 6
-                let op1 = self.slot_id(&reg);
+                let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(6, op1.0, num as u32))
             }
             BcIr::Literal(reg, val) => {
@@ -670,18 +676,23 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method {
-                name,
-                info,
-                is_block_style,
-            } => store.add_method(name, info, is_block_style, loc, sourceinfo),
+            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
             Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,
                 outer,
                 optional_params,
                 info,
-            } => store.add_block(mother, outer, optional_params, info, loc, sourceinfo),
+                is_block_style,
+            } => store.add_block(
+                mother,
+                outer,
+                optional_params,
+                is_block_style,
+                info,
+                loc,
+                sourceinfo,
+            ),
         }
     }
 }

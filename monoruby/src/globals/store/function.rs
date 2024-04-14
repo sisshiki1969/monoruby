@@ -352,13 +352,12 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
-        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, args, is_block_style, loc, sourceinfo))
+        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
     }
 
     pub(super) fn add_block(
@@ -366,6 +365,7 @@ impl Funcs {
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         for_params: Vec<(usize, BcLocal, IdentId)>,
+        is_block_style: bool,
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
@@ -373,7 +373,15 @@ impl Funcs {
         let (args, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_block_iseq(func_id, mother, outer, args, loc, sourceinfo);
+        let info = FuncInfo::new_block_iseq(
+            func_id,
+            mother,
+            outer,
+            args,
+            is_block_style,
+            loc,
+            sourceinfo,
+        );
         self.info.push(info);
         Ok(func_id)
     }
@@ -439,12 +447,11 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         args: ParamsInfo,
-        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, args, is_block_style, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
         self.info.push(info);
         func_id
     }
@@ -648,7 +655,6 @@ impl FuncInfo {
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
         params: ParamsInfo,
-        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -657,7 +663,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
+            Meta::vm_method(func_id, 0, false, params.is_simple()),
             params,
         )
     }
@@ -667,6 +673,7 @@ impl FuncInfo {
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         params: ParamsInfo,
+        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -674,7 +681,7 @@ impl FuncInfo {
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
-            Meta::vm_method(func_id, 0, true, params.is_simple()),
+            Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
             params,
         )
     }

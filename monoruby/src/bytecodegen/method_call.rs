@@ -214,7 +214,7 @@ impl BytecodeGen {
 
         let old_temp = self.temp;
         let arg = self.sp();
-        let block_fid = self.handle_block(optional_params, block)?;
+        let block_fid = self.handle_block(optional_params, block);
         self.push_nil();
         self.temp = old_temp;
 
@@ -370,7 +370,7 @@ impl BytecodeGen {
 
     fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<Functions>> {
         match block.kind {
-            NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
+            NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block))),
             NodeKind::LocalVar(0, proc_local) => {
                 let dst = self.push().into();
                 if let Some(local) = self.refer_local(&proc_local) {
@@ -395,22 +395,6 @@ impl BytecodeGen {
             }
         }
         Ok(None)
-    }
-
-    fn handle_block(
-        &mut self,
-        optional_params: Vec<(usize, BcLocal, IdentId)>,
-        block: BlockInfo,
-    ) -> Result<Functions> {
-        let outer_locals = self.get_locals();
-        let (mother, _, outer) = self.mother;
-        let func_id = self.add_block(
-            (mother, outer + 1),
-            (self.id, outer_locals),
-            optional_params,
-            block,
-        );
-        Ok(func_id)
     }
 }
 

@@ -262,6 +262,9 @@ impl Globals {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
                 format!("{:?} = array[{:?}; {}]", dst, args, pos_num)
             }
+            TraceIr::Lambda { dst, func_id } => {
+                format!("{:?} = lambda[{:?}]", dst, func_id)
+            }
             TraceIr::Hash { dst, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
             }

@@ -73,6 +73,10 @@ pub(super) enum BcIr {
         end: BcReg,
         exclude_end: bool,
     },
+    Lambda {
+        dst: BcReg,
+        func: Box<Functions>,
+    },
     Index(BcReg, BcReg, BcReg),      // ret, base, index
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst {

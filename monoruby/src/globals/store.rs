@@ -180,7 +180,6 @@ impl Store {
                 lvar: LvarCollector::new(),
                 loc: Loc::default(),
             },
-            false,
             Loc::default(),
             sourceinfo,
         )
@@ -190,12 +189,10 @@ impl Store {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
-        is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions
-            .add_method(name, info, is_block_style, loc, sourceinfo)
+        self.functions.add_method(name, info, loc, sourceinfo)
     }
 
     pub fn add_classdef(
@@ -213,12 +210,20 @@ impl Store {
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, bytecodegen::BcLocal, IdentId)>,
+        is_block_style: bool,
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions
-            .add_block(mother, outer, optional_params, info, loc, sourceinfo)
+        self.functions.add_block(
+            mother,
+            outer,
+            optional_params,
+            is_block_style,
+            info,
+            loc,
+            sourceinfo,
+        )
     }
 
     pub fn add_eval(
@@ -236,7 +241,7 @@ impl Store {
             loc,
         };
         self.functions
-            .add_block(mother, outer, vec![], info, loc, sourceinfo)
+            .add_block(mother, outer, vec![], false, info, loc, sourceinfo)
     }
 
     pub(super) fn add_builtin_func(

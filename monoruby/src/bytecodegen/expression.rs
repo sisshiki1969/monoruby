@@ -79,6 +79,7 @@ impl BytecodeGen {
                 exclude_end,
                 is_const: false,
             } => self.gen_range(dst, start, end, exclude_end, loc)?,
+            NodeKind::Lambda(info) => self.gen_lambda(dst, info, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -298,6 +299,7 @@ impl BytecodeGen {
         }
         let loc = expr.loc;
         match expr.kind {
+            NodeKind::Redo => unimplemented!("Redo"),
             NodeKind::Nil
             | NodeKind::Bool(_)
             | NodeKind::SelfValue
@@ -311,6 +313,7 @@ impl BytecodeGen {
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }
             | NodeKind::RegExp(_, _, _)
+            | NodeKind::Lambda(_)
             | NodeKind::UnOp(..)
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
@@ -681,7 +684,7 @@ impl BytecodeGen {
             NodeKind::Defined(box node) => {
                 self.gen_defined(node)?;
             }
-            _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
+            NodeKind::Splat(..) => unreachable!(),
         }
         match use_mode {
             UseMode2::Ret => {
@@ -890,6 +893,18 @@ impl BytecodeGen {
                 start,
                 end,
                 exclude_end,
+            },
+            loc,
+        );
+        Ok(())
+    }
+
+    fn gen_lambda(&mut self, dst: BcReg, info: BlockInfo, loc: Loc) -> Result<()> {
+        let info = self.handle_lambda(info);
+        self.emit(
+            BcIr::Lambda {
+                dst,
+                func: Box::new(info),
             },
             loc,
         );

@@ -353,7 +353,6 @@ enum Functions {
     Method {
         name: Option<IdentId>,
         info: BlockInfo,
-        is_block_style: bool,
     },
     ClassDef {
         name: Option<IdentId>,
@@ -364,6 +363,7 @@ enum Functions {
         outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
+        is_block_style: bool,
     },
 }
 
@@ -554,11 +554,7 @@ impl BytecodeGen {
     }
 
     fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::Method {
-            name,
-            info,
-            is_block_style: false,
-        }
+        Functions::Method { name, info }
     }
 
     fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
@@ -577,6 +573,22 @@ impl BytecodeGen {
             outer,
             optional_params,
             info,
+            is_block_style: true,
+        }
+    }
+
+    fn add_lambda(
+        &mut self,
+        mother: (FuncId, usize),
+        outer: (FuncId, ExternalContext),
+        info: BlockInfo,
+    ) -> Functions {
+        Functions::Block {
+            mother,
+            outer,
+            optional_params: vec![],
+            info,
+            is_block_style: false,
         }
     }
 
@@ -732,6 +744,27 @@ impl BytecodeGen {
             }
         }
         false
+    }
+
+    fn handle_block(
+        &mut self,
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
+        block: BlockInfo,
+    ) -> Functions {
+        let outer_locals = self.get_locals();
+        let (mother, _, outer) = self.mother;
+        self.add_block(
+            (mother, outer + 1),
+            (self.id, outer_locals),
+            optional_params,
+            block,
+        )
+    }
+
+    fn handle_lambda(&mut self, block: BlockInfo) -> Functions {
+        let outer_locals = self.get_locals();
+        let (mother, _, outer) = self.mother;
+        self.add_lambda((mother, outer + 1), (self.id, outer_locals), block)
     }
 }
 

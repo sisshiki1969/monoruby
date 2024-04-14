@@ -261,6 +261,7 @@ impl Codegen {
         self.dispatch[35] = self.vm_array();
         self.dispatch[36] = self.vm_optcase(branch);
         self.dispatch[37] = self.vm_nilbr(branch);
+        self.dispatch[38] = self.vm_lambda();
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
@@ -876,6 +877,26 @@ impl Codegen {
             call rax;
         };
         self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_lambda(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movl rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::gen_lambda);
+            call rax;
+            movzxw rdi, [r13 - 12];  // r15 <- :1
+            negq rdi;
+            lea  rdi, [r14 + rdi * 8 - (LBP_SELF)];
+            movq [rdi], rax;
+        };
+        //self.vm_store_r15();
         self.fetch_and_dispatch();
         label
     }

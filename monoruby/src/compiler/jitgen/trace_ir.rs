@@ -28,6 +28,10 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         callid: CallSiteId,
     },
+    Lambda {
+        dst: SlotId,
+        func_id: FuncId,
+    },
     Hash {
         dst: SlotId,
         args: SlotId,
