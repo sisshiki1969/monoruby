@@ -295,19 +295,15 @@ impl Codegen {
             }
             AsmInst::SendCached {
                 callid,
-                callee_fid,
+                fid,
                 recv_class,
-                native,
-                offset,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
-                self.send_cached(
-                    store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
-                );
+                self.send_cached(store, callid, fid, recv_class, using_xmm, error);
             }
-            AsmInst::SendNotCached {
+            /*AsmInst::SendNotCached {
                 self_class,
                 callid,
                 pc,
@@ -316,15 +312,14 @@ impl Codegen {
             } => {
                 let error = labels[error];
                 self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
-            }
-            AsmInst::Yield {
+            }*/
+            AsmInst::YieldNotHinted {
                 callid,
-                block_hint,
                 using_xmm,
                 error,
             } => {
                 let error = labels[error];
-                self.gen_yield(store, callid, block_hint, using_xmm, error);
+                self.gen_yield_not_cached(store, callid, using_xmm, error);
             }
 
             AsmInst::Not => {
@@ -879,5 +874,30 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(using_xmm);
+    }
+
+    ///
+    /// Set req, opt and rest arguments.
+    ///
+    /// ### out
+    /// - rax: Some(Value)
+    /// - rdi: the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn jit_set_arguments(&mut self, callid: CallSiteId, args: SlotId, offset: usize, meta: Meta) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            lea  rcx, [r14 - (conv(args))];
+            lea  r8, [rsp - 16];   // callee_lfp
+            movq r9, (meta.get());
+            subq rsp, (offset);
+            movq rax, (crate::runtime::jit_generic_set_arguments);
+            call rax;
+            addq rsp, (offset);
+        }
     }
 }

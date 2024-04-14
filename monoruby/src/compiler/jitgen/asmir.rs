@@ -26,9 +26,9 @@ mod variables;
 // ~~~
 
 const BC_OFFSET_CALLSITE_ID: usize = 0;
-const BC_OFFSET_CACHED_CLASS: usize = 24;
-const BC_OFFSET_CACHED_VERSION: usize = 28;
-const BC_OFFSET_CACHED_FUNCID: usize = 8;
+//const BC_OFFSET_CACHED_CLASS: usize = 24;
+//const BC_OFFSET_CACHED_VERSION: usize = 28;
+//const BC_OFFSET_CACHED_FUNCID: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmDeopt(usize);
@@ -410,28 +410,24 @@ impl AsmIr {
         bb: &mut BBContext,
         pc: BcPc,
         callid: CallSiteId,
-        callee_fid: FuncId,
+        fid: FuncId,
         recv_class: ClassId,
-        native: bool,
     ) {
         self.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(bb.get_register());
         let using_xmm = bb.get_using_xmm();
         self.xmm_save(using_xmm);
         let caller = &store[callid];
-        let callee = &store[callee_fid];
+        let callee = &store[fid];
         self.set_arguments(bb, caller, callid, callee, pc);
         self.unlink(bb, caller.dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
-        let offset = (16 + (LBP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16;
         self.inst.push(AsmInst::SendCached {
             callid,
-            callee_fid,
+            fid,
             recv_class,
-            native,
-            offset,
             using_xmm,
             error,
         });
@@ -499,7 +495,7 @@ impl AsmIr {
         }
     }
 
-    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
+    /*fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         let self_class = bb.self_value.class();
@@ -507,6 +503,16 @@ impl AsmIr {
             self_class,
             callid,
             pc,
+            using_xmm,
+            error,
+        });
+    }*/
+
+    fn yield_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::YieldNotHinted {
+            callid,
             using_xmm,
             error,
         });
@@ -560,7 +566,7 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
+    fn integer_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK, mode: OpMode) {
         let using_xmm = bb.get_using_xmm();
         let (deopt, error) = self.new_deopt_error(bb, pc);
         self.inst.push(AsmInst::IntegerBinOp {
@@ -1058,25 +1064,22 @@ pub(super) enum AsmInst {
     SendCached {
         callid: CallSiteId,
         recv_class: ClassId,
-        callee_fid: FuncId,
-        native: bool,
-        offset: usize,
+        fid: FuncId,
         using_xmm: UsingXmm,
         error: AsmError,
     },
-    SendNotCached {
+    /*SendNotCached {
         callid: CallSiteId,
         self_class: ClassId,
         pc: BcPc,
         using_xmm: UsingXmm,
         error: AsmError,
-    },
+    },*/
     Inline {
         proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
     },
-    Yield {
+    YieldNotHinted {
         callid: CallSiteId,
-        block_hint: Option<FuncId>,
         using_xmm: UsingXmm,
         error: AsmError,
     },

@@ -350,6 +350,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
+            movq rdx, [rbx + (EXECUTOR_CFP)];
             movq rax, (runtime::get_yield_data);
             call rax;
         }

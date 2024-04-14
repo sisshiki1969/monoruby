@@ -2,13 +2,32 @@ prelude: |
   class C
     def m
     end
+    def n
+    end
+    def o
+    end
   end
 
   o = C.new
   m = :m
+  a = [:m, :n, :o]
 benchmark:
   vm_send: |
     o.__send__ :m
+    o.__send__ :m
+    o.__send__ :m
+    o.__send__ :m
+    o.__send__ :m
+    o.__send__ :m
   vm_send_var: |
     o.__send__ m
-loop_count: 6000000
+    o.__send__ m
+    o.__send__ m
+    o.__send__ m
+    o.__send__ m
+    o.__send__ m
+  vm_send_poly: |
+    for i in 0..5
+      o.__send__ a[i % 3]
+    end
+loop_count: 1000000

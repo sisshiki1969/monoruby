@@ -707,19 +707,7 @@ impl JitContext {
                 object_send_splat(&mut self.ir, store, bb, callid, pc);
             }
             TraceIr::Yield { callid } => {
-                self.ir.write_back_callargs(bb, &store[callid]);
-                self.ir.unlink(bb, store[callid].dst);
-                self.ir.writeback_acc(bb);
-                let block_hint = self.given_block;
-                let using_xmm = bb.get_using_xmm();
-                let error = self.ir.new_error(bb, pc);
-                self.ir.inst.push(AsmInst::Yield {
-                    callid,
-                    block_hint,
-                    using_xmm,
-                    error,
-                });
-                self.ir.rax2acc(bb, store[callid].dst);
+                self.ir.gen_yield(store, bb, callid, self.given_block, pc);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {

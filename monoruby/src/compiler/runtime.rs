@@ -9,7 +9,7 @@ pub(crate) use args::*;
 // Runtime functions.
 //
 
-///
+/*///
 /// Get FuncId of the given method.
 ///
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
@@ -42,7 +42,7 @@ pub(super) extern "C" fn find_method(
             }
         }
     }
-}
+}*/
 
 pub(super) extern "C" fn find_method2(
     vm: &mut Executor,
@@ -130,13 +130,18 @@ pub(crate) struct ProcData {
 /// ### in
 /// - rdi: &mut Executor
 /// - rsi: &mut Globals
+/// - rdx: cfp
 ///
 /// ### out
 /// - rax: outer
 /// - rdx: FuncId
 ///
-pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {
-    let bh = match vm.cfp().get_block() {
+pub(super) extern "C" fn get_yield_data(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    cfp: Cfp,
+) -> ProcData {
+    let bh = match cfp.get_block() {
         Some(data) => data,
         None => {
             vm.set_error(MonorubyErr::no_block_given());

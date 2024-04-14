@@ -11,12 +11,13 @@ impl AsmIr {
     ) -> Option<()> {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
+            return None;
             // the inline method cache is invalid because the receiver class is not matched.
-            self.write_back_locals(bb);
-            self.write_back_callargs(bb, &store[callid]);
-            self.unlink(bb, dst);
-            self.writeback_acc(bb);
-            self.send_not_cached(bb, pc, callid);
+            //self.write_back_locals(bb);
+            //self.write_back_callargs(bb, &store[callid]);
+            //self.unlink(bb, dst);
+            //self.writeback_acc(bb);
+            //self.send_not_cached(bb, pc, callid);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
@@ -79,14 +80,26 @@ impl AsmIr {
                 self.fetch_to_reg(bb, args, GP::Rdx);
                 self.attr_writer(bb, pc, ivar_id);
             }
-            FuncKind::Builtin { .. } => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, true);
-            }
-            FuncKind::ISeq(_) => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, false);
+            _ => {
+                self.send_cached(store, bb, pc, callid, fid, recv_class);
             }
         };
         Some(())
+    }
+
+    pub(in crate::compiler::jitgen) fn gen_yield(
+        &mut self,
+        store: &Store,
+        bb: &mut BBContext,
+        callid: CallSiteId,
+        _block_hint: Option<FuncId>,
+        pc: BcPc,
+    ) {
+        self.write_back_callargs(bb, &store[callid]);
+        self.unlink(bb, store[callid].dst);
+        self.writeback_acc(bb);
+        self.yield_not_cached(bb, pc, callid);
+        self.rax2acc(bb, store[callid].dst);
     }
 }
 
