@@ -321,15 +321,21 @@ impl Codegen {
         );
     }
 
+    fn restore_lbp(&mut self) {
+        monoasm!( &mut self.jit,
+            // restore lfp
+            movq r14, [rbp - (BP_LFP)];
+        );
+    }
+
     /// Pop control frame
     fn pop_frame(&mut self) {
         monoasm!( &mut self.jit,
             // pop cfp
             lea  r14, [rbp - (BP_PREV_CFP)];
             movq [rbx + (EXECUTOR_CFP)], r14;
-            // restore lfp
-            movq r14, [rbp - (BP_LFP)];
         );
+        self.restore_lbp();
     }
 
     ///

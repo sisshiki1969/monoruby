@@ -325,22 +325,12 @@ impl Codegen {
     fn setup_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
         monoasm! { &mut self.jit,
             subq rsp, 32;
-            // set prev_cfp
-            //movq rax, [rbx + (EXECUTOR_CFP)];
-            //pushq rax;
-            //movq [rsp - (16 + BP_PREV_CFP)], rax;
-            // set lfp
-            //lea   rax, [rsp - 16];
-            //pushq rax;
-            //movq [rsp - (16 + BP_LFP)], rax;
             // set outer
             xorq rax, rax;
             pushq rax;
-            //movq [rsp - (16 + LBP_OUTER)], 0;
             // set meta.
             movq rax, (meta.get());
             pushq rax;
-            //movq [rsp - (16 + LBP_META)], rax;
         }
         // set block
         if let Some(func_id) = callsite.block_fid {

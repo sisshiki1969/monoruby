@@ -1,11 +1,9 @@
-class C
-  def f
-    yield 100
-  end
+def f(x)
+  x
 end
-
-c = C.new
-
-20.times {
-  puts c.f {|x| x * 2}
+  
+j = 42
+30.times {|i|
+    f = ->(x) { x + j }
+    puts f.call(i)
 }

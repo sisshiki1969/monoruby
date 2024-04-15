@@ -822,6 +822,7 @@ impl Codegen {
             movq rax, (runtime::gen_lambda);
             call rax;
         };
+        self.restore_lbp();
         self.xmm_restore(using_xmm);
     }
 

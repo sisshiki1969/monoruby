@@ -15,7 +15,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..15 do
+      for __i in 0..25 do
           __res2 = ({0})
           __assert(__res, __res2)
       end

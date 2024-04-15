@@ -90,6 +90,7 @@ fn main() {
     let path = if let Some(file_name) = iter.next() {
         let argv = Value::array_from_iter(iter.map(Value::string));
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+        globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
         let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
         File::open(&file_name)
             .unwrap()

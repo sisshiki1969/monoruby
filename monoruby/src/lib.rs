@@ -34,7 +34,7 @@ use executor::*;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 use globals::*;
-use id_table::*;
+pub use id_table::IdentId;
 use monoruby_attr::*;
 use value::rvalue::RegexpInner;
 use value::*;

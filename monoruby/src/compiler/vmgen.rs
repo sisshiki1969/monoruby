@@ -891,12 +891,14 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (runtime::gen_lambda);
             call rax;
+        }
+        self.restore_lbp();
+        monoasm! { &mut self.jit,
             movzxw rdi, [r13 - 12];  // r15 <- :1
             negq rdi;
             lea  rdi, [r14 + rdi * 8 - (LBP_SELF)];
             movq [rdi], rax;
-        };
-        //self.vm_store_r15();
+        }
         self.fetch_and_dispatch();
         label
     }

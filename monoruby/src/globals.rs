@@ -308,21 +308,21 @@ impl Globals {
         alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = flag);
     }
 
-    pub(crate) fn flush_stdout(&mut self) {
+    pub fn flush_stdout(&mut self) {
         self.stdout.flush().unwrap();
     }
 
-    pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
+    pub fn write_stdout(&mut self, bytes: &[u8]) {
         self.stdout.write_all(bytes).unwrap();
     }
 
     // Handling global variable
 
-    pub(crate) fn set_gvar(&mut self, name: IdentId, val: Value) {
+    pub fn set_gvar(&mut self, name: IdentId, val: Value) {
         self.global_vars.insert(name, val);
     }
 
-    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
+    pub fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
         self.global_vars.get(&name).cloned()
     }
 
