@@ -88,6 +88,8 @@ impl ExternalContext {
 /// Global state.
 ///
 pub struct Globals {
+    /// main object (`self`` of toplevel).
+    pub main_object: Value,
     /// function and class info.
     pub(crate) store: Store,
     /// code generator.
@@ -153,6 +155,7 @@ impl Globals {
         let main_object = Value::object(OBJECT_CLASS);
 
         let mut globals = Self {
+            main_object,
             codegen: Codegen::new(no_jit, main_object),
             store: Store::new(),
             global_vars: HashMap::default(),

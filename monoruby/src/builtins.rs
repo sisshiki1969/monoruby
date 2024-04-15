@@ -9,6 +9,7 @@ mod file;
 mod hash;
 mod io;
 mod kernel;
+mod main_object;
 mod math;
 mod method;
 mod module;
@@ -64,6 +65,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     process::init(globals);
     random::init(globals);
     symbol::init(globals);
+    main_object::init(globals);
 }
 
 #[derive(Debug, Clone, Copy)]
