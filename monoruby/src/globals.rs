@@ -387,13 +387,15 @@ impl Globals {
                     eprintln!("Warning: currently, can not require .so file. {:?}", lib);
                 }
             }
-            Err(MonorubyErr::cant_load(None, file_name))
+            //Err(MonorubyErr::cant_load(None, file_name))
+            Ok(None)
         } else {
             if file_name.exists() {
                 return self.load_file(file_name.into());
             }
             Err(MonorubyErr::cant_load(None, file_name))
         }
+        //Ok(None)
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {

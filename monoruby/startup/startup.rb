@@ -1,4 +1,6 @@
 class RbConfig
+  SIZEOF = eval(`ruby -e 'require "rbconfig/sizeof"; puts RbConfig::SIZEOF'`)
+  CONFIG = eval(`ruby -e 'require "rbconfig"; puts RbConfig::CONFIG'`)
   def self.ruby
     @ruby ||= `ruby -e 'print RbConfig.ruby'`
   end
@@ -17,6 +19,12 @@ class Process
   CLOCK_BOOTTIME_ALARM = 9
   class Tms
     attr_accessor :utime, :stime, :cutime, :cstime
+  end
+end
+
+class Integer
+  def zero?
+    self == 0
   end
 end
 
@@ -52,6 +60,9 @@ class String
     self
   end
   def -@
+    self
+  end
+  def b
     self
   end
 end
@@ -106,5 +117,40 @@ module Enumerable
 end
 
 module Comparable
+end
+
+class Fiddle
+  SIZEOF_LONG = 8
+  TYPE_VOID = 0
+  TYPE_VOIDP = 1
+  TYPE_INT = 2
+  module_function
+  def dlopen(lib)
+    h = Kernel.___dlopen(lib)
+    raise DLError.new("dlopen failed") if h == 0
+    Handle.new(h)
+  end
+  class Handle
+    def initialize(handle)
+      @handle = handle
+    end
+    def [](name)
+      ptr = Kernel.___dlsym(@handle, name)
+      raise DLError.new("dlsym failed") if ptr == 0
+      ptr
+    end
+  end
+  class DLError < StandardError
+  end
+  class Function
+    def initialize(ptr, args_type, ret_type)
+      @ptr = ptr
+      @args_type = args_type
+      @ret_type = ret_type
+    end
+    def call(*arg)
+      Kernel.___call(@ptr, arg, @args_type, @ret_type)
+    end
+  end
 end
 

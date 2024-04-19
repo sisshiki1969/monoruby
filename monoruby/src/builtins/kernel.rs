@@ -1,6 +1,6 @@
 use super::*;
 use num::Zero;
-use std::io::Write;
+use std::{io::Write, mem::transmute};
 
 //
 // Kernel module
@@ -47,6 +47,10 @@ pub(super) fn init(globals: &mut Globals) {
         super::enumerator::yielder_yield,
         1,
     );
+
+    globals.define_builtin_module_func(kernel_class, "___dlopen", dlopen, 1);
+    globals.define_builtin_module_func(kernel_class, "___dlsym", dlsym, 2);
+    globals.define_builtin_module_func(kernel_class, "___call", dlcall, 4);
 }
 
 ///
@@ -524,6 +528,85 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let path = globals.current_source_path(vm).parent().unwrap();
     Ok(Value::string(path.to_string_lossy().to_string()))
+}
+
+///
+/// Kernel.#___dlopen
+///
+/// - dlopen(lib) -> Fiddle::Handle
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiddle/m/dlopen.html]
+#[monoruby_builtin]
+fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
+    let arg0 = lfp.arg(0);
+    let lib = if let Some(s) = arg0.try_bytes() {
+        s.as_bytes().to_vec()
+    } else if arg0.is_nil() {
+        let handle = unsafe { libc::dlopen(0 as _, libc::RTLD_LAZY) };
+        return Ok(Value::integer(handle as usize as i64));
+    } else {
+        vm.invoke_method_inner(globals, IdentId::get_id("to_str"), arg0, &[], None)?
+            .expect_string()?
+            .into_bytes()
+    };
+    let lib = std::ffi::CString::new(lib).unwrap();
+    let handle = unsafe { libc::dlopen(lib.as_ptr(), libc::RTLD_LAZY) };
+    Ok(Value::integer(handle as usize as i64))
+}
+
+///
+/// Kernel.#___dlsym
+///
+/// - dlsym(handle, name) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiddle=3a=3aHandle/s/=5b=5d.html]
+#[monoruby_builtin]
+fn dlsym(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
+    let arg0 = lfp.arg(0).as_fixnum();
+    let arg1 = lfp.arg(1).expect_string()?;
+    let name = std::ffi::CString::new(arg1).unwrap();
+    let handle = unsafe { libc::dlsym(arg0 as _, name.as_ptr()) };
+    Ok(Value::integer(handle as usize as i64))
+}
+
+///
+/// Kernel.#___call
+///
+/// - call(ptr, args) -> Integer
+///
+#[monoruby_builtin]
+fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn conv(arg: Value, ty: u32) -> Result<u64> {
+        // TYPE_VOID = 0
+        // TYPE_VOIDP = 1
+        // TYPE_INT = 2
+        match ty {
+            0 => Ok(0u64),
+            1 => Ok(arg.as_bytes().as_ptr() as *const std::ffi::c_void as u64),
+            2 => Ok(arg.expect_integer()? as *const std::ffi::c_int as i32 as u32 as u64),
+            _ => unimplemented!(),
+        }
+    }
+    let ptr = lfp.arg(0).as_fixnum() as usize;
+    let f: extern "C" fn(u64, u64) -> u64 = unsafe { transmute(ptr) };
+    let args = lfp.arg(1).expect_array()?;
+    let args_type = lfp.arg(2).expect_array()?;
+    let ret_type = lfp.arg(3).expect_integer()?;
+    let a1 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+    let a2 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+    let res = f(a1, a2);
+    let res = match ret_type {
+        // TYPE_VOID = 0
+        // TYPE_VOIDP = 1
+        // TYPE_INT = 2
+        0 => Value::nil(),
+        1 => Value::integer(res as i64),
+        2 => Value::integer(res as i64),
+        _ => unimplemented!(),
+    };
+    Ok(res)
 }
 
 #[cfg(test)]
