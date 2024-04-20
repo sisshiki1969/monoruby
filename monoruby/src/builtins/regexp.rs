@@ -94,6 +94,7 @@ fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if lfp.arg(0).is_nil() {
+        vm.clear_special_variables();
         return Ok(Value::nil());
     }
     let self_ = lfp.self_val();

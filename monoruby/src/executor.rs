@@ -911,6 +911,11 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
+    pub(crate) fn clear_special_variables(&mut self) {
+        self.sp_last_match = None;
+        self.sp_post_match = None;
+        self.sp_matches.clear();
+    }
     ///
     /// Save captured strings to special variables.
     ///

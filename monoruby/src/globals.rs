@@ -164,10 +164,7 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
-            lib_directories: vec![
-                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json-2.7.1/lib/"
-                    .to_string(),
-            ],
+            lib_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "profile")]
@@ -219,7 +216,7 @@ impl Globals {
             .node;
 
         let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+        globals.extend_load_path(lib.iter().map(|v| v.as_str().trim().to_string()));
 
         // load gem library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/gempath.rb"));
@@ -228,7 +225,7 @@ impl Globals {
             .node;
 
         let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+        globals.extend_load_path(lib.iter().map(|v| v.as_str().trim().to_string()));
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -375,27 +372,32 @@ impl Globals {
         is_relative: bool,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
         if !is_relative {
-            for lib in self.lib_directories.clone() {
-                let mut lib = std::path::PathBuf::from(lib);
-                lib.push(file_name);
-                lib.set_extension("rb");
-                if lib.exists() {
-                    return self.load_file(lib);
-                }
-                lib.set_extension("so");
-                if lib.exists() {
-                    eprintln!("Warning: currently, can not require .so file. {:?}", lib);
-                }
+            if let Some(file) = self.search_lib(file_name) {
+                return self.load_file(file);
             }
-            //Err(MonorubyErr::cant_load(None, file_name))
-            Ok(None)
         } else {
             if file_name.exists() {
                 return self.load_file(file_name.into());
             }
-            Err(MonorubyErr::cant_load(None, file_name))
         }
-        //Ok(None)
+        Err(MonorubyErr::cant_load(None, file_name))
+    }
+
+    fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
+        for lib in self.lib_directories.iter() {
+            let mut lib = std::path::PathBuf::from(lib);
+            lib.push(file_name);
+            lib.set_extension("rb");
+            if lib.exists() {
+                return Some(lib);
+            }
+            lib.set_extension("so");
+            if lib.exists() {
+                return Some(lib);
+                //eprintln!("Warning: currently, can not require .so file. {:?}", lib);
+            }
+        }
+        None
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {

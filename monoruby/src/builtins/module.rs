@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
+    globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_func_with(MODULE_CLASS, "define_method", define_method, 1, 2, false);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
@@ -217,6 +218,21 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
     vm.const_get(globals, module, name, inherit)
+}
+
+///
+/// ### Module#const_set
+///
+/// - const_set(name, value) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_set.html]
+#[monoruby_builtin]
+fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string()?;
+    let module = lfp.self_val().as_class();
+    let val = lfp.arg(1);
+    globals.set_constant(module.id(), name, val);
+    Ok(val)
 }
 
 ///
@@ -748,6 +764,24 @@ mod test {
             end
             C.const_get(:S1, false)
             "#,
+        );
+    }
+
+    #[test]
+    fn const_set() {
+        run_test_with_prelude(
+            r#"
+            res = []
+            res << Foo.const_set(:FOO, 123)
+            res << Foo::FOO
+            res << Foo.const_set('BAR', 'abc')
+            res << Foo::BAR
+            res << Foo.const_set('BAR', '123')
+            res
+            "#,
+            r#"
+            module Foo; end
+        "#,
         );
     }
 
