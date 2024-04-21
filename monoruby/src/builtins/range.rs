@@ -75,8 +75,8 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.as_fixnum();
-        let mut end = range.end.as_fixnum();
+        let start = range.start.expect_integer()?;
+        let mut end = range.end.expect_integer()?;
         if !range.exclude_end() {
             end += 1
         }
@@ -103,8 +103,8 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let self_ = lfp.self_val();
         let range = self_.as_range();
         if range.start.is_fixnum() && range.end.is_fixnum() {
-            let start = range.start.as_fixnum();
-            let mut end = range.end.as_fixnum();
+            let start = range.start.expect_integer()?;
+            let mut end = range.end.expect_integer()?;
             if !range.exclude_end() {
                 end += 1
             }
@@ -140,8 +140,8 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.as_fixnum();
-        let mut end = range.end.as_fixnum();
+        let start = range.start.expect_integer()?;
+        let mut end = range.end.expect_integer()?;
         if !range.exclude_end() {
             end += 1
         }
@@ -171,8 +171,8 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.as_fixnum();
-        let mut end = range.end.as_fixnum();
+        let start = range.start.expect_integer()?;
+        let mut end = range.end.expect_integer()?;
         if !range.exclude_end() {
             end += 1
         }
@@ -200,8 +200,8 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.as_fixnum();
-        let mut end = range.end.as_fixnum();
+        let start = range.start.expect_integer()?;
+        let mut end = range.end.expect_integer()?;
         if !range.exclude_end() {
             end += 1
         }

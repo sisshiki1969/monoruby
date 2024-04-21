@@ -388,7 +388,10 @@ mod test {
                 end
             end"##,
         );
+    }
 
+    #[test]
+    fn fib_each3() {
         run_test_with_prelude(
             r##"
             ans = []
@@ -470,7 +473,7 @@ mod test {
         run_test_with_prelude(
             r##"
         res = []
-        fib.with_index.with_index do |(num, idx2), idx1|
+        e.with_index.with_index do |(num, idx2), idx1|
             res << num
             res << idx1
             res << idx2
@@ -481,7 +484,7 @@ mod test {
         res
         "##,
             r##"
-        fib = Enumerator.new do |y|
+        e = Enumerator.new do |y|
             a = b = 1
             loop do
                 y << a

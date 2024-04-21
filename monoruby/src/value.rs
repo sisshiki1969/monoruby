@@ -567,16 +567,6 @@ impl Value {
     }
 
     ///
-    /// Get `self` as i64.
-    ///
-    /// ### Panics
-    /// Panics if `self` is not a fixnum.
-    ///
-    pub(crate) fn as_fixnum(&self) -> i64 {
-        self.try_fixnum().unwrap()
-    }
-
-    ///
     /// Check if `self` is a flonum.
     ///
     fn is_flonum(&self) -> bool {

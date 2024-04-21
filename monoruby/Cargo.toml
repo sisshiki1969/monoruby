@@ -56,6 +56,9 @@ fancy-regex = "0.13.0"
 libc = "0.2.139"
 getrandom = "0.2.8"
 sfmt = "0.7.0"
-dirs = "5.0.1"
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
+dirs = "5.0.1"
+
+[build-dependencies]
+dirs = "5.0.1"

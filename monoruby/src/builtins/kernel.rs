@@ -564,7 +564,11 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn dlsym(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
-    let arg0 = lfp.arg(0).as_fixnum();
+    let arg0 = if lfp.arg(0).is_nil() {
+        0
+    } else {
+        lfp.arg(0).expect_integer()?
+    };
     let arg1 = lfp.arg(1).expect_string()?;
     let name = std::ffi::CString::new(arg1).unwrap();
     let handle = unsafe { libc::dlsym(arg0 as _, name.as_ptr()) };
@@ -579,17 +583,21 @@ fn dlsym(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     fn conv(arg: Value, ty: u32) -> Result<u64> {
-        // TYPE_VOID = 0
-        // TYPE_VOIDP = 1
-        // TYPE_INT = 2
+        // VOID = 0
+        // VOIDP = 1
+        // CHAR = 2
+        // UCHAR = -2
+        // INT = 4
+        // UINT = -4
         match ty {
             0 => Ok(0u64),
-            1 => Ok(arg.as_bytes().as_ptr() as *const std::ffi::c_void as u64),
-            2 => Ok(arg.expect_integer()? as *const std::ffi::c_int as i32 as u32 as u64),
-            _ => unimplemented!(),
+            1 => Ok(arg.as_bytes().as_ptr() as u64),
+            2 => Ok(arg.expect_integer()? as i8 as u8 as u64),
+            4 => Ok(arg.expect_integer()? as i32 as u32 as u64),
+            _ => Err(MonorubyErr::runtimeerr("not supported")),
         }
     }
-    let ptr = lfp.arg(0).as_fixnum() as usize;
+    let ptr = lfp.arg(0).expect_integer()? as usize;
     let f: extern "C" fn(u64, u64) -> u64 = unsafe { transmute(ptr) };
     let args = lfp.arg(1).expect_array()?;
     let args_type = lfp.arg(2).expect_array()?;
@@ -598,13 +606,17 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let a2 = conv(args[1], args_type[1].expect_integer()? as u32)?;
     let res = f(a1, a2);
     let res = match ret_type {
-        // TYPE_VOID = 0
-        // TYPE_VOIDP = 1
-        // TYPE_INT = 2
+        // VOID = 0
+        // VOIDP = 1
+        // CHAR = 2
+        // UCHAR = -2
+        // INT = 4
+        // UINT = -4
         0 => Value::nil(),
         1 => Value::integer(res as i64),
         2 => Value::integer(res as i64),
-        _ => unimplemented!(),
+        4 => Value::integer(res as i64),
+        _ => return Err(MonorubyErr::runtimeerr("not supported")),
     };
     Ok(res)
 }

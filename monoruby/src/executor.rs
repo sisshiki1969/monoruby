@@ -101,12 +101,25 @@ impl alloc::GC<RValue> for Executor {
 impl Executor {
     pub fn init(globals: &mut Globals) -> Self {
         let mut executor = Self::default();
-        let path = std::path::Path::new("startup/startup.rb");
-        let code = include_str!("../startup/startup.rb").to_string();
-        if let Err(err) = executor.exec_script(globals, code, path) {
+        let path = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby")
+            .join("startup.rb");
+        if let Err(err) = executor.require(globals, &path, false) {
             err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
-        };
+        }
+        #[cfg(not(test))]
+        {
+            let path = dirs::home_dir()
+                .unwrap()
+                .join(".monoruby")
+                .join("startup_features.rb");
+            if let Err(err) = executor.require(globals, &path, false) {
+                err.show_error_message_and_all_loc(globals);
+                panic!("error occurred in startup_features.");
+            }
+        }
         #[cfg(feature = "emit-bc")]
         {
             globals.startup_flag = true;
