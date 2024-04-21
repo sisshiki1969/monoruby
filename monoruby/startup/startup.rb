@@ -55,9 +55,6 @@ class String
   def -@
     self
   end
-  def b
-    self
-  end
 end
 
 class Object
@@ -111,3 +108,4 @@ end
 
 module Comparable
 end
+

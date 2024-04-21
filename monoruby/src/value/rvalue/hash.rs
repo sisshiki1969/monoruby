@@ -155,7 +155,7 @@ impl Hash for HashKey {
                     ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
                     ObjKind::BIGNUM => lhs.as_bignum().hash(state),
                     ObjKind::FLOAT => lhs.as_float().to_bits().hash(state),
-                    ObjKind::BYTES => lhs.as_bytes().hash(state),
+                    ObjKind::STRING => lhs.as_bytes().hash(state),
                     ObjKind::ARRAY => lhs.as_array().hash(state),
                     ObjKind::RANGE => lhs.as_range().hash(state),
                     ObjKind::HASH => lhs.as_hash().hash(state),

@@ -1,5 +1,4 @@
 use num::ToPrimitive;
-use std::borrow::Cow;
 
 use super::*;
 use crate::{
@@ -140,10 +139,6 @@ impl Value {
 
     pub fn is_nil(&self) -> bool {
         self.id() == NIL_VALUE
-    }
-
-    pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
-        globals.val_to_bytes(self)
     }
 
     pub(crate) fn deep_copy(&self) -> Self {
@@ -300,20 +295,20 @@ impl Value {
         RValue::new_bytes(s).pack()
     }
 
-    pub fn string_from_inner(s: StringInner) -> Self {
-        RValue::new_string_from_inner(s).pack()
+    pub fn string_from_str(s: &str) -> Self {
+        RValue::new_string_from_str(s).pack()
     }
 
-    pub fn string_from_str(b: &str) -> Self {
-        RValue::new_bytes_from_slice(b.as_bytes()).pack()
-    }
-
-    pub fn string_from_slice(b: &[u8]) -> Self {
+    pub fn bytes_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
     }
 
     pub fn string_from_vec(b: Vec<u8>) -> Self {
-        RValue::new_bytes(b).pack()
+        RValue::new_string_from_vec(b).pack()
+    }
+
+    pub fn string_from_inner(inner: StringInner) -> Self {
+        RValue::new_string_from_inner(inner).pack()
     }
 
     pub fn array(ary: ArrayInner) -> Self {
@@ -461,11 +456,15 @@ impl Value {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Complex(_) => self.as_complex().to_s(globals),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => s,
-                Err(_) => format!("{:?}", s),
-            },
+            RV::String(s) => s.to_string(),
             RV::Object(rvalue) => rvalue.to_s(globals),
+        }
+    }
+
+    pub fn to_bytes(&self, globals: &Globals) -> Vec<u8> {
+        match self.unpack() {
+            RV::String(s) => s.as_bytes().to_vec(),
+            _ => self.to_s(globals).into_bytes(),
         }
     }
 
@@ -474,10 +473,7 @@ impl Value {
             RV::Nil => "nil".to_string(),
             RV::Complex(_) => self.as_complex().inspect(globals),
             RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("{:?}", s),
-                Err(_) => format!("{:?}", s),
-            },
+            RV::String(s) => format!(r#""{}""#, s.to_string().escape_debug().to_string()),
             RV::Object(rvalue) => rvalue.inspect(globals),
             _ => self.to_s(globals),
         }
@@ -904,19 +900,18 @@ impl Value {
     }
 
     pub(crate) fn expect_string(&self) -> Result<String> {
-        if let Some(s) = self.is_bytes() {
-            let s = String::from_utf8_lossy(s).into_owned();
-            Ok(s)
-        } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
-        }
+        self.expect_str().map(|s| s.to_string())
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
         if let Some(s) = self.is_bytes() {
             let s = match std::str::from_utf8(s) {
                 Ok(s) => s,
-                Err(_) => return Err(MonorubyErr::runtimeerr("invalid_byte_sequence")),
+                Err(_) => {
+                    return Err(MonorubyErr::runtimeerr(format!(
+                        "invalid byte sequence. {s}"
+                    )))
+                }
             };
             Ok(s)
         } else {
@@ -961,7 +956,7 @@ impl Value {
     pub(crate) fn try_bytes(&self) -> Option<&StringInner> {
         if let Some(rv) = self.try_rvalue() {
             match rv.ty() {
-                ObjKind::BYTES => Some(rv.as_bytes()),
+                ObjKind::STRING => Some(rv.as_bytes()),
                 _ => None,
             }
         } else {
@@ -970,44 +965,44 @@ impl Value {
     }
 
     pub(crate) fn as_bytes(&self) -> &StringInner {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue().as_bytes()
     }
 
     pub(crate) fn as_bytes_mut(&mut self) -> &mut StringInner {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue_mut().as_bytes_mut()
     }
 
     pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::BYTES => Some(rv.as_bytes()),
+            ObjKind::STRING => Some(rv.as_bytes()),
             _ => None,
         }
     }
 
-    pub(crate) fn as_str(&self) -> Cow<'_, str> {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+    pub(crate) fn as_str(&self) -> &str {
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue().as_str()
     }
 
-    pub(crate) fn is_str(&self) -> Option<Cow<'_, str>> {
+    pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::BYTES => Some(rv.as_str()),
+            ObjKind::STRING => Some(rv.as_str()),
             _ => None,
         }
     }
 
     pub(crate) fn replace_string(&mut self, replace: String) {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         *self.rvalue_mut() = RValue::new_string(replace);
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
-        *self.rvalue_mut().as_bytes_mut() = StringInner::from_slice(replace.as_bytes());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        *self.rvalue_mut().as_bytes_mut() = StringInner::string_from_bytes(replace.as_bytes());
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
@@ -1216,7 +1211,7 @@ pub enum RV<'a> {
     Float(f64),
     Symbol(IdentId),
     Complex(&'a num::complex::Complex<Real>),
-    String(&'a [u8]),
+    String(&'a StringInner),
     Object(&'a RValue),
 }
 
@@ -1231,10 +1226,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => write!(f, "\"{s}\""),
-                Err(_) => write!(f, "{s:?}"),
-            },
+            RV::String(s) => write!(f, "\"{s}\""),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }

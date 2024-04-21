@@ -61,7 +61,7 @@ impl Executor {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    pub(super) fn get_constant_checked(
+    pub(crate) fn get_constant_checked(
         &mut self,
         globals: &mut Globals,
         class_id: ClassId,

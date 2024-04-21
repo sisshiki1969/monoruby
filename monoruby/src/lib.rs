@@ -39,7 +39,7 @@ use monoruby_attr::*;
 use value::rvalue::RegexpInner;
 use value::*;
 
-const STRING_INLINE_CAP: usize = 39;
+const STRING_INLINE_CAP: usize = 32;
 
 type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 type IndexSet<T> = indexmap::IndexSet<T>;

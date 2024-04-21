@@ -189,7 +189,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
-            return Ok(Value::string_from_slice(&[b]));
+            return Ok(Value::bytes_from_slice(&[b]));
         }
     };
     Err(MonorubyErr::char_out_of_range(globals, lfp.self_val()))

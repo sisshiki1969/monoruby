@@ -497,13 +497,6 @@ impl Globals {
         }
     }
 
-    pub(crate) fn val_to_bytes(&self, val: Value) -> Vec<u8> {
-        if let RV::String(s) = val.unpack() {
-            return s.to_vec();
-        }
-        val.to_s(self).into_bytes()
-    }
-
     pub(crate) fn generate_range(
         &mut self,
         start: Value,

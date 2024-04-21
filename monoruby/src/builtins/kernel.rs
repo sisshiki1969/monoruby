@@ -442,10 +442,9 @@ fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
 fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    use std::process::Command;
     let arg0 = lfp.arg(0);
     let (program, args) = prepare_command_arg(&arg0.as_str());
-    match Command::new(program).args(&args).output() {
+    match std::process::Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
             Ok(Value::string_from_vec(output.stdout))

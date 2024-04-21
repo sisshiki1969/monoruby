@@ -1308,6 +1308,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 /// - pack(template) -> String
 /// - [NOT SUPPORTED] pack(template, buffer: String.new) -> String
 ///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pack.html]
 #[monoruby_builtin]
 fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = Array::new(lfp.self_val());
