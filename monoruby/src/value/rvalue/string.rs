@@ -29,7 +29,7 @@ impl std::fmt::Display for StringInner {
                 }
                 Ok(())
             }
-            Encoding::Utf8 => write!(f, "{}", String::from_utf8_lossy(self.as_bytes())),
+            Encoding::Utf8 => write!(f, "{}", String::from_utf8_lossy(self)),
         }
     }
 }
@@ -64,6 +64,15 @@ impl StringInner {
 
     pub fn set_encoding(&mut self, ty: Encoding) {
         self.ty = ty;
+    }
+
+    pub fn check(&self) -> Result<&str> {
+        match std::str::from_utf8(self) {
+            Ok(s) => Ok(s),
+            Err(_) => Err(MonorubyErr::runtimeerr(format!(
+                "invalid byte sequence. {self}"
+            ))),
+        }
     }
 
     pub fn from_str(s: &str) -> Self {
@@ -101,10 +110,6 @@ impl StringInner {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.content
-    }
-
-    pub fn as_str(&self) -> &str {
-        std::str::from_utf8(self.as_bytes()).unwrap()
     }
 
     pub fn extend(&mut self, other: &Self) -> Result<()> {
@@ -176,7 +181,7 @@ impl StringInner {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
         }
-        let ord = match std::str::from_utf8(self.as_bytes()) {
+        let ord = match std::str::from_utf8(self) {
             Ok(s) => s.chars().next().unwrap() as u32,
             Err(_) => self.as_bytes()[0] as u32,
         };

@@ -35,16 +35,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
 fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let name = match lfp.arg(0).unpack() {
-        RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
-        _ => {
-            return Err(MonorubyErr::no_implicit_conversion(
-                lfp.arg(0),
-                STRING_CLASS,
-            ));
-        }
-    };
-    let mut file = match File::create(&name) {
+    let self_ = lfp.arg(0);
+    let name = self_.expect_str()?;
+    let mut file = match File::create(name) {
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };

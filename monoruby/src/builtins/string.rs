@@ -280,19 +280,15 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
         RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
         RV::String(s) => {
-            if let Ok(s) = String::from_utf8(s.to_vec()) {
-                match s.parse::<i64>() {
-                    Ok(i) => return Ok(Integer::Fixnum(i)),
-                    Err(_) => {
-                        if let Ok(b) = s.parse::<BigInt>() {
-                            return Ok(Integer::BigInt(b));
-                        }
-                    }
-                }
+            let s = s.check()?;
+            if let Ok(i) = s.parse::<i64>() {
+                return Ok(Integer::Fixnum(i));
+            } else if let Ok(b) = s.parse::<BigInt>() {
+                return Ok(Integer::BigInt(b));
             }
         }
         _ => {}
-    }
+    };
     let s = val.to_s(globals);
     Err(MonorubyErr::argumenterr(format!(
         "invalid value for Integer(): {}",
@@ -333,7 +329,7 @@ fn coerce_to_char(val: Value) -> Result<char> {
             }
             Err(MonorubyErr::argumenterr("invalid character"))
         }
-        RV::String(s) => match String::from_utf8(s.to_vec()) {
+        RV::String(s) => match std::str::from_utf8(s) {
             Ok(s) => {
                 if s.chars().count() != 1 {
                     Err(MonorubyErr::argumenterr("%c requires a character"))

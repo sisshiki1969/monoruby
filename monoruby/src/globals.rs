@@ -324,6 +324,16 @@ impl Globals {
         self.stdout.write_all(bytes).unwrap();
     }
 
+    pub fn print_value(&mut self, val: Value) {
+        if let Some(s) = val.is_bytes() {
+            self.stdout.write_all(s)
+        } else {
+            let v = val.to_s(self).into_bytes();
+            self.stdout.write_all(&v)
+        }
+        .unwrap();
+    }
+
     // Handling global variable
 
     pub fn set_gvar(&mut self, name: IdentId, val: Value) {

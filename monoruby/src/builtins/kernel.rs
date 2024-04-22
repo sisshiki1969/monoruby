@@ -99,9 +99,8 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 
     for v in collector {
-        let mut bytes = v.to_bytes(globals);
-        bytes.extend(b"\n");
-        globals.write_stdout(&bytes);
+        globals.print_value(v);
+        globals.write_stdout(b"\n");
     }
     globals.flush_stdout();
     Ok(Value::nil())
@@ -116,7 +115,7 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     for v in lfp.arg(0).as_array().iter().cloned() {
-        globals.write_stdout(&v.to_bytes(globals));
+        globals.print_value(v);
     }
     Ok(Value::nil())
 }
@@ -293,20 +292,16 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
         RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
-        RV::String(b) => {
-            if let Ok(s) = String::from_utf8(b.to_vec()) {
-                match s.parse::<i64>() {
-                    Ok(num) => return Ok(Value::integer(num)),
-                    Err(_) => {
-                        let s = arg0.to_s(globals);
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "invalid value for Integer(): {}",
-                            s
-                        )));
-                    }
-                }
+        RV::String(b) => match b.check()?.parse::<i64>() {
+            Ok(num) => return Ok(Value::integer(num)),
+            Err(_) => {
+                let s = arg0.to_s(globals);
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid value for Integer(): {}",
+                    s
+                )));
             }
-        }
+        },
         _ => {}
     };
     Err(MonorubyErr::no_implicit_conversion(arg0, INTEGER_CLASS))

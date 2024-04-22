@@ -461,13 +461,6 @@ impl Value {
         }
     }
 
-    pub fn to_bytes(&self, globals: &Globals) -> Vec<u8> {
-        match self.unpack() {
-            RV::String(s) => s.as_bytes().to_vec(),
-            _ => self.to_s(globals).into_bytes(),
-        }
-    }
-
     pub fn inspect(&self, globals: &Globals) -> String {
         match self.unpack() {
             RV::Nil => "nil".to_string(),
@@ -904,15 +897,11 @@ impl Value {
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
+        self.expect_bytes()?.check()
+    }
+
+    fn expect_bytes(&self) -> Result<&StringInner> {
         if let Some(s) = self.is_bytes() {
-            let s = match std::str::from_utf8(s) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Err(MonorubyErr::runtimeerr(format!(
-                        "invalid byte sequence. {s}"
-                    )))
-                }
-            };
             Ok(s)
         } else {
             Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
