@@ -41,12 +41,21 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };
-    let bytes = lfp.arg(1).to_s(globals).into_bytes();
-    match file.write_all(&bytes) {
-        Ok(_) => {}
-        Err(err) => return Err(MonorubyErr::runtimeerr(err)),
+    let val = lfp.arg(1);
+    let len = if let Some(s) = val.is_bytes() {
+        if let Err(err) = file.write_all(s) {
+            return Err(MonorubyErr::runtimeerr(err));
+        };
+        s.len()
+    } else {
+        let v = val.to_s(globals)?.into_bytes();
+        if let Err(err) = file.write_all(&v) {
+            return Err(MonorubyErr::runtimeerr(err));
+        };
+        v.len()
     };
-    Ok(Value::integer(bytes.len() as i64))
+
+    Ok(Value::integer(len as i64))
 }
 
 ///

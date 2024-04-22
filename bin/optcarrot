@@ -29,4 +29,4 @@ rbenv local 3.3.0
 monoruby -v
 echo "with jit"
 monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
-monoruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
+RUST_BACKTRACE=full monoruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes

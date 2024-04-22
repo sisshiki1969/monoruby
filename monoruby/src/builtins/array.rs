@@ -668,7 +668,7 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
     ary.iter()
-        .map(|v| v.to_s(globals))
+        .map(|v| v.to_s(globals).unwrap())
         .collect::<Vec<_>>()
         .join(sep)
 }

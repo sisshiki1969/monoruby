@@ -245,11 +245,13 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             Ok(ch) => ch,
             Err(_) => return Err(MonorubyErr::char_out_of_range(globals, lfp.arg(0))),
         };
+        let bytes = self_.as_bytes_mut();
         if let Ok(ch) = u8::try_from(ch) {
-            self_.as_bytes_mut().extend_from_slice(&[ch]);
+            bytes.extend_from_slice_checked(&[ch])?;
         } else {
-            self_.as_bytes_mut().extend_from_slice(&ch.to_ne_bytes());
+            bytes.extend_from_slice_checked(&ch.to_ne_bytes())?;
         }
+        bytes.check()?;
     } else {
         return Err(MonorubyErr::no_implicit_conversion(
             lfp.arg(0),
@@ -289,7 +291,7 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
         }
         _ => {}
     };
-    let s = val.to_s(globals);
+    let s = val.to_s(globals)?;
     Err(MonorubyErr::argumenterr(format!(
         "invalid value for Integer(): {}",
         s
@@ -301,7 +303,7 @@ fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
         RV::Fixnum(i) => Ok(i as f64),
         RV::Float(f) => Ok(f),
         _ => {
-            let s = val.to_s(globals);
+            let s = val.to_s(globals)?;
             Err(MonorubyErr::argumenterr(format!(
                 "invalid value for Float(): {}",
                 s
@@ -329,16 +331,14 @@ fn coerce_to_char(val: Value) -> Result<char> {
             }
             Err(MonorubyErr::argumenterr("invalid character"))
         }
-        RV::String(s) => match std::str::from_utf8(s) {
-            Ok(s) => {
-                if s.chars().count() != 1 {
-                    Err(MonorubyErr::argumenterr("%c requires a character"))
-                } else {
-                    Ok(s.chars().next().unwrap())
-                }
+        RV::String(s) => {
+            let s = s.check()?;
+            if s.chars().count() != 1 {
+                Err(MonorubyErr::argumenterr("%c requires a character"))
+            } else {
+                Ok(s.chars().next().unwrap())
             }
-            _ => Err(MonorubyErr::argumenterr("%c requires a character")),
-        },
+        }
         _ => Err(MonorubyErr::argumenterr("invalid character")),
     }
 }
@@ -428,7 +428,7 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 let ch = coerce_to_char(val)?;
                 format!("{}", ch)
             }
-            's' => val.to_s(globals),
+            's' => val.to_s(globals)?,
             'd' | 'i' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
@@ -1110,7 +1110,7 @@ fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if res.len() == self_s.len() {
         Ok(Value::nil())
     } else {
-        *lfp.self_val().as_bytes_mut() = StringInner::string_from_bytes(res.as_bytes());
+        *lfp.self_val().as_bytes_mut() = StringInner::from_str(res);
         Ok(lfp.self_val())
     }
 }

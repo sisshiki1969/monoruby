@@ -446,8 +446,8 @@ impl Value {
 // display
 
 impl Value {
-    pub fn to_s(&self, globals: &Globals) -> String {
-        match self.unpack() {
+    pub fn to_s(&self, globals: &Globals) -> Result<String> {
+        let s = match self.unpack() {
             RV::None => "Undef".to_string(),
             RV::Nil => "".to_string(),
             RV::Bool(b) => format!("{:?}", b),
@@ -456,20 +456,22 @@ impl Value {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Complex(_) => self.as_complex().to_s(globals),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => s.to_string(),
+            RV::String(s) => s.to_string()?,
             RV::Object(rvalue) => rvalue.to_s(globals),
-        }
+        };
+        Ok(s)
     }
 
-    pub fn inspect(&self, globals: &Globals) -> String {
-        match self.unpack() {
+    pub fn inspect(&self, globals: &Globals) -> Result<String> {
+        let s = match self.unpack() {
             RV::Nil => "nil".to_string(),
             RV::Complex(_) => self.as_complex().inspect(globals),
             RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => format!(r#""{}""#, s.to_string().escape_debug().to_string()),
+            RV::String(s) => format!(r#""{}""#, s.to_string()?.escape_debug().to_string()),
             RV::Object(rvalue) => rvalue.inspect(globals),
-            _ => self.to_s(globals),
-        }
+            _ => self.to_s(globals)?,
+        };
+        Ok(s)
     }
 }
 
@@ -849,7 +851,7 @@ impl Value {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = self.to_s(globals);
+                let name = self.to_s(globals).unwrap();
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
@@ -866,7 +868,7 @@ impl Value {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
-                let name = self.to_s(globals);
+                let name = self.to_s(globals)?;
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -876,7 +878,7 @@ impl Value {
         match self.is_module() {
             Some(class) => Ok(class),
             None => {
-                let name = self.to_s(globals);
+                let name = self.to_s(globals)?;
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -986,12 +988,12 @@ impl Value {
 
     pub(crate) fn replace_string(&mut self, replace: String) {
         assert_eq!(ObjKind::STRING, self.rvalue().ty());
-        *self.rvalue_mut() = RValue::new_string(replace);
+        *self.rvalue_mut().as_bytes_mut() = StringInner::from_string(replace);
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
         assert_eq!(ObjKind::STRING, self.rvalue().ty());
-        *self.rvalue_mut().as_bytes_mut() = StringInner::string_from_bytes(replace.as_bytes());
+        *self.rvalue_mut().as_bytes_mut() = StringInner::from_str(replace);
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
@@ -1215,7 +1217,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => write!(f, "\"{s}\""),
+            RV::String(s) => write!(f, "\"{}\"", s.to_string().unwrap()),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }

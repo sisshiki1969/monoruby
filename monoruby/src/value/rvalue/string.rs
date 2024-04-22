@@ -9,27 +9,43 @@ pub enum Encoding {
     Utf8,
 }
 
+///
+/// Ruby-level String.
+///
+/// This struct is used to represent a Ruby-level String.
+/// if ty is Utf8, content is guaranteed to be a valid utf8 string.
+///
 #[derive(Debug, Clone)]
-//#[repr(transparent)]
 pub struct StringInner {
     content: SmallVec<[u8; STRING_INLINE_CAP]>,
     ty: Encoding,
 }
 
-impl std::fmt::Display for StringInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl StringInner {
+    pub fn to_string(&self) -> Result<String> {
         match self.ty {
             Encoding::Ascii8 => {
+                let mut res = String::new();
                 for c in self.as_bytes() {
                     if c.is_ascii() {
-                        write!(f, "{}", *c as char)?;
+                        res.push(*c as char);
                     } else {
-                        write!(f, r#"\x{:0>2X}"#, c)?;
+                        res += &format!(r#"\x{:0>2X}"#, c);
                     }
                 }
-                Ok(())
+                Ok(res)
             }
-            Encoding::Utf8 => write!(f, "{}", String::from_utf8_lossy(self)),
+            Encoding::Utf8 => match std::str::from_utf8(self) {
+                Ok(s) => Ok(s.to_string()),
+                Err(err) => {
+                    eprintln!("invalid byte sequence: {:?}", err);
+                    let s = String::from_utf8_lossy(self).to_string();
+                    //s
+                    Err(MonorubyErr::runtimeerr(format!(
+                        "invalid byte sequence: {s}",
+                    )))
+                }
+            },
         }
     }
 }
@@ -54,7 +70,7 @@ impl std::hash::Hash for StringInner {
 }
 
 impl StringInner {
-    fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
+    unsafe fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
         StringInner { content, ty }
     }
 
@@ -70,33 +86,26 @@ impl StringInner {
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
             Err(_) => Err(MonorubyErr::runtimeerr(format!(
-                "invalid byte sequence. {self}"
+                "invalid byte sequence. {:?}",
+                self.to_string()
             ))),
         }
     }
 
     pub fn from_str(s: &str) -> Self {
-        StringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
+        unsafe { StringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8) }
     }
 
     pub fn from_string(s: String) -> Self {
-        StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
+        unsafe { StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8) }
     }
 
-    pub fn string_from_bytes(slice: &[u8]) -> Self {
-        StringInner::from(SmallVec::from_slice(slice), Encoding::Utf8)
-    }
-
-    pub fn from_vec(vec: Vec<u8>) -> Self {
-        StringInner::from(SmallVec::from_vec(vec), Encoding::Utf8)
-    }
-
-    pub fn from_vec_with_encoding(vec: Vec<u8>, ty: Encoding) -> Self {
-        StringInner::from(SmallVec::from_vec(vec), ty)
+    pub fn bytes_from_vec(vec: Vec<u8>) -> Self {
+        unsafe { StringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8) }
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
-        StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8)
+        unsafe { StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8) }
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
@@ -105,7 +114,7 @@ impl StringInner {
         } else {
             Encoding::Ascii8
         };
-        StringInner::from(SmallVec::from_vec(vec), enc)
+        unsafe { StringInner::from(SmallVec::from_vec(vec), enc) }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -118,37 +127,32 @@ impl StringInner {
             self.ty = other.ty;
             return Ok(());
         }
-        match (self.ty, other.ty) {
-            (Encoding::Utf8, Encoding::Utf8) | (Encoding::Ascii8, Encoding::Ascii8) => {
-                self.content.extend_from_slice(other);
-                return Ok(());
-            }
-            (Encoding::Utf8, Encoding::Ascii8) => {
-                if other.content.is_ascii() {
-                    self.content.extend_from_slice(other);
-                    return Ok(());
-                }
-            }
-            (Encoding::Ascii8, Encoding::Utf8) => {
-                if other.content.is_ascii() {
-                    self.content.extend_from_slice(other);
-                    return Ok(());
-                }
-            }
+        if self.ty == other.ty {
+            self.content.extend_from_slice(other);
+            Ok(())
+        } else {
+            Err(MonorubyErr::runtimeerr(format!(
+                "incompatible character encodings: {:?} and {:?}",
+                self.ty, other.ty
+            )))
         }
-        return Err(MonorubyErr::runtimeerr(format!(
-            "incompatible character encodings: {:?} and {:?}",
-            self.ty, other.ty
-        )));
     }
 
-    pub fn extend_from_slice(&mut self, slice: &[u8]) {
+    pub fn extend_from_slice_checked(&mut self, slice: &[u8]) -> Result<()> {
+        if self.ty == Encoding::Utf8 && std::str::from_utf8(slice).is_err() {
+            return Err(MonorubyErr::runtimeerr(format!(
+                "invalid byte sequence: {:?}",
+                slice
+            )));
+        }
         self.content.extend_from_slice(slice);
+        Ok(())
     }
 
     pub fn repeat(&self, len: usize) -> StringInner {
         let ty = self.ty;
-        StringInner::from_vec_with_encoding(self.content.repeat(len), ty)
+        let vec = self.content.repeat(len);
+        unsafe { StringInner::from(SmallVec::from_vec(vec), ty) }
     }
 
     pub fn string_cmp(&self, other: &Self) -> Ordering {
@@ -181,9 +185,9 @@ impl StringInner {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
         }
-        let ord = match std::str::from_utf8(self) {
-            Ok(s) => s.chars().next().unwrap() as u32,
-            Err(_) => self.as_bytes()[0] as u32,
+        let ord = match self.ty {
+            Encoding::Ascii8 => self.as_bytes()[0] as u32,
+            Encoding::Utf8 => self.check()?.chars().next().unwrap() as u32,
         };
         Ok(ord as u32)
     }

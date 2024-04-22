@@ -162,11 +162,11 @@ impl ArrayInner {
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),
-            1 => format!("[{}]", self[0].inspect(globals)),
+            1 => format!("[{}]", self[0].inspect(globals).unwrap()),
             _ => {
-                let mut s = format!("[{}", self[0].inspect(globals));
+                let mut s = format!("[{}", self[0].inspect(globals).unwrap());
                 for val in self[1..].iter() {
-                    s += &format!(", {}", val.inspect(globals));
+                    s += &format!(", {}", val.inspect(globals).unwrap());
                 }
                 s += "]";
                 s

@@ -160,7 +160,7 @@ impl RegexpInner {
             let mut res = given.to_string();
             let matched = Value::string_from_str(matched_str);
             let result = vm.invoke_block_once(globals, bh, &[matched])?;
-            let s = result.to_s(globals);
+            let s = result.to_s(globals)?;
             res.replace_range(start..end, &s);
             Ok((res, true))
         }
@@ -227,7 +227,7 @@ impl RegexpInner {
                 };
                 let matched = Value::string_from_str(matched_str);
                 let result = vm.invoke_block(globals, &data, &[matched])?;
-                let replace = result.to_s(globals);
+                let replace = result.to_s(globals)?;
                 range.push((start, end, replace));
             }
 

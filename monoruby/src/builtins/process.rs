@@ -83,7 +83,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             None => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
-                    arg1.to_s(globals)
+                    arg1.to_s(globals)?
                 )))
             }
         }
@@ -104,7 +104,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         _ => {
             return Err(MonorubyErr::argumenterr(format!(
                 "unexpected unit: {}",
-                lfp.arg(1).to_s(globals)
+                lfp.arg(1).to_s(globals)?
             )))
         }
     })
