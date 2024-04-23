@@ -294,7 +294,7 @@ impl std::fmt::Debug for RValue {
                         3 => format!("OBJECT({:?})", self.kind.object),
                         4 => format!("BIGNUM({:?})", self.kind.bignum),
                         5 => format!("FLOAT({:?})", self.kind.float),
-                        6 => format!("STRING({})", self.kind.string.to_string().unwrap()),
+                        6 => format!("STRING({})", self.kind.string.to_string()),
                         7 => format!("TIME({:?})", self.kind.time),
                         8 => format!("ARRAY({:?})", self.kind.array),
                         9 => format!("RANGE({:?})", self.kind.range),
@@ -394,7 +394,7 @@ impl RValue {
 
     fn object_tos(&self, globals: &Globals) -> String {
         if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
-            name.to_s(globals).unwrap()
+            name.to_s(globals)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
@@ -406,11 +406,11 @@ impl RValue {
 
     fn object_inspect(&self, globals: &Globals) -> String {
         if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
-            name.to_s(globals).unwrap()
+            name.to_s(globals)
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(globals).into_iter() {
-                s += &format!(" {id}={}", v.inspect(globals).unwrap());
+                s += &format!(" {id}={}", v.inspect(globals));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
@@ -437,11 +437,7 @@ impl RValue {
 
     fn enumerator_tos(&self, globals: &Globals) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!(
-            "#<Enumerator: {} {}>",
-            e.obj.to_s(globals).unwrap(),
-            e.method
-        )
+        format!("#<Enumerator: {} {}>", e.obj.to_s(globals), e.method)
     }
 
     fn proc_tos(&self) -> String {
@@ -456,9 +452,9 @@ impl RValue {
         let range = self.as_range();
         format!(
             "{}{}{}",
-            range.start.inspect(globals).unwrap(),
+            range.start.inspect(globals),
             if range.exclude_end() { "..." } else { ".." },
-            range.end.inspect(globals).unwrap(),
+            range.end.inspect(globals),
         )
     }
 }

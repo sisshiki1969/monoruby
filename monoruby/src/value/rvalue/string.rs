@@ -22,7 +22,7 @@ pub struct StringInner {
 }
 
 impl StringInner {
-    pub fn to_string(&self) -> Result<String> {
+    pub fn to_string(&self) -> String {
         match self.ty {
             Encoding::Ascii8 => {
                 let mut res = String::new();
@@ -33,17 +33,16 @@ impl StringInner {
                         res += &format!(r#"\x{:0>2X}"#, c);
                     }
                 }
-                Ok(res)
+                res
             }
             Encoding::Utf8 => match std::str::from_utf8(self) {
-                Ok(s) => Ok(s.to_string()),
+                Ok(s) => s.to_string(),
                 Err(err) => {
-                    eprintln!("invalid byte sequence: {:?}", err);
                     let s = String::from_utf8_lossy(self).to_string();
-                    //s
-                    Err(MonorubyErr::runtimeerr(format!(
-                        "invalid byte sequence: {s}",
-                    )))
+                    panic!("invalid byte sequence: {s} {err}");
+                    //Err(MonorubyErr::runtimeerr(format!(
+                    //    "invalid byte sequence: {s}",
+                    //)))
                 }
             },
         }
@@ -100,12 +99,16 @@ impl StringInner {
         unsafe { StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8) }
     }
 
+    pub fn bytes(slice: &[u8]) -> Self {
+        unsafe { StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8) }
+    }
+
     pub fn bytes_from_vec(vec: Vec<u8>) -> Self {
         unsafe { StringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8) }
     }
 
-    pub fn bytes(slice: &[u8]) -> Self {
-        unsafe { StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8) }
+    pub fn from_encoding(slice: &[u8], encoding: Encoding) -> Self {
+        unsafe { StringInner::from(SmallVec::from_slice(slice), encoding) }
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
@@ -119,6 +122,64 @@ impl StringInner {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.content
+    }
+
+    pub fn length(&self) -> usize {
+        match self.ty {
+            Encoding::Ascii8 => self.content.len(),
+            Encoding::Utf8 => self.check().unwrap().chars().count(),
+        }
+    }
+
+    ///
+    /// Convert `i` to the position of the char in the string with `len` chars.
+    ///
+    /// Return None if `i` is out of range.
+    ///
+    pub fn conv_index(&self, i: i64) -> Option<usize> {
+        let len = self.length();
+        if i >= 0 {
+            if i <= len as i64 {
+                Some(i as usize)
+            } else {
+                None
+            }
+        } else {
+            match len as i64 + i {
+                n if n < 0 => None,
+                n => Some(n as usize),
+            }
+        }
+    }
+
+    pub fn get_range(&self, index: usize, len: usize) -> std::ops::Range<usize> {
+        match self.ty {
+            Encoding::Ascii8 => {
+                if self.len() <= index {
+                    0..0
+                } else if self.len() <= index + len {
+                    index..self.len()
+                } else {
+                    index..index + len
+                }
+            }
+            Encoding::Utf8 => {
+                let s = self.check().unwrap();
+                let mut start = 0;
+                let mut end = 0;
+                for (char_i, (byte_i, _)) in s.char_indices().enumerate() {
+                    if char_i == index {
+                        start = byte_i;
+                        end = s.len();
+                    }
+                    if char_i == index + len {
+                        end = byte_i;
+                        break;
+                    }
+                }
+                start..end
+            }
+        }
     }
 
     pub fn extend(&mut self, other: &Self) -> Result<()> {

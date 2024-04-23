@@ -79,18 +79,18 @@ impl ComplexInner {
     pub fn to_s(&self, globals: &Globals) -> String {
         format!(
             "{}{}{}i",
-            self.re.get().to_s(globals).unwrap(),
+            self.re.get().to_s(globals),
             if self.im.is_negative() { "" } else { "+" },
-            self.im.get().to_s(globals).unwrap()
+            self.im.get().to_s(globals)
         )
     }
 
     pub fn inspect(&self, globals: &Globals) -> String {
         format!(
             "({}{}{}i)",
-            self.re.get().to_s(globals).unwrap(),
+            self.re.get().to_s(globals),
             if self.im.is_negative() { "" } else { "+" },
-            self.im.get().to_s(globals).unwrap()
+            self.im.get().to_s(globals)
         )
     }
 }

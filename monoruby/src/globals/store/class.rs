@@ -135,7 +135,7 @@ impl ClassId {
             Some(id) => Some(id),
             None => Some(IdentId::get_id_from_string(match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
-                Some(base) => format!("#<Class:{}>", base.to_s(globals).unwrap()),
+                Some(base) => format!("#<Class:{}>", base.to_s(globals)),
             })),
         }
     }

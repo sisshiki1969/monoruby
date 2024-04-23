@@ -115,7 +115,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
             let name = x.try_symbol().unwrap();
             let ivar_name = IdentId::add_ivar_prefix(name);
             let val = match globals.get_ivar(self_val, ivar_name) {
-                Some(v) => v.inspect(globals)?,
+                Some(v) => v.inspect(globals),
                 None => "nil".to_string(),
             };
             inspect += &format!(" {:?}={},", name, val);

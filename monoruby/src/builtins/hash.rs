@@ -382,7 +382,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
-                    lfp.arg(0).to_s(globals)?
+                    lfp.arg(0).to_s(globals)
                 )))
             }
         }

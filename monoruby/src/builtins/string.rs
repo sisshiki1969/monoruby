@@ -291,7 +291,7 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
         }
         _ => {}
     };
-    let s = val.to_s(globals)?;
+    let s = val.to_s(globals);
     Err(MonorubyErr::argumenterr(format!(
         "invalid value for Integer(): {}",
         s
@@ -303,7 +303,7 @@ fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
         RV::Fixnum(i) => Ok(i as f64),
         RV::Float(f) => Ok(f),
         _ => {
-            let s = val.to_s(globals)?;
+            let s = val.to_s(globals);
             Err(MonorubyErr::argumenterr(format!(
                 "invalid value for Float(): {}",
                 s
@@ -428,7 +428,7 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 let ch = coerce_to_char(val)?;
                 format!("{}", ch)
             }
-            's' => val.to_s(globals)?,
+            's' => val.to_s(globals),
             'd' | 'i' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
@@ -582,9 +582,10 @@ fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
 #[monoruby_builtin]
 fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.expect_str()?;
+    let lhs = self_.as_bytes();
+    let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
-        let index = match conv_index(i, lhs.chars().count()) {
+        let index = match lhs.conv_index(i) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
@@ -594,23 +595,26 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
-            let r = get_range(&lhs, index, len);
-            Ok(Value::string_from_str(&lhs[r]))
+            let r = lhs.get_range(index, len);
+            Ok(Value::string_from_inner(StringInner::from_encoding(
+                &lhs[r], enc,
+            )))
         } else {
-            let r = get_range(&lhs, index, 1);
+            let r = lhs.get_range(index, 1);
             if !r.is_empty() {
-                Ok(Value::string_from_str(&lhs[r]))
+                Ok(Value::string_from_inner(StringInner::from_encoding(
+                    &lhs[r], enc,
+                )))
             } else {
                 Ok(Value::nil())
             }
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
-        let len = lhs.chars().count();
         let (start, end) = (
             info.start.expect_integer()?,
             info.end.expect_integer()? - info.exclude_end() as i64,
         );
-        let (start, len) = match (conv_index(start, len), conv_index(end, len)) {
+        let (start, len) = match (lhs.conv_index(start), lhs.conv_index(end)) {
             (Some(start), Some(end)) => {
                 if start > end {
                     (start, 0)
@@ -620,9 +624,12 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
             _ => return Ok(Value::nil()),
         };
-        let r = get_range(&lhs, start, len);
-        Ok(Value::string_from_str(&lhs[r]))
+        let r = lhs.get_range(start, len);
+        Ok(Value::string_from_inner(StringInner::from_encoding(
+            &lhs[r], enc,
+        )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
+        let lhs = lhs.check()?;
         let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
@@ -1417,7 +1424,7 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let length = lfp.self_val().as_str().chars().count();
+    let length = lfp.self_val().as_bytes().length();
     Ok(Value::integer(length as i64))
 }
 

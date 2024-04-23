@@ -75,14 +75,14 @@ impl HashInner {
                     {
                         "{...}".to_string()
                     } else {
-                        k.inspect(globals).unwrap()
+                        k.inspect(globals)
                     };
                     let v_inspect = if let Some(h) = v.is_hash()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()
                     } else {
-                        v.inspect(globals).unwrap()
+                        v.inspect(globals)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

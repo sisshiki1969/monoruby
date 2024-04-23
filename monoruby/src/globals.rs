@@ -328,7 +328,7 @@ impl Globals {
         if let Some(s) = val.is_bytes() {
             self.stdout.write_all(s)
         } else {
-            let v = val.to_s(self).unwrap().into_bytes();
+            let v = val.to_s(self).into_bytes();
             self.stdout.write_all(&v)
         }
         .unwrap();
@@ -492,7 +492,7 @@ impl Globals {
                 }
                 None => match class_obj.is_singleton() {
                     None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.to_s(self).unwrap()),
+                    Some(base) => format!("#<Class:{}>", base.to_s(self)),
                 },
             }
         } else {
@@ -503,7 +503,7 @@ impl Globals {
     pub(crate) fn inspect2(&self, val: Value) -> String {
         match val.unpack() {
             RV::Object(rvalue) => rvalue.inspect2(self),
-            _ => val.inspect(self).unwrap(),
+            _ => val.inspect(self),
         }
     }
 
