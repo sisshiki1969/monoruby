@@ -94,7 +94,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
 fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut self_ = lfp.self_val();
+    let mut self_ = lfp.self_val().dup();
     lfp.arg(0).expect_string()?;
     self_.as_bytes_mut().extend(lfp.arg(0).as_bytes())?;
     Ok(self_)
