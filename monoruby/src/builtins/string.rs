@@ -63,6 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
+    globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
 
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
@@ -1828,6 +1829,55 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(res)
 }
 
+///
+/// ### String#unpack1
+///
+/// - unpack1(format) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack1.html]
+#[monoruby_builtin]
+fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let b = self_.as_bytes();
+
+    macro_rules! pack {
+        ($size: expr, $type: ident) => {
+            if b.len() < $size {
+                Ok(Value::nil())
+            } else {
+                let bytes = &b[0..$size];
+                let i = $type::from_ne_bytes(bytes.try_into().unwrap());
+                Ok(Value::integer(i as i64))
+            }
+        };
+    }
+
+    match lfp.arg(0).expect_str()? {
+        "q" => pack!(8, i64),
+        "Q" => {
+            if b.len() < 8 {
+                return Ok(Value::nil());
+            }
+            let bytes = &b[0..8];
+            let i = u64::from_ne_bytes(bytes.try_into().unwrap());
+            let v = match i64::try_from(i) {
+                Ok(i) => Value::integer(i),
+                Err(_) => Value::bigint(BigInt::from(i)),
+            };
+            Ok(v)
+        }
+        "l" => pack!(4, i32),
+        "L" => pack!(4, u32),
+        "s" => pack!(2, i16),
+        "S" => pack!(2, u16),
+        "c" => pack!(1, i8),
+        "C" => pack!(1, u8),
+        _ => Err(MonorubyErr::argumenterr(
+            "Currently, the template character is not supported.",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -2431,6 +2481,35 @@ mod test {
 
     #[test]
     fn encoding() {
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('q')"#);
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('Q')"#);
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('q')"#);
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('Q')"#);
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('q')"#);
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack1('Q')"#);
+
+        run_test(r#""\x00\x01\x02".unpack1('l')"#);
+        run_test(r#""\x00\x01\x02".unpack1('L')"#);
+        run_test(r#""\x00\x01\x02\x03".unpack1('l')"#);
+        run_test(r#""\x00\x01\x02\x03".unpack1('L')"#);
+        run_test(r#""\x00\x01\x02\x03\x04".unpack1('l')"#);
+        run_test(r#""\x00\x01\x02\x03\x04".unpack1('L')"#);
+
+        run_test(r#""\x00".unpack1('s')"#);
+        run_test(r#""\x00".unpack1('S')"#);
+        run_test(r#""\x00\x01".unpack1('s')"#);
+        run_test(r#""\x00\x01".unpack1('S')"#);
+        run_test(r#""\x00\x01\x02".unpack1('s')"#);
+        run_test(r#""\x00\x01\x02".unpack1('S')"#);
+
+        run_test(r#""\x00".unpack1('c')"#);
+        run_test(r#""\x00".unpack1('C')"#);
+        run_test(r#""\x00\x01".unpack1('c')"#);
+        run_test(r#""\x00\x01".unpack1('C')"#);
+    }
+
+    #[test]
+    fn unpack1g() {
         run_test(r#"'a'.b.encoding.inspect"#);
     }
 }
