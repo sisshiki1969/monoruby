@@ -54,7 +54,7 @@ pub union ObjKind {
     range: ManuallyDrop<RangeInner>,
     exception: ManuallyDrop<Box<ExceptionInner>>,
     proc: ManuallyDrop<ProcInner>,
-    hash: ManuallyDrop<HashInner>,
+    hash: ManuallyDrop<HashmapInner>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
@@ -202,17 +202,17 @@ impl ObjKind {
 
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashInner::new(map, None)),
+            hash: ManuallyDrop::new(HashmapInner::new(map, None)),
         }
     }
 
     fn hash_empty(default_proc: Option<Proc>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashInner::new(IndexMap::default(), default_proc)),
+            hash: ManuallyDrop::new(HashmapInner::new(IndexMap::default(), default_proc)),
         }
     }
 
-    fn hash_from_inner(inner: HashInner) -> Self {
+    fn hash_from_inner(inner: HashmapInner) -> Self {
         Self {
             hash: ManuallyDrop::new(inner),
         }
@@ -338,7 +338,7 @@ impl std::hash::Hash for RValue {
                 ObjKind::STRING => self.as_bytes().hash(state),
                 ObjKind::ARRAY => self.as_array().hash(state),
                 ObjKind::RANGE => self.as_range().hash(state),
-                ObjKind::HASH => self.as_hash().hash(state),
+                ObjKind::HASH => self.as_hashmap().hash(state),
                 ObjKind::COMPLEX => self.as_complex().hash(state),
                 _ => self.hash(state),
             }
@@ -360,7 +360,7 @@ impl RValue {
                 ObjKind::OBJECT => self.object_tos(globals),
                 ObjKind::RANGE => self.range_tos(globals),
                 ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.as_hash().to_s(globals),
+                ObjKind::HASH => self.as_hashmap().to_s(globals),
                 ObjKind::REGEXP => self.regexp_tos(),
                 ObjKind::IO => self.as_io().to_string(),
                 ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
@@ -393,7 +393,7 @@ impl RValue {
     pub(crate) fn inspect2(&self, globals: &Globals) -> String {
         match self.ty() {
             ObjKind::ARRAY => self.as_array().inspect2(globals),
-            ObjKind::HASH => self.as_hash().inspect2(globals),
+            ObjKind::HASH => self.as_hashmap().inspect2(globals),
             _ => self.inspect(globals),
         }
     }
@@ -493,7 +493,7 @@ impl RValue {
                     })
                 }
                 (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
-                (ObjKind::HASH, ObjKind::HASH) => self.as_hash() == other.as_hash(),
+                (ObjKind::HASH, ObjKind::HASH) => self.as_hashmap() == other.as_hashmap(),
                 //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
                 //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
                 (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
@@ -554,7 +554,7 @@ impl alloc::GC<RValue> for RValue {
                 }
                 ObjKind::PROC => {}
                 ObjKind::HASH => {
-                    for (k, v) in self.as_hash().iter() {
+                    for (k, v) in self.as_hashmap().iter() {
                         k.mark(alloc);
                         v.mark(alloc);
                     }
@@ -751,7 +751,7 @@ impl RValue {
                     }
                     ObjKind::HASH => {
                         let mut map = IndexMap::default();
-                        let hash = self.as_hash();
+                        let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
                             map.insert(HashKey(k.deep_copy()), v.deep_copy());
                         }
@@ -994,7 +994,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash_from_inner(inner: HashInner) -> Self {
+    pub(super) fn new_hash_from_inner(inner: HashmapInner) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash_from_inner(inner),
@@ -1162,8 +1162,8 @@ impl RValue {
                 }
                 (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
                 (ObjKind::HASH, ObjKind::HASH) => {
-                    let lhs = lhs.as_hash();
-                    let rhs = rhs.as_hash();
+                    let lhs = lhs.as_hashmap();
+                    let rhs = rhs.as_hashmap();
                     lhs.len() == rhs.len()
                         && lhs
                             .iter()
@@ -1245,11 +1245,11 @@ impl RValue {
         unsafe { &self.kind.exception }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInner {
+    pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         unsafe { &self.kind.hash }
     }
 
-    pub(super) fn as_hash_mut(&mut self) -> &mut HashInner {
+    pub(super) fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
         unsafe { &mut self.kind.hash }
     }
 

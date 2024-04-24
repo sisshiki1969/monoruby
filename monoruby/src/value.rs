@@ -347,7 +347,7 @@ impl Value {
         RValue::new_hash(map).pack()
     }
 
-    pub fn hash_from_inner(inner: HashInner) -> Self {
+    pub fn hash_from_inner(inner: HashmapInner) -> Self {
         RValue::new_hash_from_inner(inner).pack()
     }
 
@@ -738,22 +738,22 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_hash(&self) -> Option<&HashInner> {
+    pub(crate) fn is_hash(&self) -> Option<&HashmapInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::HASH => Some(rv.as_hash()),
+            ObjKind::HASH => Some(rv.as_hashmap()),
             _ => None,
         }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInner {
+    pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         assert_eq!(ObjKind::HASH, self.rvalue().ty());
-        self.rvalue().as_hash()
+        self.rvalue().as_hashmap()
     }
 
-    pub(crate) fn as_hash_mut(&mut self) -> &mut HashInner {
+    pub(crate) fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjKind::HASH, self.rvalue().ty());
-        self.rvalue_mut().as_hash_mut()
+        self.rvalue_mut().as_hashmap_mut()
     }
 
     pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
@@ -936,7 +936,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_hash(&self) -> Result<&HashInner> {
+    pub(crate) fn expect_hash(&self) -> Result<&HashmapInner> {
         if let Some(h) = self.is_hash() {
             Ok(h)
         } else {

@@ -1,9 +1,7 @@
-def f(x)
-  x
+h = Hash.new do |hash, key|
+  hash[key] = "foo"
+  "bar"
 end
-  
-j = 42
-30.times {|i|
-    f = ->(x) { x + j }
-    puts f.call(i)
-}
+
+puts h[:a] # => "bar"
+puts h[:a] # => "foo"

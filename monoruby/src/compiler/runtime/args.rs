@@ -537,7 +537,7 @@ fn hash_splat_and_kw_rest(
             .iter()
             .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
         {
-            let mut h = h.as_hash().clone();
+            let mut h = h.as_hashmap().clone();
             for name in callee.kw_names().iter() {
                 let sym = Value::symbol(*name);
                 h.remove(sym);
