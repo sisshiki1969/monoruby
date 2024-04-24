@@ -74,19 +74,21 @@ impl Globals {
         path: &std::path::Path,
     ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
         let mut file_body = String::new();
-        let load_path = if let Some(b"so") = path.extension().map(|s| s.as_bytes()) {
+        let (load_path, so_flag) = if let Some(b"so") = path.extension().map(|s| s.as_bytes()) {
             let mut lib = dirs::home_dir()
                 .unwrap()
                 .join(".monoruby")
                 .join(path.file_name().unwrap());
             lib.set_extension("rb");
-            lib
+            (lib, true)
         } else {
-            path.to_path_buf()
+            (path.to_path_buf(), false)
         };
         let mut file = std::fs::OpenOptions::new().read(true).open(&load_path)?;
         file.read_to_string(&mut file_body)?;
-        eprintln!(".so loaded: {:?}", load_path);
+        if so_flag {
+            eprintln!(".so loaded: {:?}", load_path);
+        }
         self.loaded_canonicalized_files.insert(path.to_path_buf());
         Ok(Some((file_body, load_path)))
     }
