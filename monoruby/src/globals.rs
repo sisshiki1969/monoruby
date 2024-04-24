@@ -170,7 +170,9 @@ impl Globals {
             lib_directories: vec![
                 "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"
                     .to_string(),
-            ],
+                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"
+                    .to_string(),
+                ],
             gem_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
@@ -221,19 +223,15 @@ impl Globals {
             .unwrap()
             .join(".monoruby")
             .join("library_path");
-        let code = std::fs::read_to_string(&load_path).unwrap();
-        let nodes = Parser::parse_program(code, load_path).unwrap().node;
-
-        let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_load_path(lib.iter().map(|v| v.as_str().trim().to_string()));
+        let path_list = std::fs::read_to_string(&load_path).unwrap();
+        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
+        globals.extend_load_path(list.iter().cloned());
 
         // load gem library path
         let load_path = dirs::home_dir().unwrap().join(".monoruby").join("gem_path");
-        let code = std::fs::read_to_string(&load_path).unwrap();
-        let nodes = Parser::parse_program(code, load_path).unwrap().node;
-
-        let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_gem_path(lib.iter().map(|v| v.as_str().trim().to_string()));
+        let path_list = std::fs::read_to_string(&load_path).unwrap();
+        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
+        globals.extend_gem_path(list.iter().cloned());
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -365,7 +363,7 @@ impl Globals {
     }
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.lib_directories.extend(iter)
+        self.lib_directories.extend(iter);
     }
 
     pub fn extend_gem_path(&mut self, iter: impl Iterator<Item = String>) {

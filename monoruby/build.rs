@@ -10,7 +10,7 @@ fn main() {
         _ => fs::create_dir(&lib_path).unwrap(),
     }
 
-    match Command::new("ruby").args(["-e", "p($:)"]).output() {
+    match Command::new("ruby").args(["-e", "puts($:)"]).output() {
         Ok(output) => {
             let dest_path = lib_path.clone().join("library_path");
             let load_path = std::str::from_utf8(&output.stdout).unwrap();
@@ -24,13 +24,13 @@ fn main() {
     match Command::new("gem").args(["environment", "paths"]).output() {
         Ok(output) => {
             let dest_path = lib_path.clone().join("gem_path");
-            let load_path = std::str::from_utf8(&output.stdout)
+            let path_list: Vec<_> = std::str::from_utf8(&output.stdout)
                 .unwrap()
                 .split(':')
-                .map(|s| format!(r#""{}""#, s))
-                .collect::<Vec<_>>()
-                .join(",");
-            fs::write(dest_path, &format!("[{}]", load_path)).unwrap();
+                .map(|s| s.to_string())
+                .collect();
+            let list = path_list.join("\n");
+            fs::write(dest_path, list).unwrap();
         }
         Err(_) => {
             println!("failed to read ruby gem path");

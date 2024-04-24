@@ -80,15 +80,14 @@ impl Globals {
                 .join(".monoruby")
                 .join(path.file_name().unwrap());
             lib.set_extension("rb");
-            eprintln!("load .so: {:?}", lib);
             lib
         } else {
             path.to_path_buf()
         };
         let mut file = std::fs::OpenOptions::new().read(true).open(&load_path)?;
         file.read_to_string(&mut file_body)?;
+        eprintln!(".so loaded: {:?}", load_path);
         self.loaded_canonicalized_files.insert(path.to_path_buf());
-        //eprintln!("{}", &file_body);
         Ok(Some((file_body, load_path)))
     }
 }
