@@ -68,10 +68,14 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
 #[monoruby_builtin]
-fn new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let map = IndexMap::default();
-    let obj = Value::hash_with_class(map, class);
+    let default_proc = if let Some(bh) = lfp.block() {
+        Some(vm.generate_proc(globals, bh)?)
+    } else {
+        None
+    };
+    let obj = Value::empty_hash_with_class(class, default_proc);
     Ok(obj)
 }
 

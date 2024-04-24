@@ -351,8 +351,8 @@ impl Value {
         RValue::new_hash_from_inner(inner).pack()
     }
 
-    pub fn hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
-        RValue::new_hash_with_class(map, class_id).pack()
+    pub fn empty_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
+        RValue::new_hash_with_class(class_id, default_proc).pack()
     }
 
     pub fn regexp(regexp: RegexpInner) -> Self {

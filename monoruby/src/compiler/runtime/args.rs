@@ -196,7 +196,7 @@ fn positional(
             .iter()
             .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
         {
-            for (k, v) in v.expect_hash()? {
+            for (k, v) in v.expect_hash()?.iter() {
                 h.insert(HashKey(k), v);
             }
         }
@@ -542,7 +542,7 @@ fn hash_splat_and_kw_rest(
                 let sym = Value::symbol(*name);
                 h.remove(sym);
             }
-            for (k, v) in h {
+            for (k, v) in h.iter() {
                 kw_rest.insert(HashKey(k), v);
             }
         }

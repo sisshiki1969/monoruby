@@ -202,7 +202,13 @@ impl ObjKind {
 
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashInner::new(map)),
+            hash: ManuallyDrop::new(HashInner::new(map, None)),
+        }
+    }
+
+    fn hash_empty(default_proc: Option<Proc>) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashInner::new(IndexMap::default(), default_proc)),
         }
     }
 
@@ -996,10 +1002,10 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
+    pub(super) fn new_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
         RValue {
             header: Header::new(class_id, ObjKind::HASH),
-            kind: ObjKind::hash(map),
+            kind: ObjKind::hash_empty(default_proc),
             var_table: None,
         }
     }
