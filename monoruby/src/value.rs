@@ -738,10 +738,10 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_hash(&self) -> Option<&HashmapInner> {
+    pub(crate) fn is_hash(self) -> Option<Hashmap> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::HASH => Some(rv.as_hashmap()),
+            ObjKind::HASH => Some(Hashmap::new(self)),
             _ => None,
         }
     }
@@ -936,11 +936,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_hash(&self) -> Result<&HashmapInner> {
+    pub(crate) fn expect_hash(self) -> Result<Hashmap> {
         if let Some(h) = self.is_hash() {
             Ok(h)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, HASH_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(self, HASH_CLASS))
         }
     }
 

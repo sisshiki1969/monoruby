@@ -30,6 +30,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
+    globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
 
     let mut env_map = IndexMap::default();
@@ -318,16 +319,38 @@ fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn merge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
-    let self_val = lfp.self_val();
-    let mut inner = self_val.as_hashmap().clone();
+    let mut h = lfp.self_val().dup().expect_hash()?;
     for arg in lfp.arg(0).as_array().iter() {
         let other = arg.expect_hash()?;
         for (k, v) in other.iter() {
-            inner.insert(k, v);
+            h.insert(k, v);
         }
     }
 
-    Ok(Value::hash_from_inner(inner))
+    Ok(h.into())
+}
+
+///
+/// ### Hash#merge!
+///
+/// - merge!(*others) -> self
+/// - [NOT SUPPORTED]merge!(*others) {|key, self_val, other_val| ... } -> self
+/// - update(*others) -> self
+/// - [NOT SUPPORTED]update(*others) {|key, self_val, other_val| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge=21.html]
+#[monoruby_builtin]
+fn merge_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    lfp.expect_no_block()?;
+    let mut h = lfp.self_val().expect_hash()?;
+    for arg in lfp.arg(0).as_array().iter() {
+        let other = arg.expect_hash()?;
+        for (k, v) in other.iter() {
+            h.insert(k, v);
+        }
+    }
+
+    Ok(lfp.self_val())
 }
 
 ///
@@ -518,6 +541,20 @@ mod test {
         run_test_with_prelude(
             r##"
         [h1.merge, h1.merge(h2), h1.merge(h2, h3)]
+        "##,
+            r#"
+            h1 = { "a" => 100, "b" => 200 }
+            h2 = { "b" => 246, "c" => 300 }
+            h3 = { "b" => 357, "d" => 400 }
+            "#,
+        );
+    }
+
+    #[test]
+    fn merge_() {
+        run_test_with_prelude(
+            r##"
+        [h1.merge!, h1.update(h2), h1.merge!(h2, h3)]
         "##,
             r#"
             h1 = { "a" => 100, "b" => 200 }
