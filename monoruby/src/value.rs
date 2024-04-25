@@ -467,7 +467,7 @@ impl Value {
             RV::Nil => "nil".to_string(),
             RV::Complex(_) => self.as_complex().inspect(globals),
             RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => format!(r#""{}""#, s.to_string().escape_debug().to_string()),
+            RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.inspect(globals),
             _ => self.to_s(globals),
         };
@@ -899,7 +899,7 @@ impl Value {
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
-        self.expect_bytes()?.check()
+        self.expect_bytes()?.check_utf8()
     }
 
     fn expect_bytes(&self) -> Result<&StringInner> {

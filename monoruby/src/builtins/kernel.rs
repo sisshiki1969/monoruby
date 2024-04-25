@@ -292,7 +292,7 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
         RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
-        RV::String(b) => match b.check()?.parse::<i64>() {
+        RV::String(b) => match b.check_utf8()?.parse::<i64>() {
             Ok(num) => return Ok(Value::integer(num)),
             Err(_) => {
                 let s = arg0.to_s(globals);

@@ -2,6 +2,8 @@ use super::*;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 
+mod printable;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum Encoding {
@@ -47,6 +49,105 @@ impl StringInner {
             },
         }
     }
+
+    pub fn dump(&self) -> String {
+        match self.ty {
+            Encoding::Ascii8 => {
+                let mut res = String::with_capacity(self.len());
+                for c in self.as_bytes() {
+                    ascii_escape(&mut res, *c);
+                }
+                res
+            }
+            Encoding::Utf8 => match std::str::from_utf8(self) {
+                Ok(s) => {
+                    let mut res = String::with_capacity(self.len());
+                    for c in s.chars() {
+                        utf8_escape(&mut res, c);
+                    }
+                    res
+                }
+                Err(err) => {
+                    let s = String::from_utf8_lossy(self).to_string();
+                    panic!("invalid byte sequence: {s} {err}");
+                    //Err(MonorubyErr::runtimeerr(format!(
+                    //    "invalid byte sequence: {s}",
+                    //)))
+                }
+            },
+        }
+    }
+
+    pub fn inspect(&self) -> String {
+        match self.ty {
+            Encoding::Ascii8 => {
+                let mut res = String::with_capacity(self.len());
+                for c in self.as_bytes() {
+                    ascii_escape(&mut res, *c);
+                }
+                res
+            }
+            Encoding::Utf8 => match std::str::from_utf8(self) {
+                Ok(s) => {
+                    let mut res = String::with_capacity(self.len());
+                    for c in s.chars() {
+                        utf8_inspect(&mut res, c);
+                    }
+                    res
+                }
+                Err(err) => {
+                    let s = String::from_utf8_lossy(self).to_string();
+                    panic!("invalid byte sequence: {s} {err}");
+                    //Err(MonorubyErr::runtimeerr(format!(
+                    //    "invalid byte sequence: {s}",
+                    //)))
+                }
+            },
+        }
+    }
+}
+
+fn utf8_escape(s: &mut String, ch: char) {
+    if ch as u32 <= 0xff {
+        ascii_escape(s, ch as u8);
+    } else {
+        s.push_str(&format!("\\u{:0>4X}", ch as u32));
+    }
+}
+
+fn utf8_inspect(s: &mut String, ch: char) {
+    if ch as u32 <= 0xff {
+        ascii_escape(s, ch as u8);
+    } else if printable::is_printable(ch) {
+        s.push(ch);
+    } else {
+        s.push_str(&format!("\\u{:0>4X}", ch as u32));
+    }
+}
+
+fn ascii_escape(s: &mut String, ch: u8) {
+    let str = match ch {
+        b'"' => "\\\"",
+        b'\\' => "\\\\",
+        c if c.is_ascii_graphic() => {
+            s.push(c as char);
+            return;
+        }
+        b' ' => " ",
+        b'\t' => "\\t",
+        b'\x0b' => "\\v",
+        b'\n' => "\\n",
+        b'\r' => "\\r",
+        b'\x0c' => "\\f",
+        b'\x08' => "\\b",
+        b'\x07' => "\\a",
+        b'\x1b' => "\\e",
+        _ => {
+            s.push_str(&format!("\\x{:0>2X}", ch));
+            return;
+        }
+    };
+    s.push_str(str);
 }
 
 impl std::ops::Deref for StringInner {
@@ -81,7 +182,7 @@ impl StringInner {
         self.ty = ty;
     }
 
-    pub fn check(&self) -> Result<&str> {
+    pub fn check_utf8(&self) -> Result<&str> {
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
             Err(_) => Err(MonorubyErr::runtimeerr(format!(
@@ -127,7 +228,7 @@ impl StringInner {
     pub fn length(&self) -> usize {
         match self.ty {
             Encoding::Ascii8 => self.content.len(),
-            Encoding::Utf8 => self.check().unwrap().chars().count(),
+            Encoding::Utf8 => self.check_utf8().unwrap().chars().count(),
         }
     }
 
@@ -164,7 +265,7 @@ impl StringInner {
                 }
             }
             Encoding::Utf8 => {
-                let s = self.check().unwrap();
+                let s = self.check_utf8().unwrap();
                 let mut start = 0;
                 let mut end = 0;
                 for (char_i, (byte_i, _)) in s.char_indices().enumerate() {
@@ -188,7 +289,7 @@ impl StringInner {
             self.ty = other.ty;
             return Ok(());
         }
-        if self.ty == other.ty {
+        if self.ty == other.ty || other.is_ascii() {
             self.content.extend_from_slice(other);
             Ok(())
         } else {
@@ -248,7 +349,7 @@ impl StringInner {
         }
         let ord = match self.ty {
             Encoding::Ascii8 => self.as_bytes()[0] as u32,
-            Encoding::Utf8 => self.check()?.chars().next().unwrap() as u32,
+            Encoding::Utf8 => self.check_utf8()?.chars().next().unwrap() as u32,
         };
         Ok(ord as u32)
     }

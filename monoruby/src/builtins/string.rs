@@ -64,6 +64,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
+    globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
 
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
@@ -252,7 +253,7 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         } else {
             bytes.extend_from_slice_checked(&ch.to_ne_bytes())?;
         }
-        bytes.check()?;
+        bytes.check_utf8()?;
     } else {
         return Err(MonorubyErr::no_implicit_conversion(
             lfp.arg(0),
@@ -283,7 +284,7 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
         RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
         RV::String(s) => {
-            let s = s.check()?;
+            let s = s.check_utf8()?;
             if let Ok(i) = s.parse::<i64>() {
                 return Ok(Integer::Fixnum(i));
             } else if let Ok(b) = s.parse::<BigInt>() {
@@ -333,7 +334,7 @@ fn coerce_to_char(val: Value) -> Result<char> {
             Err(MonorubyErr::argumenterr("invalid character"))
         }
         RV::String(s) => {
-            let s = s.check()?;
+            let s = s.check_utf8()?;
             if s.chars().count() != 1 {
                 Err(MonorubyErr::argumenterr("%c requires a character"))
             } else {
@@ -630,7 +631,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let lhs = lhs.check()?;
+        let lhs = lhs.check_utf8()?;
         let nth = if lfp.try_arg(1).is_none() {
             0
         } else {
@@ -1123,7 +1124,6 @@ fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
 }
 
-//const STRIP_START: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b'];
 const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
 
 ///
@@ -1878,6 +1878,20 @@ fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
+///
+/// ### String#dump
+///
+/// - dump -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/dump.html]
+#[monoruby_builtin]
+fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::string(format!(
+        r#""{}""#,
+        lfp.self_val().as_bytes().dump()
+    )))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -2511,5 +2525,10 @@ mod test {
     #[test]
     fn unpack1g() {
         run_test(r#"'a'.b.encoding.inspect"#);
+    }
+
+    #[test]
+    fn dump() {
+        run_test(r#""abc\r\n\f\x90'\b10\\\"魁\u1234".dump"#);
     }
 }

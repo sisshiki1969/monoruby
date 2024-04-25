@@ -1222,7 +1222,7 @@ impl RValue {
     }
 
     pub(super) fn as_str(&self) -> &str {
-        unsafe { self.kind.string.check().unwrap() }
+        unsafe { self.kind.string.check_utf8().unwrap() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
