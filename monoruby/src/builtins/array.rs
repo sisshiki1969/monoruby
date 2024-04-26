@@ -57,6 +57,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
@@ -809,6 +810,33 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     }
     Ok(max)
+}
+
+///
+/// ### Enumerable#partition
+///
+/// - [NOT SUPPORTED] partition -> Enumerator
+/// - partition {|item| ... } -> [[object], [object]]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
+#[monoruby_builtin]
+fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let aref = lfp.self_val().expect_array()?;
+    let mut res_true = vec![];
+    let mut res_false = vec![];
+    let p = vm.get_block_data(globals, bh)?;
+    for elem in aref.iter().cloned() {
+        if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
+            res_true.push(elem);
+        } else {
+            res_false.push(elem);
+        };
+    }
+    Ok(Value::array2(
+        Value::array_from_vec(res_true),
+        Value::array_from_vec(res_false),
+    ))
 }
 
 ///
@@ -1808,6 +1836,11 @@ mod test {
         );
         run_test_error("[1,:hh].max");
         run_test_error("[Float::NAN, Float::NAN].max");
+    }
+
+    #[test]
+    fn partition() {
+        run_test(r##"[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].partition {|i| i % 3 == 0 }"##);
     }
 
     #[test]
