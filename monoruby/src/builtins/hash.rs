@@ -7,18 +7,16 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
     globals.define_builtin_class_func(HASH_CLASS, "new", new, 0);
-    globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
-    globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
-    globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
-    globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
-    globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
-    globals.define_builtin_func(HASH_CLASS, "values", values, 0);
+    globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
+    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
+    globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_funcs(
         HASH_CLASS,
         "include?",
@@ -27,11 +25,15 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
     globals.define_builtin_funcs(HASH_CLASS, "inspect", &["to_s"], inspect, 0);
-    globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "invert", invert, 0);
+    globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
     globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
-    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(HASH_CLASS, "reject", reject, 0);
+    globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
+    globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
+    globals.define_builtin_func(HASH_CLASS, "values", values, 0);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -268,6 +270,26 @@ fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let s = lfp.self_val().as_hashmap().to_s(globals);
     Ok(Value::string(s))
+}
+
+///
+/// ### Hash#reject
+///
+/// - reject {|key, value| ... } -> Hash
+/// - [NOT SUPPORTED] reject -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/reject.html]
+#[monoruby_builtin]
+fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let mut h = lfp.self_val().dup().expect_hash()?;
+    let p = vm.get_block_data(globals, bh)?;
+    for (k, v) in lfp.self_val().expect_hash()?.iter() {
+        if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
+            h.remove(k);
+        }
+    }
+    Ok(h.into())
 }
 
 ///
@@ -532,6 +554,17 @@ mod test {
         run_test(
             r##"
         {5 => "5", 1 => "1", 2 => "2", 3 => "3"}.sort
+        "##,
+        );
+    }
+
+    #[test]
+    fn reject() {
+        run_test(
+            r##"
+        h = { 2 =>"8", 4 =>"6", 6 =>"4", 8 =>"2" }
+        h2 = h.reject{|key, value| key.to_i < value.to_i} #=> {6=>"4", 8=>"2"}
+        [h, h2]
         "##,
         );
     }
