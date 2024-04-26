@@ -9,13 +9,13 @@ rbenv local 3.3.0
 #echo
 
 ruby -v --yjit
-ruby --yjit ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
-ruby --yjit ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
+ruby --yjit ../optcarrot/bin/optcarrot $1 -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes > ruby.csv
+#ruby --yjit ../optcarrot/bin/optcarrot -b -f 3000 --opt ../optcarrot/examples/Lan_Master.nes
 echo
 
 rbenv local truffleruby-24.0.0
 ruby -v
-ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
+ruby ../optcarrot/bin/optcarrot $1 -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes > truffle.csv
 #ruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
 echo
 rbenv local 3.3.0
@@ -28,5 +28,10 @@ rbenv local 3.3.0
 
 monoruby -v
 echo "with jit"
-monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
-RUST_BACKTRACE=full monoruby ../optcarrot/bin/optcarrot -b --opt ../optcarrot/examples/Lan_Master.nes
+monoruby ../optcarrot/bin/optcarrot $1 -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes > monoruby.csv
+#monoruby ../optcarrot/bin/optcarrot -b -f 3000 --opt ../optcarrot/examples/Lan_Master.nes
+
+ruby calc.rb
+
+rm ruby.csv monoruby.csv truffle.csv
+
