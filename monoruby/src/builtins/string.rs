@@ -1,4 +1,5 @@
-use num::{BigInt, Num};
+use num::ToPrimitive;
+use num::{BigInt, Zero};
 
 use super::*;
 
@@ -41,7 +42,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "gsub!", gsub_, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
-    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
@@ -50,7 +50,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
+    globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
@@ -1579,6 +1581,20 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 ///
+/// ### String#to_f
+///
+/// - to_f -> Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_f.html]
+#[monoruby_builtin]
+fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str()?;
+    let f = parse_f64(s);
+    Ok(Value::float(f))
+}
+
+///
 /// ### String#to_i
 ///
 /// - to_i(base = 10) -> Integer
@@ -1598,14 +1614,169 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         10
     };
-    let num = if let Ok(num) = i64::from_str_radix(&s, radix) {
-        Value::integer(num)
-    } else if let Ok(b) = BigInt::from_str_radix(&s, radix) {
-        Value::bigint(b)
+    if let Some((i, negative)) = parse_i64(s, radix) {
+        if negative {
+            if let Some(i) = i.checked_neg() {
+                Ok(Value::integer(i))
+            } else {
+                Ok(Value::bigint(-BigInt::from(i)))
+            }
+        } else {
+            Ok(Value::integer(i))
+        }
     } else {
-        Value::i32(0)
-    };
-    Ok(num)
+        Ok(Value::bigint(parse_bigint(s, radix)))
+    }
+}
+
+fn parse_i64(s: &str, radix: u32) -> Option<(i64, bool)> {
+    let mut i = 0i64;
+    let mut sign = None;
+    let mut allow_underscore = false;
+    let iter = s.chars().skip_while(|c| c.is_ascii_whitespace());
+    for c in iter {
+        if allow_underscore && c == '_' {
+            allow_underscore = false;
+            continue;
+        }
+
+        if sign.is_none() {
+            match c {
+                '-' => {
+                    sign = Some(-1);
+                    allow_underscore = false;
+                    continue;
+                }
+                '+' => {
+                    sign = Some(1);
+                    allow_underscore = false;
+                    continue;
+                }
+                _ => {
+                    sign = Some(1);
+                }
+            };
+        }
+        allow_underscore = true;
+        let d = match c.to_digit(radix) {
+            Some(d) => d,
+            None => break,
+        };
+        i = i.checked_mul(radix as i64)?.checked_add(d as i64)?;
+    }
+    Some((i, sign.unwrap_or(1) == -1))
+}
+
+fn parse_f64(s: &str) -> f64 {
+    let mut f = BigInt::zero();
+    let mut e = 0;
+    let mut positive = true;
+    let mut iter = s.chars().skip_while(|c| c.is_ascii_whitespace()).peekable();
+
+    let c = iter.peek();
+    if c == Some(&'+') {
+        iter.next().unwrap();
+    } else if c == Some(&'-') {
+        iter.next().unwrap();
+        positive = false;
+    }
+
+    while let Some(c) = iter.peek()
+        && c.is_ascii_digit()
+    {
+        let c = iter.next().unwrap();
+        f = f * 10 + (c as u32 - '0' as u32);
+    }
+
+    if iter.peek() == Some(&'.') {
+        iter.next();
+        while let Some(c) = iter.peek()
+            && c.is_ascii_digit()
+        {
+            let c = iter.next().unwrap();
+            f = f * 10 + (c as u32 - '0' as u32);
+            e -= 1;
+        }
+    }
+
+    let peek = iter.peek();
+    if peek == Some(&'e') || peek == Some(&'E') {
+        let mut sign = 1i32;
+        let mut i = 0;
+        iter.next().unwrap();
+        let c = iter.peek();
+        if c == Some(&'+') {
+            iter.next().unwrap();
+        } else if c == Some(&'-') {
+            iter.next().unwrap();
+            sign = -1;
+        }
+        while let Some(c) = iter.peek()
+            && c.is_ascii_digit()
+        {
+            let c = iter.next().unwrap();
+            i = i * 10 + (c as u32 - '0' as u32);
+        }
+        e += (i as i32) * sign;
+    }
+
+    while e > 0 {
+        f *= 10;
+        e -= 1;
+    }
+
+    let mut f = f.to_f64().unwrap();
+    if e < 0 {
+        f /= 10.0f64.powi(-e);
+    }
+    if positive {
+        f
+    } else {
+        -f
+    }
+}
+
+fn parse_bigint(s: &str, radix: u32) -> BigInt {
+    let mut i = BigInt::zero();
+    let mut sign = None;
+    let mut allow_underscore = false;
+    let iter = s.chars().skip_while(|c| c.is_ascii_whitespace());
+    for c in iter {
+        if allow_underscore && c == '_' {
+            allow_underscore = false;
+            continue;
+        }
+
+        if sign.is_none() {
+            match c {
+                '-' => {
+                    sign = Some(-1);
+                    allow_underscore = false;
+                    continue;
+                }
+                '+' => {
+                    sign = Some(1);
+                    allow_underscore = false;
+                    continue;
+                }
+                _ => {
+                    sign = Some(1);
+                }
+            };
+        }
+        allow_underscore = true;
+        let d = match c.to_digit(radix) {
+            Some(d) => d,
+            None => break,
+        };
+        i = i * radix + d;
+    }
+
+    if sign == Some(-1) {
+        -i
+    } else {
+        i
+    }
 }
 
 ///
@@ -2391,11 +2562,29 @@ mod test {
     #[test]
     fn to_i() {
         run_test(r"'42581'.to_i");
+        run_test(r"'-42581'.to_i");
+        run_test(r"'_-42581'.to_i");
+        run_test(r"'-_42581'.to_i");
+        run_test(r"'-42_581'.to_i");
+        run_test(r"'-42_58__1'.to_i");
         run_test(r"'4a5f1'.to_i(16)");
         run_test(r"'4258159248352010254587519982001542568633842205196875555'.to_i");
         run_test(r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)");
+        run_test(r"'42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
+        run_test(r"'42581592483edr__cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
+        run_test(r"'-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
+        run_test(r"'_-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
+    }
+    #[test]
+    fn to_f() {
+        run_test(r"'4285'.to_f");
+        run_test(r"'-4285'.to_f");
+        run_test(r"'428.55'.to_f");
+        run_test(r"'-428.55'.to_f");
+        run_test(r"'-428.55e12'.to_f");
+        run_test(r"'-428.55e-12'.to_f");
     }
 
     #[test]

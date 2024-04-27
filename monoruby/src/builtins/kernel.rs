@@ -395,10 +395,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
         }
     } else {
         let input: Vec<&str> = input.split(' ').collect();
-        let arg = input[1..].concat();
-        if !arg.is_empty() {
-            args.push(arg)
-        };
+        input[1..].iter().for_each(|s| args.push(s.to_string()));
         input[0]
     }
     .to_string();
