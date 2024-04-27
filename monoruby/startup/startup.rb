@@ -1,8 +1,3 @@
-class RbConfig
-  def self.ruby
-    @ruby ||= `ruby -e 'print RbConfig.ruby'`
-  end
-end
 
 class Process
   CLOCK_REALTIME = 0
@@ -17,6 +12,12 @@ class Process
   CLOCK_BOOTTIME_ALARM = 9
   class Tms
     attr_accessor :utime, :stime, :cutime, :cstime
+  end
+end
+
+class Integer
+  def zero?
+    self == 0
   end
 end
 

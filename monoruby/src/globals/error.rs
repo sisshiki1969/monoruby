@@ -506,7 +506,7 @@ impl NoMethodErrKind {
         match self {
             NoMethodErrKind::MethodNotFound { name, obj } => format!(
                 "undefined method `{name}' for {}:{}",
-                obj.to_s(globals),
+                obj.inspect(globals),
                 obj.get_real_class_name(globals)
             ),
             NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
@@ -515,7 +515,7 @@ impl NoMethodErrKind {
             ),
             NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
                 "private method `{name}' called for {}:{}",
-                obj.to_s(globals),
+                obj.inspect(globals),
                 obj.get_real_class_name(globals)
             ),
         }
@@ -581,7 +581,7 @@ impl TypeErrKind {
                     val.get_real_class_name(globals)
                 )
             }
-            TypeErrKind::Other => "type error".to_string(),
+            TypeErrKind::Other => " type error".to_string(),
         }
     }
 }

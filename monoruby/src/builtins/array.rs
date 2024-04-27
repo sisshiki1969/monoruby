@@ -57,9 +57,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "sort_by", sort_by, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
@@ -811,6 +813,33 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Enumerable#partition
+///
+/// - [NOT SUPPORTED] partition -> Enumerator
+/// - partition {|item| ... } -> [[object], [object]]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
+#[monoruby_builtin]
+fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let aref = lfp.self_val().expect_array()?;
+    let mut res_true = vec![];
+    let mut res_false = vec![];
+    let p = vm.get_block_data(globals, bh)?;
+    for elem in aref.iter().cloned() {
+        if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
+            res_true.push(elem);
+        } else {
+            res_false.push(elem);
+        };
+    }
+    Ok(Value::array2(
+        Value::array_from_vec(res_true),
+        Value::array_from_vec(res_false),
+    ))
+}
+
+///
 /// ### Array#sort!
 ///
 /// - sort! -> self
@@ -862,6 +891,32 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         res
     };
     let mut ary = Array::new(lfp.self_val());
+    vm.sort_by(globals, &mut ary, f)?;
+    Ok(ary.into())
+}
+
+///
+/// ### Enumerable#sort_by
+///
+/// - sort_by {|item| ... } -> [object]
+/// - [NOT SUPPORTED] sort_by -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/sort_by.html]
+#[monoruby_builtin]
+fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let data = vm.get_block_data(globals, bh)?;
+    let f = |vm: &mut Executor,
+             globals: &mut Globals,
+             lhs: Value,
+             rhs: Value|
+     -> Result<std::cmp::Ordering> {
+        let lhs = vm.invoke_block(globals, &data, &[lhs])?;
+        let rhs = vm.invoke_block(globals, &data, &[rhs])?;
+        let res = Executor::compare_values(vm, globals, lhs, rhs);
+        res
+    };
+    let mut ary = Array::new(lfp.self_val().dup());
     vm.sort_by(globals, &mut ary, f)?;
     Ok(ary.into())
 }
@@ -1308,6 +1363,7 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 /// - pack(template) -> String
 /// - [NOT SUPPORTED] pack(template, buffer: String.new) -> String
 ///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pack.html]
 #[monoruby_builtin]
 fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = Array::new(lfp.self_val());
@@ -1783,6 +1839,11 @@ mod test {
     }
 
     #[test]
+    fn partition() {
+        run_test(r##"[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].partition {|i| i % 3 == 0 }"##);
+    }
+
+    #[test]
     fn sort() {
         run_test(
             r##"
@@ -1815,6 +1876,13 @@ mod test {
         fruits = %w{apple pear fig}
         fruits.sort_by! { |word| word.length }
         fruits
+        "#,
+        );
+        run_test(
+            r#"
+        fruits = %w{apple pear fig}
+        new_fruits = fruits.sort_by { |word| word.length }
+        [fruits, new_fruits]
         "#,
         );
     }

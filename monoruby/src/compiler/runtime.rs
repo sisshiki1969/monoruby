@@ -450,7 +450,15 @@ pub(super) extern "C" fn get_index(
                 }
             }
         }
-        HASH_CLASS => return Some(base.as_hash().get(index).unwrap_or_default()),
+        HASH_CLASS => {
+            return match Hashmap::new(base).index(vm, globals, index) {
+                Ok(val) => Some(val),
+                Err(err) => {
+                    vm.set_error(err);
+                    None
+                }
+            }
+        }
         INTEGER_CLASS => {
             return match op::integer_index1(base, index) {
                 Ok(val) => Some(val),

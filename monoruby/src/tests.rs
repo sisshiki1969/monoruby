@@ -1,8 +1,7 @@
 use super::*;
 use ruruby_parse::Parser;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 
 mod case;
 mod literal;
@@ -211,49 +210,61 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
     res
 }
 
+fn spawn_ruby() -> Option<std::process::Child> {
+    for i in 0..5 {
+        match std::process::Command::new("ruby")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        {
+            Err(why) => {
+                if i == 4 {
+                    panic!("couldn't spawn ruby.: {}", why)
+                } else {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+            Ok(process) => return Some(process),
+        }
+    }
+    None
+}
+
 fn run_ruby(globals: &mut Globals, code: &str) -> Value {
-    use std::process::Command;
-    let mut tmp_file = NamedTempFile::new().unwrap();
-    tmp_file
-        .write_all(
-            format!(
-                r#"____a = ({});
-              puts;
-              p(____a)"#,
-                code
-            )
-            .as_bytes(),
-        )
+    let process = spawn_ruby().unwrap();
+
+    let code = format!(
+        r#"
+            ____a = ({});
+            puts;
+            p(____a)
+        "#,
+        code
+    );
+
+    match process.stdin.unwrap().write_all(code.as_bytes()) {
+        Err(why) => panic!("couldn't write to ruby stdin: {}", why),
+        Ok(_) => println!("sent code to ruby"),
+    }
+
+    let mut response = String::new();
+    match process.stdout.unwrap().read_to_string(&mut response) {
+        Err(why) => panic!("couldn't read ruby stdout: {}", why),
+        Ok(_) => print!("wc responded with:\n{}", response),
+    }
+
+    let res = std::str::from_utf8(response.as_bytes())
+        .unwrap()
+        .trim_end()
+        .split('\n')
+        .last()
         .unwrap();
+    let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
+        .unwrap()
+        .node;
 
-    let output = Command::new("ruby")
-        .args(&[tmp_file.path().to_string_lossy().to_string()])
-        .output();
+    let res = Value::from_ast(&nodes, globals);
 
-    let res = match &output {
-        Err(err) => {
-            panic!("Error occured in executing Ruby. {:?}", err);
-        }
-        Ok(output) if !output.status.success() => {
-            panic!(
-                "Error occured in executing Ruby. {}",
-                std::str::from_utf8(&output.stderr).unwrap()
-            );
-        }
-        Ok(output) => {
-            let res = std::str::from_utf8(&output.stdout)
-                .unwrap()
-                .trim_end()
-                .split('\n')
-                .last()
-                .unwrap();
-            let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
-                .unwrap()
-                .node;
-
-            Value::from_ast(&nodes, globals)
-        }
-    };
     #[cfg(debug_assertions)]
     eprintln!("ruby: {}", res.inspect(globals));
     res

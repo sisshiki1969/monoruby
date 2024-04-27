@@ -210,8 +210,7 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
 fn strftime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut fmt = lfp.arg(0).expect_string()?;
-    fmt = fmt.replace("%N", "%f");
+    let fmt = lfp.arg(0).expect_string()?.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format(&fmt).to_string(),
         TimeInner::Utc(t) => {

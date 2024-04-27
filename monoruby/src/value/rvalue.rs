@@ -14,7 +14,7 @@ pub use ivar_table::*;
 pub use method::MethodInner;
 pub use module::*;
 pub use regexp::RegexpInner;
-pub use string::StringInner;
+pub use string::{Encoding, StringInner};
 
 mod array;
 mod complex;
@@ -54,7 +54,7 @@ pub union ObjKind {
     range: ManuallyDrop<RangeInner>,
     exception: ManuallyDrop<Box<ExceptionInner>>,
     proc: ManuallyDrop<ProcInner>,
-    hash: ManuallyDrop<HashInner>,
+    hash: ManuallyDrop<HashmapInner>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
@@ -71,7 +71,7 @@ impl ObjKind {
     pub const OBJECT: u8 = 3;
     pub const BIGNUM: u8 = 4;
     pub const FLOAT: u8 = 5;
-    pub const BYTES: u8 = 6;
+    pub const STRING: u8 = 6;
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
@@ -132,21 +132,39 @@ impl ObjKind {
         }
     }
 
-    fn bytes(s: StringInner) -> Self {
+    fn string_from_inner(inner: StringInner) -> Self {
         Self {
-            string: ManuallyDrop::new(s),
+            string: ManuallyDrop::new(inner),
         }
     }
 
     fn bytes_from_slice(slice: &[u8]) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::from_slice(slice)),
+            string: ManuallyDrop::new(StringInner::bytes(slice)),
         }
     }
 
     fn bytes_from_vec(vec: Vec<u8>) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::from_vec(vec)),
+            string: ManuallyDrop::new(StringInner::bytes_from_vec(vec)),
+        }
+    }
+
+    fn string_from_string(s: String) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner::from_string(s)),
+        }
+    }
+
+    fn string_from_str(s: &str) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner::from_str(s)),
+        }
+    }
+
+    fn string_from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner::string_from_vec(vec)),
         }
     }
 
@@ -184,11 +202,17 @@ impl ObjKind {
 
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashInner::new(map)),
+            hash: ManuallyDrop::new(HashmapInner::new(map, None)),
         }
     }
 
-    fn hash_from_inner(inner: HashInner) -> Self {
+    fn hash_empty(default_proc: Option<Proc>) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashmapInner::new(IndexMap::default(), default_proc)),
+        }
+    }
+
+    fn hash_from_inner(inner: HashmapInner) -> Self {
         Self {
             hash: ManuallyDrop::new(inner),
         }
@@ -276,7 +300,7 @@ impl std::fmt::Debug for RValue {
                         3 => format!("OBJECT({:?})", self.kind.object),
                         4 => format!("BIGNUM({:?})", self.kind.bignum),
                         5 => format!("FLOAT({:?})", self.kind.float),
-                        6 => format!("STRING({:?})", self.kind.string.as_str()),
+                        6 => format!("STRING({})", self.kind.string.to_string()),
                         7 => format!("TIME({:?})", self.kind.time),
                         8 => format!("ARRAY({:?})", self.kind.array),
                         9 => format!("RANGE({:?})", self.kind.range),
@@ -311,10 +335,10 @@ impl std::hash::Hash for RValue {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
                 ObjKind::BIGNUM => self.as_bignum().hash(state),
                 ObjKind::FLOAT => self.as_float().to_bits().hash(state),
-                ObjKind::BYTES => self.as_bytes().hash(state),
+                ObjKind::STRING => self.as_bytes().hash(state),
                 ObjKind::ARRAY => self.as_array().hash(state),
                 ObjKind::RANGE => self.as_range().hash(state),
-                ObjKind::HASH => self.as_hash().hash(state),
+                ObjKind::HASH => self.as_hashmap().hash(state),
                 ObjKind::COMPLEX => self.as_complex().hash(state),
                 _ => self.hash(state),
             }
@@ -336,7 +360,7 @@ impl RValue {
                 ObjKind::OBJECT => self.object_tos(globals),
                 ObjKind::RANGE => self.range_tos(globals),
                 ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.as_hash().to_s(globals),
+                ObjKind::HASH => self.as_hashmap().to_s(globals),
                 ObjKind::REGEXP => self.regexp_tos(),
                 ObjKind::IO => self.as_io().to_string(),
                 ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
@@ -369,7 +393,7 @@ impl RValue {
     pub(crate) fn inspect2(&self, globals: &Globals) -> String {
         match self.ty() {
             ObjKind::ARRAY => self.as_array().inspect2(globals),
-            ObjKind::HASH => self.as_hash().inspect2(globals),
+            ObjKind::HASH => self.as_hashmap().inspect2(globals),
             _ => self.inspect(globals),
         }
     }
@@ -450,7 +474,7 @@ impl RValue {
                 (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
                 (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
                 (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(&other.as_complex()),
-                (ObjKind::BYTES, ObjKind::BYTES) => self.as_bytes() == other.as_bytes(),
+                (ObjKind::STRING, ObjKind::STRING) => self.as_bytes() == other.as_bytes(),
                 (ObjKind::ARRAY, ObjKind::ARRAY) => {
                     let lhs = self.as_array();
                     let rhs = other.as_array();
@@ -469,7 +493,7 @@ impl RValue {
                     })
                 }
                 (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
-                (ObjKind::HASH, ObjKind::HASH) => self.as_hash() == other.as_hash(),
+                (ObjKind::HASH, ObjKind::HASH) => self.as_hashmap() == other.as_hashmap(),
                 //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
                 //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
                 (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
@@ -518,7 +542,7 @@ impl alloc::GC<RValue> for RValue {
                     self.as_complex().re().get().mark(alloc);
                     self.as_complex().im().get().mark(alloc);
                 }
-                ObjKind::BYTES => {}
+                ObjKind::STRING => {}
                 ObjKind::TIME => {}
                 ObjKind::ARRAY => {
                     self.as_array().iter().for_each(|v| v.mark(alloc));
@@ -530,7 +554,7 @@ impl alloc::GC<RValue> for RValue {
                 }
                 ObjKind::PROC => {}
                 ObjKind::HASH => {
-                    for (k, v) in self.as_hash().iter() {
+                    for (k, v) in self.as_hashmap().iter() {
                         k.mark(alloc);
                         v.mark(alloc);
                     }
@@ -564,7 +588,7 @@ impl alloc::GCBox for RValue {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::MODULE | ObjKind::CLASS => ManuallyDrop::drop(&mut self.kind.class),
                 ObjKind::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
-                ObjKind::BYTES => ManuallyDrop::drop(&mut self.kind.string),
+                ObjKind::STRING => ManuallyDrop::drop(&mut self.kind.string),
                 ObjKind::TIME => ManuallyDrop::drop(&mut self.kind.time),
                 ObjKind::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
                 ObjKind::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),
@@ -712,7 +736,7 @@ impl RValue {
                         self.as_complex().re().deep_copy(),
                         self.as_complex().im().deep_copy(),
                     ),
-                    ObjKind::BYTES => ObjKind::bytes_from_slice(self.as_bytes()),
+                    ObjKind::STRING => ObjKind::string_from_inner(self.as_bytes().clone()),
                     ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                     ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
                         self.as_array().iter().map(|v| v.deep_copy()),
@@ -727,7 +751,7 @@ impl RValue {
                     }
                     ObjKind::HASH => {
                         let mut map = IndexMap::default();
-                        let hash = self.as_hash();
+                        let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
                             map.insert(HashKey(k.deep_copy()), v.deep_copy());
                         }
@@ -765,7 +789,7 @@ impl RValue {
                     ObjKind::COMPLEX => ObjKind {
                         complex: ManuallyDrop::new(self.kind.complex.dup()),
                     },
-                    ObjKind::BYTES => ObjKind {
+                    ObjKind::STRING => ObjKind {
                         string: self.kind.string.clone(),
                     },
                     ObjKind::TIME => ObjKind {
@@ -899,32 +923,48 @@ impl RValue {
     }
 
     pub(super) fn new_string(s: String) -> Self {
-        Self::new_bytes(s.into_bytes())
-    }
-
-    pub(super) fn new_string_from_inner(s: StringInner) -> Self {
-        Self::new_bytes_from_inner(s)
-    }
-
-    pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes_from_vec(v),
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            kind: ObjKind::string_from_string(s),
             var_table: None,
         }
     }
 
-    pub(super) fn new_bytes_from_inner(s: StringInner) -> Self {
+    pub(super) fn new_string_from_inner(inner: StringInner) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes(s),
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            kind: ObjKind::string_from_inner(inner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_string_from_str(s: &str) -> Self {
+        RValue {
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            kind: ObjKind::string_from_str(s),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_string_from_vec(v: Vec<u8>) -> Self {
+        RValue {
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            kind: ObjKind::string_from_vec(v),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_bytes(v: Vec<u8>) -> Self {
+        RValue {
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            kind: ObjKind::bytes_from_vec(v),
             var_table: None,
         }
     }
 
     pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::BYTES),
+            header: Header::new(STRING_CLASS, ObjKind::STRING),
             kind: ObjKind::bytes_from_slice(slice),
             var_table: None,
         }
@@ -954,7 +994,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash_from_inner(inner: HashInner) -> Self {
+    pub(super) fn new_hash_from_inner(inner: HashmapInner) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash_from_inner(inner),
@@ -962,10 +1002,10 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
+    pub(super) fn new_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
         RValue {
             header: Header::new(class_id, ObjKind::HASH),
-            kind: ObjKind::hash(map),
+            kind: ObjKind::hash_empty(default_proc),
             var_table: None,
         }
     }
@@ -1091,7 +1131,7 @@ impl RValue {
             match self.ty() {
                 ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
                 ObjKind::FLOAT => RV::Float(self.as_float()),
-                ObjKind::BYTES => RV::String(self.as_bytes()),
+                ObjKind::STRING => RV::String(self.as_bytes()),
                 ObjKind::COMPLEX => RV::Complex(self.as_complex()),
                 _ => RV::Object(self),
             }
@@ -1110,7 +1150,7 @@ impl RValue {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()
                 }
-                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
+                (ObjKind::STRING, ObjKind::STRING) => lhs.as_bytes() == rhs.as_bytes(),
                 (ObjKind::ARRAY, ObjKind::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();
@@ -1122,8 +1162,8 @@ impl RValue {
                 }
                 (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
                 (ObjKind::HASH, ObjKind::HASH) => {
-                    let lhs = lhs.as_hash();
-                    let rhs = rhs.as_hash();
+                    let lhs = lhs.as_hashmap();
+                    let rhs = rhs.as_hashmap();
                     lhs.len() == rhs.len()
                         && lhs
                             .iter()
@@ -1181,8 +1221,8 @@ impl RValue {
         unsafe { &mut self.kind.string }
     }
 
-    pub(super) fn as_str(&self) -> std::borrow::Cow<'_, str> {
-        unsafe { self.kind.string.as_str() }
+    pub(super) fn as_str(&self) -> &str {
+        unsafe { self.kind.string.check_utf8().unwrap() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
@@ -1205,11 +1245,11 @@ impl RValue {
         unsafe { &self.kind.exception }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInner {
+    pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         unsafe { &self.kind.hash }
     }
 
-    pub(super) fn as_hash_mut(&mut self) -> &mut HashInner {
+    pub(super) fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
         unsafe { &mut self.kind.hash }
     }
 

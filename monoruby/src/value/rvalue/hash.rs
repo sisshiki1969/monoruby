@@ -2,64 +2,89 @@ use super::*;
 use std::hash::Hash;
 use std::ops::Deref;
 
+#[monoruby_object]
+pub struct Hashmap(Value);
+
+impl Hashmap {
+    pub(crate) fn new(val: Value) -> Self {
+        assert_eq!(val.ty(), Some(ObjKind::HASH));
+        Self(val)
+    }
+
+    pub fn index(&self, vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Value> {
+        if let Some(v) = self.get(key) {
+            Ok(v)
+        } else if let Some(p) = self.default_proc {
+            vm.invoke_proc(globals, p, &[self.0, key])
+        } else {
+            Ok(Value::nil())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HashId(usize);
 
 #[derive(Debug, Clone)]
-pub enum HashInner {
-    Map(Box<IndexMap<HashKey, Value>>),
-    IdentMap(Box<IndexMap<IdentKey, Value>>),
+pub struct HashmapInner {
+    default_proc: Option<Proc>,
+    content: HashContent,
 }
 
-impl Hash for HashInner {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            HashInner::Map(h) => {
-                for (key, val) in h.iter() {
-                    key.hash(state);
-                    val.hash(state);
-                }
-            }
-            HashInner::IdentMap(h) => {
-                for (key, val) in h.iter() {
-                    key.hash(state);
-                    val.hash(state);
-                }
-            }
-        }
-    }
-}
-
-impl PartialEq for HashInner {
-    // This type of equality is used for comparison for keys of Hash.
+impl PartialEq for HashmapInner {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (HashInner::Map(map1), HashInner::Map(map2)) => map1 == map2,
-            (HashInner::IdentMap(map1), HashInner::IdentMap(map2)) => {
-                if map1.len() != map2.len() {
-                    return false;
-                };
-                let mut m1 = HashMap::default();
-                map1.iter().for_each(|(k, v)| {
-                    m1.insert(HashKey(k.0), *v);
-                });
-                map2.iter()
-                    .all(|(k, v)| m1.get(&HashKey(k.0)).map_or(false, |v2| *v == *v2))
-            }
-            _ => false,
+        self.content == other.content
+    }
+}
+
+impl std::ops::Deref for HashmapInner {
+    type Target = HashContent;
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl std::ops::DerefMut for HashmapInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.content
+    }
+}
+
+impl alloc::GC<RValue> for HashmapInner {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(p) = self.default_proc {
+            p.mark(alloc)
+        };
+        for (k, v) in self.content.iter() {
+            k.mark(alloc);
+            v.mark(alloc);
         }
     }
 }
 
-impl HashInner {
+impl HashmapInner {
+    pub fn new(map: IndexMap<HashKey, Value>, default_proc: Option<Proc>) -> Self {
+        HashmapInner {
+            default_proc,
+            content: HashContent::new(map),
+        }
+    }
+
     fn id(&self) -> HashId {
         HashId(&self as *const _ as usize)
     }
 
+    pub fn get(&self, v: Value) -> Option<Value> {
+        match &self.content {
+            HashContent::Map(box map) => map.get(&HashKey(v)).copied(),
+            HashContent::IdentMap(box map) => map.get(&IdentKey(v)).copied(),
+        }
+    }
+
     pub fn remove(&mut self, k: Value) -> Option<Value> {
-        match self {
-            HashInner::Map(map) => map.shift_remove(&HashKey(k)),
-            HashInner::IdentMap(map) => map.shift_remove(&IdentKey(k)),
+        match &mut self.content {
+            HashContent::Map(map) => map.shift_remove(&HashKey(k)),
+            HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k)),
         }
     }
 
@@ -130,6 +155,52 @@ impl HashInner {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum HashContent {
+    Map(Box<IndexMap<HashKey, Value>>),
+    IdentMap(Box<IndexMap<IdentKey, Value>>),
+}
+
+impl Hash for HashContent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            HashContent::Map(h) => {
+                for (key, val) in h.iter() {
+                    key.hash(state);
+                    val.hash(state);
+                }
+            }
+            HashContent::IdentMap(h) => {
+                for (key, val) in h.iter() {
+                    key.hash(state);
+                    val.hash(state);
+                }
+            }
+        }
+    }
+}
+
+impl PartialEq for HashContent {
+    // This type of equality is used for comparison for keys of Hash.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (HashContent::Map(map1), HashContent::Map(map2)) => map1 == map2,
+            (HashContent::IdentMap(map1), HashContent::IdentMap(map2)) => {
+                if map1.len() != map2.len() {
+                    return false;
+                };
+                let mut m1 = HashMap::default();
+                map1.iter().for_each(|(k, v)| {
+                    m1.insert(HashKey(k.0), *v);
+                });
+                map2.iter()
+                    .all(|(k, v)| m1.get(&HashKey(k.0)).map_or(false, |v2| *v == *v2))
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Eq)]
 pub struct HashKey(pub Value);
 
@@ -155,10 +226,10 @@ impl Hash for HashKey {
                     ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
                     ObjKind::BIGNUM => lhs.as_bignum().hash(state),
                     ObjKind::FLOAT => lhs.as_float().to_bits().hash(state),
-                    ObjKind::BYTES => lhs.as_bytes().hash(state),
+                    ObjKind::STRING => lhs.as_bytes().hash(state),
                     ObjKind::ARRAY => lhs.as_array().hash(state),
                     ObjKind::RANGE => lhs.as_range().hash(state),
-                    ObjKind::HASH => lhs.as_hash().hash(state),
+                    ObjKind::HASH => lhs.as_hashmap().hash(state),
                     //ObjKind::METHOD => lhs.method().hash(state),
                     _ => self.0.hash(state),
                 }
@@ -212,10 +283,10 @@ pub enum MonorubyHashIntoIter {
 }
 
 impl MonorubyHashIntoIter {
-    fn new(hash: HashInner) -> MonorubyHashIntoIter {
+    fn new(hash: HashContent) -> MonorubyHashIntoIter {
         match hash {
-            HashInner::Map(map) => MonorubyHashIntoIter::Map(map.into_iter()),
-            HashInner::IdentMap(map) => MonorubyHashIntoIter::IdentMap(map.into_iter()),
+            HashContent::Map(map) => MonorubyHashIntoIter::Map(map.into_iter()),
+            HashContent::IdentMap(map) => MonorubyHashIntoIter::IdentMap(map.into_iter()),
         }
     }
 }
@@ -247,16 +318,16 @@ macro_rules! define_iter_new {
         impl<'a> $ty1<'a> {
             fn new(hash: $ty2) -> $ty1 {
                 match hash {
-                    HashInner::Map(map) => $ty1::Map(map.$method()),
-                    HashInner::IdentMap(map) => $ty1::IdentMap(map.$method()),
+                    HashContent::Map(map) => $ty1::Map(map.$method()),
+                    HashContent::IdentMap(map) => $ty1::IdentMap(map.$method()),
                 }
             }
         }
     };
 }
 
-define_iter_new!(Iter, &HashInner, iter);
-define_iter_new!(IterMut, &mut HashInner, iter_mut);
+define_iter_new!(Iter, &HashContent, iter);
+define_iter_new!(IterMut, &mut HashContent, iter_mut);
 
 macro_rules! define_iterator {
     ($ty2:ident) => {
@@ -287,10 +358,10 @@ macro_rules! define_into_iterator {
     };
 }
 
-define_into_iterator!(&'a HashInner, Iter);
-define_into_iterator!(&'a mut HashInner, IterMut);
+define_into_iterator!(&'a HashContent, Iter);
+define_into_iterator!(&'a mut HashContent, IterMut);
 
-impl IntoIterator for HashInner {
+impl IntoIterator for HashContent {
     type Item = (Value, Value);
     type IntoIter = MonorubyHashIntoIter;
 
@@ -299,49 +370,33 @@ impl IntoIterator for HashInner {
     }
 }
 
-impl alloc::GC<RValue> for HashInner {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        for (k, v) in self.iter() {
-            k.mark(alloc);
-            v.mark(alloc);
-        }
-    }
-}
-
-impl HashInner {
+impl HashContent {
     pub(crate) fn new(map: IndexMap<HashKey, Value>) -> Self {
-        HashInner::Map(Box::new(map))
+        HashContent::Map(Box::new(map))
     }
 
     pub(crate) fn iter(&self) -> Iter {
         Iter::new(self)
     }
 
-    pub(crate) fn get(&self, v: Value) -> Option<Value> {
-        match self {
-            HashInner::Map(box map) => map.get(&HashKey(v)).copied(),
-            HashInner::IdentMap(box map) => map.get(&IdentKey(v)).copied(),
-        }
-    }
-
     pub(crate) fn len(&self) -> usize {
         match self {
-            HashInner::Map(box map) => map.len(),
-            HashInner::IdentMap(box map) => map.len(),
+            HashContent::Map(box map) => map.len(),
+            HashContent::IdentMap(box map) => map.len(),
         }
     }
 
     pub(crate) fn clear(&mut self) {
         match self {
-            HashInner::Map(box map) => map.clear(),
-            HashInner::IdentMap(box map) => map.clear(),
+            HashContent::Map(box map) => map.clear(),
+            HashContent::IdentMap(box map) => map.clear(),
         }
     }
 
     pub(crate) fn insert(&mut self, k: Value, v: Value) {
         match self {
-            HashInner::Map(box map) => map.insert(HashKey(k), v),
-            HashInner::IdentMap(box map) => map.insert(IdentKey(k), v),
+            HashContent::Map(box map) => map.insert(HashKey(k), v),
+            HashContent::IdentMap(box map) => map.insert(IdentKey(k), v),
         };
     }
 
@@ -354,35 +409,35 @@ impl HashInner {
 
     pub(crate) fn contains_key(&self, k: Value) -> bool {
         match self {
-            HashInner::Map(map) => map.contains_key(&HashKey(k)),
-            HashInner::IdentMap(map) => map.contains_key(&IdentKey(k)),
+            HashContent::Map(map) => map.contains_key(&HashKey(k)),
+            HashContent::IdentMap(map) => map.contains_key(&IdentKey(k)),
         }
     }
 
     pub(crate) fn keys(&self) -> Vec<Value> {
         match self {
-            HashInner::Map(map) => map.keys().map(|x| x.0).collect(),
-            HashInner::IdentMap(map) => map.keys().map(|x| x.0).collect(),
+            HashContent::Map(map) => map.keys().map(|x| x.0).collect(),
+            HashContent::IdentMap(map) => map.keys().map(|x| x.0).collect(),
         }
     }
 
     pub(crate) fn values(&self) -> Vec<Value> {
         match self {
-            HashInner::Map(map) => map.values().cloned().collect(),
-            HashInner::IdentMap(map) => map.values().cloned().collect(),
+            HashContent::Map(map) => map.values().cloned().collect(),
+            HashContent::IdentMap(map) => map.values().cloned().collect(),
         }
     }
 
     pub(crate) fn compare_by_identity(&mut self) {
         match self {
-            HashInner::Map(box map) => {
+            HashContent::Map(box map) => {
                 let mut new_map = indexmap::IndexMap::default();
                 for (k, v) in map.iter() {
                     new_map.insert(IdentKey(k.0), *v);
                 }
-                *self = HashInner::IdentMap(Box::new(new_map));
+                *self = HashContent::IdentMap(Box::new(new_map));
             }
-            HashInner::IdentMap(_) => {}
+            HashContent::IdentMap(_) => {}
         }
     }
 }
@@ -393,7 +448,7 @@ mod test {
 
     #[test]
     fn hash0() {
-        let mut map = HashInner::new(IndexMap::default());
+        let mut map = HashmapInner::new(IndexMap::default(), None);
         map.insert(Value::integer(5), Value::float(12.0));
         map.insert(Value::integer(5), Value::float(5.7));
         map.insert(Value::integer(7), Value::float(42.5));

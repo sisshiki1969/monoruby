@@ -1,5 +1,4 @@
 use num::ToPrimitive;
-use std::borrow::Cow;
 
 use super::*;
 use crate::{
@@ -140,10 +139,6 @@ impl Value {
 
     pub fn is_nil(&self) -> bool {
         self.id() == NIL_VALUE
-    }
-
-    pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
-        globals.val_to_bytes(self)
     }
 
     pub(crate) fn deep_copy(&self) -> Self {
@@ -300,20 +295,20 @@ impl Value {
         RValue::new_bytes(s).pack()
     }
 
-    pub fn string_from_inner(s: StringInner) -> Self {
-        RValue::new_string_from_inner(s).pack()
+    pub fn string_from_str(s: &str) -> Self {
+        RValue::new_string_from_str(s).pack()
     }
 
-    pub fn string_from_str(b: &str) -> Self {
-        RValue::new_bytes_from_slice(b.as_bytes()).pack()
-    }
-
-    pub fn string_from_slice(b: &[u8]) -> Self {
+    pub fn bytes_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
     }
 
     pub fn string_from_vec(b: Vec<u8>) -> Self {
-        RValue::new_bytes(b).pack()
+        RValue::new_string_from_vec(b).pack()
+    }
+
+    pub fn string_from_inner(inner: StringInner) -> Self {
+        RValue::new_string_from_inner(inner).pack()
     }
 
     pub fn array(ary: ArrayInner) -> Self {
@@ -352,12 +347,12 @@ impl Value {
         RValue::new_hash(map).pack()
     }
 
-    pub fn hash_from_inner(inner: HashInner) -> Self {
+    pub fn hash_from_inner(inner: HashmapInner) -> Self {
         RValue::new_hash_from_inner(inner).pack()
     }
 
-    pub fn hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
-        RValue::new_hash_with_class(map, class_id).pack()
+    pub fn empty_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
+        RValue::new_hash_with_class(class_id, default_proc).pack()
     }
 
     pub fn regexp(regexp: RegexpInner) -> Self {
@@ -452,7 +447,7 @@ impl Value {
 
 impl Value {
     pub fn to_s(&self, globals: &Globals) -> String {
-        match self.unpack() {
+        let s = match self.unpack() {
             RV::None => "Undef".to_string(),
             RV::Nil => "".to_string(),
             RV::Bool(b) => format!("{:?}", b),
@@ -461,26 +456,22 @@ impl Value {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Complex(_) => self.as_complex().to_s(globals),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => s,
-                Err(_) => format!("{:?}", s),
-            },
+            RV::String(s) => s.to_string(),
             RV::Object(rvalue) => rvalue.to_s(globals),
-        }
+        };
+        s
     }
 
     pub fn inspect(&self, globals: &Globals) -> String {
-        match self.unpack() {
+        let s = match self.unpack() {
             RV::Nil => "nil".to_string(),
             RV::Complex(_) => self.as_complex().inspect(globals),
             RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("{:?}", s),
-                Err(_) => format!("{:?}", s),
-            },
+            RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.inspect(globals),
             _ => self.to_s(globals),
-        }
+        };
+        s
     }
 }
 
@@ -564,16 +555,6 @@ impl Value {
         } else {
             None
         }
-    }
-
-    ///
-    /// Get `self` as i64.
-    ///
-    /// ### Panics
-    /// Panics if `self` is not a fixnum.
-    ///
-    pub(crate) fn as_fixnum(&self) -> i64 {
-        self.try_fixnum().unwrap()
     }
 
     ///
@@ -757,22 +738,22 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_hash(&self) -> Option<&HashInner> {
+    pub(crate) fn is_hash(self) -> Option<Hashmap> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::HASH => Some(rv.as_hash()),
+            ObjKind::HASH => Some(Hashmap::new(self)),
             _ => None,
         }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInner {
+    pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         assert_eq!(ObjKind::HASH, self.rvalue().ty());
-        self.rvalue().as_hash()
+        self.rvalue().as_hashmap()
     }
 
-    pub(crate) fn as_hash_mut(&mut self) -> &mut HashInner {
+    pub(crate) fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjKind::HASH, self.rvalue().ty());
-        self.rvalue_mut().as_hash_mut()
+        self.rvalue_mut().as_hashmap_mut()
     }
 
     pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
@@ -914,20 +895,15 @@ impl Value {
     }
 
     pub(crate) fn expect_string(&self) -> Result<String> {
-        if let Some(s) = self.is_bytes() {
-            let s = String::from_utf8_lossy(s).into_owned();
-            Ok(s)
-        } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
-        }
+        self.expect_str().map(|s| s.to_string())
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
+        self.expect_bytes()?.check_utf8()
+    }
+
+    fn expect_bytes(&self) -> Result<&StringInner> {
         if let Some(s) = self.is_bytes() {
-            let s = match std::str::from_utf8(s) {
-                Ok(s) => s,
-                Err(_) => return Err(MonorubyErr::runtimeerr("invalid_byte_sequence")),
-            };
             Ok(s)
         } else {
             Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
@@ -960,18 +936,18 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_hash(&self) -> Result<&HashInner> {
+    pub(crate) fn expect_hash(self) -> Result<Hashmap> {
         if let Some(h) = self.is_hash() {
             Ok(h)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, HASH_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(self, HASH_CLASS))
         }
     }
 
     pub(crate) fn try_bytes(&self) -> Option<&StringInner> {
         if let Some(rv) = self.try_rvalue() {
             match rv.ty() {
-                ObjKind::BYTES => Some(rv.as_bytes()),
+                ObjKind::STRING => Some(rv.as_bytes()),
                 _ => None,
             }
         } else {
@@ -980,44 +956,44 @@ impl Value {
     }
 
     pub(crate) fn as_bytes(&self) -> &StringInner {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue().as_bytes()
     }
 
     pub(crate) fn as_bytes_mut(&mut self) -> &mut StringInner {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue_mut().as_bytes_mut()
     }
 
     pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::BYTES => Some(rv.as_bytes()),
+            ObjKind::STRING => Some(rv.as_bytes()),
             _ => None,
         }
     }
 
-    pub(crate) fn as_str(&self) -> Cow<'_, str> {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
+    pub(crate) fn as_str(&self) -> &str {
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
         self.rvalue().as_str()
     }
 
-    pub(crate) fn is_str(&self) -> Option<Cow<'_, str>> {
+    pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::BYTES => Some(rv.as_str()),
+            ObjKind::STRING => Some(rv.as_str()),
             _ => None,
         }
     }
 
     pub(crate) fn replace_string(&mut self, replace: String) {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
-        *self.rvalue_mut() = RValue::new_string(replace);
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        *self.rvalue_mut().as_bytes_mut() = StringInner::from_string(replace);
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
-        assert_eq!(ObjKind::BYTES, self.rvalue().ty());
-        *self.rvalue_mut().as_bytes_mut() = StringInner::from_slice(replace.as_bytes());
+        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        *self.rvalue_mut().as_bytes_mut() = StringInner::from_str(replace);
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
@@ -1226,7 +1202,7 @@ pub enum RV<'a> {
     Float(f64),
     Symbol(IdentId),
     Complex(&'a num::complex::Complex<Real>),
-    String(&'a [u8]),
+    String(&'a StringInner),
     Object(&'a RValue),
 }
 
@@ -1241,10 +1217,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => write!(f, "\"{s}\""),
-                Err(_) => write!(f, "{s:?}"),
-            },
+            RV::String(s) => write!(f, "\"{}\"", s.to_string()),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }

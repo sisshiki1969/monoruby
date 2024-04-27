@@ -319,7 +319,7 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
+        RV::String(s) => IdentId::get_id(s.check_utf8()?),
         _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();

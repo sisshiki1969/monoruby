@@ -1,29 +1,47 @@
-use std::env;
+use dirs;
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-    let dest_path = Path::new(&out_dir).join("libpath.rb");
-    let output = Command::new("ruby").args(["-e", "p($:)"]).output();
-    let load_path = match &output {
-        Ok(output) => std::str::from_utf8(&output.stdout).unwrap_or("[]"),
-        Err(_) => "[]",
-    };
-    fs::write(dest_path, load_path).unwrap();
+    let lib_path = dirs::home_dir().unwrap().join(".monoruby");
+    println!("lib_path: {:?}", lib_path);
+    match lib_path.try_exists() {
+        Ok(true) => {}
+        _ => fs::create_dir(&lib_path).unwrap(),
+    }
 
-    let dest_path = Path::new(&out_dir).join("gempath.rb");
-    let output = Command::new("gem").args(["environment", "paths"]).output();
-    let load_path = match &output {
-        Ok(output) => std::str::from_utf8(&output.stdout)
-            .unwrap_or("")
-            .split(':')
-            .map(|s| format!(r#""{}""#, s))
-            .collect::<Vec<_>>()
-            .join(","),
-        Err(_) => "".to_string(),
+    match Command::new("ruby").args(["-e", "puts($:)"]).output() {
+        Ok(output) => {
+            let dest_path = lib_path.clone().join("library_path");
+            let load_path = std::str::from_utf8(&output.stdout).unwrap();
+            fs::write(dest_path, load_path).unwrap();
+        }
+        Err(_) => {
+            println!("failed to read ruby library path");
+        }
+    }
+
+    match Command::new("gem").args(["environment", "paths"]).output() {
+        Ok(output) => {
+            let dest_path = lib_path.clone().join("gem_path");
+            let path_list: Vec<_> = std::str::from_utf8(&output.stdout)
+                .unwrap()
+                .split(':')
+                .map(|s| s.to_string())
+                .collect();
+            let list = path_list.join("\n");
+            fs::write(dest_path, list).unwrap();
+        }
+        Err(_) => {
+            println!("failed to read ruby gem path");
+        }
     };
-    fs::write(dest_path, &format!("[{}]", load_path)).unwrap();
-    println!("cargo:rerun-if-changed=build.rs");
+
+    for entry in fs::read_dir("startup").unwrap() {
+        let path = entry.unwrap().path();
+        let file_name = path.file_name().unwrap();
+        fs::copy(&path, lib_path.join(file_name)).unwrap();
+    }
+
+    //println!("cargo:rerun-if-changed=startup");
 }

@@ -12,6 +12,7 @@ mod dump;
 mod error;
 mod method;
 mod prng;
+mod require;
 mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
@@ -108,6 +109,8 @@ pub struct Globals {
     stdout: BufWriter<Stdout>,
     /// library directries.
     lib_directories: Vec<String>,
+    /// gem directries.
+    gem_directories: Vec<String>,
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
@@ -165,9 +168,12 @@ impl Globals {
             no_jit,
             stdout: BufWriter::new(stdout()),
             lib_directories: vec![
-                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json-2.7.1/lib/"
+                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"
                     .to_string(),
-            ],
+                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"
+                    .to_string(),
+                ],
+            gem_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "profile")]
@@ -213,22 +219,19 @@ impl Globals {
             .unwrap();
 
         // load library path
-        let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
-        let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
+        let load_path = dirs::home_dir()
             .unwrap()
-            .node;
-
-        let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+            .join(".monoruby")
+            .join("library_path");
+        let path_list = std::fs::read_to_string(&load_path).unwrap();
+        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
+        globals.extend_load_path(list.iter().cloned());
 
         // load gem library path
-        let load_path = include_str!(concat!(env!("OUT_DIR"), "/gempath.rb"));
-        let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
-            .unwrap()
-            .node;
-
-        let lib = Array::new(Value::from_ast2(&nodes));
-        globals.extend_load_path(lib.iter().map(|v| v.as_str().to_string()));
+        let load_path = dirs::home_dir().unwrap().join(".monoruby").join("gem_path");
+        let path_list = std::fs::read_to_string(&load_path).unwrap();
+        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
+        globals.extend_gem_path(list.iter().cloned());
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -319,6 +322,16 @@ impl Globals {
         self.stdout.write_all(bytes).unwrap();
     }
 
+    pub fn print_value(&mut self, val: Value) {
+        if let Some(s) = val.is_bytes() {
+            self.stdout.write_all(s)
+        } else {
+            let v = val.to_s(self).into_bytes();
+            self.stdout.write_all(&v)
+        }
+        .unwrap();
+    }
+
     // Handling global variable
 
     pub fn set_gvar(&mut self, name: IdentId, val: Value) {
@@ -350,7 +363,11 @@ impl Globals {
     }
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.lib_directories.extend(iter)
+        self.lib_directories.extend(iter);
+    }
+
+    pub fn extend_gem_path(&mut self, iter: impl Iterator<Item = String>) {
+        self.gem_directories.extend(iter)
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {
@@ -364,36 +381,6 @@ impl Globals {
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
         let source_func_id = executor.cfp().get_source_pos();
         &self[source_func_id].as_ruby_func().sourceinfo.path
-    }
-
-    ///
-    /// Load external library.
-    ///
-    pub(crate) fn load_lib(
-        &mut self,
-        file_name: &std::path::Path,
-        is_relative: bool,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
-        if !is_relative {
-            for lib in self.lib_directories.clone() {
-                let mut lib = std::path::PathBuf::from(lib);
-                lib.push(file_name);
-                lib.set_extension("rb");
-                if lib.exists() {
-                    return self.load_file(lib);
-                }
-                lib.set_extension("so");
-                if lib.exists() {
-                    eprintln!("Warning: currently, can not require .so file. {:?}", lib);
-                }
-            }
-            Err(MonorubyErr::cant_load(None, file_name))
-        } else {
-            if file_name.exists() {
-                return self.load_file(file_name.into());
-            }
-            Err(MonorubyErr::cant_load(None, file_name))
-        }
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
@@ -484,38 +471,6 @@ impl Globals {
     pub(crate) fn class_version(&self) -> u32 {
         self.codegen.class_version()
     }
-
-    ///
-    /// Load the library if it has never been loaded before.
-    ///
-    /// If the library was loaded, return the code and canonical path.
-    /// Otherwise, returns Ok(None).
-    ///
-    /// When an error occured in loading, returns Err.
-    ///
-    fn load_file(
-        &mut self,
-        path: std::path::PathBuf,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
-        fn load(
-            globals: &mut Globals,
-            path: std::path::PathBuf,
-        ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
-            let mut file_body = String::new();
-            let mut file = std::fs::OpenOptions::new().read(true).open(&path)?;
-            file.read_to_string(&mut file_body)?;
-            globals.loaded_canonicalized_files.insert(path.clone());
-            Ok(Some((file_body, path)))
-        }
-        let path = match path.canonicalize() {
-            Ok(path) => path,
-            Err(err) => return Err(MonorubyErr::cant_load(Some(err), &path)),
-        };
-        if self.loaded_canonicalized_files.get(&path).is_some() {
-            return Ok(None);
-        }
-        load(self, path.clone()).map_err(|err| MonorubyErr::cant_load(Some(err), &path))
-    }
 }
 
 impl Globals {
@@ -548,13 +503,6 @@ impl Globals {
             RV::Object(rvalue) => rvalue.inspect2(self),
             _ => val.inspect(self),
         }
-    }
-
-    pub(crate) fn val_to_bytes(&self, val: Value) -> Vec<u8> {
-        if let RV::String(s) = val.unpack() {
-            return s.to_vec();
-        }
-        val.to_s(self).into_bytes()
     }
 
     pub(crate) fn generate_range(

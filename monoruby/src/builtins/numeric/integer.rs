@@ -127,7 +127,7 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let cur = lfp.self_val().as_fixnum();
+    let cur = lfp.self_val().expect_integer()?;
     let limit = lfp.arg(0).coerce_to_i64()?;
     let step = if let Some(arg1) = lfp.try_arg(1) {
         let step = arg1.coerce_to_i64()?;
@@ -165,7 +165,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let cur = lfp.self_val().as_fixnum();
+    let cur = lfp.self_val().expect_integer()?;
     let limit = lfp.arg(0).coerce_to_i64()?;
     if cur > limit {
         return Ok(lfp.self_val());
@@ -189,7 +189,7 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
-            return Ok(Value::string_from_slice(&[b]));
+            return Ok(Value::bytes_from_slice(&[b]));
         }
     };
     Err(MonorubyErr::char_out_of_range(globals, lfp.self_val()))
