@@ -1,5 +1,6 @@
 use super::*;
 use num::{BigInt, ToPrimitive, Zero};
+use std::ops::{BitAnd, BitOr, BitXor};
 
 //
 // Integer class
@@ -21,9 +22,15 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     );
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "&", band, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "|", bor, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "^", bxor, 1);
+
+    globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
+    globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
+    globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
+    globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
+    globals.define_basic_op(INTEGER_CLASS, "%", rem, 1);
+    globals.define_basic_op(INTEGER_CLASS, "&", bitand, 1);
+    globals.define_basic_op(INTEGER_CLASS, "|", bitor, 1);
+    globals.define_basic_op(INTEGER_CLASS, "^", bitxor, 1);
     globals.define_builtin_inline_func(
         INTEGER_CLASS,
         ">>",
@@ -234,71 +241,37 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
-///
-/// ### Integer#&
-///
-/// - self & other -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=26.html]
-#[monoruby_builtin]
-fn band(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Ok(Value::integer(lhs & rhs)),
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs) & rhs)),
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs & BigInt::from(rhs))),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs & rhs)),
-        _ => {
-            lfp.arg(0).coerce_to_i64()?;
-            unreachable!();
+// Bitwise operations.
+
+macro_rules! binop {
+    ($op:ident) => {
+        paste! {
+            #[monoruby_builtin]
+            fn $op(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+                let lhs = lfp.self_val();
+                let rhs = lfp.arg(0);
+                match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Ok(Value::integer(lhs.$op(rhs))),
+                    (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs).$op(rhs))),
+                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs.$op(BigInt::from(rhs)))),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs.$op(rhs))),
+                    _ => {
+                        lfp.arg(0).coerce_to_i64()?;
+                        unreachable!();
+                    }
+                }
+            }
         }
-    }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        binop!($op1);
+        binop!($($op2),+);
+    };
 }
 
-///
-/// ### Integer#|
-///
-/// - self | other -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=7c.html]
-#[monoruby_builtin]
-fn bor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Ok(Value::integer(lhs | rhs)),
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs) | rhs)),
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs | BigInt::from(rhs))),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs | rhs)),
-        _ => {
-            lfp.arg(0).coerce_to_i64()?;
-            unreachable!();
-        }
-    }
-}
+binop!(bitand, bitor, bitxor);
 
-///
-/// ### Integer#^
-///
-/// - self ^ other -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5e.html]
-#[monoruby_builtin]
-fn bxor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Ok(Value::integer(lhs ^ rhs)),
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(BigInt::from(lhs) ^ rhs)),
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs ^ BigInt::from(rhs))),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs ^ rhs)),
-        _ => {
-            lfp.arg(0).coerce_to_i64()?;
-            unreachable!();
-        }
-    }
-}
+// Compare operations.
 
 ///
 /// ### Integer#==
@@ -358,73 +331,30 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::from_ord(ord))
 }
 
-///
-/// ### Integer#>=
-///
-/// - self >= other -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3d.html]
-#[monoruby_builtin]
-fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
+macro_rules! cmpop {
+    ($op:ident) => {
+        paste! {
+            #[monoruby_builtin]
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+                let lhs = lfp.self_val();
+                let rhs = lfp.arg(0);
+                match crate::executor::op::[<cmp_ $op _values>](vm, globals, lhs, rhs) {
+                    Some(res) => Ok(res),
+                    None => {
+                        let err = vm.take_error();
+                        Err(err)
+                    }
+                }
+            }
         }
-    }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmpop!($op1);
+        cmpop!($($op2),+);
+    };
 }
 
-///
-/// ### Integer#>
-///
-/// - self > other -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e.html]
-#[monoruby_builtin]
-fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#<=
-///
-/// - self <= other -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d.html]
-#[monoruby_builtin]
-fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#<
-///
-/// - self < other -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c.html]
-#[monoruby_builtin]
-fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
+cmpop!(ge, gt, le, lt);
 
 ///
 /// ### Integer#>>

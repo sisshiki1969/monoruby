@@ -1,7 +1,10 @@
-h = Hash.new do |hash, key|
-  hash[key] = "foo"
-  "bar"
+50.times do |x|
+  puts "#{x}: #{100 * 100}"
+  if x == 5
+    class Integer
+      def *(other)
+        42
+      end
+    end
+  end
 end
-
-puts h[:a] # => "bar"
-puts h[:a] # => "foo"

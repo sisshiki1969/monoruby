@@ -1,4 +1,5 @@
 use super::*;
+use num::ToPrimitive;
 mod send;
 pub(crate) use send::{object_send, object_send_splat, send};
 
@@ -9,6 +10,8 @@ pub(crate) use send::{object_send, object_send_splat, send};
 pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
 
+    globals.define_builtin_func(OBJECT_CLASS, "==", eq, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
@@ -54,6 +57,43 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+}
+
+#[monoruby_builtin]
+fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(eq_bool(lfp.self_val(), lfp.arg(0))?))
+}
+
+#[monoruby_builtin]
+fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(!eq_bool(lfp.self_val(), lfp.arg(0))?))
+}
+
+fn eq_bool(lhs: Value, rhs: Value) -> Result<bool> {
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Nil, RV::Nil) => true,
+        (RV::Nil, _) => false,
+        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => num::BigInt::from(lhs).eq(rhs),
+        (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::Fixnum(_), _) => false,
+        (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&num::BigInt::from(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::BigInt(_), _) => false,
+        (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        (RV::Float(_), _) => false,
+        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
+        (RV::Bool(_), _) => false,
+        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
+        (RV::Symbol(_), _) => false,
+        (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
+        (RV::String(_), _) => false,
+        _ => return Err(MonorubyErr::method_not_found(IdentId::_EQ, lhs)),
+    };
+    Ok(b)
 }
 
 ///

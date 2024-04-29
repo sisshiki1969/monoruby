@@ -1,11 +1,12 @@
 FRAMES = 2999
+arg = ARGV.join(" ")
 
 list = []
 for i in 0..FRAMES
   list[i] = [i]
 end
 
-system("cargo install --path monoruby")
+#system("cargo install --path monoruby")
 
 TEMPLATE = "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes"
 
@@ -21,25 +22,27 @@ def read(command, list)
         break
       end
     }
+    puts s[FRAMES + 1].chomp
+    puts s[FRAMES + 2].chomp
 end
 
-monoruby_version = `monoruby -v`.chomp
+puts monoruby_version = `monoruby -v`.chomp
 read('monoruby', list)
-puts "monoruby finished"
+puts
 
-system("rbenv local 3.3.0")
-ruby_version = `ruby -v`.chomp
+system("rbenv local 3.4-dev")
+puts ruby_version = `ruby -v`.chomp
 read('ruby --yjit', list)
-puts "ruby finished"
+puts
 
-system("rbenv local truffleruby-24.0.0")
-truffle_version = `ruby -v`.chomp
+system("rbenv local truffleruby+graalvm-24.0.0")
+puts truffle_version = `ruby -v`.chomp
 read('ruby', list)
-puts "truffleruby finished"
+puts
 
 system("rbenv local 3.3.0")
 
-f = "frame,'#{monoruby_version}','#{ruby_version}','#{truffle_version}'\n"
+f = "frame,\"#{monoruby_version}\",\"#{ruby_version}\",\"#{truffle_version}\"\n"
 for line in list
   frame, monoruby, ruby, truffle = line
   f << "#{frame},#{monoruby},#{ruby},#{truffle}\n"

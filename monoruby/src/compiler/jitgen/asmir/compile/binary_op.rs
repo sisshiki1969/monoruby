@@ -145,7 +145,6 @@ impl Codegen {
                     jmp error;
                 );
                 self.jit.select_page(0);
-                //self.generic_binop(kind, using_xmm, error);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(_, rhs) if *rhs > 0 && (*rhs as u64).is_power_of_two() => {
@@ -177,7 +176,6 @@ impl Codegen {
                         jmp error;
                     );
                     self.jit.select_page(0);
-                    //self.generic_binop(kind, using_xmm, error);
                 }
             },
             BinOpK::BitOr => match mode {
@@ -530,7 +528,7 @@ macro_rules! cmp_main {
     };
 }
 
-macro_rules! cmp_opt_main {
+macro_rules! jit_cmp_opt_main {
     (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
         paste! {
             fn [<condbr_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
@@ -557,8 +555,8 @@ macro_rules! cmp_opt_main {
         }
     };
     (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
-        cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
-        cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
+        jit_cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
+        jit_cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
     };
 }
 
@@ -681,7 +679,7 @@ impl Codegen {
         }
     }
 
-    cmp_opt_main!(
+    jit_cmp_opt_main!(
         (eq, ne, eq, ne),
         (ne, eq, ne, eq),
         (a, be, gt, le),

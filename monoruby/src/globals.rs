@@ -29,6 +29,7 @@ pub(crate) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
+    is_basic_op: bool,
 }
 
 impl MethodTableEntry {

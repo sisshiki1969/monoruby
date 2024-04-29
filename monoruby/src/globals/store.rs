@@ -256,6 +256,18 @@ impl Store {
             .add_native_func(name, address, min, max, rest)
     }
 
+    pub(super) fn add_basic_op(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        self.functions
+            .add_native_basic_op(name, address, min, max, rest)
+    }
+
     pub(super) fn add_builtin_func_eval(
         &mut self,
         name: String,

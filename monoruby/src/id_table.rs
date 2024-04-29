@@ -66,43 +66,47 @@ impl IdentId {
     pub const _ADD: IdentId = id!(5);
     pub const _SUB: IdentId = id!(6);
     pub const _MUL: IdentId = id!(7);
-    pub const _POW: IdentId = id!(8);
-    pub const _SHL: IdentId = id!(9);
-    pub const _REM: IdentId = id!(10);
-    pub const _EQ: IdentId = id!(11);
-    pub const _NEQ: IdentId = id!(12);
-    pub const _GT: IdentId = id!(13);
-    pub const _GE: IdentId = id!(14);
-    pub const _DIV: IdentId = id!(15);
-    pub const _LT: IdentId = id!(16);
-    pub const _LE: IdentId = id!(17);
-    pub const _CMP: IdentId = id!(18);
-    pub const _TEQ: IdentId = id!(19);
-    pub const _ENUM_FUNC: IdentId = id!(20);
-    pub const _INDEX: IdentId = id!(21);
-    pub const _INDEX_ASSIGN: IdentId = id!(22);
-    pub const TO_S: IdentId = id!(23);
-    pub const _SHR: IdentId = id!(24);
-    pub const _ALIAS_METHOD: IdentId = id!(25);
-    pub const _METHOD_MISSING: IdentId = id!(26);
-    pub const EACH: IdentId = id!(27);
-    pub const MAP: IdentId = id!(28);
-    pub const _NAME: IdentId = id!(29);
+    pub const _DIV: IdentId = id!(8);
+    pub const _REM: IdentId = id!(9);
+    pub const _POW: IdentId = id!(10);
+    pub const _SHL: IdentId = id!(11);
+    pub const _SHR: IdentId = id!(12);
+    pub const _BOR: IdentId = id!(13);
+    pub const _BAND: IdentId = id!(14);
+    pub const _BXOR: IdentId = id!(15);
+    pub const _BNOT: IdentId = id!(16);
+    pub const _UMINUS: IdentId = id!(17);
+    pub const _UPLUS: IdentId = id!(18);
+    pub const _EQ: IdentId = id!(19);
+    pub const _NEQ: IdentId = id!(20);
+    pub const _GT: IdentId = id!(21);
+    pub const _GE: IdentId = id!(22);
+    pub const _LT: IdentId = id!(23);
+    pub const _LE: IdentId = id!(24);
+    pub const _CMP: IdentId = id!(25);
+    pub const _TEQ: IdentId = id!(26);
+    pub const _MATCH: IdentId = id!(27);
+    pub const _INDEX: IdentId = id!(28);
+    pub const _INDEX_ASSIGN: IdentId = id!(29);
     pub const _DOT3: IdentId = id!(30);
-    pub const _MAIN: IdentId = id!(31);
-    pub const _BOR: IdentId = id!(32);
-    pub const _BAND: IdentId = id!(33);
-    pub const _BXOR: IdentId = id!(34);
-    pub const _UMINUS: IdentId = id!(35);
-    pub const FLOAT_SECOND: IdentId = id!(36);
-    pub const SECOND: IdentId = id!(37);
-    pub const FLOAT_MILLISECOND: IdentId = id!(38);
-    pub const MILLISECOND: IdentId = id!(39);
-    pub const FLOAT_MICROSECOND: IdentId = id!(40);
-    pub const MICROSECOND: IdentId = id!(41);
-    pub const NANOSECOND: IdentId = id!(42);
-    pub const _MATCH: IdentId = id!(43);
-    pub const TO_PROC: IdentId = id!(44);
+
+    pub const TO_S: IdentId = id!(31);
+    pub const TO_PROC: IdentId = id!(32);
+    pub const _METHOD_MISSING: IdentId = id!(33);
+    pub const EACH: IdentId = id!(34);
+    pub const MAP: IdentId = id!(35);
+    pub const _ALIAS_METHOD: IdentId = id!(36);
+    pub const _ENUM_FUNC: IdentId = id!(37);
+    pub const _NAME: IdentId = id!(38);
+    pub const _MAIN: IdentId = id!(39);
+
+    pub const FLOAT_SECOND: IdentId = id!(40);
+    pub const SECOND: IdentId = id!(41);
+    pub const FLOAT_MILLISECOND: IdentId = id!(42);
+    pub const MILLISECOND: IdentId = id!(43);
+    pub const FLOAT_MICROSECOND: IdentId = id!(44);
+    pub const MICROSECOND: IdentId = id!(45);
+    pub const NANOSECOND: IdentId = id!(46);
 }
 
 impl IdentId {
@@ -147,6 +151,9 @@ impl IdentId {
     /// Compare *self* to *other*.
     ///
     pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        if self == other {
+            return std::cmp::Ordering::Equal;
+        }
         let id = ID.read().unwrap();
         let lhs = id.get_name(*self);
         let rhs = id.get_name(*other);
@@ -199,34 +206,39 @@ impl IdentifierTable {
         table.set_id("+", IdentId::_ADD);
         table.set_id("-", IdentId::_SUB);
         table.set_id("*", IdentId::_MUL);
+        table.set_id("/", IdentId::_DIV);
+        table.set_id("%", IdentId::_REM);
         table.set_id("**", IdentId::_POW);
         table.set_id("<<", IdentId::_SHL);
-        table.set_id("%", IdentId::_REM);
+        table.set_id(">>", IdentId::_SHR);
+        table.set_id("|", IdentId::_BOR);
+        table.set_id("&", IdentId::_BAND);
+        table.set_id("^", IdentId::_BXOR);
+        table.set_id("~", IdentId::_BNOT);
+        table.set_id("-@", IdentId::_UMINUS);
+        table.set_id("+@", IdentId::_UPLUS);
         table.set_id("==", IdentId::_EQ);
         table.set_id("!=", IdentId::_NEQ);
         table.set_id(">", IdentId::_GT);
         table.set_id(">=", IdentId::_GE);
-        table.set_id("/", IdentId::_DIV);
         table.set_id("<", IdentId::_LT);
         table.set_id("<=", IdentId::_LE);
         table.set_id("<=>", IdentId::_CMP);
         table.set_id("===", IdentId::_TEQ);
-        table.set_id("/enum", IdentId::_ENUM_FUNC);
+        table.set_id("=~", IdentId::_MATCH);
         table.set_id("[]", IdentId::_INDEX);
         table.set_id("[]=", IdentId::_INDEX_ASSIGN);
+        table.set_id("...", IdentId::_DOT3);
+
         table.set_id("to_s", IdentId::TO_S);
-        table.set_id(">>", IdentId::_SHR);
-        table.set_id("/alias_method", IdentId::_ALIAS_METHOD);
+        table.set_id("to_proc", IdentId::TO_PROC);
         table.set_id("method_missing", IdentId::_METHOD_MISSING);
         table.set_id("each", IdentId::EACH);
         table.set_id("map", IdentId::MAP);
+        table.set_id("/alias_method", IdentId::_ALIAS_METHOD);
+        table.set_id("/enum", IdentId::_ENUM_FUNC);
         table.set_id("/name", IdentId::_NAME);
-        table.set_id("...", IdentId::_DOT3);
         table.set_id("/main", IdentId::_MAIN);
-        table.set_id("|", IdentId::_BOR);
-        table.set_id("&", IdentId::_BAND);
-        table.set_id("^", IdentId::_BXOR);
-        table.set_id("-@", IdentId::_UMINUS);
         table.set_id("float_second", IdentId::FLOAT_SECOND);
         table.set_id("second", IdentId::SECOND);
         table.set_id("float_millisecond", IdentId::FLOAT_MILLISECOND);
@@ -234,8 +246,6 @@ impl IdentifierTable {
         table.set_id("float_microsecond", IdentId::FLOAT_MICROSECOND);
         table.set_id("microsecond", IdentId::MICROSECOND);
         table.set_id("nanosecond", IdentId::NANOSECOND);
-        table.set_id("=~", IdentId::_MATCH);
-        table.set_id("to_proc", IdentId::TO_PROC);
         table
     }
 

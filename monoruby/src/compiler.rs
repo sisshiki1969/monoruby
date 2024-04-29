@@ -103,6 +103,7 @@ pub struct Codegen {
     class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
+    bop_redefined: DestLabel,
     #[allow(dead_code)]
     entry_panic: DestLabel,
     vm_entry: DestLabel,
@@ -143,7 +144,7 @@ pub struct Codegen {
     /// - rax: ClassId
     ///
     get_class: DestLabel,
-    dispatch: Vec<CodePtr>,
+    dispatch: Box<[CodePtr; 256]>,
     pub(super) entry_point: EntryPoint,
     pub(crate) method_invoker: MethodInvoker,
     pub(crate) method_invoker2: MethodInvoker2,
@@ -175,6 +176,7 @@ impl Codegen {
     pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
+        let bop_redefined = jit.data_i32(0);
         let const_version = jit.data_i64(1);
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
@@ -191,6 +193,7 @@ impl Codegen {
             class_version_addr: std::ptr::null_mut(),
             alloc_flag,
             const_version,
+            bop_redefined,
             entry_panic,
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
@@ -199,7 +202,7 @@ impl Codegen {
             f64_to_val,
             div_by_zero: entry_panic,
             get_class,
-            dispatch,
+            dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -223,6 +226,7 @@ impl Codegen {
             },
         };
         codegen.construct_vm(no_jit, main_object);
+        //codegen.remove_optimization();
         codegen.jit.finalize();
 
         codegen.class_version_addr =
@@ -244,6 +248,19 @@ impl Codegen {
 
     pub(crate) fn class_version_inc(&self) {
         unsafe { *self.class_version_addr += 1 }
+    }
+
+    pub(crate) fn bop_redefine(&self) -> u32 {
+        let addr = self.jit.get_label_address(self.bop_redefined).as_ptr() as *mut u32;
+        unsafe { *addr }
+    }
+
+    pub(crate) fn set_bop_redefine(&mut self) {
+        let addr = self.jit.get_label_address(self.bop_redefined).as_ptr() as *mut u32;
+        unsafe { *addr = !0 }
+        self.remove_bop_optimization();
+        #[cfg(any(test, feature = "jit-log"))]
+        eprintln!("basic op redefined.");
     }
 
     fn icmp_teq(&mut self) {

@@ -17,12 +17,13 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
     globals.define_builtin_func(FLOAT_CLASS, "to_i", toi, 0);
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "+", add, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "-", sub, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "*", mul, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "/", div, 1);
+
+    globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
+    globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
+    globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
+    globals.define_basic_op(FLOAT_CLASS, "/", div, 1);
+    globals.define_basic_op(FLOAT_CLASS, "%", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "%", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "==", eq, 1);
     globals.define_builtin_func(FLOAT_CLASS, "===", eq, 1);

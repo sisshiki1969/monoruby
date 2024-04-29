@@ -415,6 +415,21 @@ impl Funcs {
         id
     }
 
+    pub(super) fn add_native_basic_op(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let id = self.next_func_id();
+        self.info.push(FuncInfo::new_native_basic_op(
+            id, name, address, min, max, rest,
+        ));
+        id
+    }
+
     pub(super) fn add_native_func_eval(
         &mut self,
         name: String,
@@ -702,6 +717,26 @@ impl FuncInfo {
     }
 
     fn new_native(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
+        Self::new(
+            IdentId::get_id_from_string(name),
+            FuncKind::Builtin {
+                abs_address: address as *const u8 as u64,
+            },
+            Meta::native(func_id, reg_num, params.is_simple()),
+            params,
+        )
+    }
+
+    fn new_native_basic_op(
         func_id: FuncId,
         name: String,
         address: BuiltinFn,
