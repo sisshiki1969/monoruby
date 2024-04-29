@@ -8,7 +8,13 @@ end
 
 #system("cargo install --path monoruby")
 
-TEMPLATE = "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes"
+TEMPLATE = if arg.length == 0
+  "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes"
+else
+  "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 " + arg + " ../optcarrot/examples/Lan_Master.nes"
+end
+
+puts TEMPLATE
 
 def read(command, list)
     s = `#{command} #{TEMPLATE}`.lines

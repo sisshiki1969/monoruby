@@ -1,5 +1,4 @@
 use fancy_regex::Regex;
-use monoasm::CodePtr;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};

@@ -623,7 +623,7 @@ struct FuncExt {
     /// parameter information of this function.
     params: ParamsInfo,
     #[cfg(feature = "perf")]
-    wrapper: Option<(CodePtr, usize, CodePtr, usize)>,
+    wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
 
 #[derive(Debug, Clone, Default)]
