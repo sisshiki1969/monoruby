@@ -290,7 +290,7 @@ impl Codegen {
         self.push_frame();
 
         if native {
-            self.call_codeptr(codeptr);
+            self.call_codeptr(codeptr)
         } else {
             match store[callee_fid].get_jit_code(recv_class) {
                 Some(dest) => {
@@ -308,7 +308,6 @@ impl Codegen {
             };
         }
         self.pop_frame();
-
         self.xmm_restore(using_xmm);
         self.handle_error(error);
     }

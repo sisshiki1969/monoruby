@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use monoasm::*;
 use monoasm_macro::monoasm;
 
@@ -105,8 +107,9 @@ pub struct Codegen {
     const_version: DestLabel,
     bop_redefined: DestLabel,
     #[allow(dead_code)]
-    entry_panic: DestLabel,
+    pub(crate) entry_panic: DestLabel,
     pub(crate) vm_entry: DestLabel,
+    vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_fetch: DestLabel,
     jit_class_guard_fail: DestLabel,
     ///
@@ -196,6 +199,7 @@ impl Codegen {
             bop_redefined,
             entry_panic,
             vm_entry: entry_panic,
+            vm_code_position: (None, 0, None, 0),
             vm_fetch: entry_panic,
             jit_class_guard_fail: entry_panic,
             entry_raise: entry_panic,
@@ -258,9 +262,19 @@ impl Codegen {
     pub(crate) fn set_bop_redefine(&mut self) {
         let addr = self.jit.get_label_address(self.bop_redefined).as_ptr() as *mut u32;
         unsafe { *addr = !0 }
-        self.remove_bop_optimization();
+        self.remove_vm_bop_optimization();
         #[cfg(any(test, feature = "jit-log"))]
-        eprintln!("basic op redefined.");
+        eprintln!("### basic op redefined.");
+    }
+
+    ///
+    /// Check whether *addr* is in VM code or invokers.
+    ///
+    pub(crate) fn check_vm_address(&self, addr: CodePtr) -> bool {
+        let (start1, size1, start2, size2) = self.vm_code_position;
+        let start1 = start1.unwrap();
+        let start2 = start2.unwrap();
+        (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
     }
 
     fn icmp_teq(&mut self) {
@@ -754,7 +768,6 @@ impl Codegen {
         };
     }
 
-    #[cfg(feature = "perf")]
     pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
         assert_eq!(0, self.jit.get_page());
         let ptr0 = self.jit.get_current_address();

@@ -1,5 +1,7 @@
 use super::*;
 
+// Define builtin functions.
+
 impl Globals {
     fn new_builtin_fn(
         &mut self,

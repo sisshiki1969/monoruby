@@ -491,7 +491,7 @@ impl Globals {
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.func_description(func_id);
-            self.codegen.perf_info2(info, &desc);
+            self.codegen.perf_write(info, &desc);
         }
     }
 
@@ -527,7 +527,7 @@ impl Globals {
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.func_description(func_id);
-            self.codegen.perf_info2(info, &desc);
+            self.codegen.perf_write(info, &desc);
         }
         let singleton = self.get_metaclass(class_id).id();
         self.store[func_id].set_owner_class(class_id);

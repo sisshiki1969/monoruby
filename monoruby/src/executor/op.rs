@@ -305,6 +305,7 @@ pub(crate) fn cmp_teq_values_bool(
     Ok(b)
 }
 
+#[allow(dead_code)]
 pub(crate) fn cmp_teq_values_bool_no_opt(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -384,6 +385,7 @@ impl Executor {
             })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn compare_values_no_opt(
         &mut self,
         globals: &mut Globals,

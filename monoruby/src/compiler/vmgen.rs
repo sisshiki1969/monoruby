@@ -87,7 +87,6 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool, main_object: Value) {
         self.entry_point = self.gen_entry_point(main_object);
-        #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
         //
@@ -388,12 +387,14 @@ impl Codegen {
         self.perf_info(pair, "monoruby-vm");
 
         self.gen_invoker();
+        let info = self.get_wrapper_info(pair);
+        self.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
     }
 
     ///
     /// Replace VM instruction routines with non-basic-op-optimized routines.
     ///
-    pub(super) fn remove_bop_optimization(&mut self) {
+    pub(super) fn remove_vm_bop_optimization(&mut self) {
         self.dispatch[126] = self.vm_pos_no_opt();
         self.dispatch[127] = self.vm_bitnot_no_opt();
         self.dispatch[128] = self.vm_not();
@@ -477,7 +478,6 @@ impl Codegen {
         self.jit.finalize();
     }
 
-    #[cfg(feature = "perf")]
     pub(crate) fn get_wrapper_info(
         &mut self,
         pair: (CodePtr, CodePtr),
@@ -494,11 +494,11 @@ impl Codegen {
     #[cfg(feature = "perf")]
     pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
         let info = self.get_wrapper_info(pair);
-        self.perf_info2(info, func_name);
+        self.perf_write(info, func_name);
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_info2(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         self.perf_file
             .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
             .unwrap();

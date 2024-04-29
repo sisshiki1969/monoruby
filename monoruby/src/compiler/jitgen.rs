@@ -30,6 +30,9 @@ pub mod trace_ir;
 /// Context for JIT compilation.
 ///
 struct JitContext {
+    ///
+    /// Assembly IR.
+    ///
     ir: AsmIr,
     ///
     /// Destination labels for each TraceIr.
@@ -51,7 +54,7 @@ struct JitContext {
     /// Loop information.
     ///
     /// ### key
-    /// the first basic block.
+    /// the entry basic block of the loop.
     ///
     /// ### value
     /// (the last basic block, slot_info at the loop exit)
@@ -62,27 +65,27 @@ struct JitContext {
     ///
     loop_count: usize,
     ///
-    /// true for a loop, false for a method.
+    /// Flag whether this context is a loop.
     ///
     is_loop: bool,
     ///
-    /// A map for bytecode position and branches.
+    /// Map for bytecode position and branches.
     ///
     branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
     ///
-    /// Target context (BBContext) for an each instruction.
+    /// Target `BBContext` for an each instruction.
     ///
     target_ctx: HashMap<BcIndex, BBContext>,
     ///
-    /// A map for backward branches.
+    /// Map for backward branches.
     ///
     backedge_map: HashMap<BcIndex, BackedgeInfo>,
     ///
-    /// the number of slots.
+    /// Number of slots.
     ///
     total_reg_num: usize,
     ///
-    /// the number of local variables.
+    /// Number of local variables.
     ///
     local_num: usize,
     ///
@@ -90,7 +93,7 @@ struct JitContext {
     ///
     self_value: Value,
     ///
-    /// source map.
+    /// Source map.
     ///
     sourcemap: Vec<(BcIndex, usize)>,
     ///
@@ -111,7 +114,12 @@ struct JitContext {
     #[allow(dead_code)]
     class_version: u32,
     ///
-    /// The start offset of a machine code corresponding to thhe current basic block.
+    /// BOP redefinition flag at compile time.
+    ///
+    #[allow(dead_code)]
+    basic_op_redefinition: u32,
+    ///
+    /// Start offset of a machine code corresponding to the current basic block.
     ///
     #[cfg(feature = "emit-asm")]
     start_codepos: usize,
@@ -206,6 +214,7 @@ impl JitContext {
             continuation_bridge: None,
             opt_case: vec![],
             class_version: codegen.class_version(),
+            basic_op_redefinition: codegen.bop_redefine(),
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
