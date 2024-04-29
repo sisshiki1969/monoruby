@@ -106,7 +106,7 @@ pub struct Codegen {
     bop_redefined: DestLabel,
     #[allow(dead_code)]
     entry_panic: DestLabel,
-    vm_entry: DestLabel,
+    pub(crate) vm_entry: DestLabel,
     vm_fetch: DestLabel,
     jit_class_guard_fail: DestLabel,
     ///

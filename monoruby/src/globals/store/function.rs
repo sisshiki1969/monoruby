@@ -335,7 +335,6 @@ impl alloc::GC<RValue> for Funcs {
 }
 
 impl Funcs {
-    #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         &self.info
     }
@@ -475,6 +474,12 @@ impl Funcs {
         FuncId::new(self.info.len() as u32)
     }
 
+    pub(super) fn invalidate_jit_code(&mut self) {
+        self.info
+            .iter_mut()
+            .for_each(|info| info.invalidate_jit_code())
+    }
+
     fn handle_args(
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
@@ -611,6 +616,8 @@ struct FuncExt {
     name: Option<IdentId>,
     /// class id which this function belongs to.
     class_id: Option<ClassId>,
+    /// `DestLabel` of entry site.
+    entry: Option<DestLabel>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
@@ -658,6 +665,7 @@ impl FuncInfo {
             ext: Box::new(FuncExt {
                 name,
                 class_id: None,
+                entry: None,
                 jit_entry: Default::default(),
                 params,
                 #[cfg(feature = "perf")]
@@ -810,6 +818,10 @@ impl FuncInfo {
         self.ext.class_id = Some(class);
     }
 
+    pub(super) fn entry_label(&self) -> DestLabel {
+        self.ext.entry.unwrap()
+    }
+
     ///
     /// Get meta data (Meta) of this function.
     ///
@@ -896,7 +908,8 @@ impl FuncInfo {
         self.data.set_reg_num(reg_num);
     }
 
-    pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
+    pub(in crate::globals) fn set_entry(&mut self, entry: DestLabel, codeptr: monoasm::CodePtr) {
+        self.ext.entry = Some(entry);
         self.data.set_codeptr(codeptr)
     }
 
@@ -957,6 +970,10 @@ impl FuncInfo {
 
     pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
         self.ext.jit_entry.get(&self_class).cloned()
+    }
+
+    pub(crate) fn invalidate_jit_code(&mut self) {
+        self.ext.jit_entry.clear();
     }
 }
 

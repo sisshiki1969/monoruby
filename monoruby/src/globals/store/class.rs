@@ -755,8 +755,22 @@ impl Globals {
         if let Some(old) = self.store[class_id].methods.insert(name, entry)
             && old.is_basic_op
         {
-            self.codegen.set_bop_redefine();
-            //self.codegen.remove_optimization();
+            self.set_bop_redefine();
+        }
+    }
+
+    fn set_bop_redefine(&mut self) {
+        self.codegen.set_bop_redefine();
+        self.store.functions.invalidate_jit_code();
+        let vm_entry = self.codegen.vm_entry;
+        for func in self.store.functions.functions() {
+            match func.kind {
+                FuncKind::ISeq(_) => {
+                    let entry = func.entry_label();
+                    self.codegen.jit.apply_jmp_patch(entry, vm_entry);
+                }
+                _ => {}
+            }
         }
     }
 
