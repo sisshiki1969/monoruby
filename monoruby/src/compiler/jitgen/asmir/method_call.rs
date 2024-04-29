@@ -35,6 +35,7 @@ impl AsmIr {
             self.gen_call_cached(store, bb, callid, fid, pc)?;
         }
         self.rax2acc(bb, dst);
+        self.check_bop(bb, pc + 2);
         Some(())
     }
 

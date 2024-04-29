@@ -173,6 +173,23 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.recompile_and_deopt(position, deopt)
             }
+            AsmInst::CheckBOP { deopt } => {
+                let deopt = labels[deopt];
+                let bop_flag = self.bop_redefined;
+                let l1 = self.jit.label();
+                monoasm!(
+                    &mut self.jit,
+                    cmpl [rip + bop_flag], 0;
+                    jmp l1;
+                );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                l1:
+                    movq rdi, (Value::symbol(IdentId::get_id("_bop_guard")).id());
+                    jne deopt;
+                );
+                self.jit.select_page(0);
+            }
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),

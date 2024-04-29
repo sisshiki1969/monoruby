@@ -1,5 +1,3 @@
-use self::runtime::_dump_stacktrace;
-
 use super::*;
 use crate::bytecodegen::*;
 

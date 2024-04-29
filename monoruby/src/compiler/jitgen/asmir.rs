@@ -145,6 +145,11 @@ impl AsmIr {
         self.inst.push(AsmInst::Deopt(exit));
     }
 
+    pub(super) fn check_bop(&mut self, bb: &BBContext, pc: BcPc) {
+        let deopt = self.new_deopt(bb, pc);
+        self.inst.push(AsmInst::CheckBOP { deopt });
+    }
+
     pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, pc: BcPc, position: Option<BcPc>) {
         let deopt = self.new_deopt(bb, pc);
         self.inst.push(AsmInst::RecompileDeopt { position, deopt });
@@ -1083,6 +1088,9 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: AsmError,
+    },
+    CheckBOP {
+        deopt: AsmDeopt,
     },
 
     Not,
