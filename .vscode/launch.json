@@ -7,7 +7,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'monoruby'",
+      "name": "Debug 'test.rb'",
       "cargo": {
         "args": [
           "run",

@@ -180,7 +180,7 @@ impl Codegen {
                 monoasm!(
                     &mut self.jit,
                     cmpl [rip + bop_flag], 0;
-                    jmp l1;
+                    jnz l1;
                 );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
