@@ -175,7 +175,7 @@ impl Codegen {
             }
             AsmInst::CheckBOP { deopt } => {
                 let deopt = labels[deopt];
-                let bop_flag = self.bop_redefined;
+                let bop_flag = self.bop_redefined_flags;
                 let l1 = self.jit.label();
                 monoasm!(
                     &mut self.jit,
@@ -186,7 +186,7 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                 l1:
                     movq rdi, (Value::symbol(IdentId::get_id("_bop_guard")).id());
-                    jne deopt;
+                    jmp  deopt;
                 );
                 self.jit.select_page(0);
             }
@@ -318,10 +318,13 @@ impl Codegen {
                 offset,
                 using_xmm,
                 error,
+                deopt_lazy,
             } => {
                 let error = labels[error];
+                let deopt_lazy = labels[deopt_lazy];
                 self.send_cached(
                     store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
+                    deopt_lazy,
                 );
             }
             AsmInst::SendNotCached {

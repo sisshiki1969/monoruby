@@ -117,7 +117,7 @@ struct JitContext {
     /// BOP redefinition flag at compile time.
     ///
     #[allow(dead_code)]
-    basic_op_redefinition: u32,
+    bop_redefine_flags: u32,
     ///
     /// Start offset of a machine code corresponding to the current basic block.
     ///
@@ -214,7 +214,7 @@ impl JitContext {
             continuation_bridge: None,
             opt_case: vec![],
             class_version: codegen.class_version(),
-            basic_op_redefinition: codegen.bop_redefine(),
+            bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
@@ -735,6 +735,7 @@ impl JitContext {
                     func_id,
                     using_xmm,
                 });
+                self.ir.check_bop(bb, pc);
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 self.ir.write_back_slots(bb, &[obj]);
@@ -745,6 +746,7 @@ impl JitContext {
                     func_id,
                     using_xmm,
                 });
+                self.ir.check_bop(bb, pc);
             }
             TraceIr::ClassDef {
                 dst,

@@ -523,7 +523,7 @@ impl Executor {
                 globals.add_singleton_method(class_id, name, func, visibility);
             }
             globals.class_version_inc();
-            if globals.codegen.bop_redefine() != 0 {
+            if globals.codegen.bop_redefine_flags() != 0 {
                 self.patch_deopt_in_callstack(globals);
             }
             Some(Value::nil())
@@ -545,11 +545,17 @@ impl Executor {
         while let Some(prev_cfp) = cfp.prev() {
             let ret = return_addr.unwrap();
             if !globals.codegen.check_vm_address(ret) {
-                //globals
-                //    .codegen
-                //    .jit
-                //    .apply_jmp_patch_address(ret, globals.codegen.entry_panic);
-                //unsafe { ret.as_ptr().write(0xe9) };
+                if let Some((patch_point, deopt)) = globals.codegen.get_deopt_with_return_addr(ret)
+                {
+                    globals
+                        .codegen
+                        .jit
+                        .apply_jmp_patch_address(patch_point, deopt);
+                    unsafe { ret.as_ptr().write(0xe9) };
+                    eprintln!("patched");
+                } else {
+                    eprintln!("not patched");
+                }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };

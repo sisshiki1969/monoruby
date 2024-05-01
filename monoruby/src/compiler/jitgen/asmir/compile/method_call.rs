@@ -276,6 +276,7 @@ impl Codegen {
         offset: usize,
         using_xmm: UsingXmm,
         error: DestLabel,
+        deopt_lazy: DestLabel,
     ) {
         let caller = &store[callid];
         let callee = &store[callee_fid];
@@ -307,9 +308,12 @@ impl Codegen {
                 }
             };
         }
+        let return_addr = self.jit.get_current_address();
+
         self.pop_frame();
         self.xmm_restore(using_xmm);
         self.handle_error(error);
+        self.set_deopt_with_return_addr(return_addr, patch_point, deopt_lazy);
     }
 
     ///

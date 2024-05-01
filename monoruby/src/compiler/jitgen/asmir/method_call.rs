@@ -17,6 +17,7 @@ impl AsmIr {
             self.unlink(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
+            self.rax2acc(bb, dst);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
@@ -32,10 +33,14 @@ impl AsmIr {
             if !recv.is_self() && !bb.is_class(recv, cached_class) {
                 self.guard_class(bb, recv, GP::Rdi, cached_class, deopt);
             }
-            self.gen_call_cached(store, bb, callid, fid, pc)?;
+            let deopt_lazy = self.gen_call_cached(store, bb, callid, fid, pc)?;
+            self.rax2acc(bb, dst);
+            if let Some(deopt_lazy) = deopt_lazy {
+                self.deopt_lazy
+                    .insert(deopt_lazy, (bb.get_write_back(), pc));
+            }
         }
-        self.rax2acc(bb, dst);
-        self.check_bop(bb, pc + 2);
+
         Some(())
     }
 
@@ -52,7 +57,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) -> Option<()> {
+    ) -> Option<Option<AsmDeoptLazy>> {
         let CallSiteInfo { args, len, dst, .. } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let recv_class = pc.cached_class1().unwrap();
@@ -81,13 +86,17 @@ impl AsmIr {
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, true);
+                let deopt_lazy = self.new_deopt_lazy();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, true, deopt_lazy);
+                return Some(Some(deopt_lazy));
             }
             FuncKind::ISeq(_) => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, false);
+                let deopt_lazy = self.new_deopt_lazy();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, false, deopt_lazy);
+                return Some(Some(deopt_lazy));
             }
         };
-        Some(())
+        Some(None)
     }
 }
 

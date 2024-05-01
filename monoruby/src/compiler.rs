@@ -105,7 +105,9 @@ pub struct Codegen {
     class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
-    bop_redefined: DestLabel,
+    bop_redefined_flags: DestLabel,
+    /// return_addr => (patch_point, deopt)
+    return_addr_table: HashMap<CodePtr, (CodePtr, DestLabel)>,
     #[allow(dead_code)]
     pub(crate) entry_panic: DestLabel,
     pub(crate) vm_entry: DestLabel,
@@ -179,7 +181,7 @@ impl Codegen {
     pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
-        let bop_redefined = jit.data_i32(0);
+        let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
@@ -196,7 +198,8 @@ impl Codegen {
             class_version_addr: std::ptr::null_mut(),
             alloc_flag,
             const_version,
-            bop_redefined,
+            bop_redefined_flags,
+            return_addr_table: HashMap::default(),
             entry_panic,
             vm_entry: entry_panic,
             vm_code_position: (None, 0, None, 0),
@@ -254,17 +257,40 @@ impl Codegen {
         unsafe { *self.class_version_addr += 1 }
     }
 
-    pub(crate) fn bop_redefine(&self) -> u32 {
-        let addr = self.jit.get_label_address(self.bop_redefined).as_ptr() as *mut u32;
+    pub(crate) fn bop_redefine_flags(&self) -> u32 {
+        let addr = self
+            .jit
+            .get_label_address(self.bop_redefined_flags)
+            .as_ptr() as *mut u32;
         unsafe { *addr }
     }
 
     pub(crate) fn set_bop_redefine(&mut self) {
-        let addr = self.jit.get_label_address(self.bop_redefined).as_ptr() as *mut u32;
+        let addr = self
+            .jit
+            .get_label_address(self.bop_redefined_flags)
+            .as_ptr() as *mut u32;
         unsafe { *addr = !0 }
         self.remove_vm_bop_optimization();
         #[cfg(any(test, feature = "jit-log"))]
         eprintln!("### basic op redefined.");
+    }
+
+    pub(crate) fn get_deopt_with_return_addr(
+        &self,
+        return_addr: CodePtr,
+    ) -> Option<(CodePtr, DestLabel)> {
+        self.return_addr_table.get(&return_addr).cloned()
+    }
+
+    pub(crate) fn set_deopt_with_return_addr(
+        &mut self,
+        return_addr: CodePtr,
+        patch_point: CodePtr,
+        deopt: DestLabel,
+    ) {
+        self.return_addr_table
+            .insert(return_addr, (patch_point, deopt));
     }
 
     ///

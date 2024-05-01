@@ -36,6 +36,9 @@ pub(crate) struct AsmDeopt(usize);
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmError(usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AsmDeoptLazy(usize);
+
 pub(crate) struct SideExitLabels(Vec<DestLabel>);
 
 impl SideExitLabels {
@@ -64,9 +67,18 @@ impl std::ops::Index<AsmError> for SideExitLabels {
     }
 }
 
+impl std::ops::Index<AsmDeoptLazy> for SideExitLabels {
+    type Output = DestLabel;
+
+    fn index(&self, index: AsmDeoptLazy) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
-    pub(super) side_exit: Vec<SideExit>,
+    side_exit: Vec<SideExit>,
+    deopt_lazy: HashMap<AsmDeoptLazy, (WriteBack, BcPc)>,
 }
 
 // public interface
@@ -79,6 +91,11 @@ impl AsmIr {
     pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BcPc) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
         AsmError(i)
+    }
+
+    pub(crate) fn new_deopt_lazy(&mut self) -> AsmDeoptLazy {
+        let i = self.new_label(SideExit::DeoptLazy);
+        AsmDeoptLazy(i)
     }
 
     pub(crate) fn new_deopt_error(&mut self, bb: &BBContext, pc: BcPc) -> (AsmDeopt, AsmError) {
@@ -131,6 +148,7 @@ impl AsmIr {
         Self {
             inst: vec![],
             side_exit: vec![],
+            deopt_lazy: HashMap::default(),
         }
     }
 
@@ -418,6 +436,7 @@ impl AsmIr {
         callee_fid: FuncId,
         recv_class: ClassId,
         native: bool,
+        deopt_lazy: AsmDeoptLazy,
     ) {
         self.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(bb.get_register());
@@ -439,6 +458,7 @@ impl AsmIr {
             offset,
             using_xmm,
             error,
+            deopt_lazy,
         });
     }
 
@@ -1073,6 +1093,7 @@ pub(super) enum AsmInst {
         offset: usize,
         using_xmm: UsingXmm,
         error: AsmError,
+        deopt_lazy: AsmDeoptLazy,
     },
     SendNotCached {
         callid: CallSiteId,
@@ -1404,16 +1425,17 @@ pub(super) enum FMode {
 }
 
 pub(super) enum SideExit {
+    DeoptLazy,
     Deoptimize(BcPc, WriteBack),
     Error(BcPc, WriteBack),
 }
 
 impl Codegen {
     pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext) {
-        // generate machine code for a main math
+        // generate machine code for a main context
         self.gen_asm(store, ctx, None, None);
 
-        // generate machinwe code for bridges
+        // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
             ctx.ir = ir;
             self.gen_asm(store, ctx, Some(entry), Some(exit));
@@ -1436,8 +1458,13 @@ impl Codegen {
             let label = self.jit.label();
             side_exits.push(label);
             match side_exit {
-                SideExit::Deoptimize(pc, wb) => self.gen_deopt_with_label(pc, &wb, label),
-                SideExit::Error(pc, wb) => self.gen_handle_error(pc, wb, label),
+                SideExit::DeoptLazy => {}
+                SideExit::Deoptimize(pc, wb) => {
+                    self.gen_deopt_with_label(pc, &wb, label);
+                }
+                SideExit::Error(pc, wb) => {
+                    self.gen_handle_error(pc, wb, label);
+                }
             }
         }
 
