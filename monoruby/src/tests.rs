@@ -1,6 +1,6 @@
 use super::*;
 use ruruby_parse::Parser;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 mod case;
@@ -211,29 +211,17 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
     res
 }
 
-fn spawn_ruby() -> Option<std::process::Child> {
-    for i in 0..5 {
-        match std::process::Command::new("bash")
-            .args(&["-C", "ruby"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-        {
-            Err(why) => {
-                if i == 4 {
-                    panic!("couldn't spawn ruby.: {}", why)
-                } else {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
-            Ok(process) => return Some(process),
-        }
-    }
-    None
+fn spawn_ruby() -> std::process::Child {
+    std::process::Command::new("bash")
+        .args(&["-C", "ruby"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("couldn't spawn ruby.: {}", err))
 }
 
 fn run_ruby(globals: &mut Globals, code: &str) -> Value {
-    let process = spawn_ruby().unwrap();
+    let mut process = spawn_ruby();
 
     let code = format!(
         r#"
@@ -244,23 +232,24 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
         code
     );
 
-    match process.stdin.unwrap().write_all(code.as_bytes()) {
+    match process.stdin.take().unwrap().write_all(code.as_bytes()) {
         Err(why) => panic!("couldn't write to ruby stdin: {}", why),
-        Ok(_) => println!("sent code to ruby: {}", code),
+        Ok(_) => eprintln!("sent code to ruby: {}", code),
     }
 
-    let mut response = String::new();
-    match process.stdout.unwrap().read_to_string(&mut response) {
+    let res = match process.wait_with_output() {
         Err(why) => panic!("couldn't read ruby stdout: {}", why),
-        Ok(_) => {}
-    }
+        Ok(res) => {
+            if !res.status.success() {
+                eprintln!("ruby exited with: {}", res.status);
+            }
+            let res = String::from_utf8(res.stdout);
+            eprintln!("{:?}", res);
+            res.unwrap()
+        }
+    };
 
-    let res = std::str::from_utf8(response.as_bytes())
-        .unwrap()
-        .trim_end()
-        .split('\n')
-        .last()
-        .unwrap();
+    let res = res.trim_end().split('\n').last().unwrap();
     let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
         .unwrap()
         .node;
