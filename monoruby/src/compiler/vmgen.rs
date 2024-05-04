@@ -395,6 +395,8 @@ impl Codegen {
     /// Replace VM instruction routines with non-basic-op-optimized routines.
     ///
     pub(super) fn remove_vm_bop_optimization(&mut self) {
+        self.dispatch[14] = self.vm_loop_start_no_opt();
+
         self.dispatch[126] = self.vm_pos_no_opt();
         self.dispatch[127] = self.vm_bitnot_no_opt();
         self.dispatch[128] = self.vm_not();
@@ -914,6 +916,12 @@ impl Codegen {
                 jmp rax;
             );
         }
+        label
+    }
+
+    fn vm_loop_start_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch_and_dispatch();
         label
     }
 

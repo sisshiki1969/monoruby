@@ -524,7 +524,7 @@ impl Executor {
             }
             globals.class_version_inc();
             if globals.codegen.bop_redefine_flags() != 0 {
-                self.patch_deopt_in_callstack(globals);
+                self.immediate_eviction(globals);
             }
             Some(Value::nil())
         } else {
@@ -539,7 +539,7 @@ impl Executor {
         }
     }
 
-    fn patch_deopt_in_callstack(&mut self, globals: &mut Globals) {
+    fn immediate_eviction(&mut self, globals: &mut Globals) {
         let mut cfp = self.cfp();
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
@@ -547,20 +547,17 @@ impl Executor {
             if !globals.codegen.check_vm_address(ret) {
                 if let Some((patch_point, deopt)) = globals.codegen.get_deopt_with_return_addr(ret)
                 {
+                    let patch_point = patch_point.unwrap();
                     globals
                         .codegen
                         .jit
                         .apply_jmp_patch_address(patch_point, deopt);
-                    unsafe { ret.as_ptr().write(0xe9) };
-                    eprintln!("patched");
-                } else {
-                    eprintln!("not patched");
+                    unsafe { patch_point.as_ptr().write(0xe9) };
                 }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
-        //_dump_stacktrace(self, globals);
     }
 }
 

@@ -44,7 +44,7 @@ impl Codegen {
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
-                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    movq rdi, (Value::symbol_from_str("_arith_overflow").id());
                     jmp deopt;
                 );
                 self.jit.select_page(0);
@@ -74,7 +74,7 @@ impl Codegen {
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
-                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    movq rdi, (Value::symbol_from_str("_arith_overflow").id());
                     jmp deopt;
                 );
                 self.jit.select_page(0);
@@ -107,7 +107,7 @@ impl Codegen {
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
-                    movq rdi, (Value::symbol(IdentId::get_id("_arith_overflow")).id());
+                    movq rdi, (Value::symbol_from_str("_arith_overflow").id());
                     jmp deopt;
                 );
                 self.jit.select_page(0);
@@ -232,12 +232,11 @@ impl Codegen {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn generic_binop(&mut self, kind: BinOpK, using_xmm: UsingXmm, error: DestLabel) {
+    pub(super) fn generic_binop(&mut self, kind: BinOpK, using_xmm: UsingXmm) {
         let func = kind.generic_func();
         self.xmm_save(using_xmm);
         self.call_binop(func);
         self.xmm_restore(using_xmm);
-        self.handle_error(error);
     }
 }
 

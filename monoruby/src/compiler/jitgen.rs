@@ -720,10 +720,12 @@ impl JitContext {
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
+                let evict = self.ir.new_evict();
                 self.ir.inst.push(AsmInst::Yield {
                     callid,
                     using_xmm,
                     error,
+                    evict,
                 });
                 self.ir.rax2acc(bb, store[callid].dst);
             }
@@ -1426,12 +1428,35 @@ impl Codegen {
     }
 
     ///
-    /// Get *DestLabel* for fallback to interpreter. (without write-back)
+    /// Get *DestLabel* for fallback to interpreter by deoptimization.
     ///
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
     fn gen_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+        self.side_exit_with_label(pc, wb, entry, false)
+    }
+
+    ///
+    /// Get *DestLabel* for fallback to interpreter by immediate eviction.
+    ///
+    fn gen_evict_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+        self.side_exit_with_label(pc, wb, entry, true)
+    }
+
+    ///
+    /// Get *DestLabel* for fallback to interpreter.
+    ///
+    /// ### in
+    /// - rdi: deopt-reason:Value
+    ///
+    fn side_exit_with_label(
+        &mut self,
+        pc: BcPc,
+        wb: &WriteBack,
+        entry: DestLabel,
+        _is_evict: bool,
+    ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
@@ -1439,15 +1464,26 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.u64());
         );
+
         #[cfg(any(feature = "deopt", feature = "profile"))]
-        monoasm!( &mut self.jit,
-            movq rcx, rdi; // the Value which caused this deopt.
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, r13;
-            movq rax, (crate::globals::log_deoptimize);
-            call rax;
-        );
+        {
+            if _is_evict {
+                monoasm!( &mut self.jit,
+                    movq rcx, (Value::symbol_from_str("__immediate_evict").id());
+                );
+            } else {
+                monoasm!( &mut self.jit,
+                    movq rcx, rdi; // the Value which caused this deopt.
+                );
+            }
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, r13;
+                movq rax, (crate::globals::log_deoptimize);
+                call rax;
+            );
+        }
         let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
             jmp fetch;

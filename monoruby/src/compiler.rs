@@ -8,6 +8,8 @@ pub mod runtime;
 mod vmgen;
 mod wrapper;
 
+use self::jitgen::asmir::AsmEvict;
+
 use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
@@ -107,7 +109,8 @@ pub struct Codegen {
     const_version: DestLabel,
     bop_redefined_flags: DestLabel,
     /// return_addr => (patch_point, deopt)
-    return_addr_table: HashMap<CodePtr, (CodePtr, DestLabel)>,
+    return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
+    asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
     #[allow(dead_code)]
     pub(crate) entry_panic: DestLabel,
     pub(crate) vm_entry: DestLabel,
@@ -200,6 +203,7 @@ impl Codegen {
             const_version,
             bop_redefined_flags,
             return_addr_table: HashMap::default(),
+            asm_return_addr_table: HashMap::default(),
             entry_panic,
             vm_entry: entry_panic,
             vm_code_position: (None, 0, None, 0),
@@ -279,18 +283,29 @@ impl Codegen {
     pub(crate) fn get_deopt_with_return_addr(
         &self,
         return_addr: CodePtr,
-    ) -> Option<(CodePtr, DestLabel)> {
+    ) -> Option<(Option<CodePtr>, DestLabel)> {
         self.return_addr_table.get(&return_addr).cloned()
     }
 
     pub(crate) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
+        evict: AsmEvict,
+        evict_label: DestLabel,
+    ) {
+        self.asm_return_addr_table.insert(evict, return_addr);
+        self.return_addr_table
+            .insert(return_addr, (None, evict_label));
+    }
+
+    pub(crate) fn set_deopt_patch_point_with_return_addr(
+        &mut self,
+        return_addr: CodePtr,
         patch_point: CodePtr,
-        deopt: DestLabel,
     ) {
         self.return_addr_table
-            .insert(return_addr, (patch_point, deopt));
+            .entry(return_addr)
+            .and_modify(|e| e.0 = Some(patch_point));
     }
 
     ///
@@ -994,7 +1009,7 @@ fn guard_class() {
         (FLOAT_CLASS, Value::float(f64::MAX)),
         (FLOAT_CLASS, Value::float(f64::MIN)),
         (NIL_CLASS, Value::nil()),
-        (SYMBOL_CLASS, Value::symbol(IdentId::get_id("Ruby"))),
+        (SYMBOL_CLASS, Value::symbol_from_str("Ruby")),
         (TRUE_CLASS, Value::bool(true)),
         (FALSE_CLASS, Value::bool(false)),
         (ARRAY_CLASS, Value::array_from_vec(vec![])),

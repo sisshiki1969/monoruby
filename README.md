@@ -82,23 +82,7 @@ and its REPL.
 
 ## Benchmark
 
-### optcarrot
-
-Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
-
-- ruby33yjit: ruby 3.3.0 (2023-12-25 revision 5124f9ac75) +YJIT [x86_64-linux]fps: 232.57980491198208
-- truffleruby: truffleruby 23.1.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]
-- monoruby: 3e348afd4141c40978342e67ad26d42dc0b8d2a7
-
-#### optcarrot benchmark
-
-![optcarrot_benchmark](./doc/optcarrot_benchmark.png)
-
-#### optcarrot fps history (0-3000 frames)
-
-![optcarrot_fps_history](./doc/optcarrot_fps_history.png)
-
-#### machine spec
+### machine spec
 
 - Architecture: x86_64
 - CPU(s): 32
@@ -111,26 +95,44 @@ Several Ruby implementations described below were measured by [optcarrot](https:
   - L2: 32 MiB (16 instances)
   - L3: 36 MiB (1 instance)
 
+### optcarrot
+
+Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
+
+- ruby 3.4.0dev (2024-04-27T08:56:20Z master 9ea77cb351) [x86_64-linux]
+- truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM JVM [x86_64-linux]
+- truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]
+- monoruby: 3e348afd4141c40978342e67ad26d42dc0b8d2a7
+
+#### optcarrot benchmark
+
+![optcarrot_benchmark](./doc/optcarrot_benchmark.png)
+
+#### optcarrot fps history (0-3000 frames)
+
+![optcarrot_fps_history](./doc/optcarrot_fps_history.png)
+
+##### with --opt option (self-rewriting optimization mode)
+
+![optcarrot_fps_history](./doc/optcarrot_fps_history_opt.png)
+
 ### micro benchmark
 
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
-- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark), and in the benchmark directory (`qsort.rb` and `tarai.rb` etc, shown with \*) in this repo.
+- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark) and [plb2](https://github.com/attractivechaos/plb2).
 - measurements are shown in iteration/sec (the higher, the better).
 
-|               |  3.3.0 | 3.3.0 --yjit | truffleruby-23.1.1 | monoruby | monoruby --no-jit |
-| :------------ | -----: | -----------: | -----------------: | -------: | ----------------: |
-| app_fib       |  5.793 |       41.915 |             27.680 |   40.864 |             5.786 |
-| so_mandelbrot |  0.956 |        2.037 |              2.296 |   30.801 |             1.179 |
-| so_nbody      |  1.814 |        3.808 |             10.283 |   15.704 |             1.309 |
-| app_aobench   |  0.051 |        0.090 |              0.426 |    0.285 |             0.047 |
-| nqueen        |  0.016 |        0.016 |              0.193 |    0.151 |             0.020 |
-| sudoku        |  0.018 |        0.071 |              0.236 |    0.121 |             0.022 |
-| matmul        |  0.009 |        0.023 |              0.331 |    0.064 |             0.008 |
-| bedcov        |  0.032 |        0.034 |              0.269 |    0.046 |             0.029 |
-| tarai\*       |  4.646 |       35.527 |             14.583 |   29.046 |             4.594 |
-| quick_sort\*  | 1.716k |       6.874k |            28.201k |  15.020k |            2.745k |
-| binarytrees\* |  5.385 |       10.613 |              4.835 |    7.740 |             4.056 |
+|               | 3.4-dev | 3.4-dev --yjit | truffleruby+graalvm-24.0.1 | truffleruby-24.0.1 | monoruby | monoruby --no-jit |
+| :------------ | ------: | -------------: | -------------------------: | -----------------: | -------: | ----------------: |
+| app_fib       |   5.473 |         41.195 |                      6.988 |             27.447 |   39.174 |             9.912 |
+| so_mandelbrot |   0.968 |          1.980 |                      1.144 |              2.425 |   29.720 |             1.080 |
+| so_nbody      |   1.768 |          4.633 |                      4.441 |              8.730 |   15.618 |             1.324 |
+| app_aobench   |   0.049 |          0.094 |                      0.276 |              0.346 |    0.305 |             0.044 |
+| nqueen        |   0.015 |          0.015 |                      0.206 |              0.193 |    0.150 |             0.021 |
+| sudoku        |   0.018 |          0.077 |                      0.207 |              0.238 |    0.133 |             0.020 |
+| matmul        |   0.010 |          0.023 |                      0.332 |              0.347 |    0.062 |             0.007 |
+| bedcov        |   0.033 |          0.049 |                      0.222 |              0.257 |    0.048 |             0.033 |
 
-ratio to Ruby 3.3.0 were shown in the graph below.
+ratio to CRuby 3.4-dev were shown in the graph below.
 
 ![micro_bench](./doc/benchmark.png)

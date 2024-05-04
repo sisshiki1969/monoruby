@@ -1789,7 +1789,7 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 #[monoruby_builtin]
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let sym = Value::symbol(IdentId::get_id(&self_val.as_str()));
+    let sym = Value::symbol_from_str(&self_val.as_str());
     Ok(sym)
 }
 

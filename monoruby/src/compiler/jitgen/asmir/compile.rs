@@ -163,6 +163,11 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_class(r, class, deopt);
             }
+
+            AsmInst::HandleError(error) => {
+                let error = labels[error];
+                self.handle_error(error);
+            }
             AsmInst::Deopt(deopt) => {
                 let deopt = labels[deopt];
                 monoasm!( &mut self.jit,
@@ -185,7 +190,7 @@ impl Codegen {
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 l1:
-                    movq rdi, (Value::symbol(IdentId::get_id("_bop_guard")).id());
+                    movq rdi, (Value::symbol_from_str("_bop_guard").id());
                     jmp  deopt;
                 );
                 self.jit.select_page(0);
@@ -198,10 +203,8 @@ impl Codegen {
                 args,
                 meta,
                 offset,
-                error,
             } => {
                 self.jit_set_arguments(callid, args, offset, meta);
-                self.handle_error(labels[error]);
             }
 
             AsmInst::Ret => {
@@ -300,6 +303,11 @@ impl Codegen {
                 };
             }
 
+            AsmInst::ImmediateEvict { evict } => {
+                let patch_point = self.jit.get_current_address();
+                let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
+                self.set_deopt_patch_point_with_return_addr(*return_addr, patch_point);
+            }
             AsmInst::AttrWriter {
                 ivar_id,
                 using_xmm,
@@ -318,14 +326,13 @@ impl Codegen {
                 offset,
                 using_xmm,
                 error,
-                deopt_lazy,
+                evict,
             } => {
                 let error = labels[error];
-                let deopt_lazy = labels[deopt_lazy];
-                self.send_cached(
+                let return_addr = self.send_cached(
                     store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
-                    deopt_lazy,
                 );
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendNotCached {
                 self_class,
@@ -333,40 +340,34 @@ impl Codegen {
                 pc,
                 using_xmm,
                 error,
+                evict,
             } => {
                 let error = labels[error];
-                self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
+                let return_addr =
+                    self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::Yield {
                 callid,
                 using_xmm,
                 error,
+                evict,
             } => {
                 let error = labels[error];
-                self.gen_yield(store, callid, using_xmm, error);
+                self.gen_yield(store, callid, using_xmm, error, evict, labels[evict]);
             }
 
             AsmInst::Not => {
                 self.not_rdi_to_rax();
             }
-            AsmInst::GenericUnOp {
-                func,
-                using_xmm,
-                error,
-            } => {
+            AsmInst::GenericUnOp { func, using_xmm } => {
                 self.xmm_save(using_xmm);
                 self.call_unop(func);
                 self.xmm_restore(using_xmm);
-                self.handle_error(labels[error]);
             }
 
-            AsmInst::GenericBinOp {
-                kind,
-                using_xmm,
-                error,
-            } => {
-                let error = labels[error];
-                self.generic_binop(kind, using_xmm, error);
+            AsmInst::GenericBinOp { kind, using_xmm } => {
+                self.generic_binop(kind, using_xmm);
             }
             AsmInst::IntegerBinOp {
                 kind,
@@ -380,13 +381,8 @@ impl Codegen {
                 self.integer_binop(&mode, kind, deopt, error, using_xmm);
             }
 
-            AsmInst::GenericCmp {
-                kind,
-                using_xmm,
-                error,
-            } => {
+            AsmInst::GenericCmp { kind, using_xmm } => {
                 self.generic_cmp(&kind, using_xmm);
-                self.handle_error(labels[error]);
             }
             AsmInst::IntegerCmp { kind, mode } => self.integer_cmp(kind, mode),
             AsmInst::IntegerCmpBr {
@@ -451,10 +447,8 @@ impl Codegen {
                 idx,
                 pc,
                 using_xmm,
-                error,
             } => {
                 self.generic_index(using_xmm, base, idx, pc);
-                self.handle_error(labels[error]);
             }
             AsmInst::ArrayU16Index { idx } => {
                 self.gen_array_u16_index(idx);
@@ -468,10 +462,8 @@ impl Codegen {
                 idx,
                 pc,
                 using_xmm,
-                error,
             } => {
                 self.generic_index_assign(using_xmm, base, idx, src, pc);
-                self.handle_error(labels[error]);
             }
             AsmInst::ArrayU16IndexAssign {
                 idx,
@@ -500,12 +492,10 @@ impl Codegen {
                 end,
                 exclude_end,
                 using_xmm,
-                error,
             } => {
                 self.load_rdi(start);
                 self.load_rsi(end);
                 self.new_range(exclude_end, using_xmm);
-                self.handle_error(labels[error]);
             }
 
             AsmInst::BlockArgProxy { ret, outer } => {
@@ -551,22 +541,15 @@ impl Codegen {
                 labels[error],
             ),
 
-            AsmInst::LoadCVar {
-                name,
-                using_xmm,
-                error,
-            } => {
+            AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
-                self.handle_error(labels[error]);
             }
             AsmInst::StoreCVar {
                 name,
                 src,
                 using_xmm,
-                error,
             } => {
                 self.store_cvar(name, src, using_xmm);
-                self.handle_error(labels[error]);
             }
 
             AsmInst::LoadGVar { name, using_xmm } => self.load_gvar(name, using_xmm),
@@ -646,7 +629,6 @@ impl Codegen {
                 arg,
                 len,
                 using_xmm,
-                error,
             } => {
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
@@ -658,13 +640,11 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                self.handle_error(labels[error]);
             }
             AsmInst::AliasMethod {
                 new,
                 old,
                 using_xmm,
-                error,
             } => {
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
@@ -678,7 +658,6 @@ impl Codegen {
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                self.handle_error(labels[error]);
             }
             AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
             AsmInst::DefinedConst {
@@ -785,7 +764,7 @@ impl Codegen {
             movl [rip + cached_version], rax;
             jmp  exit;
         fail:
-            movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).id());
+            movq rdi, (Value::symbol_from_str("__version_guard").id());
             jmp  deopt;
         }
         self.jit.select_page(0);

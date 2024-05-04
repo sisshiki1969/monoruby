@@ -1,4 +1,4 @@
-FRAMES = 2999
+FRAMES = 4999
 arg = ARGV.join(" ")
 
 list = []
@@ -9,9 +9,9 @@ end
 #system("cargo install --path monoruby")
 
 TEMPLATE = if arg.length == 0
-  "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 ../optcarrot/examples/Lan_Master.nes"
+  "../optcarrot/bin/optcarrot -b --print-fps-history -f 5000 ../optcarrot/examples/Lan_Master.nes"
 else
-  "../optcarrot/bin/optcarrot -b --print-fps-history -f 3000 " + arg + " ../optcarrot/examples/Lan_Master.nes"
+  "../optcarrot/bin/optcarrot -b --print-fps-history -f 5000 " + arg + " ../optcarrot/examples/Lan_Master.nes"
 end
 
 puts TEMPLATE
@@ -41,17 +41,22 @@ puts ruby_version = `ruby -v`.chomp
 read('ruby --yjit', list)
 puts
 
-system("rbenv local truffleruby+graalvm-24.0.0")
+system("rbenv local truffleruby+graalvm-24.0.1")
+puts truffle_graal_version = `ruby -v`.chomp
+read('ruby', list)
+puts
+
+system("rbenv local truffleruby-24.0.1")
 puts truffle_version = `ruby -v`.chomp
 read('ruby', list)
 puts
 
 system("rbenv local 3.3.0")
 
-f = "frame,\"#{monoruby_version}\",\"#{ruby_version}\",\"#{truffle_version}\"\n"
+f = "frame,\"#{monoruby_version}\",\"#{ruby_version}\",\"#{truffle_graal_version}\",\"#{truffle_version}\",\n"
 for line in list
-  frame, monoruby, ruby, truffle = line
-  f << "#{frame},#{monoruby},#{ruby},#{truffle}\n"
+  frame, monoruby, ruby, truffle_graal, truffle = line
+  f << "#{frame},#{monoruby},#{ruby},#{truffle_graal},#{truffle}\n"
 end
 
 File.write("result.csv", f)

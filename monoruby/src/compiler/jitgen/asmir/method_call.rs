@@ -33,11 +33,11 @@ impl AsmIr {
             if !recv.is_self() && !bb.is_class(recv, cached_class) {
                 self.guard_class(bb, recv, GP::Rdi, cached_class, deopt);
             }
-            let deopt_lazy = self.gen_call_cached(store, bb, callid, fid, pc)?;
+            let evict = self.gen_call_cached(store, bb, callid, fid, pc)?;
             self.rax2acc(bb, dst);
-            if let Some(deopt_lazy) = deopt_lazy {
-                self.deopt_lazy
-                    .insert(deopt_lazy, (bb.get_write_back(), pc));
+            if let Some(evict) = evict {
+                self.inst.push(AsmInst::ImmediateEvict { evict });
+                self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
             }
         }
 
@@ -57,7 +57,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) -> Option<Option<AsmDeoptLazy>> {
+    ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo { args, len, dst, .. } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let recv_class = pc.cached_class1().unwrap();
@@ -86,14 +86,14 @@ impl AsmIr {
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
-                let deopt_lazy = self.new_deopt_lazy();
-                self.send_cached(store, bb, pc, callid, fid, recv_class, true, deopt_lazy);
-                return Some(Some(deopt_lazy));
+                let evict = self.new_evict();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, true, evict);
+                return Some(Some(evict));
             }
             FuncKind::ISeq(_) => {
-                let deopt_lazy = self.new_deopt_lazy();
-                self.send_cached(store, bb, pc, callid, fid, recv_class, false, deopt_lazy);
-                return Some(Some(deopt_lazy));
+                let evict = self.new_evict();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, false, evict);
+                return Some(Some(evict));
             }
         };
         Some(None)

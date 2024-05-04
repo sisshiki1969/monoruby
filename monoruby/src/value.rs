@@ -375,6 +375,11 @@ impl Value {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
+    pub fn symbol_from_str(s: &str) -> Self {
+        let id = IdentId::get_id(s);
+        Value::symbol(id)
+    }
+
     pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue::new_range(start, end, exclude_end).pack()
     }
@@ -1078,7 +1083,7 @@ impl Value {
             },
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
+            NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast(node, globals));
@@ -1164,7 +1169,7 @@ impl Value {
             NodeKind::Float(num) => Value::float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
+            NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
             NodeKind::Array(v, true) => {
                 let iter = v.iter().map(Self::from_ast2);

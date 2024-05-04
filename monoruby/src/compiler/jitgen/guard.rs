@@ -285,7 +285,7 @@ mod test {
             (FLOAT_CLASS, Value::float(f64::MAX)),
             (FLOAT_CLASS, Value::float(f64::MIN)),
             (NIL_CLASS, Value::nil()),
-            (SYMBOL_CLASS, Value::symbol(IdentId::get_id("Ruby"))),
+            (SYMBOL_CLASS, Value::symbol_from_str("Ruby")),
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
         ] {

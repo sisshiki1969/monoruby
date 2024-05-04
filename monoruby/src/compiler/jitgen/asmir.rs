@@ -37,7 +37,7 @@ pub(crate) struct AsmDeopt(usize);
 pub(crate) struct AsmError(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct AsmDeoptLazy(usize);
+pub(crate) struct AsmEvict(usize);
 
 pub(crate) struct SideExitLabels(Vec<DestLabel>);
 
@@ -67,10 +67,10 @@ impl std::ops::Index<AsmError> for SideExitLabels {
     }
 }
 
-impl std::ops::Index<AsmDeoptLazy> for SideExitLabels {
+impl std::ops::Index<AsmEvict> for SideExitLabels {
     type Output = DestLabel;
 
-    fn index(&self, index: AsmDeoptLazy) -> &Self::Output {
+    fn index(&self, index: AsmEvict) -> &Self::Output {
         &self.0[index.0]
     }
 }
@@ -78,7 +78,20 @@ impl std::ops::Index<AsmDeoptLazy> for SideExitLabels {
 pub(crate) struct AsmIr {
     pub(super) inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
-    deopt_lazy: HashMap<AsmDeoptLazy, (WriteBack, BcPc)>,
+}
+
+impl std::ops::Index<AsmEvict> for AsmIr {
+    type Output = SideExit;
+
+    fn index(&self, index: AsmEvict) -> &Self::Output {
+        &self.side_exit[index.0]
+    }
+}
+
+impl std::ops::IndexMut<AsmEvict> for AsmIr {
+    fn index_mut(&mut self, index: AsmEvict) -> &mut Self::Output {
+        &mut self.side_exit[index.0]
+    }
 }
 
 // public interface
@@ -93,9 +106,9 @@ impl AsmIr {
         AsmError(i)
     }
 
-    pub(crate) fn new_deopt_lazy(&mut self) -> AsmDeoptLazy {
-        let i = self.new_label(SideExit::DeoptLazy);
-        AsmDeoptLazy(i)
+    pub(crate) fn new_evict(&mut self) -> AsmEvict {
+        let i = self.new_label(SideExit::Evict(None));
+        AsmEvict(i)
     }
 
     pub(crate) fn new_deopt_error(&mut self, bb: &BBContext, pc: BcPc) -> (AsmDeopt, AsmError) {
@@ -148,7 +161,6 @@ impl AsmIr {
         Self {
             inst: vec![],
             side_exit: vec![],
-            deopt_lazy: HashMap::default(),
         }
     }
 
@@ -367,6 +379,10 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn handle_error(&mut self, error: AsmError) {
+        self.inst.push(AsmInst::HandleError(error));
+    }
+
     ///
     /// Attribute writer
     ///
@@ -436,7 +452,7 @@ impl AsmIr {
         callee_fid: FuncId,
         recv_class: ClassId,
         native: bool,
-        deopt_lazy: AsmDeoptLazy,
+        evict: AsmEvict,
     ) {
         self.reg_move(GP::Rdi, GP::R13);
         self.exec_gc(bb.get_register());
@@ -458,7 +474,7 @@ impl AsmIr {
             offset,
             using_xmm,
             error,
-            deopt_lazy,
+            evict,
         });
     }
 
@@ -519,14 +535,15 @@ impl AsmIr {
                 args,
                 meta,
                 offset,
-                error,
             });
+            self.handle_error(error);
         }
     }
 
     pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BcPc, callid: CallSiteId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
+        let evict = self.new_evict();
         let self_class = bb.self_value.class();
         self.inst.push(AsmInst::SendNotCached {
             self_class,
@@ -534,17 +551,15 @@ impl AsmIr {
             pc,
             using_xmm,
             error,
+            evict,
         });
     }
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BcPc, func: UnaryOpFn) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericUnOp {
-            func,
-            using_xmm,
-            error,
-        });
+        self.inst.push(AsmInst::GenericUnOp { func, using_xmm });
+        self.handle_error(error);
     }
 
     ///
@@ -564,11 +579,8 @@ impl AsmIr {
     pub(super) fn generic_binop(&mut self, bb: &BBContext, pc: BcPc, kind: BinOpK) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericBinOp {
-            kind,
-            using_xmm,
-            error,
-        });
+        self.inst.push(AsmInst::GenericBinOp { kind, using_xmm });
+        self.handle_error(error);
     }
 
     ///
@@ -600,11 +612,8 @@ impl AsmIr {
     pub(super) fn generic_cmp(&mut self, bb: &BBContext, pc: BcPc, kind: CmpKind) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::GenericCmp {
-            kind,
-            using_xmm,
-            error,
-        });
+        self.inst.push(AsmInst::GenericCmp { kind, using_xmm });
+        self.handle_error(error);
     }
 
     pub(super) fn integer_cmp_br(
@@ -645,8 +654,8 @@ impl AsmIr {
             idx,
             pc,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(super) fn array_u16_index(&mut self, idx: u16) {
@@ -673,8 +682,8 @@ impl AsmIr {
             idx,
             pc,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BcPc) {
@@ -724,8 +733,8 @@ impl AsmIr {
             end,
             exclude_end,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(super) fn block_arg_proxy(&mut self, ret: SlotId, outer: usize) {
@@ -760,11 +769,8 @@ impl AsmIr {
     pub(super) fn load_cvar(&mut self, bb: &BBContext, pc: BcPc, name: IdentId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::LoadCVar {
-            name,
-            using_xmm,
-            error,
-        });
+        self.inst.push(AsmInst::LoadCVar { name, using_xmm });
+        self.handle_error(error);
     }
 
     pub(super) fn store_cvar(&mut self, bb: &BBContext, pc: BcPc, name: IdentId, src: SlotId) {
@@ -774,8 +780,8 @@ impl AsmIr {
             name,
             src,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
@@ -800,8 +806,8 @@ impl AsmIr {
             arg,
             len,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
@@ -821,8 +827,8 @@ impl AsmIr {
             new,
             old,
             using_xmm,
-            error,
         });
+        self.handle_error(error);
     }
 
     pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &SideExitLabels) + 'static) {
@@ -1041,6 +1047,7 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     WriteBack(WriteBack),
+    HandleError(AsmError),
     XmmSave(UsingXmm),
     ExecGc(WriteBack),
     ///
@@ -1057,7 +1064,6 @@ pub(super) enum AsmInst {
         args: SlotId,
         meta: Meta,
         offset: usize,
-        error: AsmError,
     },
 
     ///
@@ -1081,6 +1087,9 @@ pub(super) enum AsmInst {
     AttrReader {
         ivar_id: IvarId,
     },
+    ImmediateEvict {
+        evict: AsmEvict,
+    },
     ///
     /// ### in
     /// - rdi: receiver: Value
@@ -1093,7 +1102,7 @@ pub(super) enum AsmInst {
         offset: usize,
         using_xmm: UsingXmm,
         error: AsmError,
-        deopt_lazy: AsmDeoptLazy,
+        evict: AsmEvict,
     },
     SendNotCached {
         callid: CallSiteId,
@@ -1101,6 +1110,7 @@ pub(super) enum AsmInst {
         pc: BcPc,
         using_xmm: UsingXmm,
         error: AsmError,
+        evict: AsmEvict,
     },
     Inline {
         proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
@@ -1109,6 +1119,7 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: AsmError,
+        evict: AsmEvict,
     },
     CheckBOP {
         deopt: AsmDeopt,
@@ -1118,7 +1129,6 @@ pub(super) enum AsmInst {
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
 
     ///
@@ -1138,7 +1148,6 @@ pub(super) enum AsmInst {
     GenericBinOp {
         kind: BinOpK,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     ///
     /// Integer binary operation.
@@ -1173,7 +1182,6 @@ pub(super) enum AsmInst {
     GenericCmp {
         kind: CmpKind,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     ///
     /// Integer comparison
@@ -1234,7 +1242,6 @@ pub(super) enum AsmInst {
         idx: SlotId,
         pc: BcPc,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     ArrayU16Index {
         idx: u16,
@@ -1246,7 +1253,6 @@ pub(super) enum AsmInst {
         idx: SlotId,
         pc: BcPc,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     ArrayU16IndexAssign {
         idx: u16,
@@ -1270,7 +1276,6 @@ pub(super) enum AsmInst {
         end: SlotId,
         exclude_end: bool,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     ConcatStr {
         arg: SlotId,
@@ -1317,13 +1322,11 @@ pub(super) enum AsmInst {
     LoadCVar {
         name: IdentId,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     StoreCVar {
         name: IdentId,
         src: SlotId,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     LoadGVar {
         name: IdentId,
@@ -1377,13 +1380,11 @@ pub(super) enum AsmInst {
         arg: SlotId,
         len: usize,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     AliasMethod {
         new: SlotId,
         old: SlotId,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
     DefinedYield {
         dst: SlotId,
@@ -1424,8 +1425,8 @@ pub(super) enum FMode {
     IR(i16, Xmm),
 }
 
-pub(super) enum SideExit {
-    DeoptLazy,
+pub enum SideExit {
+    Evict(Option<(BcPc, WriteBack)>),
     Deoptimize(BcPc, WriteBack),
     Error(BcPc, WriteBack),
 }
@@ -1458,13 +1459,16 @@ impl Codegen {
             let label = self.jit.label();
             side_exits.push(label);
             match side_exit {
-                SideExit::DeoptLazy => {}
+                SideExit::Evict(Some((pc, wb))) => {
+                    self.gen_evict_with_label(pc, &wb, label);
+                }
                 SideExit::Deoptimize(pc, wb) => {
                     self.gen_deopt_with_label(pc, &wb, label);
                 }
                 SideExit::Error(pc, wb) => {
                     self.gen_handle_error(pc, wb, label);
                 }
+                _ => {}
             }
         }
 
