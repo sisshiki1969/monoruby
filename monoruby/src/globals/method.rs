@@ -1,5 +1,7 @@
 use super::*;
 
+// Define builtin functions.
+
 impl Globals {
     fn new_builtin_fn(
         &mut self,
@@ -17,6 +19,25 @@ impl Globals {
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
+        func_id
+    }
+
+    fn new_basic_op(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        visi: Visibility,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let func_id = self
+            .store
+            .add_basic_op(name.to_string(), address, min, max, rest);
+        let method_name = IdentId::get_id(name);
+        self.gen_wrapper(func_id);
+        self.add_basic_op_method(class_id, method_name, func_id, visi);
         func_id
     }
 
@@ -92,6 +113,24 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            arg_num,
+            arg_num,
+            false,
+        )
+    }
+
+    pub(crate) fn define_basic_op(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arg_num: usize,
+    ) -> FuncId {
+        self.new_basic_op(
             class_id,
             name,
             address,

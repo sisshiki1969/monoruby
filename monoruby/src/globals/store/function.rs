@@ -335,7 +335,6 @@ impl alloc::GC<RValue> for Funcs {
 }
 
 impl Funcs {
-    #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         &self.info
     }
@@ -415,6 +414,21 @@ impl Funcs {
         id
     }
 
+    pub(super) fn add_native_basic_op(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let id = self.next_func_id();
+        self.info.push(FuncInfo::new_native_basic_op(
+            id, name, address, min, max, rest,
+        ));
+        id
+    }
+
     pub(super) fn add_native_func_eval(
         &mut self,
         name: String,
@@ -458,6 +472,12 @@ impl Funcs {
 
     fn next_func_id(&self) -> FuncId {
         FuncId::new(self.info.len() as u32)
+    }
+
+    pub(super) fn invalidate_jit_code(&mut self) {
+        self.info
+            .iter_mut()
+            .for_each(|info| info.invalidate_jit_code())
     }
 
     fn handle_args(
@@ -596,12 +616,14 @@ struct FuncExt {
     name: Option<IdentId>,
     /// class id which this function belongs to.
     class_id: Option<ClassId>,
+    /// `DestLabel` of entry site.
+    entry: Option<DestLabel>,
     /// JIT code entries for each class of *self*.
     jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
     params: ParamsInfo,
     #[cfg(feature = "perf")]
-    wrapper: Option<(CodePtr, usize, CodePtr, usize)>,
+    wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -643,6 +665,7 @@ impl FuncInfo {
             ext: Box::new(FuncExt {
                 name,
                 class_id: None,
+                entry: None,
                 jit_entry: Default::default(),
                 params,
                 #[cfg(feature = "perf")]
@@ -721,6 +744,26 @@ impl FuncInfo {
         )
     }
 
+    fn new_native_basic_op(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> Self {
+        let params = ParamsInfo::new_native(min, max, rest);
+        let reg_num = params.total_args() + 1;
+        Self::new(
+            IdentId::get_id_from_string(name),
+            FuncKind::Builtin {
+                abs_address: address as *const u8 as u64,
+            },
+            Meta::native(func_id, reg_num, params.is_simple()),
+            params,
+        )
+    }
+
     fn new_native_eval(
         func_id: FuncId,
         name: String,
@@ -773,6 +816,10 @@ impl FuncInfo {
 
     pub(super) fn set_owner_class(&mut self, class: ClassId) {
         self.ext.class_id = Some(class);
+    }
+
+    pub(super) fn entry_label(&self) -> DestLabel {
+        self.ext.entry.unwrap()
     }
 
     ///
@@ -861,7 +908,8 @@ impl FuncInfo {
         self.data.set_reg_num(reg_num);
     }
 
-    pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
+    pub(in crate::globals) fn set_entry(&mut self, entry: DestLabel, codeptr: monoasm::CodePtr) {
+        self.ext.entry = Some(entry);
         self.data.set_codeptr(codeptr)
     }
 
@@ -922,6 +970,10 @@ impl FuncInfo {
 
     pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
         self.ext.jit_entry.get(&self_class).cloned()
+    }
+
+    pub(crate) fn invalidate_jit_code(&mut self) {
+        self.ext.jit_entry.clear();
     }
 }
 

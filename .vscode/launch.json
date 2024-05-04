@@ -7,7 +7,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'monoruby'",
+      "name": "Debug 'test.rb'",
       "cargo": {
         "args": [
           "run",
@@ -19,9 +19,8 @@
           "kind": "bin"
         }
       },
-      //"args": ["../optcarrot/bin/optcarrot", "--opt", "-b", "../optcarrot/examples/Lan_Master.nes"],
       "args": [
-        "a.rb"
+        "test.rb"
       ],
       "cwd": "${workspaceFolder}"
     },

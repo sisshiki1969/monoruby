@@ -1,5 +1,4 @@
 use fancy_regex::Regex;
-use monoasm::CodePtr;
 use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -29,6 +28,7 @@ pub(crate) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
+    is_basic_op: bool,
 }
 
 impl MethodTableEntry {
@@ -450,18 +450,18 @@ impl Globals {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) -> CodePtr {
+    pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
         let kind = self[func_id].kind.clone();
-        let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
-        self[func_id].set_codeptr(codeptr);
+        let entry = self.codegen.gen_wrapper(kind, self.no_jit);
+        let codeptr = self.codegen.jit.get_label_address(entry);
+        self[func_id].set_entry(entry, codeptr);
         #[cfg(feature = "perf")]
         {
             let info = self.codegen.get_wrapper_info(pair);
             self[func_id].set_wrapper_info(info);
         }
-        codeptr
     }
 
     pub(crate) fn class_version_inc(&mut self) {

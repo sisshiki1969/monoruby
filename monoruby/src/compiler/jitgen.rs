@@ -30,6 +30,9 @@ pub mod trace_ir;
 /// Context for JIT compilation.
 ///
 struct JitContext {
+    ///
+    /// Assembly IR.
+    ///
     ir: AsmIr,
     ///
     /// Destination labels for each TraceIr.
@@ -51,7 +54,7 @@ struct JitContext {
     /// Loop information.
     ///
     /// ### key
-    /// the first basic block.
+    /// the entry basic block of the loop.
     ///
     /// ### value
     /// (the last basic block, slot_info at the loop exit)
@@ -62,27 +65,27 @@ struct JitContext {
     ///
     loop_count: usize,
     ///
-    /// true for a loop, false for a method.
+    /// Flag whether this context is a loop.
     ///
     is_loop: bool,
     ///
-    /// A map for bytecode position and branches.
+    /// Map for bytecode position and branches.
     ///
     branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
     ///
-    /// Target context (BBContext) for an each instruction.
+    /// Target `BBContext` for an each instruction.
     ///
     target_ctx: HashMap<BcIndex, BBContext>,
     ///
-    /// A map for backward branches.
+    /// Map for backward branches.
     ///
     backedge_map: HashMap<BcIndex, BackedgeInfo>,
     ///
-    /// the number of slots.
+    /// Number of slots.
     ///
     total_reg_num: usize,
     ///
-    /// the number of local variables.
+    /// Number of local variables.
     ///
     local_num: usize,
     ///
@@ -90,7 +93,7 @@ struct JitContext {
     ///
     self_value: Value,
     ///
-    /// source map.
+    /// Source map.
     ///
     sourcemap: Vec<(BcIndex, usize)>,
     ///
@@ -111,7 +114,12 @@ struct JitContext {
     #[allow(dead_code)]
     class_version: u32,
     ///
-    /// The start offset of a machine code corresponding to thhe current basic block.
+    /// BOP redefinition flag at compile time.
+    ///
+    #[allow(dead_code)]
+    bop_redefine_flags: u32,
+    ///
+    /// Start offset of a machine code corresponding to the current basic block.
     ///
     #[cfg(feature = "emit-asm")]
     start_codepos: usize,
@@ -206,6 +214,7 @@ impl JitContext {
             continuation_bridge: None,
             opt_case: vec![],
             class_version: codegen.class_version(),
+            bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
             start_codepos,
         }
@@ -711,10 +720,12 @@ impl JitContext {
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
+                let evict = self.ir.new_evict();
                 self.ir.inst.push(AsmInst::Yield {
                     callid,
                     using_xmm,
                     error,
+                    evict,
                 });
                 self.ir.rax2acc(bb, store[callid].dst);
             }
@@ -726,6 +737,7 @@ impl JitContext {
                     func_id,
                     using_xmm,
                 });
+                self.ir.check_bop(bb, pc);
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 self.ir.write_back_slots(bb, &[obj]);
@@ -736,6 +748,7 @@ impl JitContext {
                     func_id,
                     using_xmm,
                 });
+                self.ir.check_bop(bb, pc);
             }
             TraceIr::ClassDef {
                 dst,
@@ -1415,12 +1428,35 @@ impl Codegen {
     }
 
     ///
-    /// Get *DestLabel* for fallback to interpreter. (without write-back)
+    /// Get *DestLabel* for fallback to interpreter by deoptimization.
     ///
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
     fn gen_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+        self.side_exit_with_label(pc, wb, entry, false)
+    }
+
+    ///
+    /// Get *DestLabel* for fallback to interpreter by immediate eviction.
+    ///
+    fn gen_evict_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+        self.side_exit_with_label(pc, wb, entry, true)
+    }
+
+    ///
+    /// Get *DestLabel* for fallback to interpreter.
+    ///
+    /// ### in
+    /// - rdi: deopt-reason:Value
+    ///
+    fn side_exit_with_label(
+        &mut self,
+        pc: BcPc,
+        wb: &WriteBack,
+        entry: DestLabel,
+        _is_evict: bool,
+    ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
@@ -1428,15 +1464,26 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq r13, (pc.u64());
         );
+
         #[cfg(any(feature = "deopt", feature = "profile"))]
-        monoasm!( &mut self.jit,
-            movq rcx, rdi; // the Value which caused this deopt.
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, r13;
-            movq rax, (crate::globals::log_deoptimize);
-            call rax;
-        );
+        {
+            if _is_evict {
+                monoasm!( &mut self.jit,
+                    movq rcx, (Value::symbol_from_str("__immediate_evict").id());
+                );
+            } else {
+                monoasm!( &mut self.jit,
+                    movq rcx, rdi; // the Value which caused this deopt.
+                );
+            }
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, r13;
+                movq rax, (crate::globals::log_deoptimize);
+                call rax;
+            );
+        }
         let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
             jmp fetch;

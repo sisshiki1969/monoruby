@@ -449,20 +449,49 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
+        self.add_method_inner(class_id, name, func_id, visibility, false)
+    }
+
+    ///
+    /// Add a new basic operation method *func* with *name* to the class of *class_id*.
+    ///
+    pub(crate) fn add_basic_op_method(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+    ) {
+        self.add_method_inner(class_id, name, func_id, visibility, true)
+    }
+
+    ///
+    /// Add a new method *func* with *name* to the class of *class_id*.
+    ///
+    fn add_method_inner(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+        is_basic_op: bool,
+    ) {
         self.store[func_id].set_owner_class(class_id);
-        self.store[class_id].methods.insert(
+        self.insert_method(
+            class_id,
             name,
             MethodTableEntry {
                 owner: class_id,
                 func_id: Some(func_id),
                 visibility,
+                is_basic_op,
             },
         );
         #[cfg(feature = "perf")]
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.func_description(func_id);
-            self.codegen.perf_info2(info, &desc);
+            self.codegen.perf_write(info, &desc);
         }
     }
 
@@ -472,12 +501,14 @@ impl Globals {
         name: IdentId,
         visibility: Visibility,
     ) {
-        self.store[class_id].methods.insert(
+        self.insert_method(
+            class_id,
             name,
             MethodTableEntry {
                 owner: class_id,
                 func_id: None,
                 visibility,
+                is_basic_op: false,
             },
         );
     }
@@ -496,16 +527,18 @@ impl Globals {
         {
             let info = self.store[func_id].get_wrapper_info();
             let desc = self.func_description(func_id);
-            self.codegen.perf_info2(info, &desc);
+            self.codegen.perf_write(info, &desc);
         }
         let singleton = self.get_metaclass(class_id).id();
         self.store[func_id].set_owner_class(class_id);
-        self.store[singleton].methods.insert(
+        self.insert_method(
+            singleton,
             name,
             MethodTableEntry {
                 owner: singleton,
                 func_id: Some(func_id),
                 visibility,
+                is_basic_op: false,
             },
         );
     }
@@ -713,6 +746,32 @@ impl Globals {
     ///
     fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
         self.store[class_id].methods.get(&name)
+    }
+
+    ///
+    /// If the re-defined method is "basic operation", return true.
+    ///
+    fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
+        if let Some(old) = self.store[class_id].methods.insert(name, entry)
+            && old.is_basic_op
+        {
+            self.set_bop_redefine();
+        }
+    }
+
+    fn set_bop_redefine(&mut self) {
+        self.codegen.set_bop_redefine();
+        self.store.functions.invalidate_jit_code();
+        let vm_entry = self.codegen.vm_entry;
+        for func in self.store.functions.functions() {
+            match func.kind {
+                FuncKind::ISeq(_) => {
+                    let entry = func.entry_label();
+                    self.codegen.jit.apply_jmp_patch(entry, vm_entry);
+                }
+                _ => {}
+            }
+        }
     }
 
     #[cfg(feature = "profile")]

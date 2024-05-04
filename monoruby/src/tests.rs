@@ -6,6 +6,7 @@ use std::path::PathBuf;
 mod case;
 mod literal;
 mod method_call;
+mod redefine;
 mod require;
 mod rescue;
 mod variables;
@@ -212,7 +213,8 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
 
 fn spawn_ruby() -> Option<std::process::Child> {
     for i in 0..5 {
-        match std::process::Command::new("ruby")
+        match std::process::Command::new("bash")
+            .args(&["-C", "ruby"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -244,13 +246,13 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
 
     match process.stdin.unwrap().write_all(code.as_bytes()) {
         Err(why) => panic!("couldn't write to ruby stdin: {}", why),
-        Ok(_) => println!("sent code to ruby"),
+        Ok(_) => println!("sent code to ruby: {}", code),
     }
 
     let mut response = String::new();
     match process.stdout.unwrap().read_to_string(&mut response) {
         Err(why) => panic!("couldn't read ruby stdout: {}", why),
-        Ok(_) => print!("wc responded with:\n{}", response),
+        Ok(_) => {}
     }
 
     let res = std::str::from_utf8(response.as_bytes())

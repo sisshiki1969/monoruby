@@ -13,10 +13,10 @@ mod variables;
 
 const OPECODE: i64 = 6;
 
-macro_rules! cmp_ops {
+macro_rules! vm_cmp_opt {
   ($op:ident) => {
       paste! {
-          fn [<vm_ $op rr>](&mut self) -> CodePtr {
+          fn [<vm_ $op _opt_rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
               self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
@@ -33,7 +33,7 @@ macro_rules! cmp_ops {
               label
           }
 
-          fn [<vm_ $op ri>](&mut self) -> CodePtr {
+          fn [<vm_ $op _opt_ri>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
               self.vm_get_ri_r15();
@@ -49,23 +49,44 @@ macro_rules! cmp_ops {
 
               label
           }
+
+          fn [<vm_ $op _rr>](&mut self) -> CodePtr {
+              let label = self.jit.get_current_address();
+              let generic = self.jit.label();
+              self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+              self.vm_save_binary_integer();
+              self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
+              self.fetch_and_dispatch();
+
+              label
+          }
+
+          fn [<vm_ $op _ri>](&mut self) -> CodePtr {
+              let label = self.jit.get_current_address();
+              let generic = self.jit.label();
+              self.vm_get_ri_r15();
+              self.vm_save_binary_integer();
+              self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
+              self.fetch_and_dispatch();
+
+              label
+          }
       }
   };
   ($op1:ident, $($op2:ident),+) => {
-      cmp_ops!($op1);
-      cmp_ops!($($op2),+);
+      vm_cmp_opt!($op1);
+      vm_cmp_opt!($($op2),+);
   };
 }
 
 impl Codegen {
-    cmp_ops!(eq, ne, gt, ge, lt, le, teq, cmp);
+    vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq, cmp);
 
     ///
     /// Generate interpreter.
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool, main_object: Value) {
         self.entry_point = self.gen_entry_point(main_object);
-        #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
         //
@@ -283,44 +304,44 @@ impl Codegen {
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
 
-        self.dispatch[134] = self.vm_eqrr();
-        self.dispatch[135] = self.vm_nerr();
-        self.dispatch[136] = self.vm_ltrr();
-        self.dispatch[137] = self.vm_lerr();
-        self.dispatch[138] = self.vm_gtrr();
-        self.dispatch[139] = self.vm_gerr();
-        self.dispatch[140] = self.vm_teqrr();
-        self.dispatch[141] = self.vm_cmprr();
+        self.dispatch[134] = self.vm_eq_opt_rr();
+        self.dispatch[135] = self.vm_ne_opt_rr();
+        self.dispatch[136] = self.vm_lt_opt_rr();
+        self.dispatch[137] = self.vm_le_opt_rr();
+        self.dispatch[138] = self.vm_gt_opt_rr();
+        self.dispatch[139] = self.vm_ge_opt_rr();
+        self.dispatch[140] = self.vm_teq_opt_rr();
+        self.dispatch[141] = self.vm_cmp_opt_rr();
 
-        self.dispatch[142] = self.vm_eqri();
-        self.dispatch[143] = self.vm_neri();
-        self.dispatch[144] = self.vm_ltri();
-        self.dispatch[145] = self.vm_leri();
-        self.dispatch[146] = self.vm_gtri();
-        self.dispatch[147] = self.vm_geri();
-        self.dispatch[148] = self.vm_teqri();
-        self.dispatch[149] = self.vm_cmpri();
+        self.dispatch[142] = self.vm_eq_opt_ri();
+        self.dispatch[143] = self.vm_ne_opt_ri();
+        self.dispatch[144] = self.vm_lt_opt_ri();
+        self.dispatch[145] = self.vm_le_opt_ri();
+        self.dispatch[146] = self.vm_gt_opt_ri();
+        self.dispatch[147] = self.vm_ge_opt_ri();
+        self.dispatch[148] = self.vm_teq_opt_ri();
+        self.dispatch[149] = self.vm_cmp_opt_ri();
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
 
-        self.dispatch[154] = self.vm_eqrr();
-        self.dispatch[155] = self.vm_nerr();
-        self.dispatch[156] = self.vm_ltrr();
-        self.dispatch[157] = self.vm_lerr();
-        self.dispatch[158] = self.vm_gtrr();
-        self.dispatch[159] = self.vm_gerr();
-        self.dispatch[160] = self.vm_teqrr();
-        self.dispatch[161] = self.vm_cmprr();
+        self.dispatch[154] = self.vm_eq_opt_rr();
+        self.dispatch[155] = self.vm_ne_opt_rr();
+        self.dispatch[156] = self.vm_lt_opt_rr();
+        self.dispatch[157] = self.vm_le_opt_rr();
+        self.dispatch[158] = self.vm_gt_opt_rr();
+        self.dispatch[159] = self.vm_ge_opt_rr();
+        self.dispatch[160] = self.vm_teq_opt_rr();
+        self.dispatch[161] = self.vm_cmp_opt_rr();
 
-        self.dispatch[162] = self.vm_eqri();
-        self.dispatch[163] = self.vm_neri();
-        self.dispatch[164] = self.vm_ltri();
-        self.dispatch[165] = self.vm_leri();
-        self.dispatch[166] = self.vm_gtri();
-        self.dispatch[167] = self.vm_geri();
-        self.dispatch[168] = self.vm_teqri();
-        self.dispatch[169] = self.vm_cmpri();
+        self.dispatch[162] = self.vm_eq_opt_ri();
+        self.dispatch[163] = self.vm_ne_opt_ri();
+        self.dispatch[164] = self.vm_lt_opt_ri();
+        self.dispatch[165] = self.vm_le_opt_ri();
+        self.dispatch[166] = self.vm_gt_opt_ri();
+        self.dispatch[167] = self.vm_ge_opt_ri();
+        self.dispatch[168] = self.vm_teq_opt_ri();
+        self.dispatch[169] = self.vm_cmp_opt_ri();
 
         self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
@@ -366,9 +387,99 @@ impl Codegen {
         self.perf_info(pair, "monoruby-vm");
 
         self.gen_invoker();
+        let info = self.get_wrapper_info(pair);
+        self.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
     }
 
-    #[cfg(feature = "perf")]
+    ///
+    /// Replace VM instruction routines with non-basic-op-optimized routines.
+    ///
+    pub(super) fn remove_vm_bop_optimization(&mut self) {
+        self.dispatch[14] = self.vm_loop_start_no_opt();
+
+        self.dispatch[126] = self.vm_pos_no_opt();
+        self.dispatch[127] = self.vm_bitnot_no_opt();
+        self.dispatch[128] = self.vm_not();
+        self.dispatch[129] = self.vm_neg_no_opt();
+
+        self.dispatch[134] = self.vm_eq_rr();
+        self.dispatch[135] = self.vm_ne_rr();
+        self.dispatch[136] = self.vm_lt_rr();
+        self.dispatch[137] = self.vm_le_rr();
+        self.dispatch[138] = self.vm_gt_rr();
+        self.dispatch[139] = self.vm_ge_rr();
+        self.dispatch[140] = self.vm_teq_rr();
+        self.dispatch[141] = self.vm_cmp_rr();
+
+        self.dispatch[142] = self.vm_eq_ri();
+        self.dispatch[143] = self.vm_ne_ri();
+        self.dispatch[144] = self.vm_lt_ri();
+        self.dispatch[145] = self.vm_le_ri();
+        self.dispatch[146] = self.vm_gt_ri();
+        self.dispatch[147] = self.vm_ge_ri();
+        self.dispatch[148] = self.vm_teq_ri();
+        self.dispatch[149] = self.vm_cmp_ri();
+
+        self.dispatch[154] = self.vm_eq_rr();
+        self.dispatch[155] = self.vm_ne_rr();
+        self.dispatch[156] = self.vm_lt_rr();
+        self.dispatch[157] = self.vm_le_rr();
+        self.dispatch[158] = self.vm_gt_rr();
+        self.dispatch[159] = self.vm_ge_rr();
+        self.dispatch[160] = self.vm_teq_rr();
+        self.dispatch[161] = self.vm_cmp_rr();
+
+        self.dispatch[162] = self.vm_eq_ri();
+        self.dispatch[163] = self.vm_ne_ri();
+        self.dispatch[164] = self.vm_lt_ri();
+        self.dispatch[165] = self.vm_le_ri();
+        self.dispatch[166] = self.vm_gt_ri();
+        self.dispatch[167] = self.vm_ge_ri();
+        self.dispatch[168] = self.vm_teq_ri();
+        self.dispatch[169] = self.vm_cmp_ri();
+
+        let (add_rr, add_ri, add_ir) = self.vm_binops(add_values_no_opt);
+        let (sub_rr, sub_ri, sub_ir) = self.vm_binops(sub_values_no_opt);
+        let (or_rr, or_ri, or_ir) = self.vm_binops(bitor_values_no_opt);
+        let (and_rr, and_ri, and_ir) = self.vm_binops(bitand_values_no_opt);
+        let (xor_rr, xor_ri, xor_ir) = self.vm_binops(bitxor_values_no_opt);
+        let (div_rr, div_ri, div_ir) = self.vm_binops(div_values_no_opt);
+        let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values_no_opt);
+        let (rem_rr, rem_ri, rem_ir) = self.vm_binops(rem_values_no_opt);
+        let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values_no_opt);
+
+        self.dispatch[180] = add_ir;
+        self.dispatch[181] = sub_ir;
+        self.dispatch[182] = mul_ir;
+        self.dispatch[183] = div_ir;
+        self.dispatch[184] = or_ir;
+        self.dispatch[185] = and_ir;
+        self.dispatch[186] = xor_ir;
+        self.dispatch[187] = rem_ir;
+        self.dispatch[188] = pow_ir;
+
+        self.dispatch[190] = add_ri;
+        self.dispatch[191] = sub_ri;
+        self.dispatch[192] = mul_ri;
+        self.dispatch[193] = div_ri;
+        self.dispatch[194] = or_ri;
+        self.dispatch[195] = and_ri;
+        self.dispatch[196] = xor_ri;
+        self.dispatch[197] = rem_ri;
+        self.dispatch[198] = pow_ri;
+
+        self.dispatch[200] = add_rr;
+        self.dispatch[201] = sub_rr;
+        self.dispatch[202] = mul_rr;
+        self.dispatch[203] = div_rr;
+        self.dispatch[204] = or_rr;
+        self.dispatch[205] = and_rr;
+        self.dispatch[206] = xor_rr;
+        self.dispatch[207] = rem_rr;
+        self.dispatch[208] = pow_rr;
+        self.jit.finalize();
+    }
+
     pub(crate) fn get_wrapper_info(
         &mut self,
         pair: (CodePtr, CodePtr),
@@ -385,11 +496,11 @@ impl Codegen {
     #[cfg(feature = "perf")]
     pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
         let info = self.get_wrapper_info(pair);
-        self.perf_info2(info, func_name);
+        self.perf_write(info, func_name);
     }
 
     #[cfg(feature = "perf")]
-    pub(crate) fn perf_info2(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         self.perf_file
             .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
             .unwrap();
@@ -808,6 +919,12 @@ impl Codegen {
         label
     }
 
+    fn vm_loop_start_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_loop_end(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch_and_dispatch();
@@ -1151,6 +1268,16 @@ impl Codegen {
         label
     }
 
+    fn vm_bitnot_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
+        self.vm_generic_unop(generic, bitnot_value_no_opt);
+        label
+    }
+
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
@@ -1170,6 +1297,16 @@ impl Codegen {
         label
     }
 
+    fn vm_neg_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
+        self.vm_generic_unop(generic, neg_value_no_opt);
+        label
+    }
+
     fn vm_pos(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
@@ -1183,6 +1320,16 @@ impl Codegen {
         }
         self.fetch_and_dispatch();
         self.vm_generic_unop(generic, pos_value);
+        label
+    }
+
+    fn vm_pos_no_opt(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
+        self.vm_generic_unop(generic, pos_value_no_opt);
         label
     }
 

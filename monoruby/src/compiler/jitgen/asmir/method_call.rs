@@ -17,6 +17,7 @@ impl AsmIr {
             self.unlink(bb, dst);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
+            self.rax2acc(bb, dst);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
@@ -32,9 +33,14 @@ impl AsmIr {
             if !recv.is_self() && !bb.is_class(recv, cached_class) {
                 self.guard_class(bb, recv, GP::Rdi, cached_class, deopt);
             }
-            self.gen_call_cached(store, bb, callid, fid, pc)?;
+            let evict = self.gen_call_cached(store, bb, callid, fid, pc)?;
+            self.rax2acc(bb, dst);
+            if let Some(evict) = evict {
+                self.inst.push(AsmInst::ImmediateEvict { evict });
+                self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
+            }
         }
-        self.rax2acc(bb, dst);
+
         Some(())
     }
 
@@ -51,7 +57,7 @@ impl AsmIr {
         callid: CallSiteId,
         fid: FuncId,
         pc: BcPc,
-    ) -> Option<()> {
+    ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo { args, len, dst, .. } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let recv_class = pc.cached_class1().unwrap();
@@ -80,13 +86,17 @@ impl AsmIr {
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, true);
+                let evict = self.new_evict();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, true, evict);
+                return Some(Some(evict));
             }
             FuncKind::ISeq(_) => {
-                self.send_cached(store, bb, pc, callid, fid, recv_class, false);
+                let evict = self.new_evict();
+                self.send_cached(store, bb, pc, callid, fid, recv_class, false, evict);
+                return Some(Some(evict));
             }
         };
-        Some(())
+        Some(None)
     }
 }
 

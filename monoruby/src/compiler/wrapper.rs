@@ -1,12 +1,13 @@
 use super::*;
 
 impl Codegen {
-    pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
-        let codeptr = self.jit.get_current_address();
+    pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> DestLabel {
+        let entry = self.jit.label();
+        self.jit.bind_label(entry);
         match kind {
             FuncKind::ISeq(_) => {
                 if !no_jit {
-                    self.gen_jit_stub()
+                    self.gen_jit_stub(entry)
                 } else {
                     self.gen_vm_stub()
                 }
@@ -16,7 +17,7 @@ impl Codegen {
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
         };
         self.jit.finalize();
-        codeptr
+        entry
     }
 
     ///
@@ -38,10 +39,9 @@ impl Codegen {
     ///    +-------------------------------+
     ///
     /// ```
-    fn gen_jit_stub(&mut self) {
+    fn gen_jit_stub(&mut self, entry: DestLabel) {
         let vm_entry = self.vm_entry;
         let counter = self.jit.data_i32(COUNT_START_COMPILE);
-        let entry = self.jit.label();
         let next = self.jit.label();
         monoasm!( &mut self.jit,
         entry:

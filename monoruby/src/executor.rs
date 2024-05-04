@@ -523,6 +523,9 @@ impl Executor {
                 globals.add_singleton_method(class_id, name, func, visibility);
             }
             globals.class_version_inc();
+            if globals.codegen.bop_redefine_flags() != 0 {
+                self.immediate_eviction(globals);
+            }
             Some(Value::nil())
         } else {
             let err = MonorubyErr::internalerr(format!(
@@ -533,6 +536,27 @@ impl Executor {
             runtime::_dump_stacktrace(self, globals);
             self.set_error(err);
             None
+        }
+    }
+
+    fn immediate_eviction(&mut self, globals: &mut Globals) {
+        let mut cfp = self.cfp();
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            let ret = return_addr.unwrap();
+            if !globals.codegen.check_vm_address(ret) {
+                if let Some((patch_point, deopt)) = globals.codegen.get_deopt_with_return_addr(ret)
+                {
+                    let patch_point = patch_point.unwrap();
+                    globals
+                        .codegen
+                        .jit
+                        .apply_jmp_patch_address(patch_point, deopt);
+                    unsafe { patch_point.as_ptr().write(0xe9) };
+                }
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
         }
     }
 }
@@ -1783,8 +1807,11 @@ pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &
     let func_id = lfp.meta().func_id();
     let jit_entry = globals.codegen.jit.label();
     globals.exec_jit_compile_method(func_id, self_value, jit_entry);
-    let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
-    globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
+    // get_jit_code() must not be None.
+    // After BOP redefinition occurs, recompilation in invalidated methods cause None.
+    if let Some(patch_point) = globals[func_id].get_jit_code(self_value.class()) {
+        globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
+    }
 }
 
 ///

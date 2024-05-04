@@ -1,10 +1,11 @@
 use super::*;
 
+mod binary_ops;
 mod sort;
 
-use num::{BigInt, Integer, ToPrimitive, Zero};
+pub(crate) use binary_ops::*;
+use num::{BigInt, ToPrimitive};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
 //
 // Generic operations.
@@ -12,391 +13,6 @@ use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
 pub extern "C" fn i64_to_value(i: i64) -> Value {
     Value::integer(i)
-}
-
-macro_rules! binop_values {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _values>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value
-            ) -> Option<Value> {
-                let v = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Fixnum(lhs), RV::Fixnum(rhs)) => match lhs.[<checked_ $op>](rhs){
-                        Some(res) => Value::integer(res),
-                        None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
-                    }
-                    (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
-                    (RV::Fixnum(lhs), RV::Complex(rhs)) => {
-                        let lhs = num::complex::Complex::from(Real::from(lhs));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
-                    (RV::BigInt(lhs), RV::Complex(rhs)) => {
-                        let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Integer");
-                        vm.set_error(err);
-                        return None;
-                    }
-
-                    (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
-                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
-                    (RV::Float(lhs), RV::Complex(rhs)) => {
-                        let lhs = num::complex::Complex::from(Real::from(lhs));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Float(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Float");
-                        vm.set_error(err);
-                        return None;
-                    }
-                    (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Complex(lhs), RV::BigInt(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Complex(lhs), RV::Float(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs));
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Complex(lhs), RV::Complex(rhs)) => {
-                        Value::complex_from(lhs.$op(rhs))
-                    }
-                    (RV::Complex(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Complex");
-                        vm.set_error(err);
-                        return None;
-                    }
-                    _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
-                    }
-                };
-                Some(v)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        binop_values!(($op1, $op_str1));
-        binop_values!($(($op2, $op_str2)),+);
-    };
-}
-
-pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
-    if let Ok(rhs) = i32::try_from(rhs) {
-        if rhs < 0 {
-            unimplemented!("a**b: b<0 in not supported yet.")
-        }
-        let rhs = rhs as u32;
-        match lhs.checked_pow(rhs) {
-            Some(res) => Value::integer(res),
-            None => Value::bigint(BigInt::from(lhs).pow(rhs)),
-        }
-    } else {
-        Value::float(f64::INFINITY)
-    }
-}
-
-fn pow_ff(lhs: f64, rhs: f64) -> Value {
-    Value::float(lhs.powf(rhs))
-}
-
-pub(crate) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.powf(rhs)
-}
-
-// TODO: support rhs < 0.
-pub(crate) extern "C" fn pow_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs),
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                Value::bigint(BigInt::from(lhs).pow(rhs))
-            } else {
-                Value::float(f64::INFINITY)
-            }
-        }
-        (RV::Fixnum(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if let Ok(rhs) = i32::try_from(rhs) {
-                let rhs = rhs as u32;
-                Value::bigint(lhs.pow(rhs))
-            } else {
-                Value::float(f64::INFINITY)
-            }
-        }
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                Value::bigint(lhs.pow(rhs))
-            } else {
-                Value::float(f64::INFINITY)
-            }
-        }
-        (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
-        (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_POW, rhs, "Integer");
-            vm.set_error(err);
-            return None;
-        }
-
-        (RV::Float(lhs), RV::Fixnum(rhs)) => {
-            //if let Ok(rhs) = i32::try_from(rhs) {
-            pow_ff(lhs, rhs as f64)
-            //} else {
-            //    Value::new_float(lhs.powf(rhs as f64))
-            //}
-        }
-        (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
-        (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
-        (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_POW, rhs, "Float");
-            vm.set_error(err);
-            return None;
-        }
-        _ => {
-            return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs], None);
-        }
-    };
-    Some(v)
-}
-
-binop_values!(
-    (add, IdentId::_ADD),
-    (sub, IdentId::_SUB),
-    (mul, IdentId::_MUL),
-    (rem, IdentId::_REM)
-);
-
-pub(crate) extern "C" fn div_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::integer(lhs.div_floor(rhs))
-        }
-        (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(BigInt::from(lhs).div_floor(rhs))
-        }
-        (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
-        (RV::Fixnum(lhs), RV::Complex(rhs)) => {
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
-        }
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::bigint(lhs.div_floor(rhs))
-        }
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
-        (RV::BigInt(lhs), RV::Complex(rhs)) => {
-            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Integer");
-            vm.set_error(err);
-            return None;
-        }
-
-        (RV::Float(lhs), RV::Fixnum(rhs)) => Value::float(lhs.div(&(rhs as f64))),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
-        (RV::Float(lhs), RV::Complex(rhs)) => {
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Float");
-            vm.set_error(err);
-            return None;
-        }
-        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.clone().div(rhs))
-        }
-        (RV::Complex(lhs), RV::BigInt(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Float(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Complex(rhs)) => Value::complex_from(lhs.div(rhs)),
-        (RV::Complex(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Complex");
-            vm.set_error(err);
-            return None;
-        }
-        _ => {
-            return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs], None);
-        }
-    };
-    Some(v)
-}
-
-macro_rules! int_binop_values {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _values>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value
-            ) -> Option<Value> {
-                let v = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Value::integer(lhs.$op(&rhs)),
-                    (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
-                    (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Integer");
-                        vm.set_error(err);
-                        return None;
-                    }
-                    _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
-                    }
-                };
-                Some(v)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        int_binop_values!(($op1, $op_str1));
-        int_binop_values!($(($op2, $op_str2)),+);
-    };
-}
-
-int_binop_values!(
-    (bitor, IdentId::_BOR),
-    (bitand, IdentId::_BAND),
-    (bitxor, IdentId::_BXOR)
-);
-
-pub(crate) extern "C" fn shr_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
-            if rhs >= 0 {
-                int_shr(lhs, rhs as u64 as u32)
-            } else {
-                int_shl(lhs, -rhs as u64 as u32)
-            }
-        }
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if rhs >= 0 {
-                bigint_shr(lhs, rhs as u64 as u32)
-            } else {
-                bigint_shl(lhs, -rhs as u64 as u32)
-            }
-        }
-        (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_SHR, rhs, "Integer");
-            vm.set_error(err);
-            return None;
-        }
-        _ => {
-            return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs], None);
-        }
-    };
-    Some(v)
-}
-
-pub(crate) extern "C" fn shl_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
-            if rhs >= 0 {
-                int_shl(lhs, rhs as u64 as u32)
-            } else {
-                int_shr(lhs, -rhs as u64 as u32)
-            }
-        }
-        (RV::BigInt(lhs), RV::Fixnum(rhs)) => {
-            if rhs >= 0 {
-                bigint_shl(lhs, rhs as u64 as u32)
-            } else {
-                bigint_shr(lhs, -rhs as u64 as u32)
-            }
-        }
-        (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_SHL, rhs, "Integer");
-            vm.set_error(err);
-            return None;
-        }
-        _ => {
-            return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs], None);
-        }
-    };
-    Some(v)
-}
-
-fn int_shr(lhs: i64, rhs: u32) -> Value {
-    Value::integer(
-        lhs.checked_shr(rhs)
-            .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
-    )
-}
-
-fn int_shl(lhs: i64, rhs: u32) -> Value {
-    match lhs.checked_shl(rhs) {
-        // Work around
-        Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
-        _ => bigint_shl(&BigInt::from(lhs), rhs),
-    }
-}
-
-fn bigint_shr(lhs: &BigInt, rhs: u32) -> Value {
-    Value::bigint(lhs.shr(rhs))
-}
-
-fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
-    Value::bigint(lhs.shl(rhs))
 }
 
 macro_rules! cmp_values {
@@ -434,6 +50,17 @@ macro_rules! cmp_values {
                     }
                 };
                 Some(Value::bool(b))
+            }
+        }
+
+        paste! {
+            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value
+            ) -> Option<Value> {
+                vm.invoke_method(globals, $op_str, lhs, &[rhs], None)
             }
         }
     };
@@ -485,6 +112,18 @@ impl Executor {
         Ok(b)
     }
 
+    pub(crate) fn eq_values_bool_no_opt(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<bool> {
+        let b = self
+            .invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None)?
+            .as_bool();
+        Ok(b)
+    }
+
     pub(crate) fn ne_values_bool(
         &mut self,
         globals: &mut Globals,
@@ -492,6 +131,15 @@ impl Executor {
         rhs: Value,
     ) -> Result<bool> {
         Ok(!self.eq_values_bool(globals, lhs, rhs)?)
+    }
+
+    pub(crate) fn ne_values_bool_no_opt(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<bool> {
+        Ok(!self.eq_values_bool_no_opt(globals, lhs, rhs)?)
     }
 }
 
@@ -505,6 +153,23 @@ macro_rules! eq_values {
                 rhs: Value
             ) -> Option<Value> {
                 match vm.[<$op _values_bool>](globals, lhs, rhs) {
+                    Ok(b) => Some(Value::bool(b)),
+                    Err(err) => {
+                        vm.set_error(err);
+                        None
+                    }
+                }
+            }
+        }
+
+        paste! {
+            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value
+            ) -> Option<Value> {
+                match vm.[<$op _values_bool_no_opt>](globals, lhs, rhs) {
                     Ok(b) => Some(Value::bool(b)),
                     Err(err) => {
                         vm.set_error(err);
@@ -597,6 +262,15 @@ pub(crate) extern "C" fn cmp_teq_values(
     Some(Value::bool(b))
 }
 
+pub(crate) extern "C" fn cmp_teq_values_no_opt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs], None)
+}
+
 pub(crate) fn cmp_teq_values_bool(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -631,6 +305,17 @@ pub(crate) fn cmp_teq_values_bool(
     Ok(b)
 }
 
+#[allow(dead_code)]
+pub(crate) fn cmp_teq_values_bool_no_opt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Result<bool> {
+    vm.invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None)
+        .map(|v| v.as_bool())
+}
+
 pub(crate) extern "C" fn cmp_cmp_values(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -638,6 +323,21 @@ pub(crate) extern "C" fn cmp_cmp_values(
     rhs: Value,
 ) -> Option<Value> {
     match vm.cmp_cmp_values_inner(globals, lhs, rhs) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+pub(crate) extern "C" fn cmp_cmp_values_no_opt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    match vm.cmp_cmp_values_no_opt_inner(globals, lhs, rhs) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);
@@ -659,6 +359,18 @@ impl Executor {
         Ok(res)
     }
 
+    pub(crate) fn cmp_cmp_values_no_opt_inner(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        let res = self
+            .compare_values_no_opt_inner(globals, lhs, rhs)?
+            .map_or(Value::nil(), Value::from_ord);
+        Ok(res)
+    }
+
     pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,
@@ -666,6 +378,21 @@ impl Executor {
         rhs: Value,
     ) -> Result<std::cmp::Ordering> {
         self.compare_values_inner(globals, lhs, rhs)?
+            .ok_or_else(|| {
+                let lhs = lhs.get_real_class_name(globals);
+                let rhs = rhs.to_s(globals);
+                MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
+            })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn compare_values_no_opt(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<std::cmp::Ordering> {
+        self.compare_values_no_opt_inner(globals, lhs, rhs)?
             .ok_or_else(|| {
                 let lhs = lhs.get_real_class_name(globals);
                 let rhs = rhs.to_s(globals);
@@ -717,7 +444,53 @@ impl Executor {
         };
         Ok(res)
     }
+
+    pub(crate) fn compare_values_no_opt_inner(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Option<std::cmp::Ordering>> {
+        let res = if let Some(i) = self
+            .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None)?
+            .try_fixnum()
+        {
+            match i {
+                -1 => Some(std::cmp::Ordering::Less),
+                0 => Some(std::cmp::Ordering::Equal),
+                1 => Some(std::cmp::Ordering::Greater),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        Ok(res)
+    }
 }
+
+macro_rules! unop_value_no_opt {
+    (($op:ident, $op_str:expr)) => {
+        paste! {
+            pub(crate) extern "C" fn [<$op _value_no_opt>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+            ) -> Option<Value> {
+                vm.invoke_method(globals, $op_str, lhs, &[], None)
+            }
+        }
+    };
+    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
+        unop_value_no_opt!(($op1, $op_str1));
+        unop_value_no_opt!($(($op2, $op_str2)),+);
+    };
+}
+
+unop_value_no_opt!(
+    (bitnot, IdentId::_BNOT),
+    (pos, IdentId::_UPLUS),
+    (neg, IdentId::_UMINUS)
+);
 
 pub(crate) extern "C" fn neg_value(
     vm: &mut Executor,
@@ -749,7 +522,7 @@ pub(crate) extern "C" fn pos_value(
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         RV::Float(lhs) => Value::float(lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[], None);
+            return vm.invoke_method(globals, IdentId::_UPLUS, lhs, &[], None);
         }
     };
     Some(v)
@@ -764,7 +537,7 @@ pub(crate) extern "C" fn bitnot_value(
         RV::Fixnum(lhs) => Value::integer(!lhs),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::get_id("~"), lhs, &[], None);
+            return vm.invoke_method(globals, IdentId::_BNOT, lhs, &[], None);
         }
     };
     Some(v)

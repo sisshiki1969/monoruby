@@ -43,6 +43,13 @@ impl Cfp {
     }
 
     ///
+    /// Get base pointer address of *self*.
+    ///
+    pub unsafe fn return_addr(&self) -> Option<monoasm::CodePtr> {
+        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_PREV_CFP as usize / 8)
+    }
+
+    ///
     /// Get LFP.
     ///
     pub(crate) fn lfp(&self) -> Lfp {

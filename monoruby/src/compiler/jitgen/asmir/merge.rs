@@ -28,6 +28,9 @@ impl JitContext {
         }
     }
 
+    ///
+    /// Merge incoming contexts for *bb_pos*.
+    ///
     pub(in crate::compiler::jitgen) fn incoming_context(
         &mut self,
         func: &ISeqInfo,

@@ -58,7 +58,7 @@ impl Codegen {
         pc: BcPc,
         using_xmm: UsingXmm,
         error: DestLabel,
-    ) {
+    ) -> CodePtr {
         let callsite = &store[callid];
         // argument registers:
         //   rdi: args len
@@ -121,7 +121,7 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        self.generic_call(callid, callsite.args, error);
+        let return_addr = self.generic_call(callid, callsite.args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
 
@@ -147,6 +147,8 @@ impl Codegen {
             jmp resolved;
         }
         self.jit.select_page(0);
+
+        return_addr
     }
 
     ///
@@ -276,7 +278,7 @@ impl Codegen {
         offset: usize,
         using_xmm: UsingXmm,
         error: DestLabel,
-    ) {
+    ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
@@ -290,7 +292,7 @@ impl Codegen {
         self.push_frame();
 
         if native {
-            self.call_codeptr(codeptr);
+            self.call_codeptr(codeptr)
         } else {
             match store[callee_fid].get_jit_code(recv_class) {
                 Some(dest) => {
@@ -307,10 +309,12 @@ impl Codegen {
                 }
             };
         }
-        self.pop_frame();
+        let return_addr = self.jit.get_current_address();
 
+        self.pop_frame();
         self.xmm_restore(using_xmm);
         self.handle_error(error);
+        return_addr
     }
 
     ///
@@ -367,6 +371,8 @@ impl Codegen {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: DestLabel,
+        deopt_lazy: AsmEvict,
+        deopt: DestLabel,
     ) {
         let callsite = &store[callid];
         self.xmm_save(using_xmm);
@@ -399,9 +405,10 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        self.generic_call(callid, callsite.args, error);
+        let return_addr = self.generic_call(callid, callsite.args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
+        self.set_deopt_with_return_addr(return_addr, deopt_lazy, deopt);
     }
 
     ///
@@ -440,7 +447,7 @@ impl Codegen {
     /// ### in
     /// - r15: &FuncData
     ///
-    fn call_funcdata(&mut self) {
+    fn call_funcdata(&mut self) -> CodePtr {
         monoasm! { &mut self.jit,
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
@@ -452,7 +459,9 @@ impl Codegen {
         monoasm! { &mut self.jit,
             call [r15 + (FUNCDATA_CODEPTR)];
         }
+        let return_addr = self.jit.get_current_address();
         self.pop_frame();
+        return_addr
     }
 
     ///
@@ -506,14 +515,14 @@ impl Codegen {
         self.handle_error(error);
     }
 
-    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) {
+    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) -> CodePtr {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
             lea  rdx, [r14 - (conv(args))];
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);
-        self.call_funcdata();
+        self.call_funcdata()
     }
 }
 

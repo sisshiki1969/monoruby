@@ -1,8 +1,8 @@
 [package]
 name = "monoruby"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["monochrome <sisshiki@mac.com>"]
-description = "another Ruby interpreter with JIT compiler."
+description = "another CRuby implementation with JIT compiler."
 repository = "https://github.com/sisshiki1969/monoruby"
 edition = "2021"
 license = "MIT OR Apache-2.0"

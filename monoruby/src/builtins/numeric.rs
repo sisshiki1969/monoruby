@@ -1,4 +1,5 @@
 use super::*;
+use paste::paste;
 
 mod complex;
 mod float;
@@ -18,90 +19,65 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(NUMERIC_CLASS, "*", mul, 1);
     globals.define_builtin_func(NUMERIC_CLASS, "/", div, 1);
     globals.define_builtin_funcs(NUMERIC_CLASS, "%", &["module"], rem, 1);
+    globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
+    globals.define_builtin_func(NUMERIC_CLASS, "-@", neg, 0);
+    globals.define_builtin_func(NUMERIC_CLASS, "+@", pos, 0);
+    globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
 }
 
-///
-/// ### Integer#+
-///
-/// - self + other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
-#[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::add_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
+macro_rules! binop {
+    ($op:ident) => {
+        paste! {
+            #[monoruby_builtin]
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+                match super::op::[<$op _values>](vm, globals, lfp.self_val(), lfp.arg(0)) {
+                    Some(val) => Ok(val),
+                    None => {
+                        let err = vm.take_error();
+                        Err(err)
+                    }
+                }
+            }
         }
-    }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        binop!($op1);
+        binop!($($op2),+);
+    };
 }
 
-///
-/// ### Integer#-
-///
-/// - self - other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2d.html]
-#[monoruby_builtin]
-fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::sub_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
+binop!(add, sub, mul, div, rem, pow);
+
+macro_rules! unop {
+    ($op:ident) => {
+        paste! {
+            #[monoruby_builtin]
+            fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+                match super::op::[<$op _value>](vm, globals, lfp.self_val()) {
+                    Some(val) => Ok(val),
+                    None => {
+                        let err = vm.take_error();
+                        Err(err)
+                    }
+                }
+            }
         }
-    }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        unop!($op1);
+        unop!($($op2),+);
+    };
 }
 
-///
-/// ### Integer#*
-///
-/// - self * other -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a.html]
-#[monoruby_builtin]
-fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::mul_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
+unop!(neg, bitnot);
 
 ///
-/// ### Integer#/
+/// ### Integer#+@
 ///
-/// - self / other -> Numeric
+/// - + self -> Integer
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/=2b=40.html]
 #[monoruby_builtin]
-fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::div_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
-}
-
-///
-/// ### Integer#%
-///
-/// - self % other -> Numeric
-/// - modulo(other) -> Numeric
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
-#[monoruby_builtin]
-fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(lfp.self_val())
 }
