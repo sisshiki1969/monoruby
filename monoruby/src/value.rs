@@ -610,6 +610,14 @@ impl Value {
         None
     }
 
+    pub fn try_complex(&self) -> Option<&ComplexInner> {
+        if self.ty()? == ObjKind::COMPLEX {
+            Some(unsafe { self.rvalue().as_complex() })
+        } else {
+            None
+        }
+    }
+
     pub fn as_complex(&self) -> &ComplexInner {
         assert_eq!(Some(ObjKind::COMPLEX), self.ty());
         unsafe { self.rvalue().as_complex() }

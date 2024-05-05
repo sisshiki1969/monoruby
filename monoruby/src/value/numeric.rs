@@ -184,8 +184,12 @@ impl std::cmp::PartialEq for RealKind {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (RealKind::Integer(a), RealKind::Integer(b)) => a == b,
+            (RealKind::Integer(a), RealKind::Float(b)) => a.to_f64() == Some(*b),
             (RealKind::BigInt(a), RealKind::BigInt(b)) => a == b,
+            (RealKind::BigInt(a), RealKind::Float(b)) => a.to_f64() == Some(*b),
+            (RealKind::Float(a), RealKind::Integer(b)) => Some(*a) == b.to_f64(),
             (RealKind::Float(a), RealKind::Float(b)) => a == b,
+            (RealKind::Float(a), RealKind::BigInt(b)) => Some(*a) == b.to_f64(),
             _ => false,
         }
     }
