@@ -20,8 +20,6 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3.0"
-      - run: |
-          sudo apt-get install -y git
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
