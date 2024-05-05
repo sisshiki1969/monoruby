@@ -212,8 +212,8 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
 }
 
 fn spawn_ruby() -> std::process::Child {
-    std::process::Command::new("bash")
-        .args(&["-C", "ruby"])
+    std::process::Command::new("ruby")
+        //.args(&["-C", "ruby"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
