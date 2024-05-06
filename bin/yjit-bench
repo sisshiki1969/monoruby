@@ -1,7 +1,4 @@
 #!/bin/sh
 
-cargo build
 cargo install --path monoruby
-cd ../yjit-bench
-./run_benchmarks.rb fib -e "monoruby"
-cd ../monoruby
+cd ../yjit-bench && ./run_benchmarks.rb fib -e "monoruby"

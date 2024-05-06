@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         false,
     );
+    globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
@@ -207,6 +208,22 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 }
 
 ///
+/// ### Module#const_defined?
+///
+/// - const_defined?(name, inherit = true) -> bool
+///
+/// https://docs.ruby-lang.org/ja/latest/method/Module/i/const_defined=3f.html]
+#[monoruby_builtin]
+fn const_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string()?;
+    let module = lfp.self_val().as_class();
+    let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
+    Ok(Value::bool(
+        vm.const_get(globals, module, name, inherit).is_ok(),
+    ))
+}
+
+///
 /// ### Module#const_get
 ///
 /// - const_get(name, inherit = true) -> object
@@ -301,26 +318,20 @@ fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Val
 
 ///
 /// ### Module#instance_methods
-/// - instance_methods([NOT SUPPRTED] inherited_too = true) -> [Symbol]
+/// - instance_methods(inherited_too = true) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
-///
-/// !! Currently, this method returns only the methods that is defined in *self*.
-///
-/// TODO: support inherited_too.
 #[monoruby_builtin]
 fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let inhereted_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    if !inhereted_too {
-        return Err(MonorubyErr::argumenterr(
-            "Currently, inherited_too is not supported.",
-        ));
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let iter = if !inherited_too {
+        globals.get_method_names(class_id)
+    } else {
+        globals.get_method_names_inherit(class_id)
     }
-    let iter = globals
-        .get_method_names(class_id)
-        .into_iter()
-        .map(Value::symbol);
+    .into_iter()
+    .map(Value::symbol);
     Ok(Value::array_from_iter(iter))
 }
 
@@ -724,6 +735,42 @@ mod test {
         run_test_with_prelude(
             r#"
             [C.constants.sort!, C.constants(false).sort!]
+            "#,
+            r#"
+            class S
+              S1 = 100
+            end
+            class C < S
+              C1 = 1
+              C2 = 2
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn instance_methods() {
+        run_test_with_prelude(
+            r#"
+            [(C.instance_methods - S.instance_methods).sort!, C.instance_methods(false).sort!]
+            "#,
+            r#"
+            class S
+              def s; end
+            end
+            class C < S
+              def c1; end
+              def c2; end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn const_defined() {
+        run_test_with_prelude(
+            r#"
+            [C.const_defined?(:C1), C.const_defined?(:C3), C.const_defined?(:S1), C.const_defined?(:S1, true), C.const_defined?(:S1, false)]
             "#,
             r#"
             class S

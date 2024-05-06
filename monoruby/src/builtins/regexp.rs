@@ -10,6 +10,7 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape, 1);
+    globals.define_builtin_class_func_rest(REGEXP_CLASS, "union", regexp_union);
     globals.define_builtin_class_func_with(
         REGEXP_CLASS,
         "last_match",
@@ -52,6 +53,28 @@ fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result
     let string = arg0.expect_str()?;
     let val = Value::string(regex::escape(string));
     Ok(val)
+}
+
+///
+/// ### Regexp.union
+/// - union(*pattern) -> Regexp
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
+#[monoruby_builtin]
+fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let rest = lfp.arg(0);
+    let mut v = vec![];
+    for arg in rest.as_array().iter() {
+        if let Some(s) = arg.is_str() {
+            v.push(regex::escape(s));
+        } else if let Some(re) = arg.is_regex() {
+            v.push(re.as_str().to_string());
+        } else {
+            return Err(MonorubyErr::no_implicit_conversion(*arg, STRING_CLASS));
+        }
+    }
+
+    Ok(Value::regexp(RegexpInner::union(globals, &v)?))
 }
 
 ///
@@ -205,6 +228,12 @@ mod test {
           [$', $&, $1, $2, $3]
             "#,
         );
+    }
+
+    #[test]
+    fn union() {
+        run_test(r##""?" =~ Regexp.union("a", "?", "b")"##);
+        run_test(r##""ghi" =~ Regexp.union(/abc/, /def/, /ghi/)"##);
     }
 
     #[test]

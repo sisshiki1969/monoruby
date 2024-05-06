@@ -778,9 +778,8 @@ impl Value {
     }
 
     pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
-        let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjKind::CLASS | ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
+        match self.ty()? {
+            ObjKind::CLASS | ObjKind::MODULE => Some(unsafe { self.rvalue().as_class_id() }),
             _ => None,
         }
     }
@@ -864,7 +863,7 @@ impl Value {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = self.to_s(globals);
+                let name = self.inspect(globals);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }

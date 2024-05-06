@@ -581,7 +581,7 @@ impl TypeErrKind {
                     val.get_real_class_name(globals)
                 )
             }
-            TypeErrKind::Other => " type error".to_string(),
+            TypeErrKind::Other => "".to_string(),
         }
     }
 }

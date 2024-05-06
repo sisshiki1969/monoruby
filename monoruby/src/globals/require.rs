@@ -26,7 +26,11 @@ impl Globals {
 
     fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
         for lib in self.load_path.as_array().iter() {
-            let mut lib = std::path::PathBuf::from(lib.as_str()).join(file_name);
+            let lib = match lib.is_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut lib = std::path::PathBuf::from(lib).join(file_name);
             if lib.extension().is_some() {
                 if lib.exists() {
                     return Some(lib);

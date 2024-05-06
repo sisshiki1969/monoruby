@@ -739,6 +739,23 @@ impl Globals {
         self.store[class_id].methods.keys().cloned().collect()
     }
 
+    pub(crate) fn get_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
+        let mut names = vec![];
+        loop {
+            names.extend(self.store[class_id].methods.keys().cloned());
+            match class_id.get_module(self).superclass_id() {
+                Some(superclass) => {
+                    if superclass == OBJECT_CLASS {
+                        break;
+                    }
+                    class_id = superclass;
+                }
+                None => break,
+            }
+        }
+        names
+    }
+
     ///
     /// Get a method with *name* in the class of *class_id*.
     ///   

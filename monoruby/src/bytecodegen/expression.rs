@@ -163,8 +163,7 @@ impl BytecodeGen {
                 prefix,
             } => {
                 let base: Option<BcReg> = if let Some(box parent) = parent {
-                    let base = self.sp().into();
-                    self.gen_temp_expr(parent)?;
+                    let base = self.gen_temp_expr(parent)?;
                     Some(base)
                 } else {
                     None

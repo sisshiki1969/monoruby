@@ -26,6 +26,15 @@ impl RegexpInner {
         self.0.as_str()
     }
 
+    pub fn union(globals: &mut Globals, v: &[String]) -> Result<Self> {
+        let s = v
+            .iter()
+            .map(|re| format!("(?:{})", re))
+            .collect::<Vec<_>>()
+            .join("|");
+        Self::from_string(globals, s)
+    }
+
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Result<Self> {
         let string = regex::escape(escaped_str);

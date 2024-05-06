@@ -140,4 +140,4 @@ benchmark:
 
     puts "%.9f" % energy(BODIES)
 
-loop_count: 200
+loop_count: 10000
