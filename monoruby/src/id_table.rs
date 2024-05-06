@@ -107,6 +107,11 @@ impl IdentId {
     pub const FLOAT_MICROSECOND: IdentId = id!(44);
     pub const MICROSECOND: IdentId = id!(45);
     pub const NANOSECOND: IdentId = id!(46);
+
+    pub const ENCODING: IdentId = id!(47);
+    pub const UTF_8: IdentId = id!(48);
+    pub const ASCII_8BIT: IdentId = id!(49);
+    pub const _ENCODING: IdentId = id!(50);
 }
 
 impl IdentId {
@@ -246,6 +251,11 @@ impl IdentifierTable {
         table.set_id("float_microsecond", IdentId::FLOAT_MICROSECOND);
         table.set_id("microsecond", IdentId::MICROSECOND);
         table.set_id("nanosecond", IdentId::NANOSECOND);
+
+        table.set_id("Encoding", IdentId::ENCODING);
+        table.set_id("UTF_8", IdentId::UTF_8);
+        table.set_id("ASCII_8BIT", IdentId::ASCII_8BIT);
+        table.set_id("/encoding", IdentId::_ENCODING);
         table
     }
 

@@ -11,6 +11,18 @@ pub enum Encoding {
     Utf8,
 }
 
+impl Encoding {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s.to_uppercase().as_str() {
+            "ASCII-8BIT" => Ok(Encoding::Ascii8),
+            "UTF-8" => Ok(Encoding::Utf8),
+            _ => Err(MonorubyErr::argumenterr(format!(
+                "Unknown encoding name - {s}"
+            ))),
+        }
+    }
+}
+
 ///
 /// Ruby-level String.
 ///

@@ -34,6 +34,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
 }
 
 ///
@@ -205,6 +207,33 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     }
 }
 
+///
+/// ### Float#finite?
+///
+/// - finite? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/finite=3f.html]
+#[monoruby_builtin]
+fn finite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().try_float().unwrap().is_finite()))
+}
+
+///
+/// ### Float#finite?
+///
+/// - infinite? -> 1 | -1 | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/infinite=3f.html]
+#[monoruby_builtin]
+fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    if f.is_infinite() {
+        Ok(Value::fixnum(num::signum(f) as i64))
+    } else {
+        Ok(Value::nil())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -221,5 +250,17 @@ mod test {
         run_test("3.0.div(-2)");
         run_test("(-3.0).div(2)");
         run_test("(-3.0).div(-2)");
+    }
+
+    #[test]
+    fn finite() {
+        run_test("(1/0.0).finite?");
+        run_test("(-1/0.0).finite?");
+        run_test("(Float::NAN).finite?");
+        run_test("(5.5).finite?");
+        run_test("(1/0.0).infinite?");
+        run_test("(-1/0.0).infinite?");
+        run_test("(Float::NAN).infinite?");
+        run_test("(5.5).infinite?");
     }
 }

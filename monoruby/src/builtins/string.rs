@@ -67,6 +67,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
+    globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
 
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
@@ -77,7 +78,10 @@ pub(super) fn init(globals: &mut Globals) {
             Value::string_from_str("#<Encoding:UTF-8>"),
         )
         .unwrap();
-    globals.set_constant_by_str(enc.id(), "UTF_8", val);
+    globals
+        .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
+        .unwrap();
+    globals.set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
         .set_ivar(
@@ -86,8 +90,22 @@ pub(super) fn init(globals: &mut Globals) {
             Value::string_from_str("#<Encoding:ASCII-8BIT>"),
         )
         .unwrap();
-    globals.set_constant_by_str(enc.id(), "ASCII_8BIT", val);
+    globals
+        .set_ivar(
+            val,
+            IdentId::_ENCODING,
+            Value::string_from_str("ASCII-8BIT"),
+        )
+        .unwrap();
+    globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
+}
+
+fn encoding_class(globals: &Globals) -> ClassId {
+    globals
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
+        .unwrap()
+        .as_class_id()
 }
 
 ///
@@ -2063,6 +2081,27 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     )))
 }
 
+///
+/// ### String#force_encoding
+///
+/// - force_encoding(encoding) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/force_encoding.html]
+#[monoruby_builtin]
+fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let enc = if let Some(s) = arg0.is_str() {
+        Encoding::from_str(s)?
+    } else if arg0.class() == encoding_class(globals) {
+        let s = globals.get_ivar(arg0, IdentId::_ENCODING).unwrap();
+        Encoding::from_str(s.as_str())?
+    } else {
+        return Err(MonorubyErr::argumenterr("1st arg must be String."));
+    };
+    lfp.self_val().as_bytes_mut().set_encoding(enc);
+    Ok(lfp.self_val())
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -2719,5 +2758,14 @@ mod test {
     #[test]
     fn dump() {
         run_test(r#""abc\r\n\f\x90'\b10\\\"魁\u1234".dump"#);
+    }
+
+    #[test]
+    fn force_encoding() {
+        run_test(r#""Ruby".force_encoding("ASCII-8BIT")"#);
+        run_test(r#""Ruby".force_encoding("UTF-8")"#);
+        run_test(r#""Ruby".force_encoding(Encoding::UTF_8)"#);
+        run_test(r#""Ruby".force_encoding(Encoding::ASCII_8BIT)"#);
+        run_test_error(r#""Ruby".force_encoding(:ASCII)"#);
     }
 }
