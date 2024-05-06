@@ -115,9 +115,9 @@ impl ArrayInner {
         self.0.fill(value);
     }
 
-    /*pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
+    pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
         self.0.extend(iter);
-    }*/
+    }
 
     pub fn extend_from_slice(&mut self, slice: &[Value]) {
         self.0.extend_from_slice(slice);

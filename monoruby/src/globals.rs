@@ -108,7 +108,7 @@ pub struct Globals {
     /// stdout.
     stdout: BufWriter<Stdout>,
     /// library directries.
-    lib_directories: Vec<String>,
+    load_path: Value,
     /// gem directries.
     gem_directories: Vec<String>,
     /// standard PRNG
@@ -147,6 +147,8 @@ impl std::ops::IndexMut<FuncId> for Globals {
 
 impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.main_object.mark(alloc);
+        self.load_path.mark(alloc);
         self.store.mark(alloc);
         self.global_vars.values().for_each(|v| v.mark(alloc));
     }
@@ -167,12 +169,10 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
-            lib_directories: vec![
-                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"
-                    .to_string(),
-                "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"
-                    .to_string(),
-                ],
+            load_path: Value::array_from_vec(vec![
+                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
+                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
+                ]),
             gem_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
@@ -355,15 +355,13 @@ impl Globals {
     // Handling library load path.
 
     pub fn get_load_path(&self) -> Value {
-        let iter = self
-            .lib_directories
-            .iter()
-            .map(|s| Value::string_from_str(s));
-        Value::array_from_iter(iter)
+        self.load_path
     }
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.lib_directories.extend(iter);
+        self.load_path
+            .as_array_mut()
+            .extend(iter.map(|s| Value::string(s)));
     }
 
     pub fn extend_gem_path(&mut self, iter: impl Iterator<Item = String>) {
