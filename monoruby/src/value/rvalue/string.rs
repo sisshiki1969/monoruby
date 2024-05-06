@@ -117,6 +117,13 @@ impl StringInner {
             },
         }
     }
+
+    pub fn valid(&self) -> bool {
+        match self.ty {
+            Encoding::Ascii8 => true,
+            Encoding::Utf8 => std::str::from_utf8(self).is_ok(),
+        }
+    }
 }
 
 fn utf8_escape(s: &mut String, ch: char) {

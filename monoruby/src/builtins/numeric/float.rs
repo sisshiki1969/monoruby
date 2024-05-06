@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
 }
 
 ///
@@ -234,6 +235,17 @@ fn infinite(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     }
 }
 
+///
+/// ### Float#nan?
+///
+/// - nan? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/nan=3f.html]
+#[monoruby_builtin]
+fn nan(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().try_float().unwrap().is_nan()))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -262,5 +274,9 @@ mod test {
         run_test("(-1/0.0).infinite?");
         run_test("(Float::NAN).infinite?");
         run_test("(5.5).infinite?");
+        run_test("(1/0.0).nan?");
+        run_test("(-1/0.0).nan?");
+        run_test("(Float::NAN).nan?");
+        run_test("(5.5).nan?");
     }
 }

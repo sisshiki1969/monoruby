@@ -4,7 +4,7 @@ cargo install --path monoruby
 rbenv local 3.4-dev
 
 ruby -v
-ruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes
+ruby ../optcarrot/bin/optcarrot -b $1 ../optcarrot/examples/Lan_Master.nes
 echo
 
 ruby -v --yjit

@@ -68,6 +68,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
+    globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
 
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
@@ -2100,6 +2101,17 @@ fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     };
     lfp.self_val().as_bytes_mut().set_encoding(enc);
     Ok(lfp.self_val())
+}
+
+///
+/// ### String#valid_encoding?
+///
+/// - valid_encoding? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/valid_encoding=3f.html]
+#[monoruby_builtin]
+fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_bytes().valid()))
 }
 
 #[cfg(test)]

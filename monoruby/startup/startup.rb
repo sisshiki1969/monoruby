@@ -26,6 +26,7 @@ class Hash
   # to_h -> self
   # to_h {|key, value| block } -> Hash
   def to_h
+    return self if !block_given?
     h = {}
     self.each {|k, v|
       new_kv = yield k, v
