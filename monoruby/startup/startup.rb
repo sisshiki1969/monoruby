@@ -1,4 +1,4 @@
-
+require 'rbconfig' 
 class Process
   CLOCK_REALTIME = 0
   CLOCK_MONOTONIC = 1

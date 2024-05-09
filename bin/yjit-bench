@@ -1,5 +1,4 @@
 #!/bin/sh
 
 cargo install --path monoruby
-cd ../yjit-bench && ./run_benchmarks.rb --rss --graph fib so_mandelbrot nbody binarytrees aobench optcarrot matmul nqueens sudoku --chruby "3.3.1::ruby-3.3.1" -e "monoruby(no JIT)::monoruby --no-jit" --chruby "3.3.1+YJIT::ruby-3.3.1 --yjit" -e "monoruby"
-cd ../yjit-bench && ./run_benchmarks.rb --rss --graph fib so_mandelbrot nbody binarytrees aobench optcarrot matmul nqueens sudoku -e "monoruby" --chruby "3.3.1+YJIT::ruby-3.3.1 --yjit; TruffleNative::truffleruby-24.0.1; TruffleJVM::truffleruby-graalvm-24.0.1"
+cd ../yjit-bench && ./run_benchmarks.rb --harness=harness-warmup --rss fib binarytrees so_mandelbrot nbody aobench optcarrot matmul nqueens sudoku --chruby "3.3.1::ruby-3.3.1" -e "monoruby(noJIT)::monoruby --no-jit" --chruby "3.3.1+YJIT::ruby-3.3.1 --yjit" -e "monoruby" --chruby "TruffleNative::truffleruby-24.0.1; TruffleJVM::truffleruby-graalvm-24.0.1"

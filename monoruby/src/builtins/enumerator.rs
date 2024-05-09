@@ -106,7 +106,10 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
 
     let internal = Fiber::from(self_val.proc);
-    each_inner(vm, globals, internal, &data, self_val)
+    vm.temp_push(internal.into());
+    let res = each_inner(vm, globals, internal, &data, self_val);
+    vm.temp_pop();
+    res
 }
 
 ///
@@ -165,7 +168,10 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     };
 
     let internal = Fiber::from(self_val.proc);
-    with_index_inner(vm, globals, internal, &data, count, self_val)
+    vm.temp_push(internal.into());
+    let res = with_index_inner(vm, globals, internal, &data, count, self_val);
+    vm.temp_pop();
+    res
 }
 
 ///

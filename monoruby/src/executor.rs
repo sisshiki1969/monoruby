@@ -109,17 +109,6 @@ impl Executor {
             err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
         }
-        #[cfg(not(test))]
-        {
-            let path = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("startup_features.rb");
-            if let Err(err) = executor.require(globals, &path, false) {
-                err.show_error_message_and_all_loc(globals);
-                panic!("error occurred in startup_features.");
-            }
-        }
         #[cfg(feature = "emit-bc")]
         {
             globals.startup_flag = true;
@@ -1837,6 +1826,7 @@ struct Root<'a, 'b> {
 
 impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        unsafe { crate::builtins::YIELDER.unwrap().mark(alloc) };
         self.globals.mark(alloc);
         self.executor.mark(alloc);
     }

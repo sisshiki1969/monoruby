@@ -20,6 +20,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
             internal.mark(alloc);
         }
         self.proc.mark(alloc);
+        self.args.iter().for_each(|v| v.mark(alloc));
         if let Some(buf) = self.buffer {
             buf.mark(alloc)
         }
