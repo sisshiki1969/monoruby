@@ -1,4 +1,5 @@
 use super::*;
+use num::ToPrimitive;
 use num::Zero;
 use std::{io::Write, mem::transmute};
 
@@ -29,6 +30,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
+    globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
     globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
@@ -305,6 +307,34 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         _ => {}
     };
     Err(MonorubyErr::no_implicit_conversion(arg0, INTEGER_CLASS))
+}
+
+///
+/// ### Kernel.#Float
+///
+/// - Float(arg, [NOT SUPPORTED] exception: true) -> Float | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Float.html]
+#[monoruby_builtin]
+fn kernel_float(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    match arg0.unpack() {
+        RV::Fixnum(num) => return Ok(Value::float(num as f64)),
+        RV::BigInt(num) => return Ok(Value::float(num.to_f64().unwrap())),
+        RV::Float(num) => return Ok(Value::float(num)),
+        RV::String(b) => {
+            let (f, err) = parse_f64(&b.to_string());
+            if err {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid value for Float(): {}",
+                    b.to_string()
+                )));
+            }
+            return Ok(Value::float(f));
+        }
+        _ => {}
+    };
+    Err(MonorubyErr::no_implicit_conversion(arg0, FLOAT_CLASS))
 }
 
 ///
@@ -632,6 +662,18 @@ mod test {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+    }
+
+    #[test]
+    fn float() {
+        run_test(r#"Float(0.0)"#);
+        run_test(r#"Float(1)"#);
+        run_test(r#"Float(1000000000000000000000000000000000000000000000000000000000000)"#);
+        run_test(r#"Float('10.0')"#);
+        run_test(r#"Float('   10.0')"#);
+        run_test(r#"Float(' -0.7e-10')"#);
+        run_test_error(r#"Float(' -0.7 5')"#);
+        run_test_error(r#"Float(' -0.7e-10z')"#);
     }
 
     #[test]

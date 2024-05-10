@@ -37,6 +37,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
+    globals.define_builtin_funcs(FLOAT_CLASS, "abs", &["magnitude"], abs, 0);
 }
 
 ///
@@ -246,6 +247,19 @@ fn nan(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().try_float().unwrap().is_nan()))
 }
 
+///
+/// ### Float#abs
+///
+/// - abs -> Float
+/// - magnitude -> Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/abs.html]
+#[monoruby_builtin]
+fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f = lfp.self_val().try_float().unwrap();
+    Ok(Value::float(f.abs()))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -262,6 +276,8 @@ mod test {
         run_test("3.0.div(-2)");
         run_test("(-3.0).div(2)");
         run_test("(-3.0).div(-2)");
+        run_test("(-37.044).abs");
+        run_test("37.044.magnitude");
     }
 
     #[test]

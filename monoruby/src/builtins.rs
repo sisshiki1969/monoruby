@@ -31,6 +31,7 @@ pub use enumerator::YIELDER;
 pub use monoasm::*;
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
+use num::ToPrimitive;
 pub(crate) use object::{object_send, object_send_splat, send};
 pub use time::TimeInner;
 
@@ -83,5 +84,75 @@ impl std::ops::Add<usize> for Arg {
     type Output = Arg;
     fn add(self, rhs: usize) -> Arg {
         Arg(unsafe { self.0.sub(rhs) })
+    }
+}
+
+fn parse_f64(s: &str) -> (f64, bool) {
+    let mut f = <num::BigInt as num::Zero>::zero();
+    let mut e = 0;
+    let mut positive = true;
+    let mut iter = s.chars().skip_while(|c| c.is_ascii_whitespace()).peekable();
+
+    let c = iter.peek();
+    if c == Some(&'+') {
+        iter.next().unwrap();
+    } else if c == Some(&'-') {
+        iter.next().unwrap();
+        positive = false;
+    }
+
+    while let Some(c) = iter.peek()
+        && c.is_ascii_digit()
+    {
+        let c = iter.next().unwrap();
+        f = f * 10 + (c as u32 - '0' as u32);
+    }
+
+    if iter.peek() == Some(&'.') {
+        iter.next();
+        while let Some(c) = iter.peek()
+            && c.is_ascii_digit()
+        {
+            let c = iter.next().unwrap();
+            f = f * 10 + (c as u32 - '0' as u32);
+            e -= 1;
+        }
+    }
+
+    let peek = iter.peek();
+    if peek == Some(&'e') || peek == Some(&'E') {
+        let mut sign = 1i32;
+        let mut i = 0;
+        iter.next().unwrap();
+        let c = iter.peek();
+        if c == Some(&'+') {
+            iter.next().unwrap();
+        } else if c == Some(&'-') {
+            iter.next().unwrap();
+            sign = -1;
+        }
+        while let Some(c) = iter.peek()
+            && c.is_ascii_digit()
+        {
+            let c = iter.next().unwrap();
+            i = i * 10 + (c as u32 - '0' as u32);
+        }
+        e += (i as i32) * sign;
+    }
+
+    while e > 0 {
+        f *= 10;
+        e -= 1;
+    }
+
+    let mut f = f.to_f64().unwrap();
+    if e < 0 {
+        f /= 10.0f64.powi(-e);
+    }
+    let err = iter.peek().is_some();
+    if positive {
+        (f, err)
+    } else {
+        (-f, err)
     }
 }

@@ -1,4 +1,3 @@
-use num::ToPrimitive;
 use num::{BigInt, Zero};
 
 use super::*;
@@ -1609,7 +1608,7 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str()?;
-    let f = parse_f64(s);
+    let f = parse_f64(s).0;
     Ok(Value::float(f))
 }
 
@@ -1684,75 +1683,6 @@ fn parse_i64(s: &str, radix: u32) -> Option<(i64, bool)> {
         i = i.checked_mul(radix as i64)?.checked_add(d as i64)?;
     }
     Some((i, sign.unwrap_or(1) == -1))
-}
-
-fn parse_f64(s: &str) -> f64 {
-    let mut f = BigInt::zero();
-    let mut e = 0;
-    let mut positive = true;
-    let mut iter = s.chars().skip_while(|c| c.is_ascii_whitespace()).peekable();
-
-    let c = iter.peek();
-    if c == Some(&'+') {
-        iter.next().unwrap();
-    } else if c == Some(&'-') {
-        iter.next().unwrap();
-        positive = false;
-    }
-
-    while let Some(c) = iter.peek()
-        && c.is_ascii_digit()
-    {
-        let c = iter.next().unwrap();
-        f = f * 10 + (c as u32 - '0' as u32);
-    }
-
-    if iter.peek() == Some(&'.') {
-        iter.next();
-        while let Some(c) = iter.peek()
-            && c.is_ascii_digit()
-        {
-            let c = iter.next().unwrap();
-            f = f * 10 + (c as u32 - '0' as u32);
-            e -= 1;
-        }
-    }
-
-    let peek = iter.peek();
-    if peek == Some(&'e') || peek == Some(&'E') {
-        let mut sign = 1i32;
-        let mut i = 0;
-        iter.next().unwrap();
-        let c = iter.peek();
-        if c == Some(&'+') {
-            iter.next().unwrap();
-        } else if c == Some(&'-') {
-            iter.next().unwrap();
-            sign = -1;
-        }
-        while let Some(c) = iter.peek()
-            && c.is_ascii_digit()
-        {
-            let c = iter.next().unwrap();
-            i = i * 10 + (c as u32 - '0' as u32);
-        }
-        e += (i as i32) * sign;
-    }
-
-    while e > 0 {
-        f *= 10;
-        e -= 1;
-    }
-
-    let mut f = f.to_f64().unwrap();
-    if e < 0 {
-        f /= 10.0f64.powi(-e);
-    }
-    if positive {
-        f
-    } else {
-        -f
-    }
 }
 
 fn parse_bigint(s: &str, radix: u32) -> BigInt {
