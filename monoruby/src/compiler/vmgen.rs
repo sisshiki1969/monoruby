@@ -85,8 +85,7 @@ impl Codegen {
     ///
     /// Generate interpreter.
     ///
-    pub(super) fn construct_vm(&mut self, no_jit: bool, main_object: Value) {
-        self.entry_point = self.gen_entry_point(main_object);
+    pub(super) fn construct_vm(&mut self, no_jit: bool) {
         let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
         //
@@ -104,7 +103,6 @@ impl Codegen {
         vm_entry:
             pushq rbp;
             movq rbp, rsp;
-            //movq rdx, rdi;
         };
         let entry_fetch = self.jit.label();
         self.jit.bind_label(entry_fetch);

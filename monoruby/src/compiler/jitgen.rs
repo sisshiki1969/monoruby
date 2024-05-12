@@ -1498,7 +1498,7 @@ mod test {
 
     #[test]
     fn float_test() {
-        let gen = Codegen::new(false, Value::nil());
+        let gen = Codegen::new(false);
 
         let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
         let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
@@ -1528,7 +1528,7 @@ mod test {
 
     #[test]
     fn float_test2() {
-        let mut gen = Codegen::new(false, Value::nil());
+        let mut gen = Codegen::new(false);
 
         let panic = gen.entry_panic;
         let assume_int_to_f64 = gen.jit.label();

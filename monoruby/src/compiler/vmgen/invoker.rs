@@ -1,40 +1,6 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn gen_entry_point(
-        &mut self,
-        main_object: Value,
-    ) -> extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value> {
-        // "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-
-        let entry = self.jit.get_current_address();
-        let error_exit = self.jit.label();
-
-        self.invoker_prologue();
-        self.get_func_data();
-        monoasm! { &mut self.jit,
-            lea  r14, [rsp - 16];
-            // set meta func_id
-            movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
-            movq [r14 - (LBP_META)], rax;
-            // set block
-            movq [r14 - (LBP_BLOCK)], 0;
-            movq [r14 - (LBP_OUTER)], 0;
-            // set self
-            movq rax, (main_object.id());
-            movq [r14 - (LBP_SELF)], rax;
-        };
-        self.invoker_call();
-        self.invoker_epilogue(error_exit);
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "entry-point");
-
-        unsafe { std::mem::transmute(entry.as_ptr()) }
-    }
-
     pub(super) fn gen_invoker(&mut self) {
         self.method_invoker = self.method_invoker();
         self.method_invoker2 = self.method_invoker2();

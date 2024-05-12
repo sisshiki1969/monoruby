@@ -161,7 +161,7 @@ impl Globals {
 
         let mut globals = Self {
             main_object,
-            codegen: Codegen::new(no_jit, main_object),
+            codegen: Codegen::new(no_jit),
             store: Store::new(),
             global_vars: HashMap::default(),
             global_method_cache: GlobalMethodCache::default(),

@@ -273,7 +273,7 @@ mod test {
 
     #[test]
     fn guard_class() {
-        let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
+        let mut gen = Codegen::new(false);
         let side_exit = gen.entry_panic;
 
         for (class, value) in [
@@ -304,7 +304,7 @@ mod test {
 
     #[test]
     fn unbox_float() {
-        let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
+        let mut gen = Codegen::new(false);
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
         let x = Xmm(0);
@@ -338,7 +338,7 @@ mod test {
 
     #[test]
     fn unbox_integer_float() {
-        let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
+        let mut gen = Codegen::new(false);
         let side_exit = gen.entry_panic;
         let entry_point = gen.jit.get_current_address();
         let x = Xmm(0);

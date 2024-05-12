@@ -14,8 +14,6 @@ use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
 
-type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, FuncId) -> Option<Value>;
-
 type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
@@ -153,7 +151,6 @@ pub struct Codegen {
     ///
     get_class: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
-    pub(super) entry_point: EntryPoint,
     pub(crate) method_invoker: MethodInvoker,
     pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
@@ -181,7 +178,7 @@ pub struct Codegen {
 }
 
 impl Codegen {
-    pub fn new(no_jit: bool, main_object: Value) -> Self {
+    pub fn new(no_jit: bool) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
@@ -214,7 +211,6 @@ impl Codegen {
             div_by_zero: entry_panic,
             get_class,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
-            entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -236,8 +232,7 @@ impl Codegen {
                 file
             },
         };
-        codegen.construct_vm(no_jit, main_object);
-        //codegen.remove_optimization();
+        codegen.construct_vm(no_jit);
         codegen.jit.finalize();
 
         codegen.class_version_addr =
@@ -995,7 +990,7 @@ extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Val
 
 #[test]
 fn guard_class() {
-    let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
+    let mut gen = Codegen::new(false);
 
     for (class, value) in [
         (INTEGER_CLASS, Value::integer(-2558)),
@@ -1024,7 +1019,7 @@ fn guard_class() {
 
 #[test]
 fn test_f64_to_val() {
-    let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
+    let mut gen = Codegen::new(false);
 
     for f in [
         1.44e-17,
