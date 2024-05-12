@@ -1,8 +1,8 @@
 use super::*;
 use num::BigInt;
 use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, RescueEntry,
-    SourceInfoRef, UnOp,
+    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
+    RescueEntry, SourceInfoRef, UnOp,
 };
 
 mod binary;
@@ -18,9 +18,10 @@ pub fn compile_script(
     globals: &mut Globals,
     ast: Node,
     sourceinfo: SourceInfoRef,
+    binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
     let main_fid = globals.store.add_main(ast, sourceinfo)?;
-    compile(globals, main_fid)?;
+    compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
 
@@ -35,15 +36,18 @@ pub fn compile_eval(
     let main_fid = globals
         .store
         .add_eval(mother, outer, ast, loc, sourceinfo)?;
-    compile(globals, main_fid)?;
+    compile(globals, main_fid, None)?;
     Ok(main_fid)
 }
 
-fn compile(globals: &mut Globals, main_fid: FuncId) -> Result<()> {
-    let mut fid = main_fid;
+fn compile(globals: &mut Globals, main_fid: FuncId, binding: Option<LvarCollector>) -> Result<()> {
+    assert!(globals.store.func_len() > main_fid.get() as usize);
+    compile_func(&mut globals.store, main_fid, binding)?;
+    globals.gen_wrapper(main_fid);
+    let mut fid = FuncId::new(main_fid.get() + 1);
 
     while globals.store.func_len() > fid.get() as usize {
-        compile_func(&mut globals.store, fid)?;
+        compile_func(&mut globals.store, fid, None)?;
         globals.gen_wrapper(fid);
         fid = FuncId::new(fid.get() + 1);
     }
@@ -51,7 +55,7 @@ fn compile(globals: &mut Globals, main_fid: FuncId) -> Result<()> {
     Ok(())
 }
 
-fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
+fn compile_func(store: &mut Store, func_id: FuncId, binding: Option<LvarCollector>) -> Result<()> {
     let CompileInfo {
         ast,
         for_param_info,
@@ -63,7 +67,7 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
     let info = store[func_id].as_ruby_func();
     let (fid, outer) = info.mother;
     let params = store[fid].as_ruby_func().args.clone();
-    let mut gen = BytecodeGen::new(info, (fid, params, outer));
+    let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -521,7 +525,11 @@ impl std::ops::Index<Label> for BytecodeGen {
 }
 
 impl BytecodeGen {
-    fn new(info: &ISeqInfo, mother: (FuncId, ParamsInfo, usize)) -> Self {
+    fn new(
+        info: &ISeqInfo,
+        mother: (FuncId, ParamsInfo, usize),
+        binding: Option<LvarCollector>,
+    ) -> Self {
         let mut ir = Self {
             id: info.id(),
             mother,
@@ -541,9 +549,16 @@ impl BytecodeGen {
             exception_table: vec![],
             merge_info: HashMap::default(),
         };
-        info.args.args_names.iter().for_each(|name| {
-            ir.add_local(*name);
-        });
+        if let Some(lvc) = binding {
+            assert!(info.args.args_names.is_empty());
+            lvc.table.0.iter().for_each(|name| {
+                ir.add_local(IdentId::get_id(name));
+            });
+        } else {
+            info.args.args_names.iter().for_each(|name| {
+                ir.add_local(*name);
+            });
+        }
         ir.gen_dummy_init(info.is_block_style());
 
         ir

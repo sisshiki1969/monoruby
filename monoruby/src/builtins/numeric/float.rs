@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(FLOAT_CLASS, "%", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "divmod", divmod, 1);
     globals.define_builtin_func(FLOAT_CLASS, "==", eq, 1);
     globals.define_builtin_func(FLOAT_CLASS, "===", eq, 1);
     globals.define_builtin_func(FLOAT_CLASS, ">=", ge, 1);
@@ -135,13 +136,8 @@ fn cmp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3d.html]
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0))
+        .ok_or_else(|| vm.take_error())
 }
 
 ///
@@ -152,13 +148,8 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e.html]
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0))
+        .ok_or_else(|| vm.take_error())
 }
 
 ///
@@ -169,13 +160,8 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d.html]
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0))
+        .ok_or_else(|| vm.take_error())
 }
 
 ///
@@ -186,13 +172,8 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c.html]
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(res) => Ok(res),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0))
+        .ok_or_else(|| vm.take_error())
 }
 
 ///
@@ -278,6 +259,14 @@ mod test {
         run_test("(-3.0).div(-2)");
         run_test("(-37.044).abs");
         run_test("37.044.magnitude");
+    }
+
+    #[test]
+    fn divmod() {
+        run_test("(11.5).divmod(3.5)");
+        run_test("(11.5).divmod(-3.5)");
+        run_test("(11.5).divmod(-3.5)");
+        run_test("(-11.5).divmod(3.5)");
     }
 
     #[test]

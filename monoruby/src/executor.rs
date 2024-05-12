@@ -186,7 +186,7 @@ impl Executor {
         path: &std::path::Path,
     ) -> Result<Value> {
         let fid = match ruruby_parse::Parser::parse_program(code, path) {
-            Ok(res) => bytecodegen::compile_script(globals, res.node, res.source_info),
+            Ok(res) => bytecodegen::compile_script(globals, res.node, res.source_info, None),
             Err(err) => Err(MonorubyErr::parse(err)),
         }?;
         self.exec_func(globals, fid)
@@ -201,7 +201,16 @@ impl Executor {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let res = (globals.codegen.entry_point)(self, globals, func_id);
+        let main_object = globals.main_object;
+        let res = (globals.codegen.method_invoker)(
+            self,
+            globals,
+            func_id,
+            main_object,
+            (&[]).as_ptr(),
+            0,
+            None,
+        );
         res.ok_or_else(|| self.take_error())
     }
 
@@ -586,10 +595,8 @@ impl Executor {
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, true)?;
-        match self.invoke_func(globals, func_id, receiver, args, bh) {
-            Some(res) => Ok(res),
-            None => Err(self.take_error()),
-        }
+        self.invoke_func(globals, func_id, receiver, args, bh)
+            .ok_or_else(|| self.take_error())
     }
 
     ///
@@ -605,17 +612,15 @@ impl Executor {
         data: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
-        match (globals.codegen.block_invoker)(
+        (globals.codegen.block_invoker)(
             self,
             globals,
             data,
             Value::nil(),
             args.as_ptr(),
             args.len(),
-        ) {
-            Some(val) => Ok(val),
-            None => Err(self.take_error()),
-        }
+        )
+        .ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn invoke_block_with_self(
@@ -625,17 +630,15 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        match (globals.codegen.block_invoker_with_self)(
+        (globals.codegen.block_invoker_with_self)(
             self,
             globals,
             data as _,
             self_val,
             args.as_ptr(),
             args.len(),
-        ) {
-            Some(val) => Ok(val),
-            None => Err(self.take_error()),
-        }
+        )
+        .ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn invoke_block_once(
@@ -771,10 +774,8 @@ impl Executor {
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            match self.invoke_func(globals, func_id, receiver, args, bh) {
-                Some(val) => Ok(val),
-                None => Err(self.take_error()),
-            }
+            self.invoke_func(globals, func_id, receiver, args, bh)
+                .ok_or_else(|| self.take_error())
         } else {
             Ok(Value::nil())
         }

@@ -31,6 +31,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "&", bitand, 1);
     globals.define_basic_op(INTEGER_CLASS, "|", bitor, 1);
     globals.define_basic_op(INTEGER_CLASS, "^", bitxor, 1);
+    globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
     globals.define_builtin_inline_func(
         INTEGER_CLASS,
         ">>",
@@ -364,13 +365,7 @@ cmpop!(ge, gt, le, lt);
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
 #[monoruby_builtin]
 fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
 fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
@@ -396,13 +391,7 @@ fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSi
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)) {
-        Some(val) => Ok(val),
-        None => {
-            let err = vm.take_error();
-            Err(err)
-        }
-    }
+    super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
 fn integer_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {

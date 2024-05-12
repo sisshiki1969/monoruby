@@ -15,15 +15,16 @@ impl Codegen {
         self.invoker_prologue();
         self.get_func_data();
         monoasm! { &mut self.jit,
+            lea  r14, [rsp - 16];
             // set meta func_id
             movq rax, [r15 + (FUNCDATA_META)];  // r13: *const FuncData
-            movq [rsp - (16 + LBP_META)], rax;
+            movq [r14 - (LBP_META)], rax;
             // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_OUTER)], 0;
+            movq [r14 - (LBP_BLOCK)], 0;
+            movq [r14 - (LBP_OUTER)], 0;
             // set self
             movq rax, (main_object.id());
-            movq [rsp - (16 + LBP_SELF)], rax;
+            movq [r14 - (LBP_SELF)], rax;
         };
         self.invoker_call();
         self.invoker_epilogue(error_exit);

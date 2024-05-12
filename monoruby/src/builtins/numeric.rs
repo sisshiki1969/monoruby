@@ -48,6 +48,58 @@ macro_rules! binop {
 
 binop!(add, sub, mul, div, rem, pow);
 
+///
+/// ### Float#divmod
+///
+/// - Float#divmod
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
+#[monoruby_builtin]
+fn divmod(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let (div, modulo) = match (lfp.self_val().unpack(), lfp.arg(0).unpack()) {
+        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
+            let div = if rhs.is_negative() {
+                (-lhs).div_euclid(-rhs)
+            } else {
+                lhs.div_euclid(rhs)
+            };
+            let modulo = lhs - rhs * div;
+            (Value::integer(div), Value::integer(modulo))
+        }
+        (RV::Fixnum(lhs), RV::Float(rhs)) => {
+            let lhs = lhs as f64;
+            let div = if rhs.is_sign_negative() {
+                (-lhs).div_euclid(-rhs)
+            } else {
+                lhs.div_euclid(rhs)
+            };
+            let modulo = lhs - rhs * div;
+            (Value::integer(div as i64), Value::float(modulo))
+        }
+        (RV::Float(lhs), RV::Fixnum(rhs)) => {
+            let rhs = rhs as f64;
+            let div = if rhs.is_sign_negative() {
+                (-lhs).div_euclid(-rhs)
+            } else {
+                lhs.div_euclid(rhs)
+            };
+            let modulo = lhs - rhs * div;
+            (Value::integer(div as i64), Value::float(modulo))
+        }
+        (RV::Float(lhs), RV::Float(rhs)) => {
+            let div = if rhs.is_sign_negative() {
+                (-lhs).div_euclid(-rhs)
+            } else {
+                lhs.div_euclid(rhs)
+            };
+            let modulo = lhs - rhs * div;
+            (Value::integer(div as i64), Value::float(modulo))
+        }
+        _ => return Err(MonorubyErr::cant_convert_into_float(lfp.arg(0))),
+    };
+    Ok(Value::array2(div, modulo))
+}
+
 macro_rules! unop {
     ($op:ident) => {
         paste! {

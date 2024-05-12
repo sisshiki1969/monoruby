@@ -32,7 +32,7 @@ fn main() {
     let mut cont_mode = false;
     let mut buf = String::new();
     let mut script_line = 0;
-    let mut context = None;
+    let mut binding = None;
     let mut executor = Executor::init(&mut globals);
     loop {
         let prompt = format!(
@@ -52,22 +52,25 @@ fn main() {
                 let main_fid = match ruruby_parse::Parser::parse_program_binding(
                     buf.clone(),
                     std::path::Path::new(&format!("(irm):{script_line}")).into(),
-                    context.clone(),
+                    binding.clone(),
                     None::<&ruruby_parse::DummyContext>,
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;
-                        let fid =
-                            match monoruby::compile_script(&mut globals, res.node, res.source_info)
-                            {
-                                Ok(id) => id,
-                                Err(err) => {
-                                    err.show_error_message_and_all_loc(&globals);
-                                    cont_mode = false;
-                                    continue;
-                                }
-                            };
-                        context = Some(collector);
+                        let fid = match monoruby::compile_script(
+                            &mut globals,
+                            res.node,
+                            res.source_info,
+                            std::mem::take(&mut binding),
+                        ) {
+                            Ok(id) => id,
+                            Err(err) => {
+                                err.show_error_message_and_all_loc(&globals);
+                                cont_mode = false;
+                                continue;
+                            }
+                        };
+                        binding = Some(collector);
                         fid
                     }
                     Err(err) => {
