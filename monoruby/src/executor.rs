@@ -18,19 +18,19 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<V
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
-pub(crate) const BP_PREV_CFP: i64 = 8;
-pub(crate) const BP_LFP: i64 = 16;
-pub(crate) const LFP_OFFSET: i64 = 24;
-pub(crate) const LBP_OUTER: i64 = 0 + LFP_OFFSET;
+pub(crate) const BP_PREV_CFP: i32 = 8;
+pub(crate) const BP_LFP: i32 = 16;
+pub(crate) const LFP_OFFSET: i32 = 24;
+pub(crate) const LBP_OUTER: i32 = 0 + LFP_OFFSET;
 /// Meta 8bytes
-pub(crate) const LBP_META: i64 = 8 + LFP_OFFSET;
+pub(crate) const LBP_META: i32 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
-pub(crate) const LBP_META_REGNUM: i64 = LBP_META - META_REGNUM as i64;
+pub(crate) const LBP_META_REGNUM: i32 = LBP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
 //pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
-pub(crate) const LBP_BLOCK: i64 = 16 + LFP_OFFSET;
-pub(crate) const LBP_SELF: i64 = 24 + LFP_OFFSET;
-pub const LBP_ARG0: i64 = LBP_SELF + 8;
+pub(crate) const LBP_BLOCK: i32 = 16 + LFP_OFFSET;
+pub(crate) const LBP_SELF: i32 = 24 + LFP_OFFSET;
+pub const LBP_ARG0: i32 = LBP_SELF + 8;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
@@ -189,7 +189,7 @@ impl Executor {
             Ok(res) => bytecodegen::compile_script(globals, res.node, res.source_info, None),
             Err(err) => Err(MonorubyErr::parse(err)),
         }?;
-        self.exec_func(globals, fid)
+        self.eval_toplevel(globals, fid)
     }
 
     ///
@@ -197,7 +197,7 @@ impl Executor {
     ///
     /// *main* object is set to *self*.
     ///
-    pub fn exec_func(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+    pub fn eval_toplevel(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
@@ -211,6 +211,19 @@ impl Executor {
             0,
             None,
         );
+        res.ok_or_else(|| self.take_error())
+    }
+
+    ///
+    /// Execute top level method.
+    ///
+    /// *main* object is set to *self*.
+    ///
+    pub fn eval_binding(&mut self, globals: &mut Globals, binding_lfp: Lfp) -> Result<Value> {
+        #[cfg(feature = "emit-bc")]
+        globals.dump_bc();
+
+        let res = (globals.codegen.binding_invoker)(self, globals, binding_lfp);
         res.ok_or_else(|| self.take_error())
     }
 

@@ -474,11 +474,11 @@ impl Codegen {
         let CallSiteInfo {
             kw_pos, kw_args, ..
         } = caller;
-        let mut callee_ofs = (callee.pos_num() as i64 + 1) * 8 + LBP_SELF;
+        let mut callee_ofs = (callee.pos_num() as i32 + 1) * 8 + LBP_SELF;
         for param_name in callee.kw_names() {
             match kw_args.get(param_name) {
                 Some(caller) => {
-                    let caller_ofs = (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;
+                    let caller_ofs = (kw_pos.0 as i32 + *caller as i32) * 8 + LBP_SELF;
                     monoasm! { &mut self.jit,
                         movq  rax, [r14 - (caller_ofs)];
                         movq  [rsp - (16 + callee_ofs)], rax;

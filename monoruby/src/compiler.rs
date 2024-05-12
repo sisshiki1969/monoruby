@@ -43,6 +43,8 @@ type BlockInvoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
+type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
+
 type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
@@ -155,6 +157,7 @@ pub struct Codegen {
     pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
     pub(crate) block_invoker_with_self: BlockInvoker,
+    pub(crate) binding_invoker: BindingInvoker,
     ///
     /// Fiber invoker.
     ///
@@ -215,6 +218,7 @@ impl Codegen {
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            binding_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -574,6 +578,12 @@ impl Codegen {
             leave;
             ret;
         );
+    }
+
+    fn test_heap_frame(&mut self) {
+        monoasm! { &mut self.jit,
+            testb [r14 - (LBP_META - META_KIND)], (0b1000_0000 as u8 as i8);
+        }
     }
 
     fn save_registers(&mut self) {

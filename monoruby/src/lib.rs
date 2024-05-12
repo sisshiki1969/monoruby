@@ -31,6 +31,7 @@ use builtins::Arg;
 use compiler::jitgen::analysis;
 //use compiler::jitgen::trace_ir::TraceIr;
 use executor::*;
+pub use frame::Lfp;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 use globals::*;
