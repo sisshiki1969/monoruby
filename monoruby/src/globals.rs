@@ -342,11 +342,25 @@ impl Globals {
         self.global_vars.get(&name).cloned()
     }
 
-    pub fn heap_frame(&mut self, fid: FuncId, self_val: Value, locals: &[Value]) -> Lfp {
+    ///
+    /// Create new heap frame with *fid* and *self_val*.
+    ///
+    /// local variables are copied from *binding_lfp* if any.
+    ///
+    pub fn new_heap_frame(
+        &mut self,
+        fid: FuncId,
+        self_val: Value,
+        binding_lfp: Option<Lfp>,
+    ) -> Lfp {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
-        for (i, val) in locals.iter().enumerate() {
-            unsafe { lfp.set_register(i + 1, Some(*val)) }
+        if let Some(binding_lfp) = binding_lfp {
+            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            for i in 1..1 + locals_len {
+                let v = unsafe { binding_lfp.register(i) };
+                unsafe { lfp.set_register(i, v) }
+            }
         }
         lfp
     }

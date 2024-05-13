@@ -33,8 +33,8 @@ fn main() {
     let mut buf = String::new();
     let mut script_line = 0;
     let mut binding = None;
+    let mut binding_lfp = None;
     let mut executor = Executor::init(&mut globals);
-    let mut locals = vec![];
     loop {
         let prompt = format!(
             "monoruby:{:03}{} ",
@@ -88,14 +88,12 @@ fn main() {
                 };
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
-                let binding_lfp = globals.heap_frame(main_fid, globals.main_object, &locals);
-                match executor.eval_binding(&mut globals, binding_lfp) {
+                binding_lfp =
+                    Some(globals.new_heap_frame(main_fid, globals.main_object, binding_lfp));
+                match executor.eval_binding(&mut globals, binding_lfp.unwrap()) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };
-                let locals_len = globals[main_fid].locals_len();
-                locals = binding_lfp.locals(locals_len);
-                script_line += 1;
                 script_line += 1;
             }
             Err(ReadlineError::Interrupted) => {

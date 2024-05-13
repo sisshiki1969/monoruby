@@ -389,16 +389,6 @@ impl Lfp {
         std::ptr::read(self.register_ptr(index))
     }
 
-    pub fn locals(&self, len: usize) -> Vec<Value> {
-        let mut v = vec![];
-        for i in 1..1 + len {
-            if let Some(val) = unsafe { self.register(i) } {
-                v.push(val);
-            }
-        }
-        v
-    }
-
     /// Get a value of a register slot *index*.
     ///
     pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
