@@ -918,8 +918,8 @@ struct BranchEntry {
     cont: bool,
 }
 
-pub(crate) fn conv(reg: SlotId) -> i64 {
-    reg.0 as i64 * 8 + LBP_SELF
+pub(crate) fn conv(reg: SlotId) -> i32 {
+    reg.0 as i32 * 8 + LBP_SELF
 }
 
 ///

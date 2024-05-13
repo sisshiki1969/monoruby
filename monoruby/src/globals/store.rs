@@ -16,7 +16,7 @@ pub(crate) use iseq::*;
 //#[derive(Default)]
 pub(crate) struct Store {
     /// function info.
-    pub functions: function::Funcs,
+    pub(crate) functions: function::Funcs,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -376,7 +376,7 @@ impl Store {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ConstSiteInfo {
+pub struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
     /// The slot of base object.
@@ -423,7 +423,7 @@ pub struct ConstSiteId(pub u32);
 
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
-pub(crate) struct CallSiteInfo {
+pub struct CallSiteInfo {
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Position of the receiver.
@@ -476,7 +476,7 @@ impl CallSiteId {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct OptCaseInfo {
+pub struct OptCaseInfo {
     pub min: u16,
     pub max: u16,
     pub branch_table: Box<[u32]>,

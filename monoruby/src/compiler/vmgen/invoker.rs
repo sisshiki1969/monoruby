@@ -6,6 +6,7 @@ impl Codegen {
         self.method_invoker2 = self.method_invoker2();
         self.block_invoker = self.block_invoker();
         self.block_invoker_with_self = self.block_invoker_with_self();
+        self.binding_invoker = self.binding_invoker();
         self.fiber_invoker = self.fiber_invoker();
         self.fiber_invoker_with_self = self.fiber_invoker_with_self();
         self.resume_fiber = self.resume_fiber();
@@ -120,6 +121,43 @@ impl Codegen {
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "block-invoker-with-self");
+
+        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    }
+
+    fn binding_invoker(&mut self) -> BindingInvoker {
+        let codeptr = self.jit.get_current_address();
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+
+        // rdi: &mut Executor
+        // rsi: &mut Globals
+        // rdx: Lfp
+        let error_exit = self.jit.label();
+        self.invoker_prologue();
+        monoasm! { &mut self.jit,
+            // set lfp
+            movq r14, rdx;
+            // set FuncId
+            movl rdx, [r14 - (LBP_META)];
+        };
+        self.get_func_data();
+        self.push_frame();
+        monoasm! { &mut self.jit,
+            // set lfp
+            movq [rsp - (16 + BP_LFP)], r14;
+            // r15 : &FuncData
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
+            call [r15 + (FUNCDATA_CODEPTR)];
+            movq rdi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rdi;
+        };
+        self.invoker_epilogue(error_exit);
+
+        #[cfg(feature = "perf")]
+        self.perf_info(pair, "binding-invoker");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
@@ -288,6 +326,7 @@ impl Codegen {
     /// ### in
     /// - rcx: `self` (if *specify_self* is true)
     /// - rdx: FuncId (if *invoke_block* is false) or &BlockData (if *invoke_block* is true)
+    /// - r11: BlockHandler (if *invoke_block* is false)
     ///
     /// ### out
     /// - r15: &FuncData
@@ -328,6 +367,16 @@ impl Codegen {
         };
     }
 
+    ///
+    /// Arguments preparation.
+    ///
+    /// ### in
+    /// - r8: *args
+    /// - r9: len
+    ///
+    /// ### destroy
+    /// - rax, rdi, r9, r10
+    ///
     fn invoker_prep(&mut self) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
@@ -349,6 +398,16 @@ impl Codegen {
         };
     }
 
+    ///
+    /// Arguments preparation.
+    ///
+    /// ### in
+    /// - r8: *args
+    /// - r9: len
+    ///
+    /// ### destroy
+    /// - rax, rdi, r9
+    ///
     fn invoker_prep2(&mut self) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
@@ -371,12 +430,16 @@ impl Codegen {
     }
 
     ///
+    /// Handle arguments.
     ///
     /// ### in
     /// - rdi: arg_num
     /// - rsi: Meta
     /// - r15: &FuncData
     /// - r8:  args: *const Value
+    ///
+    /// ### destroy
+    /// - caller save registers
     ///
     fn invoker_args(&mut self, error_exit: DestLabel) {
         // In invoker call, CallSiteInfo is not available.

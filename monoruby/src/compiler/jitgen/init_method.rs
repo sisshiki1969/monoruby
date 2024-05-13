@@ -27,6 +27,11 @@ impl Codegen {
             reg_num, arg_num, ..
         } = *fn_info;
 
+        let l1 = self.jit.label();
+        self.test_heap_frame();
+        monoasm! { &mut self.jit,
+            jnz l1;
+        }
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num;
         if clear_len > 2 {
@@ -45,5 +50,6 @@ impl Codegen {
                 );
             }
         }
+        self.jit.bind_label(l1);
     }
 }

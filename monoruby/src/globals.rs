@@ -342,6 +342,15 @@ impl Globals {
         self.global_vars.get(&name).cloned()
     }
 
+    pub fn heap_frame(&mut self, fid: FuncId, self_val: Value, locals: &[Value]) -> Lfp {
+        let meta = self.store[fid].meta();
+        let mut lfp = Lfp::heap_frame(self_val, meta);
+        for (i, val) in locals.iter().enumerate() {
+            unsafe { lfp.set_register(i + 1, Some(*val)) }
+        }
+        lfp
+    }
+
     // Handling regex.
 
     pub(crate) fn set_regex(&mut self, k: String, v: Rc<Regex>) -> Option<Rc<Regex>> {

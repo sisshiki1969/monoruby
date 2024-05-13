@@ -207,7 +207,7 @@ impl Lfp {
     ///
     fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { Cfp::new(self.sub(BP_PREV_CFP) as _) }
+        unsafe { Cfp::new(self.sub(BP_PREV_CFP as _) as _) }
     }
 
     ///
@@ -225,11 +225,11 @@ impl Lfp {
     /// Get the address of outer.
     ///
     fn outer_address(self) -> Dfp {
-        unsafe { Dfp::new(self.sub(LBP_OUTER) as _) }
+        unsafe { Dfp::new(self.sub(LBP_OUTER as _) as _) }
     }
 
     fn meta_mut(&mut self) -> &mut Meta {
-        unsafe { &mut *(self.sub(LBP_META) as *mut Meta) }
+        unsafe { &mut *(self.sub(LBP_META as _) as *mut Meta) }
     }
 
     fn on_stack(self) -> bool {
@@ -301,6 +301,33 @@ impl Lfp {
         }
     }
 
+    pub fn heap_frame(self_val: Value, mut meta: Meta) -> Self {
+        let local_len = meta.reg_num() as usize - 1;
+        meta.set_on_heap();
+        let mut v = vec![Value::nil().id(); local_len];
+        // self
+        v.push(self_val.id());
+        // block
+        v.push(0);
+        // meta
+        v.push(meta.get());
+        // outer
+        v.push(0);
+        // dummy
+        v.push(0);
+        // dummy
+        v.push(0);
+        // dummy
+        v.push(0);
+        let v = v.into_boxed_slice();
+        let len = v.len() * 8;
+        unsafe {
+            let heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            assert!(!heap_lfp.on_stack());
+            heap_lfp
+        }
+    }
+
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
         unsafe {
             let v = vec![0, 0, self_val.id(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
@@ -334,25 +361,25 @@ impl Lfp {
     /// Get Meta.
     ///
     pub(crate) fn meta(&self) -> &Meta {
-        unsafe { &*(self.sub(LBP_META) as *const Meta) }
+        unsafe { &*(self.sub(LBP_META as _) as *const Meta) }
     }
 
     ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {
-        unsafe { *(self.sub(LBP_BLOCK) as *const _) }
+        unsafe { *(self.sub(LBP_BLOCK as _) as *const _) }
     }
 
     ///
     /// Set block.
     ///
     pub fn set_block(&self, bh: Option<BlockHandler>) {
-        unsafe { *(self.sub(LBP_BLOCK) as *mut _) = bh }
+        unsafe { *(self.sub(LBP_BLOCK as _) as *mut _) = bh }
     }
 
     pub unsafe fn register_ptr(&self, index: usize) -> *mut Option<Value> {
-        self.sub(LBP_SELF + 8 * index as i64) as _
+        self.sub(LBP_SELF as i64 + 8 * index as i64) as _
     }
 
     ///
@@ -360,6 +387,16 @@ impl Lfp {
     ///
     pub unsafe fn register(&self, index: usize) -> Option<Value> {
         std::ptr::read(self.register_ptr(index))
+    }
+
+    pub fn locals(&self, len: usize) -> Vec<Value> {
+        let mut v = vec![];
+        for i in 1..1 + len {
+            if let Some(val) = unsafe { self.register(i) } {
+                v.push(val);
+            }
+        }
+        v
     }
 
     /// Get a value of a register slot *index*.
@@ -394,7 +431,7 @@ impl Lfp {
     /// Get *self*.
     ///
     pub fn self_val(&self) -> Value {
-        unsafe { *(self.sub(LBP_SELF) as *const _) }
+        unsafe { *(self.sub(LBP_SELF as _) as *const _) }
     }
 
     ///

@@ -84,7 +84,7 @@ impl FuncData {
 /// ~~~text
 ///   7   6   5   4    3   2    1    0
 /// +-------+-------+---------+----+----+
-/// |    FuncId     | reg_num |kind|mode|
+/// |    FuncId     | reg_num |mode|kind|
 /// +-------+-------+---------+----+----+
 /// ~~~
 ///
@@ -881,6 +881,13 @@ impl FuncInfo {
 
     pub(crate) fn total_args(&self) -> usize {
         self.ext.params.total_args()
+    }
+
+    pub fn locals_len(&self) -> usize {
+        match self.kind {
+            FuncKind::ISeq(ref info) => info.locals.len(),
+            _ => 0,
+        }
     }
 
     ///

@@ -76,7 +76,9 @@ impl Codegen {
     fn fill(&mut self, val: u64) {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
+        self.test_heap_frame();
         monoasm! { &mut self.jit,
+            jnz l1;
             testq rax, rax;
             jz   l1;
             negq r15;
