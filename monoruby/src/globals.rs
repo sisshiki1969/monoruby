@@ -295,6 +295,7 @@ impl Globals {
                     (outer_fid, external_context),
                     Loc::default(),
                     res.source_info,
+                    None,
                 );
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
@@ -304,7 +305,7 @@ impl Globals {
         }
     }
 
-    /*pub(crate) fn compile_script_binding(
+    pub(crate) fn compile_script_binding(
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
@@ -320,7 +321,10 @@ impl Globals {
         let mut external_context = ExternalContext::one(ex_scope, None);
         external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
-        let context = self[binding.func_id()];
+        let context = self[binding.func_id()]
+            .as_ruby_func()
+            .lvar_collector
+            .clone();
 
         match Parser::parse_program_binding(
             code,
@@ -336,6 +340,7 @@ impl Globals {
                     (outer_fid, external_context),
                     Loc::default(),
                     res.source_info,
+                    Some(res.lvar_collector),
                 );
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
@@ -343,7 +348,7 @@ impl Globals {
             }
             Err(err) => Err(MonorubyErr::parse(err)),
         }
-    }*/
+    }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
         let info = &self[func_id];
@@ -397,6 +402,7 @@ impl Globals {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
         if let Some(binding_lfp) = binding_lfp {
+            unsafe { lfp.set_outer(binding_lfp.outer()) };
             let locals_len = self[binding_lfp.meta().func_id()].locals_len();
             for i in 1..1 + locals_len {
                 let v = unsafe { binding_lfp.register(i) };

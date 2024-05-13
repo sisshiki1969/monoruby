@@ -219,7 +219,7 @@ impl Executor {
     ///
     /// *main* object is set to *self*.
     ///
-    pub fn eval_binding(&mut self, globals: &mut Globals, binding_lfp: Lfp) -> Result<Value> {
+    pub fn invoke_binding(&mut self, globals: &mut Globals, binding_lfp: Lfp) -> Result<Value> {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 

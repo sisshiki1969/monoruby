@@ -11,10 +11,8 @@ pub(super) fn init(globals: &mut Globals) {
 
 #[monoruby_builtin]
 fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    eprintln!("Binding#local_variables");
     let binding_lfp = lfp.self_val().as_binding().binding();
-    unsafe { globals.dump_frame_info(binding_lfp) };
-    let v: Vec<Value> = dbg!(&globals[dbg!(binding_lfp.meta()).func_id()])
+    let v: Vec<Value> = dbg!(&globals[binding_lfp.meta().func_id()])
         .as_ruby_func()
         .locals
         .keys()
@@ -39,6 +37,22 @@ mod test {
           binding
         end
         f(42).local_variables
+        "#,
+        );
+    }
+
+    #[test]
+    fn binding_eval() {
+        run_test(
+            r#"
+        def get_binding(str)
+            binding
+        end
+        str = "hello"
+        p = []
+        p << eval("str + ' Fred'")                      #=> "hello Fred"
+        p << eval("str + ' Fred'", get_binding("bye"))  #=> "bye Fred"
+        p
         "#,
         );
     }

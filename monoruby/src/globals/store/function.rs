@@ -354,9 +354,10 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
+        let lvar_collector = info.lvar.clone();
         let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
+        Ok(self.add_method_iseq(name, args, loc, sourceinfo, lvar_collector))
     }
 
     pub(super) fn add_block(
@@ -369,6 +370,7 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
+        let lvar_collector = info.lvar.clone();
         let (args, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
@@ -380,6 +382,7 @@ impl Funcs {
             is_block_style,
             loc,
             sourceinfo,
+            lvar_collector,
         );
         self.info.push(info);
         Ok(func_id)
@@ -392,10 +395,11 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
+        let lvar_collector = info.lvar.clone();
         let (_, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_classdef_iseq(name, func_id, loc, sourceinfo);
+        let info = FuncInfo::new_classdef_iseq(name, func_id, loc, sourceinfo, lvar_collector);
         self.info.push(info);
         Ok(func_id)
     }
@@ -463,9 +467,10 @@ impl Funcs {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo, lvar_collector);
         self.info.push(info);
         func_id
     }
@@ -680,9 +685,17 @@ impl FuncInfo {
         params: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
+        let info = ISeqInfo::new_method(
+            func_id,
+            name,
+            params.clone(),
+            loc,
+            sourceinfo,
+            lvar_collector,
+        );
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),
@@ -699,8 +712,17 @@ impl FuncInfo {
         is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
+        let info = ISeqInfo::new_block(
+            func_id,
+            mother,
+            outer,
+            params.clone(),
+            loc,
+            sourceinfo,
+            lvar_collector,
+        );
         Self::new(
             None,
             FuncKind::ISeq(Box::new(info)),
@@ -714,8 +736,16 @@ impl FuncInfo {
         func_id: FuncId,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> Self {
-        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+        let info = ISeqInfo::new_method(
+            func_id,
+            name,
+            ParamsInfo::default(),
+            loc,
+            sourceinfo,
+            lvar_collector,
+        );
         Self::new(
             name,
             FuncKind::ISeq(Box::new(info)),

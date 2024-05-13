@@ -5,7 +5,7 @@ pub struct Binding(Value);
 
 impl Binding {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::PROC));
+        assert_eq!(val.ty(), Some(ObjKind::BINDING));
         Binding(val)
     }
 
@@ -41,5 +41,9 @@ impl BindingInner {
 
     pub fn self_val(&self) -> Value {
         self.binding_lfp.self_val()
+    }
+
+    pub fn set_inner(&mut self, binding_lfp: Lfp) {
+        self.binding_lfp = binding_lfp
     }
 }

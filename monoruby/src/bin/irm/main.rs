@@ -90,7 +90,7 @@ fn main() {
                 cont_mode = false;
                 binding_lfp =
                     Some(globals.new_heap_frame(main_fid, globals.main_object, binding_lfp));
-                match executor.eval_binding(&mut globals, binding_lfp.unwrap()) {
+                match executor.invoke_binding(&mut globals, binding_lfp.unwrap()) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };

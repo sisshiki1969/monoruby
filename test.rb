@@ -1,8 +1,6 @@
-a = 1
-b = 2
-def f(x)
-  a = 100
-  b = 100
+def get_binding(str)
   binding
 end
-puts f(42).local_variables
+str = "hello"
+p eval("str + ' Fred'")                      #=> "hello Fred"
+p eval("str + ' Fred'", get_binding("bye"))   #=> "bye Fred"

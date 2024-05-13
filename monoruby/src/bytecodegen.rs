@@ -32,11 +32,12 @@ pub fn compile_eval(
     outer: (FuncId, ExternalContext),
     loc: Loc,
     sourceinfo: SourceInfoRef,
+    binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
     let main_fid = globals
         .store
         .add_eval(mother, outer, ast, loc, sourceinfo)?;
-    compile(globals, main_fid, None)?;
+    compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
 

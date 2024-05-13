@@ -69,6 +69,7 @@ pub(crate) struct ISeqInfo {
     pub temp_num: u16,
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
+    pub lvar_collector: LvarCollector,
     is_block_style: bool,
     ///
     /// Basic block information.
@@ -107,6 +108,7 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
         is_block_style: bool,
     ) -> Self {
         ISeqInfo {
@@ -126,6 +128,7 @@ impl ISeqInfo {
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
+            lvar_collector,
             is_block_style,
             bb_info: BasicBlockInfo::default(),
         }
@@ -142,8 +145,19 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> Self {
-        Self::new(id, mother, outer.1, None, args, loc, sourceinfo, true)
+        Self::new(
+            id,
+            mother,
+            outer.1,
+            None,
+            args,
+            loc,
+            sourceinfo,
+            lvar_collector,
+            true,
+        )
     }
 
     pub(super) fn new_method(
@@ -152,6 +166,7 @@ impl ISeqInfo {
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        lvar_collector: LvarCollector,
     ) -> Self {
         Self::new(
             id,
@@ -161,6 +176,7 @@ impl ISeqInfo {
             args,
             loc,
             sourceinfo,
+            lvar_collector,
             false,
         )
     }

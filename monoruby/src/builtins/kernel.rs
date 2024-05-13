@@ -402,7 +402,7 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 /// ### Kernel.#eval
 ///
 /// - eval(expr) -> object
-/// - [NOT SUPPORTED] eval(expr, bind, fname = "(eval)", lineno = 1) -> object
+/// - eval(expr, bind, [NOT SUPPORTED] fname = "(eval)", [NOT SUPPORTED] lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
@@ -410,9 +410,17 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
-    let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
-    let proc = ProcInner::from(caller_cfp.lfp(), fid);
-    vm.invoke_block(globals, &proc, &[])
+    if let Some(bind) = lfp.try_arg(1) {
+        let mut binding = Binding::new(bind);
+        let fid = globals.compile_script_binding(expr, "(eval)", caller_cfp, binding)?;
+        let new_binding = globals.new_heap_frame(fid, binding.self_val(), Some(binding.binding()));
+        binding.set_inner(new_binding);
+        vm.invoke_binding(globals, new_binding)
+    } else {
+        let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
+        let proc = ProcInner::from(caller_cfp.lfp(), fid);
+        vm.invoke_block(globals, &proc, &[])
+    }
 }
 
 fn prepare_command_arg(input: &str) -> (String, Vec<String>) {

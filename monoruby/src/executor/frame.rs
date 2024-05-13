@@ -213,7 +213,7 @@ impl Lfp {
     ///
     /// Set outer.
     ///
-    unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
+    pub unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
         *(self.outer_address().0.as_ptr()) = outer;
     }
 
