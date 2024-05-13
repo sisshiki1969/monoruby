@@ -43,7 +43,7 @@ pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -59,7 +59,7 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -70,7 +70,7 @@ impl ExternalContext {
         Self { scope: vec![] }
     }
 
-    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+    pub fn one(locals: IndexMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
         Self {
             scope: vec![(locals, block)],
         }
@@ -279,7 +279,7 @@ impl Globals {
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
-        let mut ex_scope = HashMap::default();
+        let mut ex_scope = IndexMap::default();
         for (name, idx) in &self[outer_fid].as_ruby_func().locals {
             ex_scope.insert(*name, *idx);
         }
@@ -303,6 +303,47 @@ impl Globals {
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }
+
+    /*pub(crate) fn compile_script_binding(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        caller_cfp: Cfp,
+        binding: Binding,
+    ) -> Result<FuncId> {
+        let outer_fid = caller_cfp.lfp().meta().func_id();
+        let mother = caller_cfp.method_func_id_depth();
+        let mut ex_scope = IndexMap::default();
+        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+            ex_scope.insert(*name, *idx);
+        }
+        let mut external_context = ExternalContext::one(ex_scope, None);
+        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+
+        let context = self[binding.func_id()];
+
+        match Parser::parse_program_binding(
+            code,
+            path.into(),
+            Some(context),
+            Some(&external_context),
+        ) {
+            Ok(res) => {
+                let res = bytecodegen::compile_eval(
+                    self,
+                    res.node,
+                    mother,
+                    (outer_fid, external_context),
+                    Loc::default(),
+                    res.source_info,
+                );
+                #[cfg(feature = "emit-bc")]
+                self.dump_bc();
+                res
+            }
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }*/
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
         let info = &self[func_id];

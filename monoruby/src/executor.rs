@@ -924,6 +924,11 @@ impl Executor {
         Proc::from(ProcInner::from(outer_lfp, func_id))
     }
 
+    pub fn generate_binding(&mut self) -> Binding {
+        let lfp = self.cfp().prev().unwrap().lfp();
+        Binding::from(lfp)
+    }
+
     ///
     /// Generate a proc object for Enumerator.
     ///

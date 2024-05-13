@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func(kernel_class, "proc", proc, 0);
     globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
+    globals.define_builtin_module_func(kernel_class, "binding", binding, 0);
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with(kernel_class, "raise", raise, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 1, 2, false);
@@ -149,6 +150,17 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         Err(MonorubyErr::create_proc_no_block())
     }
+}
+
+///
+/// ### Kernel.#binding
+///
+/// - binding -> Binding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/binding.html]
+#[monoruby_builtin]
+fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
+    Ok(vm.generate_binding().as_val())
 }
 
 ///
@@ -398,12 +410,6 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
-    /*let path = globals.store[cfp.get_source_pos()]
-    .as_ruby_func()
-    .sourceinfo
-    .path
-    .clone();*/
-
     let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
     let proc = ProcInner::from(caller_cfp.lfp(), fid);
     vm.invoke_block(globals, &proc, &[])

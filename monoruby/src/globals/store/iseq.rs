@@ -50,7 +50,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Name of local variabl
     ///
-    pub locals: HashMap<IdentId, bytecodegen::BcLocal>,
+    pub locals: IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
@@ -119,7 +119,7 @@ impl ISeqInfo {
             sp: vec![],
             exception_map: vec![],
             args: args.clone(),
-            locals: HashMap::default(),
+            locals: IndexMap::default(),
             outer_locals,
             literals: vec![],
             non_temp_num: 0,

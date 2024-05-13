@@ -232,7 +232,7 @@ impl Lfp {
         unsafe { &mut *(self.sub(LBP_META as _) as *mut Meta) }
     }
 
-    fn on_stack(self) -> bool {
+    pub fn on_stack(self) -> bool {
         self.meta().on_stack()
     }
 
