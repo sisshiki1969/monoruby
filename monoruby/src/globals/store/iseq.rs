@@ -421,13 +421,13 @@ impl ParamsInfo {
         }
     }
 
-    pub fn new_native(min: usize, max: usize, rest: bool) -> Self {
+    pub fn new_native(min: usize, max: usize, rest: bool, kw_names: Vec<IdentId>) -> Self {
         ParamsInfo {
             required_num: min,
             reqopt_num: max,
             pos_num: max + rest as usize,
             args_names: vec![],
-            kw_names: vec![],
+            kw_names,
             kw_rest: None,
             block_param: None,
         }

@@ -418,6 +418,22 @@ impl Funcs {
         id
     }
 
+    pub(super) fn add_native_func_with_kw(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+    ) -> FuncId {
+        let id = self.next_func_id();
+        self.info.push(FuncInfo::new_native_with_kw(
+            id, name, address, min, max, rest, kw_names,
+        ));
+        id
+    }
+
     pub(super) fn add_native_basic_op(
         &mut self,
         name: String,
@@ -762,7 +778,20 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        Self::new_native_with_kw(func_id, name, address, min, max, rest, &[])
+    }
+
+    fn new_native_with_kw(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+    ) -> Self {
+        let kw_names = kw_names.iter().map(|s| IdentId::get_id(s)).collect();
+        let params = ParamsInfo::new_native(min, max, rest, kw_names);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -782,7 +811,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        let params = ParamsInfo::new_native(min, max, rest, vec![]);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -802,7 +831,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        let params = ParamsInfo::new_native(min, max, rest, vec![]);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
