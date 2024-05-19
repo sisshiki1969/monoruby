@@ -760,12 +760,19 @@ impl Codegen {
     /// ### destroy
     /// - none
     fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
+        let l1 = self.jit.label();
         monoasm!(&mut self.jit,
             testq R(reg as _), 0b01;
-            jz side_exit;
+            jz l1;
             sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
+        self.jit.select_page(1);
+        monoasm!(&mut self.jit,
+            movq rdi, R(reg as _);
+            jmp side_exit;
+        );
+        self.jit.select_page(0);
     }
 
     ///
