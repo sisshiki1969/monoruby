@@ -18,19 +18,22 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<V
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
-pub(crate) const BP_PREV_CFP: i32 = 8;
-pub(crate) const BP_LFP: i32 = 16;
-pub(crate) const LFP_OFFSET: i32 = 24;
-pub(crate) const LBP_OUTER: i32 = 0 + LFP_OFFSET;
+pub(crate) const RSP_STACK_LFP: i32 = 40 - LFP_OFFSET;
+pub(crate) const RSP_CFP: i32 = 24;
+pub(crate) const BP_CFP: i32 = 8;
+pub(crate) const CFP_LFP: i32 = 8;
+
+const LFP_OFFSET: i32 = 24;
+pub(crate) const LFP_OUTER: i32 = 0 + LFP_OFFSET;
 /// Meta 8bytes
-pub(crate) const LBP_META: i32 = 8 + LFP_OFFSET;
+pub(crate) const LFP_META: i32 = 8 + LFP_OFFSET;
 /// Meta::Regnum 2bytes
-pub(crate) const LBP_META_REGNUM: i32 = LBP_META - META_REGNUM as i32;
+pub(crate) const LFP_META_REGNUM: i32 = LFP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
 //pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
-pub(crate) const LBP_BLOCK: i32 = 16 + LFP_OFFSET;
-pub(crate) const LBP_SELF: i32 = 24 + LFP_OFFSET;
-pub const LBP_ARG0: i32 = LBP_SELF + 8;
+pub(crate) const LFP_BLOCK: i32 = 16 + LFP_OFFSET;
+pub(crate) const LFP_SELF: i32 = 24 + LFP_OFFSET;
+pub const LFP_ARG0: i32 = LFP_SELF + 8;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;

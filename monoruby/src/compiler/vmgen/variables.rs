@@ -87,7 +87,7 @@ impl Codegen {
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movq rsi, rdi; // name: IdentId
-            movq rdi, [r14 - (LBP_SELF)];  // base: Value
+            movq rdi, [r14 - (LFP_SELF)];  // base: Value
             movq rdx, r12; // &mut Globals
             lea rcx, [r13 - 8]; // &mut ClassId
             movq rax, (get_instance_var_with_cache);
@@ -111,7 +111,7 @@ impl Codegen {
             movq rcx, rdi;  // name: IdentId
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
-            movq rdx, [r14 - (LBP_SELF)];  // base: Value
+            movq rdx, [r14 - (LFP_SELF)];  // base: Value
             movq r8, r15;     // val: Value
             lea r9, [r13 - 8]; // &mut ClassId
             movq rax, (set_instance_var_with_cache);
@@ -276,16 +276,16 @@ impl Codegen {
         let loop_exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
-            movq rax, [r14 - (LBP_OUTER)];
+            movq rax, [r14 - (LFP_OUTER)];
         loop_:
             subq rsi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (LBP_OUTER)];
+            lea  rax, [rax + (LFP_OUTER)];
             negq rdi;
-            movq rax, [rax + rdi * 8 - (LBP_SELF)];
+            movq rax, [rax + rdi * 8 - (LFP_SELF)];
         };
         self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
@@ -312,18 +312,18 @@ impl Codegen {
         let loop_exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
-            movq rax, [r14 - (LBP_OUTER)];
+            movq rax, [r14 - (LFP_OUTER)];
         loop_:
             subq rdi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (LBP_OUTER)];
+            lea  rax, [rax + (LFP_OUTER)];
             negq rsi;
             negq r15;
-            movq rdi, [r14 + rsi * 8 - (LBP_SELF)];
-            movq [rax + r15 * 8 - (LBP_SELF)], rdi;
+            movq rdi, [r14 + rsi * 8 - (LFP_SELF)];
+            movq [rax + r15 * 8 - (LFP_SELF)], rdi;
         };
         self.fetch_and_dispatch();
         label
