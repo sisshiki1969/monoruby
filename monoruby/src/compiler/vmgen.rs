@@ -133,7 +133,7 @@ impl Codegen {
         vm_raise:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (LBP_META)];
+            movq rdx, [r14 - (LFP_META)];
             movq rcx, r13;
             subq rcx, 16;
             movq rax, (runtime::handle_error);
@@ -574,7 +574,7 @@ impl Codegen {
         let r = reg as u64;
         monoasm! { &mut self.jit,
             negq R(r);
-            lea R(r), [r14 + R(r) * 8 - (LBP_SELF)];
+            lea R(r), [r14 + R(r) * 8 - (LFP_SELF)];
         };
     }
 
@@ -591,7 +591,7 @@ impl Codegen {
         let r = reg as u64;
         monoasm! { &mut self.jit,
             negq R(r);
-            movq R(r), [r14 + R(r) * 8 - (LBP_SELF)];
+            movq R(r), [r14 + R(r) * 8 - (LFP_SELF)];
         };
     }
 
@@ -635,7 +635,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movzxw r15, [r13 - 12];  // r15 <- :1
             negq r15;
-            lea r15, [r14 + r15 * 8 - (LBP_SELF)];
+            lea r15, [r14 + r15 * 8 - (LFP_SELF)];
         };
     }
 
@@ -643,7 +643,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movzxw r15, [r13 - 12];  // r15 <- :1
             negq r15;
-            movq r15, [r14 + r15 * 8 - (LBP_SELF)];
+            movq r15, [r14 + r15 * 8 - (LFP_SELF)];
         };
     }
 
@@ -798,10 +798,10 @@ impl Codegen {
             movq rdx, rsi;
             // rsi <- dst
             negq rdi;
-            lea rsi, [r14 + rdi * 8 - (LBP_SELF)];
+            lea rsi, [r14 + rdi * 8 - (LFP_SELF)];
             // rdi <- *src
             negq r15;
-            movq rdi, [r14 + r15 * 8 - (LBP_SELF)];
+            movq rdi, [r14 + r15 * 8 - (LFP_SELF)];
             movq rax, (runtime::expand_array);
             call rax;
         };
@@ -825,14 +825,14 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl rcx, rdi;  // new
             negq rcx;
-            movq rcx, [r14 + rcx * 8 - (LBP_SELF)];
+            movq rcx, [r14 + rcx * 8 - (LFP_SELF)];
             movl r8, rsi;  // old
             negq r8;
-            movq r8, [r14 + r8 * 8 - (LBP_SELF)];
+            movq r8, [r14 + r8 * 8 - (LFP_SELF)];
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (LBP_SELF)];
-            movq r9, [r14 - (LBP_META)];
+            movq rdx, [r14 - (LFP_SELF)];
+            movq r9, [r14 - (LFP_META)];
             movq rax, (runtime::alias_method);
             call rax;
         };
@@ -987,7 +987,7 @@ impl Codegen {
             movl rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rcx, [r14 - (LBP_SELF)];
+            lea  rcx, [r14 - (LFP_SELF)];
             movq rax, (runtime::gen_array);
             call rax;
         };
@@ -1011,7 +1011,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movzxw rdi, [r13 - 12];  // r15 <- :1
             negq rdi;
-            lea  rdi, [r14 + rdi * 8 - (LBP_SELF)];
+            lea  rdi, [r14 + rdi * 8 - (LFP_SELF)];
             movq [rdi], rax;
         }
         self.fetch_and_dispatch();
@@ -1108,7 +1108,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LBP_OUTER)];
+            lea  rax, [r14 - (LFP_OUTER)];
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1116,8 +1116,8 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LBP_OUTER)];
-            movq rax, [rax - (LBP_BLOCK)];
+            lea  rax, [rax + (LFP_OUTER)];
+            movq rax, [rax - (LFP_BLOCK)];
             movq rdi, (Value::nil().id());
             testq rax, rax;
             cmoveqq rax, rdi;
@@ -1144,7 +1144,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LBP_OUTER)];
+            lea  rax, [r14 - (LFP_OUTER)];
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1152,8 +1152,8 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LBP_OUTER)];
-            movq rdx, [rax - (LBP_BLOCK)];
+            lea  rax, [rax + (LFP_OUTER)];
+            movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::block_arg);

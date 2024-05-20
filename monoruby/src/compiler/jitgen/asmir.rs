@@ -465,7 +465,7 @@ impl AsmIr {
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);
-        let offset = (16 + (LBP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16;
+        let offset = (16 + (LFP_ARG0 as usize) + 8 * callee.total_args() + 8) / 16 * 16;
         self.inst.push(AsmInst::SendCached {
             callid,
             callee_fid,
@@ -506,7 +506,7 @@ impl AsmIr {
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
             {
-                (16 + LBP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16
+                (16 + LFP_ARG0 as i32 + (8 * pos_num) as i32 + 8) / 16 * 16
             } else {
                 0
             };
@@ -514,13 +514,13 @@ impl AsmIr {
             self.reg_sub(GP::Rsp, ofs);
             for i in 0..pos_num {
                 let reg = args + i;
-                let offset = ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32);
+                let offset = ofs - (16 + LFP_ARG0 as i32 + (8 * i) as i32);
                 self.fetch_to_rsp_offset(bb, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
                 for i in pos_num..callee.max_positional_args() {
-                    let offset = ofs - (16 + LBP_ARG0 as i32 + (8 * i) as i32);
+                    let offset = ofs - (16 + LFP_ARG0 as i32 + (8 * i) as i32);
                     self.reg2rsp_offset(GP::Rax, offset);
                 }
             }
@@ -528,7 +528,7 @@ impl AsmIr {
         } else {
             self.write_back_args(bb, caller);
             let meta = callee.meta();
-            let offset = (16 + (LBP_ARG0 as usize) + 8 * callee.max_positional_args() + 8) & !0xf;
+            let offset = (16 + (LFP_ARG0 as usize) + 8 * callee.max_positional_args() + 8) & !0xf;
             let error = self.new_error(bb, pc);
             self.inst.push(AsmInst::SetArguments {
                 callid,

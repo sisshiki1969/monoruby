@@ -919,7 +919,7 @@ struct BranchEntry {
 }
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
-    reg.0 as i32 * 8 + LBP_SELF
+    reg.0 as i32 * 8 + LFP_SELF
 }
 
 ///
@@ -1122,7 +1122,7 @@ impl Codegen {
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let side_exit = self.gen_deopt(pc + 1, &bb);
             monoasm!( &mut self.jit,
-                movq rdi, [r14 - (LBP_SELF)];
+                movq rdi, [r14 - (LFP_SELF)];
             );
             self.guard_class_rdi(self_value.class(), side_exit);
         } else {

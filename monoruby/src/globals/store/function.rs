@@ -62,7 +62,7 @@ impl FuncData {
 
     fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
-        self.ofs = ((reg_num as usize * 8 + LBP_SELF as usize + 15) >> 4) as u16;
+        self.ofs = ((reg_num as usize * 8 + LFP_SELF as usize + 15) >> 4) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -671,7 +671,7 @@ impl FuncInfo {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.reqopt_num() as u16;
-        let ofs = ((max as usize * 8 + LBP_ARG0 as usize + 15) >> 4) as u16;
+        let ofs = ((max as usize * 8 + LFP_ARG0 as usize + 15) >> 4) as u16;
         Self {
             data: FuncData {
                 codeptr: None,

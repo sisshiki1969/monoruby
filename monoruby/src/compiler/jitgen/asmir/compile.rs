@@ -650,10 +650,10 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rdi, rbx;
                     movq rsi, r12;
-                    movq rdx, [r14 - (LBP_SELF)];
+                    movq rdx, [r14 - (LFP_SELF)];
                     movq rcx, [r14 - (conv(new))];
                     movq r8, [r14 - (conv(old))];
-                    movq r9, [r14 - (LBP_META)];
+                    movq r9, [r14 - (LFP_META)];
                     movq rax, (runtime::alias_method);
                     call rax;
                 );
@@ -786,7 +786,7 @@ impl Codegen {
             };
         } else {
             monoasm!( &mut self.jit,
-                movq rax, [r14 - (LBP_OUTER)];
+                movq rax, [r14 - (LFP_OUTER)];
             );
             for _ in 0..outer - 1 {
                 monoasm!( &mut self.jit,
@@ -794,7 +794,7 @@ impl Codegen {
                 );
             }
             monoasm!( &mut self.jit,
-                lea rax, [rax + (LBP_OUTER)];
+                lea rax, [rax + (LFP_OUTER)];
             );
         }
     }
@@ -803,7 +803,7 @@ impl Codegen {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             movl rdx, (callid.get());
-            lea  rcx, [r14 - (LBP_SELF)];
+            lea  rcx, [r14 - (LFP_SELF)];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::gen_array);
@@ -871,7 +871,7 @@ impl Codegen {
     ///
     fn block_arg_proxy(&mut self) {
         monoasm! { &mut self.jit,
-            movq rax, [rax - (LBP_BLOCK)];
+            movq rax, [rax - (LFP_BLOCK)];
             xorq rdi, rdi;
             movq rsi, 0b10;
             testq rax, 0b1;
@@ -886,7 +886,7 @@ impl Codegen {
     fn block_arg(&mut self, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
-            movq rdx, [rax - (LBP_BLOCK)];
+            movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::block_arg);
