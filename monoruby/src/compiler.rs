@@ -769,6 +769,7 @@ impl Codegen {
         );
         self.jit.select_page(1);
         monoasm!(&mut self.jit,
+        l1:
             movq rdi, R(reg as _);
             jmp side_exit;
         );
