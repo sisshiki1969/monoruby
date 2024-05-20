@@ -12,12 +12,9 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let binding_lfp = lfp.self_val().as_binding().binding();
-    let v: Vec<Value> = dbg!(&globals[binding_lfp.meta().func_id()])
+    let v = globals[binding_lfp.meta().func_id()]
         .as_ruby_func()
-        .locals
-        .keys()
-        .map(|id| Value::symbol(*id))
-        .collect();
+        .local_variables();
     Ok(Value::array_from_vec(v))
 }
 
@@ -31,12 +28,16 @@ mod test {
             r#"
         a = 1
         b = 2
-        def f(x)
-          a = 100
-          b = 100
-          binding
+        def f(x, &block)
+          z = nil
+          1.times do |x|
+            a = 100
+            b = 100
+            z = binding
+          end
+          z
         end
-        f(42).local_variables
+        f(42){}.local_variables.sort
         "#,
         );
     }

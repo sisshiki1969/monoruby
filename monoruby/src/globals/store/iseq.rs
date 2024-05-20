@@ -48,7 +48,7 @@ pub(crate) struct ISeqInfo {
     ///
     pub args: ParamsInfo,
     ///
-    /// Name of local variabl
+    /// Name of local variables
     ///
     pub locals: IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
@@ -251,6 +251,26 @@ impl ISeqInfo {
     ///
     pub(crate) fn block_param(&self) -> Option<IdentId> {
         self.args.block_param
+    }
+
+    ///
+    /// Get names of local variables.
+    ///
+    pub(crate) fn local_variables(&self) -> Vec<Value> {
+        let mut map = IndexSet::default();
+        self.locals.keys().for_each(|id| {
+            map.insert(*id);
+        });
+
+        self.outer_locals.scope.iter().for_each(|(locals, block)| {
+            locals.keys().for_each(|id| {
+                map.insert(*id);
+            });
+            if let Some(id) = block {
+                map.insert(*id);
+            }
+        });
+        map.into_iter().map(|id| Value::symbol(id)).collect()
     }
 
     ///
