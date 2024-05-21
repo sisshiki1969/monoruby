@@ -18,12 +18,11 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<V
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
-pub(crate) const RSP_STACK_LFP: i32 = 16;
+pub(crate) const RSP_STACK_LFP: i32 = 40 - LFP_OFFSET;
 pub(crate) const RSP_CFP: i32 = 24;
-
 pub(crate) const BP_CFP: i32 = 8;
-pub(crate) const BP_LFP: i32 = 16;
 pub(crate) const CFP_LFP: i32 = 8;
+
 const LFP_OFFSET: i32 = 24;
 pub(crate) const LFP_OUTER: i32 = 0 + LFP_OFFSET;
 /// Meta 8bytes
