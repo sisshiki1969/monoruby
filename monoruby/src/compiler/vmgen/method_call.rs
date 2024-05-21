@@ -175,7 +175,7 @@ impl Codegen {
                 negq r9;
             loop_:
                 movq rax, [rdx + r9 * 8 + 8];
-                movq [rsp + r9 * 8 - (16 + LFP_SELF)], rax;
+                movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
                 addq r9, 1;
                 jne  loop_;
             exit:

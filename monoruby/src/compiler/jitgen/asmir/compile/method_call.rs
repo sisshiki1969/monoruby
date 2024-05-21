@@ -36,7 +36,7 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (callid.get());
             lea  rcx, [r14 - (conv(args))];
-            lea  r8, [rsp - 16];   // callee_lfp
+            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
             movq r9, (meta.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
@@ -105,7 +105,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + 8];
+            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
             pushq rax;
             // set outer
             xorq rax, rax;
@@ -390,7 +390,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + 8];
+            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
             pushq rax;
             // set outer
             lea  rax, [rdi - (LFP_OUTER)];
@@ -506,7 +506,7 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movl rdx, (callid.get());
             movq rcx, (meta.get());
-            lea  r8, [rsp - 16];   // callee_lfp
+            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
             subq rsp, (offset);
             movq rax, (jit_handle_hash_splat_kw_rest);
             call rax;
@@ -671,7 +671,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + 8];
+            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
             pushq rax;
             // set outer
             xorq rax, rax;

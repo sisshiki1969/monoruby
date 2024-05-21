@@ -21,7 +21,7 @@ pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option
 pub(crate) const RSP_STACK_LFP: i32 = 16;
 pub(crate) const BP_PREV_CFP: i32 = 8;
 pub(crate) const BP_LFP: i32 = 16;
-pub(crate) const BP_STACK_LFP: i32 = 24;
+const BP_STACK_LFP: i32 = 24;
 pub(crate) const LFP_OUTER: i32 = 0 + BP_STACK_LFP;
 /// Meta 8bytes
 pub(crate) const LFP_META: i32 = 8 + BP_STACK_LFP;

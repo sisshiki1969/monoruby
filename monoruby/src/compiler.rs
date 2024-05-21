@@ -804,7 +804,7 @@ impl Codegen {
     ) {
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
-            lea  rcx, [rsp - 16];
+            lea  rcx, [rsp - (RSP_STACK_LFP)];
             // rdi <- stacck_offset
             movzxw rdi, [r15 + (FUNCDATA_OFS)];
             shlq rdi, 4;

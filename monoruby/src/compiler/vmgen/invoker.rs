@@ -390,7 +390,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (16 + LFP_SELF)], rax;
+            movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
             subq r10, 1;
             addq r9, 1;
             jne  loop_;
@@ -422,7 +422,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - (16 + LFP_SELF)], rax;
+            movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
             addq r9, 1;
             jne  loop_;
         loop_exit:
@@ -461,7 +461,7 @@ impl Codegen {
             cmpw rdi, [r15 + (FUNCDATA_MIN)];
             jeq exit;
         generic:
-            lea  rdx, [rsp - 16]; // callee lfp: Lfp
+            lea  rdx, [rsp - (RSP_STACK_LFP)]; // callee lfp: Lfp
             subq rsp, 4096;
             movq rcx, rdi; // arg_num
             movq rdi, rbx; // &mut Executor
