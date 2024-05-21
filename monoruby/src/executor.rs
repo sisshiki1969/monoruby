@@ -19,6 +19,7 @@ pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
 pub(crate) const RSP_STACK_LFP: i32 = 16;
+pub(crate) const RSP_STACK_BP: i32 = 16;
 pub(crate) const BP_PREV_CFP: i32 = 8;
 pub(crate) const BP_LFP: i32 = 16;
 const BP_STACK_LFP: i32 = 24;
