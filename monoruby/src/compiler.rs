@@ -386,7 +386,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             // push cfp
             movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (RSP_STACK_LFP + BP_PREV_CFP)];
+            lea  rsi, [rsp - (RSP_CFP)];
             movq [rsi], rdi;
             movq [rbx + (EXECUTOR_CFP)], rsi;
         );
@@ -403,7 +403,7 @@ impl Codegen {
     fn pop_frame(&mut self) {
         monoasm!( &mut self.jit,
             // pop cfp
-            lea  r14, [rbp - (BP_PREV_CFP)];
+            lea  r14, [rbp - (BP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], r14;
         );
         self.restore_lbp();
@@ -500,7 +500,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             // set lfp
             lea  r14, [rsp - (RSP_STACK_LFP)];
-            movq [r14 - (BP_LFP)], r14;
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
         );
     }
 
@@ -710,7 +710,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, [rbx + (EXECUTOR_CFP)];
             movq rdi, [rdi];    // rdi <- caller's cfp
-            lea  rbp, [rdi + (BP_PREV_CFP)];
+            lea  rbp, [rdi + (BP_CFP)];
         }
     }
 

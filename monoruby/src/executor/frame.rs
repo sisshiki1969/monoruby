@@ -38,25 +38,15 @@ impl Cfp {
     ///
     /// Get base pointer address of *self*.
     ///
-    pub unsafe fn bp(&self) -> *const usize {
-        self.as_ptr().add(BP_PREV_CFP as usize / 8) as _
-    }
-
-    ///
-    /// Get base pointer address of *self*.
-    ///
     pub unsafe fn return_addr(&self) -> Option<monoasm::CodePtr> {
-        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_PREV_CFP as usize / 8)
+        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8)
     }
 
     ///
     /// Get LFP.
     ///
     pub(crate) fn lfp(&self) -> Lfp {
-        unsafe {
-            let bp = self.bp();
-            Lfp::new(*bp.sub(BP_LFP as usize / 8) as _)
-        }
+        unsafe { *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) }
     }
 
     ///
@@ -87,8 +77,7 @@ impl Cfp {
     /// Set LFP.
     ///
     pub unsafe fn set_lfp(&mut self, lfp: Lfp) {
-        let bp = self.bp() as *mut usize;
-        *bp.sub(BP_LFP as usize / 8) = lfp.as_ptr() as _;
+        *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp;
     }
 
     ///
@@ -207,7 +196,7 @@ impl Lfp {
     ///
     fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { Cfp::new(self.sub(BP_PREV_CFP as _) as _) }
+        unsafe { Cfp::new(self.sub(BP_CFP as _) as _) }
     }
 
     ///

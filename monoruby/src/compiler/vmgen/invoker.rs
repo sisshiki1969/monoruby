@@ -146,12 +146,12 @@ impl Codegen {
         self.push_frame();
         monoasm! { &mut self.jit,
             // set lfp
-            movq [rsp - (RSP_STACK_BP + BP_LFP)], r14;
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
             // r15 : &FuncData
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
             call [r15 + (FUNCDATA_CODEPTR)];
-            movq rdi, [rsp - (RSP_STACK_BP + BP_PREV_CFP)];
+            movq rdi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };
         self.invoker_epilogue(error_exit);
@@ -492,7 +492,7 @@ impl Codegen {
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
             call [r15 + (FUNCDATA_CODEPTR)];
-            movq rdi, [rsp - (RSP_STACK_BP + BP_PREV_CFP)];
+            movq rdi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };
     }

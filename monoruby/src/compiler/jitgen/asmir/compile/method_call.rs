@@ -452,7 +452,7 @@ impl Codegen {
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
             // push cfp
-            lea  rsi, [rsp - (RSP_STACK_BP + BP_PREV_CFP)];
+            lea  rsi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rsi;
         }
         self.set_lfp();
