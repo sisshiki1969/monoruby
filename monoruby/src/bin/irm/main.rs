@@ -44,6 +44,7 @@ fn main() {
 
     let binding = Binding::from_outer(dummy_outer);
     executor.temp_push(binding.as_val());
+
     loop {
         let prompt = format!(
             "monoruby:{:03}{} ",
@@ -83,6 +84,9 @@ fn main() {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };
+                let locals_len = globals[main_fid].locals_len();
+                locals = binding_lfp.locals(locals_len);
+                script_line += 1;
                 script_line += 1;
             }
             Err(ReadlineError::Interrupted) => {
