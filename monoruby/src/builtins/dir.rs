@@ -147,7 +147,7 @@ mod test {
         run_test(r#"Dir.glob("Cargo?????")"#);
         run_test(r#"Dir.glob("d{a,c}*")"#);
         run_test(r#"Dir.glob("/*")"#);
-        run_test(r#"Dir.glob("././././*")"#);
+        run_test(r#"Dir.glob("././././C*")"#);
         run_test(r#"Dir.glob("../../../../*")"#);
         run_test(r#"Dir.glob("../*")"#);
         run_test(r#"Dir.glob("monoruby/src/builtins/*.rs")"#);
