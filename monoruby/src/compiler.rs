@@ -386,7 +386,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             // push cfp
             movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
+            lea  rsi, [rsp - (RSP_CFP)];
             movq [rsi], rdi;
             movq [rbx + (EXECUTOR_CFP)], rsi;
         );
@@ -395,7 +395,7 @@ impl Codegen {
     fn restore_lbp(&mut self) {
         monoasm!( &mut self.jit,
             // restore lfp
-            movq r14, [rbp - (BP_LFP)];
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
         );
     }
 
@@ -403,7 +403,7 @@ impl Codegen {
     fn pop_frame(&mut self) {
         monoasm!( &mut self.jit,
             // pop cfp
-            lea  r14, [rbp - (BP_PREV_CFP)];
+            lea  r14, [rbp - (BP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], r14;
         );
         self.restore_lbp();
@@ -464,8 +464,8 @@ impl Codegen {
         self.set_block_outer();
         monoasm! { &mut self.jit,
             // set self
-            movq rsi, [rax - (LBP_SELF)];
-            movq [rsp - (16 + LBP_SELF)], rsi;
+            movq rsi, [rax - (LFP_SELF)];
+            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], rsi;
         };
     }
 
@@ -480,24 +480,27 @@ impl Codegen {
     fn set_block_outer(&mut self) {
         monoasm! { &mut self.jit,
             // set outer
-            lea  rsi, [rax - (LBP_OUTER)];
-            movq [rsp - (16 + LBP_OUTER)], rsi;
+            lea  rsi, [rax - (LFP_OUTER)];
+            movq [rsp - (RSP_STACK_LFP + LFP_OUTER)], rsi;
         };
     }
 
     /// Set outer.
     fn set_method_outer(&mut self) {
         monoasm! { &mut self.jit,
-            movq [rsp - (16 + LBP_OUTER)], 0;
+            movq [rsp - (RSP_STACK_LFP + LFP_OUTER)], 0;
         };
     }
 
+    ///
     /// Set lfp(r14) for callee.
+    ///
+    /// the local frame MUST BE on the stack.
     fn set_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // set lfp
-            lea  r14, [rsp - 16];
-            movq [r14 - (BP_LFP)], r14;
+            lea  r14, [rsp - (RSP_STACK_LFP)];
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
         );
     }
 
@@ -582,7 +585,7 @@ impl Codegen {
 
     fn test_heap_frame(&mut self) {
         monoasm! { &mut self.jit,
-            testb [r14 - (LBP_META - META_KIND)], (0b1000_0000 as u8 as i8);
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000 as u8 as i8);
         }
     }
 
@@ -668,7 +671,7 @@ impl Codegen {
 
         monoasm! { &mut self.jit,
         guard:
-            movq rdi, [r14 - (LBP_SELF)];
+            movq rdi, [r14 - (LFP_SELF)];
         }
         self.guard_class_rdi(self_class, exit_patch_point);
         monoasm! { &mut self.jit,
@@ -707,7 +710,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, [rbx + (EXECUTOR_CFP)];
             movq rdi, [rdi];    // rdi <- caller's cfp
-            lea  rbp, [rdi + (BP_PREV_CFP)];
+            lea  rbp, [rdi + (BP_CFP)];
         }
     }
 
@@ -760,12 +763,20 @@ impl Codegen {
     /// ### destroy
     /// - none
     fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
+        let l1 = self.jit.label();
         monoasm!(&mut self.jit,
             testq R(reg as _), 0b01;
-            jz side_exit;
+            jz l1;
             sarq R(reg as _), 1;
             cvtsi2sdq xmm(xmm.enc()), R(reg as _);
         );
+        self.jit.select_page(1);
+        monoasm!(&mut self.jit,
+        l1:
+            movq rdi, R(reg as _);
+            jmp side_exit;
+        );
+        self.jit.select_page(0);
     }
 
     ///
@@ -793,7 +804,7 @@ impl Codegen {
     ) {
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
-            lea  rcx, [rsp - 16];
+            lea  rcx, [rsp - (RSP_STACK_LFP)];
             // rdi <- stacck_offset
             movzxw rdi, [r15 + (FUNCDATA_OFS)];
             shlq rdi, 4;

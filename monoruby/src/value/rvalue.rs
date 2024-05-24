@@ -5,6 +5,7 @@ use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
 pub use array::*;
+pub use binding::*;
 pub use complex::ComplexInner;
 pub use enumerator::*;
 pub use fiber::*;
@@ -17,6 +18,7 @@ pub use regexp::RegexpInner;
 pub use string::{Encoding, StringInner};
 
 mod array;
+mod binding;
 mod complex;
 mod enumerator;
 mod fiber;
@@ -61,6 +63,7 @@ pub union ObjKind {
     fiber: ManuallyDrop<FiberInner>,
     enumerator: ManuallyDrop<EnumeratorInner>,
     generator: ManuallyDrop<GeneratorInner>,
+    binding: ManuallyDrop<BindingInner>,
 }
 
 #[allow(dead_code)]
@@ -85,6 +88,7 @@ impl ObjKind {
     pub const ENUMERATOR: u8 = 17;
     pub const GENERATOR: u8 = 18;
     pub const COMPLEX: u8 = 19;
+    pub const BINDING: u8 = 20;
 }
 
 impl ObjKind {
@@ -265,6 +269,12 @@ impl ObjKind {
             generator: ManuallyDrop::new(GeneratorInner::new(proc)),
         }
     }
+
+    fn binding_from_outer(outer_lfp: Lfp) -> Self {
+        Self {
+            binding: ManuallyDrop::new(BindingInner::from(outer_lfp)),
+        }
+    }
 }
 
 /// Heap-allocated objects.
@@ -314,6 +324,7 @@ impl std::fmt::Debug for RValue {
                         17 => format!("ENUMERATOR({:?})", self.kind.enumerator),
                         18 => format!("GENERATOR({:?})", self.kind.generator),
                         19 => format!("COMPLEX({:?})", self.kind.complex),
+                        20 => format!("BINDING({:?})", self.kind.binding),
                         _ => unreachable!(),
                     }
                 },
@@ -566,6 +577,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjKind::FIBER => self.as_fiber().mark(alloc),
                 ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjKind::GENERATOR => self.as_generator().mark(alloc),
+                ObjKind::BINDING => self.as_binding().mark(alloc),
                 _ => unreachable!("mark {:016x} {}", self.id(), self.ty()),
             }
         }
@@ -597,6 +609,7 @@ impl alloc::GCBox for RValue {
                 ObjKind::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
                 ObjKind::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
                 ObjKind::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
+                ObjKind::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
                 _ => {}
             }
             self.set_next_none();
@@ -1123,6 +1136,16 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_binding(outer_lfp: Lfp) -> Self {
+        let outer_lfp = outer_lfp.move_frame_to_heap();
+        assert!(!outer_lfp.on_stack());
+        RValue {
+            header: Header::new(BINDING_CLASS, ObjKind::BINDING),
+            kind: ObjKind::binding_from_outer(outer_lfp),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -1307,6 +1330,14 @@ impl RValue {
 
     pub(super) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
         &mut self.kind.generator
+    }
+
+    pub(super) unsafe fn as_binding(&self) -> &BindingInner {
+        &self.kind.binding
+    }
+
+    pub(super) unsafe fn as_binding_mut(&mut self) -> &mut BindingInner {
+        &mut self.kind.binding
     }
 }
 

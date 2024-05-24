@@ -1,4 +1,3 @@
-use ruruby_parse::ParseErrKind;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -32,9 +31,20 @@ fn main() {
     let mut cont_mode = false;
     let mut buf = String::new();
     let mut script_line = 0;
-    let mut binding = None;
     let mut executor = Executor::init(&mut globals);
-    let mut locals = vec![];
+
+    let parse_result = ruruby_parse::Parser::parse_program(
+        String::new(),
+        std::path::Path::new(&format!("(irm):{script_line}")),
+    )
+    .unwrap();
+    let dummy_fid = monoruby::compile_script(&mut globals, parse_result).unwrap();
+    let meta = globals[dummy_fid].meta();
+    let dummy_outer = Lfp::heap_frame(globals.main_object, meta);
+
+    let binding = Binding::from_outer(dummy_outer);
+    executor.temp_push(binding.as_val());
+
     loop {
         let prompt = format!(
             "monoruby:{:03}{} ",
@@ -50,36 +60,17 @@ fn main() {
                     code.clone()
                 };
 
-                let main_fid = match ruruby_parse::Parser::parse_program_binding(
+                let fid = match globals.compile_script_binding(
                     buf.clone(),
-                    std::path::Path::new(&format!("(irm):{script_line}")).into(),
-                    binding.clone(),
-                    None::<&ruruby_parse::DummyContext>,
+                    std::path::Path::new(&format!("(irm):{script_line}")),
+                    binding,
                 ) {
-                    Ok(res) => {
-                        let collector = res.lvar_collector;
-                        let fid = match monoruby::compile_script(
-                            &mut globals,
-                            res.node,
-                            res.source_info,
-                            std::mem::take(&mut binding),
-                        ) {
-                            Ok(id) => id,
-                            Err(err) => {
-                                err.show_error_message_and_all_loc(&globals);
-                                cont_mode = false;
-                                continue;
-                            }
-                        };
-                        binding = Some(collector);
-                        fid
-                    }
+                    Ok(fid) => fid,
                     Err(err) => {
-                        if err.kind == ParseErrKind::UnexpectedEOF {
+                        if err.is_unexpected_eof() {
                             rl.add_history_entry(code.as_str()).unwrap();
                             cont_mode = true;
                         } else {
-                            let err = MonorubyErr::parse(err);
                             err.show_error_message_and_all_loc(&globals);
                             cont_mode = false;
                         }
@@ -88,8 +79,8 @@ fn main() {
                 };
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
-                let binding_lfp = globals.heap_frame(main_fid, globals.main_object, &locals);
-                match executor.eval_binding(&mut globals, binding_lfp) {
+                let binding_lfp = globals.new_binding_frame(fid, globals.main_object, binding);
+                match executor.invoke_binding(&mut globals, binding_lfp) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };

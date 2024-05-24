@@ -96,6 +96,9 @@ end
 
 class Thread
   class Mutex
+    def synchronize
+      yield
+    end
   end
 end
 
@@ -108,5 +111,11 @@ module Enumerable
 end
 
 module Comparable
+end
+
+class Errno
+  ENOLCK = 37
+  ENOSYS = 38
+  ENOTSUP = 95
 end
 

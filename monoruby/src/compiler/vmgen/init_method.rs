@@ -82,7 +82,7 @@ impl Codegen {
             testq rax, rax;
             jz   l1;
             negq r15;
-            lea  r15, [r14 + r15 * 8 - (LBP_ARG0)];
+            lea  r15, [r14 + r15 * 8 - (LFP_ARG0)];
         l0:
             movq [r15 + rax * 8], (val);
             subq rax, 1;

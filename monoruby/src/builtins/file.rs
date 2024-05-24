@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "basename", basename, 1);
     globals.define_builtin_class_func(klass, "extname", extname, 1);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
+    globals.define_builtin_class_func(klass, "file?", file_, 1);
 }
 
 ///
@@ -292,6 +293,19 @@ fn exist(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(b))
 }
 
+///
+/// ### File.file?
+/// - file?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/file=3f.html]
+#[monoruby_builtin]
+fn file_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+        Ok(path) => Ok(Value::bool(path.is_file())),
+        Err(_) => Ok(Value::bool(false)),
+    }
+}
+
 // Utils
 
 /// Convert `file` to canonicalized PathBuf.
@@ -385,5 +399,12 @@ mod test {
         run_test(r##"File.binread("../LICENSE-MIT", 20, 10)"##);
         run_test(r##"File.exist?("../LICENSE-MIT")"##);
         run_test(r##"File.exist?("../LICENCE-MIT")"##);
+    }
+
+    #[test]
+    fn file_() {
+        run_test(r##"File.file?("monoruby")"##);
+        run_test(r##"File.file?("README.md")"##);
+        run_test(r##"File.file?("readme.md")"##);
     }
 }

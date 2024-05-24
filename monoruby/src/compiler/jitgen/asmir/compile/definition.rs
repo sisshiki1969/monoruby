@@ -122,9 +122,9 @@ impl Codegen {
 
             movq r8, rax;
             movq rdi, [r8 + (FUNCDATA_META)];
-            movq [rsp - (16 + LBP_META)], rdi;
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_SELF)], r15;
+            movq [rsp - (RSP_STACK_LFP + LFP_META)], rdi;
+            movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], 0;
+            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], r15;
         }
         self.set_method_outer();
         monoasm! { &mut self.jit,

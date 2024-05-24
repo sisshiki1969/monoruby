@@ -5,7 +5,7 @@ use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
 /// Information of instruction sequences.
 ///
 #[derive(Clone)]
-pub(crate) struct ISeqInfo {
+pub struct ISeqInfo {
     ///
     /// *FuncId* of this function.
     ///
@@ -33,7 +33,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Valid temp register information.
     ///
-    pub sp: Vec<SlotId>,
+    pub(crate) sp: Vec<SlotId>,
     ///
     /// Exception handling map.
     ///
@@ -46,15 +46,15 @@ pub(crate) struct ISeqInfo {
     ///
     /// Information of parameters.
     ///
-    pub args: ParamsInfo,
+    pub(crate) args: ParamsInfo,
     ///
-    /// Name of local variabl
+    /// Name of local variables
     ///
-    pub locals: HashMap<IdentId, bytecodegen::BcLocal>,
+    pub(crate) locals: IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
-    pub outer_locals: ExternalContext,
+    pub(crate) outer_locals: ExternalContext,
     ///
     /// literal values. (for GC)
     ///
@@ -73,7 +73,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Basic block information.
     ///
-    pub bb_info: BasicBlockInfo,
+    pub(crate) bb_info: BasicBlockInfo,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -119,7 +119,7 @@ impl ISeqInfo {
             sp: vec![],
             exception_map: vec![],
             args: args.clone(),
-            locals: HashMap::default(),
+            locals: IndexMap::default(),
             outer_locals,
             literals: vec![],
             non_temp_num: 0,
@@ -238,6 +238,26 @@ impl ISeqInfo {
     }
 
     ///
+    /// Get names of local variables.
+    ///
+    pub(crate) fn local_variables(&self) -> Vec<Value> {
+        let mut map = IndexSet::default();
+        self.locals.keys().for_each(|id| {
+            map.insert(*id);
+        });
+
+        self.outer_locals.scope.iter().for_each(|(locals, block)| {
+            locals.keys().for_each(|id| {
+                map.insert(*id);
+            });
+            if let Some(id) = block {
+                map.insert(*id);
+            }
+        });
+        map.into_iter().map(|id| Value::symbol(id)).collect()
+    }
+
+    ///
     /// Get the name of iseq.
     ///
     pub(crate) fn name(&self) -> String {
@@ -257,7 +277,7 @@ impl ISeqInfo {
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub fn get_pc(&self, idx: BcIndex) -> BcPc {
+    pub(crate) fn get_pc(&self, idx: BcIndex) -> BcPc {
         BcPc::from(&self.bytecode()[idx.0 as usize])
     }
 
@@ -405,13 +425,13 @@ impl ParamsInfo {
         }
     }
 
-    pub fn new_native(min: usize, max: usize, rest: bool) -> Self {
+    pub fn new_native(min: usize, max: usize, rest: bool, kw_names: Vec<IdentId>) -> Self {
         ParamsInfo {
             required_num: min,
             reqopt_num: max,
             pos_num: max + rest as usize,
             args_names: vec![],
-            kw_names: vec![],
+            kw_names,
             kw_rest: None,
             block_param: None,
         }

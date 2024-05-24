@@ -2,7 +2,7 @@ use super::*;
 use num::BigInt;
 use ruruby_parse::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
-    RescueEntry, SourceInfoRef, UnOp,
+    ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };
 
 mod binary;
@@ -14,29 +14,22 @@ mod method_call;
 mod statement;
 use inst::*;
 
-pub fn compile_script(
-    globals: &mut Globals,
-    ast: Node,
-    sourceinfo: SourceInfoRef,
-    binding: Option<LvarCollector>,
-) -> Result<FuncId> {
-    let main_fid = globals.store.add_main(ast, sourceinfo)?;
-    compile(globals, main_fid, binding)?;
+pub fn compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
+    let main_fid = globals.store.add_main(result)?;
+    compile(globals, main_fid, None)?;
     Ok(main_fid)
 }
 
 pub fn compile_eval(
     globals: &mut Globals,
-    ast: Node,
+    result: ParseResult,
     mother: (FuncId, usize),
     outer: (FuncId, ExternalContext),
     loc: Loc,
-    sourceinfo: SourceInfoRef,
+    binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals
-        .store
-        .add_eval(mother, outer, ast, loc, sourceinfo)?;
-    compile(globals, main_fid, None)?;
+    let main_fid = globals.store.add_eval(mother, result, outer, loc)?;
+    compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }
 
@@ -496,7 +489,7 @@ struct BytecodeGen {
     /// ensure clause information.
     ensure: Vec<Option<Node>>,
     /// local variables.
-    locals: HashMap<IdentId, BcLocal>,
+    locals: IndexMap<IdentId, BcLocal>,
     /// outer local variables. (dynamic_locals, block_param)
     outer_locals: ExternalContext,
     /// literal values. (for GC)
@@ -538,7 +531,7 @@ impl BytecodeGen {
             labels: vec![],
             loops: vec![],
             ensure: vec![],
-            locals: HashMap::default(),
+            locals: IndexMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
             block_param: info.block_param(),

@@ -163,11 +163,19 @@ impl Codegen {
     /// - rdi, rax
     ///
     pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
+        let l1 = self.jit.label();
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b001;
-            jnz deopt;
+            jnz l1;
         );
         self.float_val_to_f64(reg, xmm, deopt);
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        l1:
+            movq rdi, R(reg as _);
+            jmp deopt;
+        );
+        self.jit.select_page(0);
     }
 
     ///

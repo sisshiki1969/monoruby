@@ -25,7 +25,7 @@ pub use bytecodegen::compile_script;
 pub use executor::Executor;
 pub use globals::OBJECT_CLASS;
 pub use globals::{Globals, MonorubyErr};
-pub use value::Value;
+pub use value::*;
 
 use builtins::Arg;
 use compiler::jitgen::analysis;
@@ -37,8 +37,6 @@ use fxhash::FxHashSet as HashSet;
 use globals::*;
 pub use id_table::IdentId;
 use monoruby_attr::*;
-use value::rvalue::RegexpInner;
-use value::*;
 
 const STRING_INLINE_CAP: usize = 32;
 

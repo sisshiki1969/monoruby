@@ -1,5 +1,5 @@
 use fancy_regex::Regex;
-use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
+use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
-    scope: Vec<(HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
+    scope: Vec<(IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>)>,
 }
 
 impl ruruby_parse::LocalsContext for ExternalContext {
@@ -59,7 +59,7 @@ impl ruruby_parse::LocalsContext for ExternalContext {
 }
 
 impl std::ops::Index<usize> for ExternalContext {
-    type Output = (HashMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
+    type Output = (IndexMap<IdentId, bytecodegen::BcLocal>, Option<IdentId>);
     fn index(&self, index: usize) -> &Self::Output {
         &self.scope[index]
     }
@@ -70,7 +70,7 @@ impl ExternalContext {
         Self { scope: vec![] }
     }
 
-    pub fn one(locals: HashMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
+    pub fn one(locals: IndexMap<IdentId, bytecodegen::BcLocal>, block: Option<IdentId>) -> Self {
         Self {
             scope: vec![(locals, block)],
         }
@@ -279,7 +279,7 @@ impl Globals {
     ) -> Result<FuncId> {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
-        let mut ex_scope = HashMap::default();
+        let mut ex_scope = IndexMap::default();
         for (name, idx) in &self[outer_fid].as_ruby_func().locals {
             ex_scope.insert(*name, *idx);
         }
@@ -290,11 +290,61 @@ impl Globals {
             Ok(res) => {
                 let res = bytecodegen::compile_eval(
                     self,
-                    res.node,
+                    res,
                     mother,
                     (outer_fid, external_context),
                     Loc::default(),
-                    res.source_info,
+                    None,
+                );
+                #[cfg(feature = "emit-bc")]
+                self.dump_bc();
+                res
+            }
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }
+
+    pub fn compile_script_binding(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        binding: Binding,
+    ) -> Result<FuncId> {
+        let outer_fid = binding.outer_lfp().meta().func_id();
+        let mother = match binding.outer_lfp().outermost_lfp_depth() {
+            (lfp, outer) => (lfp.meta().func_id(), outer),
+        };
+        let mut ex_scope = IndexMap::default();
+        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+            ex_scope.insert(*name, *idx);
+        }
+        let mut external_context = ExternalContext::one(ex_scope, None);
+        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+
+        let context = if let Some(fid) = binding.func_id() {
+            let mut lvar = LvarCollector::new();
+            for (name, _) in &self[fid].as_ruby_func().locals {
+                lvar.insert(&name.get_name());
+            }
+            Some(lvar)
+        } else {
+            None
+        };
+
+        match Parser::parse_program_binding(
+            code,
+            path.into(),
+            context.clone(),
+            Some(&external_context),
+        ) {
+            Ok(res) => {
+                let res = bytecodegen::compile_eval(
+                    self,
+                    res,
+                    mother,
+                    (outer_fid, external_context),
+                    Loc::default(),
+                    context,
                 );
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
@@ -342,11 +392,46 @@ impl Globals {
         self.global_vars.get(&name).cloned()
     }
 
-    pub fn heap_frame(&mut self, fid: FuncId, self_val: Value, locals: &[Value]) -> Lfp {
+    ///
+    /// Create new heap binding frame with *fid* and *self_val*.
+    ///
+    /// local variables are copied from *binding_lfp* if any.
+    ///
+    pub fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) -> Lfp {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
-        for (i, val) in locals.iter().enumerate() {
-            unsafe { lfp.set_register(i + 1, Some(*val)) }
+        unsafe { lfp.set_outer(Some(binding.outer_lfp().outer_address())) };
+        if let Some(binding_lfp) = binding.binding() {
+            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            for i in 1..1 + locals_len {
+                let v = unsafe { binding_lfp.register(i) };
+                unsafe { lfp.set_register(i, v) }
+            }
+        }
+        binding.set_inner(lfp);
+        lfp
+    }
+
+    ///
+    /// Create new heap frame with *fid* and *self_val*.
+    ///
+    /// local variables are copied from *binding_lfp* if any.
+    ///
+    pub fn new_heap_frame(
+        &mut self,
+        fid: FuncId,
+        self_val: Value,
+        binding_lfp: Option<Lfp>,
+    ) -> Lfp {
+        let meta = self.store[fid].meta();
+        let mut lfp = Lfp::heap_frame(self_val, meta);
+        if let Some(binding_lfp) = binding_lfp {
+            unsafe { lfp.set_outer(binding_lfp.outer()) };
+            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            for i in 1..1 + locals_len {
+                let v = unsafe { binding_lfp.register(i) };
+                unsafe { lfp.set_register(i, v) }
+            }
         }
         lfp
     }

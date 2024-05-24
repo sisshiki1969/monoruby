@@ -1,7 +1,9 @@
 use super::*;
 
 mod array;
+mod binding;
 mod class;
+mod dir;
 pub(crate) mod enumerator;
 mod exception;
 mod fiber;
@@ -66,6 +68,8 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     process::init(globals);
     random::init(globals);
     symbol::init(globals);
+    binding::init(globals);
+    dir::init(globals);
     main_object::init(globals);
 }
 

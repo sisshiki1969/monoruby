@@ -426,6 +426,10 @@ impl Value {
         RValue::new_generator(proc).pack()
     }
 
+    pub(crate) fn new_binding(outer_lfp: Lfp) -> Self {
+        RValue::new_binding(outer_lfp).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Fixnum(i)
@@ -1067,6 +1071,16 @@ impl Value {
     pub fn as_generator_mut(&mut self) -> &mut GeneratorInner {
         assert_eq!(ObjKind::GENERATOR, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_generator_mut() }
+    }
+
+    pub fn as_binding(&self) -> &BindingInner {
+        assert_eq!(ObjKind::BINDING, self.rvalue().ty());
+        unsafe { self.rvalue().as_binding() }
+    }
+
+    pub fn as_binding_mut(&mut self) -> &mut BindingInner {
+        assert_eq!(ObjKind::BINDING, self.rvalue().ty());
+        unsafe { self.rvalue_mut().as_binding_mut() }
     }
 }
 

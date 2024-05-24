@@ -31,6 +31,7 @@ pub const ENUMERATOR_CLASS: ClassId = ClassId::new(22);
 pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
 pub const COMPLEX_CLASS: ClassId = ClassId::new(24);
 pub const NUMERIC_CLASS: ClassId = ClassId::new(25);
+pub const BINDING_CLASS: ClassId = ClassId::new(26);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -64,6 +65,7 @@ impl std::fmt::Debug for ClassId {
             23 => write!(f, "GENERATOR"),
             24 => write!(f, "COMPLEX"),
             25 => write!(f, "NUMERIC"),
+            26 => write!(f, "BINDING"),
             n => write!(f, "ClassId({n})"),
         }
     }

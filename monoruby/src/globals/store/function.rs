@@ -62,7 +62,7 @@ impl FuncData {
 
     fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
-        self.ofs = ((reg_num as usize * 8 + LBP_SELF as usize + 15) >> 4) as u16;
+        self.ofs = ((reg_num as usize * 8 + LFP_SELF as usize + 15) >> 4) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -414,6 +414,22 @@ impl Funcs {
         id
     }
 
+    pub(super) fn add_native_func_with_kw(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+    ) -> FuncId {
+        let id = self.next_func_id();
+        self.info.push(FuncInfo::new_native_with_kw(
+            id, name, address, min, max, rest, kw_names,
+        ));
+        id
+    }
+
     pub(super) fn add_native_basic_op(
         &mut self,
         name: String,
@@ -650,7 +666,7 @@ impl FuncInfo {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.reqopt_num() as u16;
-        let ofs = ((max as usize * 8 + LBP_ARG0 as usize + 15) >> 4) as u16;
+        let ofs = ((max as usize * 8 + LFP_ARG0 as usize + 15) >> 4) as u16;
         Self {
             data: FuncData {
                 codeptr: None,
@@ -732,7 +748,20 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        Self::new_native_with_kw(func_id, name, address, min, max, rest, &[])
+    }
+
+    fn new_native_with_kw(
+        func_id: FuncId,
+        name: String,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+    ) -> Self {
+        let kw_names = kw_names.iter().map(|s| IdentId::get_id(s)).collect();
+        let params = ParamsInfo::new_native(min, max, rest, kw_names);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -752,7 +781,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        let params = ParamsInfo::new_native(min, max, rest, vec![]);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -772,7 +801,7 @@ impl FuncInfo {
         max: usize,
         rest: bool,
     ) -> Self {
-        let params = ParamsInfo::new_native(min, max, rest);
+        let params = ParamsInfo::new_native(min, max, rest, vec![]);
         let reg_num = params.total_args() + 1;
         Self::new(
             IdentId::get_id_from_string(name),
@@ -825,7 +854,7 @@ impl FuncInfo {
     ///
     /// Get meta data (Meta) of this function.
     ///
-    pub(crate) fn meta(&self) -> Meta {
+    pub fn meta(&self) -> Meta {
         self.data.meta()
     }
 
@@ -946,7 +975,7 @@ impl FuncInfo {
         (meta, codeptr, pc)
     }
 
-    pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
+    pub fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {
             FuncKind::ISeq(info) => info,
             _ => unreachable!(),

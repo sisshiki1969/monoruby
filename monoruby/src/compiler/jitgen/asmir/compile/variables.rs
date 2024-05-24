@@ -140,7 +140,7 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         generic:
-            movq rdi, [r14 - (LBP_SELF)];
+            movq rdi, [r14 - (LFP_SELF)];
             movl rsi, (ivar);
             movq rdx, rax;
         );
@@ -169,7 +169,7 @@ impl Codegen {
 impl Codegen {
     pub(super) fn load_dyn_var(&mut self, src: DynVar) {
         self.get_outer(src.outer);
-        let offset = conv(src.reg) - LBP_OUTER;
+        let offset = conv(src.reg) - LFP_OUTER;
         monoasm!( &mut self.jit,
             movq rax, [rax - (offset)];
         );
@@ -177,7 +177,7 @@ impl Codegen {
 
     pub(super) fn store_dyn_var(&mut self, dst: DynVar, src: GP) {
         self.get_outer(dst.outer);
-        let offset = conv(dst.reg) - LBP_OUTER;
+        let offset = conv(dst.reg) - LFP_OUTER;
         monoasm!( &mut self.jit,
             movq [rax - (offset)], R(src as _);
         );
@@ -185,7 +185,7 @@ impl Codegen {
 
     fn get_outer(&mut self, outer: usize) {
         monoasm!( &mut self.jit,
-            movq rax, [r14 - (LBP_OUTER)];
+            movq rax, [r14 - (LFP_OUTER)];
         );
         for _ in 0..outer - 1 {
             monoasm!( &mut self.jit,

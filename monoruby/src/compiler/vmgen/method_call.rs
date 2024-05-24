@@ -55,7 +55,7 @@ impl Codegen {
         // rdi: receiver: Value
         self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
-            movq [rsp - (16 + LBP_SELF)], rdi;
+            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], rdi;
             call get_class;
             movl r15, rax;
             // r15: class of receiver: ClassId
@@ -140,7 +140,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
-            movq [rsp -(16 + LBP_META)], rax;
+            movq [rsp - (RSP_STACK_LFP + LFP_META)], rax;
         }
         monoasm! { &mut self.jit,
             movzxw r9, [r13 + (POS_NUM)];
@@ -167,7 +167,7 @@ impl Codegen {
                 jz  generic;
                 cmpw r9, [r15 + (FUNCDATA_MIN)];
                 jne  generic;
-                movq [rsp - (16 + LBP_BLOCK)], 0;
+                movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], 0;
                 // rdx : *args
                 // r9 : len
                 testq r9, r9;
@@ -175,7 +175,7 @@ impl Codegen {
                 negq r9;
             loop_:
                 movq rax, [rdx + r9 * 8 + 8];
-                movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
+                movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
                 addq r9, 1;
                 jne  loop_;
             exit:

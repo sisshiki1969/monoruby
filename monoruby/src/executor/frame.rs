@@ -38,25 +38,15 @@ impl Cfp {
     ///
     /// Get base pointer address of *self*.
     ///
-    pub unsafe fn bp(&self) -> *const usize {
-        self.as_ptr().add(BP_PREV_CFP as usize / 8) as _
-    }
-
-    ///
-    /// Get base pointer address of *self*.
-    ///
     pub unsafe fn return_addr(&self) -> Option<monoasm::CodePtr> {
-        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_PREV_CFP as usize / 8)
+        *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8)
     }
 
     ///
     /// Get LFP.
     ///
     pub(crate) fn lfp(&self) -> Lfp {
-        unsafe {
-            let bp = self.bp();
-            Lfp::new(*bp.sub(BP_LFP as usize / 8) as _)
-        }
+        unsafe { *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) }
     }
 
     ///
@@ -70,13 +60,7 @@ impl Cfp {
     /// Get outermost LFP and the depth.
     ///
     pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        match self.lfp().outer() {
-            Some(dfp) => {
-                let (dfp, depth) = dfp.outermost();
-                (dfp.lfp(), depth)
-            }
-            None => (self.lfp(), 0),
-        }
+        self.lfp().outermost_lfp_depth()
     }
 
     pub(crate) fn block_given(&self) -> bool {
@@ -87,8 +71,7 @@ impl Cfp {
     /// Set LFP.
     ///
     pub unsafe fn set_lfp(&mut self, lfp: Lfp) {
-        let bp = self.bp() as *mut usize;
-        *bp.sub(BP_LFP as usize / 8) = lfp.as_ptr() as _;
+        *(self.as_ptr().sub(CFP_LFP as usize / 8) as *mut Lfp) = lfp;
     }
 
     ///
@@ -207,13 +190,13 @@ impl Lfp {
     ///
     fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { Cfp::new(self.sub(BP_PREV_CFP as _) as _) }
+        unsafe { Cfp::new(self.sub(BP_CFP as _) as _) }
     }
 
     ///
     /// Set outer.
     ///
-    unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
+    pub unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
         *(self.outer_address().0.as_ptr()) = outer;
     }
 
@@ -224,20 +207,20 @@ impl Lfp {
     ///
     /// Get the address of outer.
     ///
-    fn outer_address(self) -> Dfp {
-        unsafe { Dfp::new(self.sub(LBP_OUTER as _) as _) }
+    pub(crate) fn outer_address(self) -> Dfp {
+        unsafe { Dfp::new(self.sub(LFP_OUTER as _) as _) }
     }
 
     fn meta_mut(&mut self) -> &mut Meta {
-        unsafe { &mut *(self.sub(LBP_META as _) as *mut Meta) }
+        unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
     }
 
-    fn on_stack(self) -> bool {
+    pub fn on_stack(self) -> bool {
         self.meta().on_stack()
     }
 
     fn frame_bytes(self) -> usize {
-        LBP_SELF as usize + 8 * self.meta().reg_num() as usize
+        LFP_SELF as usize + 8 * self.meta().reg_num() as usize
     }
 
     fn frame_ref(&self) -> &[u8] {
@@ -260,9 +243,9 @@ impl Lfp {
         let len = self.arg_len();
         unsafe {
             let data = if len == 0 {
-                self.0.as_ptr().sub(LBP_ARG0 as usize)
+                self.0.as_ptr().sub(LFP_ARG0 as usize)
             } else {
-                self.0.as_ptr().sub(LBP_ARG0 as usize + len * 8 - 8)
+                self.0.as_ptr().sub(LFP_ARG0 as usize + len * 8 - 8)
             };
             std::slice::from_raw_parts(data as *const Value, len).iter()
         }
@@ -358,28 +341,41 @@ impl Lfp {
     }
 
     ///
+    /// Get outermost LFP and the depth.
+    ///
+    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
+        match self.outer() {
+            Some(dfp) => {
+                let (dfp, depth) = dfp.outermost();
+                (dfp.lfp(), depth)
+            }
+            None => (*self, 0),
+        }
+    }
+
+    ///
     /// Get Meta.
     ///
     pub(crate) fn meta(&self) -> &Meta {
-        unsafe { &*(self.sub(LBP_META as _) as *const Meta) }
+        unsafe { &*(self.sub(LFP_META as _) as *const Meta) }
     }
 
     ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {
-        unsafe { *(self.sub(LBP_BLOCK as _) as *const _) }
+        unsafe { *(self.sub(LFP_BLOCK as _) as *const _) }
     }
 
     ///
     /// Set block.
     ///
     pub fn set_block(&self, bh: Option<BlockHandler>) {
-        unsafe { *(self.sub(LBP_BLOCK as _) as *mut _) = bh }
+        unsafe { *(self.sub(LFP_BLOCK as _) as *mut _) = bh }
     }
 
     pub unsafe fn register_ptr(&self, index: usize) -> *mut Option<Value> {
-        self.sub(LBP_SELF as i64 + 8 * index as i64) as _
+        self.sub(LFP_SELF as i64 + 8 * index as i64) as _
     }
 
     ///
@@ -431,7 +427,7 @@ impl Lfp {
     /// Get *self*.
     ///
     pub fn self_val(&self) -> Value {
-        unsafe { *(self.sub(LBP_SELF as _) as *const _) }
+        unsafe { *(self.sub(LFP_SELF as _) as *const _) }
     }
 
     ///
@@ -487,7 +483,7 @@ impl Lfp {
     }
 
     pub fn try_arg(&self, i: usize) -> Option<Value> {
-        let v = unsafe { *((self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8)) as *const u64) };
+        let v = unsafe { *((self.0.as_ptr().sub(LFP_ARG0 as usize + i * 8)) as *const u64) };
         if v == 0 {
             None
         } else {
@@ -547,6 +543,6 @@ impl Dfp {
     /// Get LFP.
     ///
     pub fn lfp(&self) -> Lfp {
-        unsafe { Lfp::new((self.get() as *const u8).add(LBP_OUTER as usize) as _) }
+        unsafe { Lfp::new((self.get() as *const u8).add(LFP_OUTER as usize) as _) }
     }
 }
