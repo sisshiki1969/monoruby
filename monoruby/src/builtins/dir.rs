@@ -142,7 +142,7 @@ mod test {
 
     #[test]
     fn glob() {
-        run_test(r#"Dir.glob("mono*")"#);
+        run_test(r#"Dir.glob("LIC*")"#);
         run_test(r#"Dir.glob("*.rb")"#);
         run_test(r#"Dir.glob("Cargo?????")"#);
         run_test(r#"Dir.glob("d{a,c}*")"#);
