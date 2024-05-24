@@ -409,14 +409,13 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
-    let caller_cfp = cfp.prev().unwrap();
     if let Some(bind) = lfp.try_arg(1) {
-        let mut binding = Binding::new(bind);
-        let fid = globals.compile_script_binding(expr, "(eval)", caller_cfp, binding)?;
-        let new_binding = globals.new_heap_frame(fid, binding.self_val(), Some(binding.binding()));
-        binding.set_inner(new_binding);
+        let binding = Binding::new(bind);
+        let fid = globals.compile_script_binding(expr, "(eval)", binding)?;
+        let new_binding = globals.new_binding_frame(fid, binding.self_val(), binding);
         vm.invoke_binding(globals, new_binding)
     } else {
+        let caller_cfp = cfp.prev().unwrap();
         let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
         let proc = ProcInner::from(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])
@@ -676,6 +675,23 @@ mod test {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+    }
+
+    #[test]
+    fn eval_binding() {
+        run_test(
+            r##"
+        $res = []
+        def f(x)
+          binding
+        end
+        b = f(10)
+        x = 20
+        $res << eval("x")
+        $res << eval("x", b)
+        $res
+        "##,
+        );
     }
 
     #[test]

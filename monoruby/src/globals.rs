@@ -305,15 +305,16 @@ impl Globals {
         }
     }
 
-    pub(crate) fn compile_script_binding(
+    pub fn compile_script_binding(
         &mut self,
         code: String,
         path: impl Into<PathBuf>,
-        caller_cfp: Cfp,
         binding: Binding,
     ) -> Result<FuncId> {
-        let outer_fid = caller_cfp.lfp().meta().func_id();
-        let mother = caller_cfp.method_func_id_depth();
+        let outer_fid = binding.outer_lfp().meta().func_id();
+        let mother = match binding.outer_lfp().outermost_lfp_depth() {
+            (lfp, outer) => (lfp.meta().func_id(), outer),
+        };
         let mut ex_scope = IndexMap::default();
         for (name, idx) in &self[outer_fid].as_ruby_func().locals {
             ex_scope.insert(*name, *idx);
@@ -321,17 +322,13 @@ impl Globals {
         let mut external_context = ExternalContext::one(ex_scope, None);
         external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
-        let context = self[binding.func_id()]
-            .as_ruby_func()
-            .lvar_collector
-            .clone();
+        let context = if let Some(fid) = binding.func_id() {
+            Some(self[fid].as_ruby_func().lvar_collector.clone())
+        } else {
+            None
+        };
 
-        match Parser::parse_program_binding(
-            code,
-            path.into(),
-            Some(context),
-            Some(&external_context),
-        ) {
+        match Parser::parse_program_binding(code, path.into(), context, Some(&external_context)) {
             Ok(res) => {
                 let res = bytecodegen::compile_eval(
                     self,
@@ -386,6 +383,26 @@ impl Globals {
 
     pub fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
         self.global_vars.get(&name).cloned()
+    }
+
+    ///
+    /// Create new heap binding frame with *fid* and *self_val*.
+    ///
+    /// local variables are copied from *binding_lfp* if any.
+    ///
+    pub fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) -> Lfp {
+        let meta = self.store[fid].meta();
+        let mut lfp = Lfp::heap_frame(self_val, meta);
+        unsafe { lfp.set_outer(Some(binding.outer_lfp().outer_address())) };
+        if let Some(binding_lfp) = binding.binding() {
+            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            for i in 1..1 + locals_len {
+                let v = unsafe { binding_lfp.register(i) };
+                unsafe { lfp.set_register(i, v) }
+            }
+        }
+        binding.set_inner(lfp);
+        lfp
     }
 
     ///

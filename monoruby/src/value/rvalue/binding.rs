@@ -9,41 +9,53 @@ impl Binding {
         Binding(val)
     }
 
-    pub(crate) fn from(binding_lfp: Lfp) -> Self {
-        Binding(Value::new_binding(binding_lfp))
+    pub fn from_outer(outer_lfp: Lfp) -> Self {
+        Binding(Value::new_binding(outer_lfp))
     }
 }
 
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct BindingInner {
-    binding_lfp: Lfp,
+    binding_lfp: Option<Lfp>,
+    outer_lfp: Lfp,
 }
 
 impl alloc::GC<RValue> for BindingInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.binding_lfp.mark(alloc)
+        if let Some(binding) = self.binding_lfp {
+            binding.mark(alloc)
+        } else {
+            self.outer_lfp.mark(alloc)
+        }
     }
 }
 
 impl BindingInner {
-    pub(crate) fn from(binding_lfp: Lfp) -> Self {
-        Self { binding_lfp }
+    pub(crate) fn from(outer_lfp: Lfp) -> Self {
+        Self {
+            binding_lfp: None,
+            outer_lfp,
+        }
     }
 
-    pub fn binding(&self) -> Lfp {
+    pub fn binding(&self) -> Option<Lfp> {
         self.binding_lfp
     }
 
-    pub fn func_id(&self) -> FuncId {
-        self.binding_lfp.meta().func_id()
+    pub fn outer_lfp(&self) -> Lfp {
+        self.outer_lfp
+    }
+
+    pub fn func_id(&self) -> Option<FuncId> {
+        Some(self.binding_lfp?.meta().func_id())
     }
 
     pub fn self_val(&self) -> Value {
-        self.binding_lfp.self_val()
+        self.outer_lfp.self_val()
     }
 
     pub fn set_inner(&mut self, binding_lfp: Lfp) {
-        self.binding_lfp = binding_lfp
+        self.binding_lfp = Some(binding_lfp);
     }
 }

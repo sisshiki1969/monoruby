@@ -60,13 +60,7 @@ impl Cfp {
     /// Get outermost LFP and the depth.
     ///
     pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        match self.lfp().outer() {
-            Some(dfp) => {
-                let (dfp, depth) = dfp.outermost();
-                (dfp.lfp(), depth)
-            }
-            None => (self.lfp(), 0),
-        }
+        self.lfp().outermost_lfp_depth()
     }
 
     pub(crate) fn block_given(&self) -> bool {
@@ -213,7 +207,7 @@ impl Lfp {
     ///
     /// Get the address of outer.
     ///
-    fn outer_address(self) -> Dfp {
+    pub(crate) fn outer_address(self) -> Dfp {
         unsafe { Dfp::new(self.sub(LFP_OUTER as _) as _) }
     }
 
@@ -343,6 +337,19 @@ impl Lfp {
         match self.outer() {
             Some(dfp) => dfp.outermost().0.lfp(),
             None => self,
+        }
+    }
+
+    ///
+    /// Get outermost LFP and the depth.
+    ///
+    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
+        match self.outer() {
+            Some(dfp) => {
+                let (dfp, depth) = dfp.outermost();
+                (dfp.lfp(), depth)
+            }
+            None => (*self, 0),
         }
     }
 

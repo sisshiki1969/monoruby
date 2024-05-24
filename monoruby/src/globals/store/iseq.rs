@@ -5,7 +5,7 @@ use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
 /// Information of instruction sequences.
 ///
 #[derive(Clone)]
-pub(crate) struct ISeqInfo {
+pub struct ISeqInfo {
     ///
     /// *FuncId* of this function.
     ///
@@ -33,7 +33,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Valid temp register information.
     ///
-    pub sp: Vec<SlotId>,
+    pub(crate) sp: Vec<SlotId>,
     ///
     /// Exception handling map.
     ///
@@ -46,15 +46,15 @@ pub(crate) struct ISeqInfo {
     ///
     /// Information of parameters.
     ///
-    pub args: ParamsInfo,
+    pub(crate) args: ParamsInfo,
     ///
     /// Name of local variables
     ///
-    pub locals: IndexMap<IdentId, bytecodegen::BcLocal>,
+    pub(crate) locals: IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
-    pub outer_locals: ExternalContext,
+    pub(crate) outer_locals: ExternalContext,
     ///
     /// literal values. (for GC)
     ///
@@ -74,7 +74,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Basic block information.
     ///
-    pub bb_info: BasicBlockInfo,
+    pub(crate) bb_info: BasicBlockInfo,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -293,7 +293,7 @@ impl ISeqInfo {
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub fn get_pc(&self, idx: BcIndex) -> BcPc {
+    pub(crate) fn get_pc(&self, idx: BcIndex) -> BcPc {
         BcPc::from(&self.bytecode()[idx.0 as usize])
     }
 

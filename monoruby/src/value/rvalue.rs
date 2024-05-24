@@ -270,9 +270,9 @@ impl ObjKind {
         }
     }
 
-    fn binding(binding_lfp: Lfp) -> Self {
+    fn binding_from_outer(outer_lfp: Lfp) -> Self {
         Self {
-            binding: ManuallyDrop::new(BindingInner::from(binding_lfp)),
+            binding: ManuallyDrop::new(BindingInner::from(outer_lfp)),
         }
     }
 }
@@ -1137,12 +1137,12 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_binding(lfp: Lfp) -> Self {
-        let binding_lfp = lfp.move_frame_to_heap();
-        assert!(!binding_lfp.on_stack());
+    pub(super) fn new_binding(outer_lfp: Lfp) -> Self {
+        let outer_lfp = outer_lfp.move_frame_to_heap();
+        assert!(!outer_lfp.on_stack());
         RValue {
             header: Header::new(BINDING_CLASS, ObjKind::BINDING),
-            kind: ObjKind::binding(binding_lfp),
+            kind: ObjKind::binding_from_outer(outer_lfp),
             var_table: None,
         }
     }

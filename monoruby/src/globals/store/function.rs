@@ -884,7 +884,7 @@ impl FuncInfo {
     ///
     /// Get meta data (Meta) of this function.
     ///
-    pub(crate) fn meta(&self) -> Meta {
+    pub fn meta(&self) -> Meta {
         self.data.meta()
     }
 
@@ -1005,7 +1005,7 @@ impl FuncInfo {
         (meta, codeptr, pc)
     }
 
-    pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
+    pub fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {
             FuncKind::ISeq(info) => info,
             _ => unreachable!(),

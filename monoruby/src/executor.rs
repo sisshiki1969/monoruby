@@ -929,7 +929,7 @@ impl Executor {
 
     pub fn generate_binding(&mut self) -> Binding {
         let lfp = self.cfp().prev().unwrap().lfp();
-        Binding::from(lfp)
+        Binding::from_outer(lfp)
     }
 
     ///

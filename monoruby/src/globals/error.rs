@@ -135,6 +135,10 @@ impl MonorubyErr {
         };
         MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, error.loc, error.source_info)
     }
+
+    pub fn is_unexpected_eof(&self) -> bool {
+        self.kind == MonorubyErrKind::Syntax && self.msg == "unexpected end-of-file."
+    }
 }
 
 // Bytecodegen level errors.

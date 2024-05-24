@@ -139,14 +139,13 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set lfp
             movq r14, rdx;
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
             // set FuncId
             movl rdx, [r14 - (LFP_META)];
         };
         self.get_func_data();
         self.push_frame();
         monoasm! { &mut self.jit,
-            // set lfp
-            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
             // r15 : &FuncData
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];

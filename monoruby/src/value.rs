@@ -426,8 +426,8 @@ impl Value {
         RValue::new_generator(proc).pack()
     }
 
-    pub(crate) fn new_binding(binding_lfp: Lfp) -> Self {
-        RValue::new_binding(binding_lfp).pack()
+    pub(crate) fn new_binding(outer_lfp: Lfp) -> Self {
+        RValue::new_binding(outer_lfp).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {
