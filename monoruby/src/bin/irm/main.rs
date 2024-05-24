@@ -38,13 +38,7 @@ fn main() {
         std::path::Path::new(&format!("(irm):{script_line}")),
     )
     .unwrap();
-    let dummy_fid = monoruby::compile_script(
-        &mut globals,
-        parse_result.node,
-        parse_result.source_info,
-        None,
-    )
-    .unwrap();
+    let dummy_fid = monoruby::compile_script(&mut globals, parse_result).unwrap();
     let meta = globals[dummy_fid].meta();
     let dummy_outer = Lfp::heap_frame(globals.main_object, meta);
 

@@ -1,5 +1,5 @@
 use monoasm::DestLabel;
-use ruruby_parse::LvarCollector;
+use ruruby_parse::{LvarCollector, ParseResult};
 
 use crate::executor::inline::InlineMethodId;
 
@@ -171,17 +171,17 @@ impl Store {
         self.functions.get_compile_info()
     }
 
-    pub(crate) fn add_main(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
+    pub(crate) fn add_main(&mut self, result: ParseResult) -> Result<FuncId> {
         self.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],
-                body: Box::new(ast),
+                body: Box::new(result.node),
                 lvar: LvarCollector::new(),
                 loc: Loc::default(),
             },
             Loc::default(),
-            sourceinfo,
+            result.source_info,
         )
     }
 
@@ -229,19 +229,18 @@ impl Store {
     pub fn add_eval(
         &mut self,
         mother: (FuncId, usize),
+        result: ParseResult,
         outer: (FuncId, ExternalContext),
-        ast: Node,
         loc: Loc,
-        sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let info = BlockInfo {
             params: vec![],
-            body: Box::new(ast),
+            body: Box::new(result.node),
             lvar: LvarCollector::new(),
             loc,
         };
         self.functions
-            .add_block(mother, outer, vec![], false, info, loc, sourceinfo)
+            .add_block(mother, outer, vec![], false, info, loc, result.source_info)
     }
 
     pub(super) fn add_builtin_func(

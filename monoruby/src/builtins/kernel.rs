@@ -689,6 +689,8 @@ mod test {
         x = 20
         $res << eval("x")
         $res << eval("x", b)
+        eval("a=42", b)
+        $res << eval("x + a", b)
         $res
         "##,
         );

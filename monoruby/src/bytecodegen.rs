@@ -2,7 +2,7 @@ use super::*;
 use num::BigInt;
 use ruruby_parse::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
-    RescueEntry, SourceInfoRef, UnOp,
+    ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };
 
 mod binary;
@@ -14,29 +14,21 @@ mod method_call;
 mod statement;
 use inst::*;
 
-pub fn compile_script(
-    globals: &mut Globals,
-    ast: Node,
-    sourceinfo: SourceInfoRef,
-    binding: Option<LvarCollector>,
-) -> Result<FuncId> {
-    let main_fid = globals.store.add_main(ast, sourceinfo)?;
-    compile(globals, main_fid, binding)?;
+pub fn compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
+    let main_fid = globals.store.add_main(result)?;
+    compile(globals, main_fid, None)?;
     Ok(main_fid)
 }
 
 pub fn compile_eval(
     globals: &mut Globals,
-    ast: Node,
+    result: ParseResult,
     mother: (FuncId, usize),
     outer: (FuncId, ExternalContext),
     loc: Loc,
-    sourceinfo: SourceInfoRef,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals
-        .store
-        .add_eval(mother, outer, ast, loc, sourceinfo)?;
+    let main_fid = globals.store.add_eval(mother, result, outer, loc)?;
     compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }

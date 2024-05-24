@@ -189,7 +189,7 @@ impl Executor {
         path: &std::path::Path,
     ) -> Result<Value> {
         let fid = match ruruby_parse::Parser::parse_program(code, path) {
-            Ok(res) => bytecodegen::compile_script(globals, res.node, res.source_info, None),
+            Ok(res) => bytecodegen::compile_script(globals, res),
             Err(err) => Err(MonorubyErr::parse(err)),
         }?;
         self.eval_toplevel(globals, fid)

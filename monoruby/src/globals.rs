@@ -1,5 +1,5 @@
 use fancy_regex::Regex;
-use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
+use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -290,11 +290,10 @@ impl Globals {
             Ok(res) => {
                 let res = bytecodegen::compile_eval(
                     self,
-                    res.node,
+                    res,
                     mother,
                     (outer_fid, external_context),
                     Loc::default(),
-                    res.source_info,
                     None,
                 );
                 #[cfg(feature = "emit-bc")]
@@ -323,21 +322,29 @@ impl Globals {
         external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
 
         let context = if let Some(fid) = binding.func_id() {
-            Some(self[fid].as_ruby_func().lvar_collector.clone())
+            let mut lvar = LvarCollector::new();
+            for (name, _) in &self[fid].as_ruby_func().locals {
+                lvar.insert(&name.get_name());
+            }
+            Some(lvar)
         } else {
             None
         };
 
-        match Parser::parse_program_binding(code, path.into(), context, Some(&external_context)) {
+        match Parser::parse_program_binding(
+            code,
+            path.into(),
+            context.clone(),
+            Some(&external_context),
+        ) {
             Ok(res) => {
                 let res = bytecodegen::compile_eval(
                     self,
-                    res.node,
+                    res,
                     mother,
                     (outer_fid, external_context),
                     Loc::default(),
-                    res.source_info,
-                    Some(res.lvar_collector),
+                    context,
                 );
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
