@@ -60,12 +60,12 @@ fn main() {
                     code.clone()
                 };
 
-                let fid = match globals.compile_script_binding(
+                match globals.compile_script_binding(
                     buf.clone(),
                     std::path::Path::new(&format!("(irm):{script_line}")),
                     binding,
                 ) {
-                    Ok(fid) => fid,
+                    Ok(_) => {}
                     Err(err) => {
                         if err.is_unexpected_eof() {
                             rl.add_history_entry(code.as_str()).unwrap();
@@ -79,8 +79,7 @@ fn main() {
                 };
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
-                let binding_lfp = globals.new_binding_frame(fid, globals.main_object, binding);
-                match executor.invoke_binding(&mut globals, binding_lfp) {
+                match executor.invoke_binding(&mut globals, binding.binding().unwrap()) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };

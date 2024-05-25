@@ -309,7 +309,7 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
         binding: Binding,
-    ) -> Result<FuncId> {
+    ) -> Result<()> {
         let outer_fid = binding.outer_lfp().meta().func_id();
         let mother = match binding.outer_lfp().outermost_lfp_depth() {
             (lfp, outer) => (lfp.meta().func_id(), outer),
@@ -331,7 +331,7 @@ impl Globals {
             None
         };
 
-        match Parser::parse_program_binding(
+        let fid = match Parser::parse_program_binding(
             code,
             path.into(),
             context.clone(),
@@ -351,7 +351,9 @@ impl Globals {
                 res
             }
             Err(err) => Err(MonorubyErr::parse(err)),
-        }
+        }?;
+        self.new_binding_frame(fid, binding.self_val(), binding);
+        Ok(())
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
@@ -397,7 +399,7 @@ impl Globals {
     ///
     /// local variables are copied from *binding_lfp* if any.
     ///
-    pub fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) -> Lfp {
+    fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
         unsafe { lfp.set_outer(Some(binding.outer_lfp().outer_address())) };
@@ -409,7 +411,6 @@ impl Globals {
             }
         }
         binding.set_inner(lfp);
-        lfp
     }
 
     ///

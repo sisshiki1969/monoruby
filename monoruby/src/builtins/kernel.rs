@@ -411,9 +411,8 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let cfp = vm.cfp();
     if let Some(bind) = lfp.try_arg(1) {
         let binding = Binding::new(bind);
-        let fid = globals.compile_script_binding(expr, "(eval)", binding)?;
-        let new_binding = globals.new_binding_frame(fid, binding.self_val(), binding);
-        vm.invoke_binding(globals, new_binding)
+        globals.compile_script_binding(expr, "(eval)", binding)?;
+        vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let caller_cfp = cfp.prev().unwrap();
         let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
