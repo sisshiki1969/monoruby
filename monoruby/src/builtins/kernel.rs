@@ -41,6 +41,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "warn",
+        warn,
+        0,
+        0,
+        true,
+        &["uplevel", "category"],
+    );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
@@ -552,6 +561,39 @@ fn exit(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// Kernel.#warn
+///
+/// - warn(*message, [NOT SUPPORTED] uplevel: nil, [NOT SUPPORTED] category: nil) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/warn.html]
+#[monoruby_builtin]
+fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let message = lfp.arg(0);
+    if lfp.try_arg(1).is_some() {
+        return Err(MonorubyErr::runtimeerr("uplevel is not supported"));
+    }
+    if lfp.try_arg(2).is_some() {
+        return Err(MonorubyErr::runtimeerr("category is not supported"));
+    }
+    if let Some(ary) = message.try_array_ty() {
+        for m in ary.iter() {
+            if let Some(s) = m.is_str() {
+                eprintln!("{}", s);
+            } else {
+                eprintln!("{}", m.to_s(globals));
+            }
+        }
+    } else {
+        if let Some(s) = message.is_str() {
+            eprintln!("{}", s);
+        } else {
+            eprintln!("{}", message.to_s(globals));
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
 /// Kernel.#__dir__
 ///
 /// - __dir__ -> String | nil
@@ -726,5 +768,13 @@ mod test {
         run_test("lambda {|x| x * 2}.call(1)");
         run_test("lambda {|x, y| x * y}.call(7,2)");
         run_test_error("lambda {|x| puts x}.call(1,2)");
+    }
+
+    #[test]
+    fn warn() {
+        run_test(r#"warn("woo")"#);
+        run_test(r#"warn("woo", :boo, 100)"#);
+        run_test_error(r#"warn(uplevel:1)"#);
+        run_test_error(r#"warn(category:100)"#);
     }
 }

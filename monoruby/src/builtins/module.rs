@@ -39,10 +39,11 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
+    globals.define_builtin_func(MODULE_CLASS, "remove_method", remove_method, 1);
     globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
-    // private methos
+    // private methods
     globals.define_private_builtin_func_rest(MODULE_CLASS, "module_function", module_function);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
@@ -375,6 +376,26 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         }
     };
     Ok(Value::new_unbound_method(entry.func_id(), entry.owner()))
+}
+
+///
+/// ### Module#instance_method
+///
+/// - remove_method(*name) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_method.html]
+#[monoruby_builtin]
+fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let func_name = lfp.arg(0).expect_symbol_or_string()?;
+    match globals.remove_method(class_id, func_name) {
+        Some(_) => Ok(lfp.self_val()),
+        None => Err(MonorubyErr::nameerr(format!(
+            "method `{}' not defined in {}",
+            func_name,
+            globals.get_class_name(class_id)
+        ))),
+    }
 }
 
 ///
@@ -786,6 +807,41 @@ mod test {
               def c2; end
             end
         "#,
+        );
+    }
+
+    #[test]
+    fn remove_method() {
+        run_test(
+            r#"
+            class S
+              def f; end
+            end
+            class C < S
+            end
+            S.remove_method(:f)
+            "#,
+        );
+        run_test_error(
+            r#"
+            class S
+              def f; end
+            end
+            class C < S
+            end
+            C.remove_method(:f)
+            "#,
+        );
+        run_test_error(
+            r#"
+            class S
+              def f; end
+            end
+            class C < S
+            end
+            S.remove_method(:f)
+            S.new.f
+            "#,
         );
     }
 

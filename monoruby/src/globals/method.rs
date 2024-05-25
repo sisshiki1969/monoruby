@@ -303,6 +303,23 @@ impl Globals {
         func_id
     }
 
+    pub(crate) fn define_builtin_module_func_with_kw(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw: &[&str],
+    ) -> FuncId {
+        let func_id =
+            self.store
+                .add_builtin_func_with_kw(name.to_string(), address, min, max, rest, kw);
+        self.new_builtin_module_fn(class_id, name, func_id);
+        func_id
+    }
+
     pub(crate) fn define_builtin_module_func_eval_with(
         &mut self,
         class_id: ClassId,

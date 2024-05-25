@@ -582,6 +582,14 @@ impl Globals {
     }
 
     ///
+    /// remove method.
+    ///
+    pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Option<()> {
+        self.store[class_id].methods.remove(&func_name)?;
+        Some(())
+    }
+
+    ///
     /// Check whether public/protected method *name* is defined for *class_id* or its superclasses.
     ///
     pub(crate) fn method_defined(&mut self, class_id: ClassId, func_name: IdentId) -> bool {
