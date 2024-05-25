@@ -12,7 +12,7 @@ pub use fiber::*;
 pub use hash::*;
 pub use io::IoInner;
 pub use ivar_table::*;
-pub use method::MethodInner;
+pub use method::*;
 pub use module::*;
 pub use regexp::RegexpInner;
 pub use string::{Encoding, StringInner};
@@ -60,6 +60,7 @@ pub union ObjKind {
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
+    umethod: ManuallyDrop<UMethodInner>,
     fiber: ManuallyDrop<FiberInner>,
     enumerator: ManuallyDrop<EnumeratorInner>,
     generator: ManuallyDrop<GeneratorInner>,
@@ -89,6 +90,7 @@ impl ObjKind {
     pub const GENERATOR: u8 = 18;
     pub const COMPLEX: u8 = 19;
     pub const BINDING: u8 = 20;
+    pub const UMETHOD: u8 = 21;
 }
 
 impl ObjKind {
@@ -246,9 +248,15 @@ impl ObjKind {
         }
     }
 
-    fn method(receiver: Value, func_id: FuncId) -> Self {
+    fn method(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
         Self {
-            method: ManuallyDrop::new(MethodInner::new(receiver, func_id)),
+            method: ManuallyDrop::new(MethodInner::new(receiver, func_id, owner)),
+        }
+    }
+
+    fn unbound_method(func_id: FuncId, owner: ClassId) -> Self {
+        Self {
+            umethod: ManuallyDrop::new(UMethodInner::new(func_id, owner)),
         }
     }
 
@@ -325,6 +333,7 @@ impl std::fmt::Debug for RValue {
                         18 => format!("GENERATOR({:?})", self.kind.generator),
                         19 => format!("COMPLEX({:?})", self.kind.complex),
                         20 => format!("BINDING({:?})", self.kind.binding),
+                        21 => format!("UMETHOD({:?})", self.kind.umethod),
                         _ => unreachable!(),
                     }
                 },
@@ -380,6 +389,8 @@ impl RValue {
                 ObjKind::ENUMERATOR => self.enumerator_tos(globals),
                 ObjKind::GENERATOR => self.object_tos(globals),
                 ObjKind::COMPLEX => self.as_complex().to_s(globals),
+                ObjKind::BINDING => self.object_tos(globals),
+                ObjKind::UMETHOD => self.as_umethod().to_s(globals),
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -1100,10 +1111,18 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_method(receiver: Value, func_id: FuncId) -> Self {
+    pub(super) fn new_method(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
         RValue {
             header: Header::new(METHOD_CLASS, ObjKind::METHOD),
-            kind: ObjKind::method(receiver, func_id),
+            kind: ObjKind::method(receiver, func_id, owner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
+        RValue {
+            header: Header::new(UMETHOD_CLASS, ObjKind::UMETHOD),
+            kind: ObjKind::unbound_method(func_id, owner),
             var_table: None,
         }
     }
@@ -1305,14 +1324,22 @@ impl RValue {
     }
 
     pub(crate) fn as_method(&self) -> &MethodInner {
+        assert_eq!(self.ty(), ObjKind::METHOD);
         unsafe { &self.kind.method }
     }
 
+    pub(crate) fn as_umethod(&self) -> &UMethodInner {
+        assert_eq!(self.ty(), ObjKind::UMETHOD);
+        unsafe { &self.kind.umethod }
+    }
+
     pub(super) unsafe fn as_fiber(&self) -> &FiberInner {
+        assert_eq!(self.ty(), ObjKind::FIBER);
         &self.kind.fiber
     }
 
     pub(super) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
+        assert_eq!(self.ty(), ObjKind::FIBER);
         &mut self.kind.fiber
     }
 

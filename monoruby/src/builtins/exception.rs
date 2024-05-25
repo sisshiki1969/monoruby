@@ -71,7 +71,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     } else {
         globals.get_class_name(class_id)
     };
-    let kind = class_id.get_name_id(globals).unwrap();
+    let kind = class_id.get_name_id(globals);
     Ok(Value::new_exception(kind, msg, vec![], class_id))
 }
 
@@ -84,7 +84,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 #[monoruby_builtin]
 fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?;
-    let name = class_id.get_name_id(globals).unwrap();
+    let name = class_id.get_name_id(globals);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
         let status = arg0.expect_integer()?;
         if let Some(arg1) = lfp.try_arg(1) {

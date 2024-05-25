@@ -405,8 +405,12 @@ impl Value {
         RValue::new_proc(block).pack()
     }
 
-    pub fn new_method(receiver: Value, func_id: FuncId) -> Self {
-        RValue::new_method(receiver, func_id).pack()
+    pub fn new_method(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
+        RValue::new_method(receiver, func_id, owner).pack()
+    }
+
+    pub fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
+        RValue::new_unbound_method(func_id, owner).pack()
     }
 
     pub(crate) fn new_fiber(proc: Proc) -> Self {

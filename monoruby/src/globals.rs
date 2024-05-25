@@ -35,6 +35,10 @@ impl MethodTableEntry {
     pub fn func_id(&self) -> FuncId {
         self.func_id.unwrap()
     }
+
+    pub fn owner(&self) -> ClassId {
+        self.owner
+    }
 }
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
@@ -486,10 +490,7 @@ impl Globals {
                 match info.owner_class() {
                     Some(owner) => format!(
                         "{}#{}",
-                        match owner.get_name_id(self) {
-                            Some(name) => format!("{:?}", name),
-                            None => "<unnamed>".to_string(),
-                        },
+                        format!("{:?}", owner.get_name_id(self)),
                         func.name()
                     ),
                     None => format!("{}", func.name()),
@@ -502,13 +503,7 @@ impl Globals {
                 String::new()
             };
             match info.owner_class() {
-                Some(owner) => format!(
-                    "{}#{name}",
-                    match owner.get_name_id(self) {
-                        Some(name) => format!("{:?}", name),
-                        None => "<unnamed>".to_string(),
-                    },
-                ),
+                Some(owner) => format!("{}#{name}", format!("{:?}", owner.get_name_id(self))),
                 None => format!("{name}"),
             }
         }

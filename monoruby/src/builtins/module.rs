@@ -38,6 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
+    globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
@@ -352,6 +353,28 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         class.include_module(v.as_class());
     }
     Ok(lfp.self_val())
+}
+
+///
+/// ### Module#instance_method
+///
+/// - instance_method(name) -> UnboundMethod
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_method.html]
+#[monoruby_builtin]
+fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let klass = lfp.self_val().as_class();
+    let method_name = lfp.arg(0).expect_symbol_or_string()?;
+    let entry = match globals.check_method_for_class(klass.id(), method_name) {
+        Some(entry) => entry,
+        None => {
+            return Err(MonorubyErr::undefined_method(
+                method_name,
+                klass.id().get_name_id(globals),
+            ))
+        }
+    };
+    Ok(Value::new_unbound_method(entry.func_id(), entry.owner()))
 }
 
 ///

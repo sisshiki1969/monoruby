@@ -301,25 +301,30 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn nameerr(msg: impl ToString) -> MonorubyErr {
+        Self::new(MonorubyErrKind::Name, msg)
+    }
+
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Name,
-            format!("uninitialized constant {name}"),
-        )
+        Self::nameerr(format!("uninitialized constant {name}"))
     }
 
     pub(crate) fn uninitialized_cvar(name: IdentId, class_name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Name,
-            format!("uninitialized class variable {name} in {class_name}"),
-        )
+        Self::nameerr(format!(
+            "uninitialized class variable {name} in {class_name}"
+        ))
     }
 
     pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Name,
-            format!("identifier {name} needs to be constant"),
-        )
+        Self::nameerr(format!("identifier {name} needs to be constant"))
+    }
+
+    pub(crate) fn undefined_method(method_name: IdentId, class_name: IdentId) -> MonorubyErr {
+        Self::nameerr(format!(
+            "undefined method `{}' for class `{}'",
+            method_name.get_name(),
+            class_name.get_name(),
+        ))
     }
 
     pub(crate) fn typeerr(msg: impl ToString, kind: TypeErrKind) -> MonorubyErr {

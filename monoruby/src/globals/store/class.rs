@@ -32,6 +32,7 @@ pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
 pub const COMPLEX_CLASS: ClassId = ClassId::new(24);
 pub const NUMERIC_CLASS: ClassId = ClassId::new(25);
 pub const BINDING_CLASS: ClassId = ClassId::new(26);
+pub const UMETHOD_CLASS: ClassId = ClassId::new(27);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -66,6 +67,7 @@ impl std::fmt::Debug for ClassId {
             24 => write!(f, "COMPLEX"),
             25 => write!(f, "NUMERIC"),
             26 => write!(f, "BINDING"),
+            27 => write!(f, "UMETHOD"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -131,14 +133,14 @@ impl ClassId {
     }
 
     /// Get class name(IdentId) of *ClassId*.
-    pub(crate) fn get_name_id(self, globals: &Globals) -> Option<IdentId> {
+    pub(crate) fn get_name_id(self, globals: &Globals) -> IdentId {
         let class = self.get_module(globals);
         match globals.store[self].name {
-            Some(id) => Some(id),
-            None => Some(IdentId::get_id_from_string(match class.is_singleton() {
+            Some(id) => id,
+            None => IdentId::get_id_from_string(match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
                 Some(base) => format!("#<Class:{}>", base.to_s(globals)),
-            })),
+            }),
         }
     }
 }

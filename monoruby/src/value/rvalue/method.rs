@@ -5,11 +5,16 @@ use super::*;
 pub struct MethodInner {
     receiver: Value,
     func_id: FuncId,
+    owner: ClassId,
 }
 
 impl MethodInner {
-    pub fn new(receiver: Value, func_id: FuncId) -> Self {
-        Self { receiver, func_id }
+    pub fn new(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
+        Self {
+            receiver,
+            func_id,
+            owner,
+        }
     }
 
     pub fn receiver(&self) -> Value {
@@ -24,6 +29,31 @@ impl MethodInner {
         format!(
             "#<Method: {}#{}()>",
             globals.get_class_name(self.receiver.class()),
+            globals[self.func_id()].name().unwrap()
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+#[repr(C)]
+pub struct UMethodInner {
+    func_id: FuncId,
+    owner: ClassId,
+}
+
+impl UMethodInner {
+    pub fn new(func_id: FuncId, owner: ClassId) -> Self {
+        Self { func_id, owner }
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.func_id
+    }
+
+    pub fn to_s(&self, globals: &Globals) -> String {
+        format!(
+            "#<UnboundMethod: {}#{}()>",
+            globals.get_class_name(self.owner),
             globals[self.func_id()].name().unwrap()
         )
     }
