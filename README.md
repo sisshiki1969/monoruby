@@ -5,6 +5,10 @@
 
 Ruby implementation with yet another JIT compiler written in Rust.
 
+## Presentation
+
+Presentation slides for [RubyKaigi2024](https://rubykaigi.org/2024/presentations/s_isshiki1969.html#day2) are [here](./doc/RunningOptcarrotOnMyOwnRuby-Added.pdf).
+
 ## Features
 
 - Written in Rust from scratch. No dependencies on any other Ruby implementations.
@@ -57,7 +61,7 @@ And also, you can launch REPL.
 or
 
 ```sh
-> ./irm.sh
+> bin/irm
 ```
 
 ## How to install
