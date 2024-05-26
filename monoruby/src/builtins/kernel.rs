@@ -418,8 +418,14 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let expr = lfp.arg(0).expect_string()?;
     let cfp = vm.cfp();
-    if let Some(bind) = lfp.try_arg(1) {
-        let binding = Binding::new(bind);
+    if let Some(bind) = lfp.try_arg(1)
+        && !bind.is_nil()
+    {
+        let binding = if let Some(b) = Binding::try_new(bind) {
+            b
+        } else {
+            return Err(MonorubyErr::typeerr("Binding expected", TypeErrKind::Other));
+        };
         globals.compile_script_binding(expr, "(eval)", binding)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {

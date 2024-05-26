@@ -9,6 +9,14 @@ impl Binding {
         Binding(val)
     }
 
+    pub(crate) fn try_new(val: Value) -> Option<Self> {
+        if val.ty() == Some(ObjKind::BINDING) {
+            Some(Binding(val))
+        } else {
+            None
+        }
+    }
+
     pub fn from_outer(outer_lfp: Lfp) -> Self {
         Binding(Value::new_binding(outer_lfp))
     }
