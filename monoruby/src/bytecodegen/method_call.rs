@@ -125,52 +125,7 @@ impl BytecodeGen {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)?
         } else {
-            let (_, mother_args, outer) = self.mother.clone();
-            let pos_len = mother_args.pos_num();
-            let pos_start = if outer == 0 {
-                BcLocal(0).into()
-            } else {
-                let args = self.sp().into();
-                for i in 0..pos_len {
-                    let dst = self.push().into();
-                    let src = BcLocal(i as _).into();
-                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
-                }
-                args
-            };
-            let kw_list = &mother_args.kw_names;
-            let kw = if kw_list.is_empty() {
-                None
-            } else {
-                let mut kw_args = IndexMap::default();
-                let kw_start = if outer == 0 {
-                    BcLocal(mother_args.pos_num() as u16).into()
-                } else {
-                    let dst = self.push().into();
-                    let src = BcLocal(mother_args.pos_num() as u16).into();
-                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
-                    dst
-                };
-                for (id, name) in kw_list.iter().enumerate() {
-                    kw_args.insert(*name, id);
-                }
-                Some(KeywordArgs {
-                    kw_start,
-                    kw_args,
-                    hash_splat_pos: vec![],
-                })
-            };
-            CallSite::new(
-                None,
-                pos_len,
-                kw,
-                vec![],
-                None,
-                None,
-                pos_start,
-                BcReg::Self_,
-                dst,
-            )
+            self.handle_super_delegate(dst, loc)
         };
         self.temp = old;
         if ret_pop_flag {
@@ -181,6 +136,85 @@ impl BytecodeGen {
             self.emit_ret(None)?;
         }
         Ok(())
+    }
+
+    fn handle_super_delegate(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
+        let (_, mother_args, outer) = self.mother.clone();
+        let pos_len = mother_args.pos_num();
+        let splat_pos = if mother_args.is_rest() {
+            vec![pos_len - 1]
+        } else {
+            vec![]
+        };
+        let pos_start = if outer == 0 {
+            BcLocal(0).into()
+        } else {
+            let args = self.sp().into();
+            for i in 0..pos_len {
+                let dst = self.push().into();
+                let src = BcLocal(i as _).into();
+                self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
+            }
+            args
+        };
+        let kw_list = &mother_args.kw_names;
+        let kw = if kw_list.is_empty() && mother_args.kw_rest.is_none() {
+            None
+        } else {
+            let kw_start = if outer == 0 {
+                BcLocal(pos_len as u16).into()
+            } else {
+                self.sp().into()
+            };
+            let mut hash_splat_pos = if let Some(kw_rest) = mother_args.kw_rest
+                && outer == 0
+            {
+                vec![BcLocal((kw_rest.0 - 1) as u16).into()]
+            } else {
+                vec![]
+            };
+
+            let mut kw_args = IndexMap::default();
+            for (i, name) in kw_list.iter().enumerate() {
+                kw_args.insert(*name, i);
+                if outer != 0 {
+                    let dst = self.push().into();
+                    let src = BcLocal((pos_len + i) as u16).into();
+                    self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
+                }
+            }
+            if let Some(kw_rest) = mother_args.kw_rest {
+                let kw_rest = if outer == 0 {
+                    BcLocal(kw_rest.0 - 1).into()
+                } else {
+                    self.load_dynvar(kw_rest, outer, loc)
+                };
+                hash_splat_pos.push(kw_rest);
+            };
+            Some(KeywordArgs {
+                kw_start,
+                kw_args,
+                hash_splat_pos,
+            })
+        };
+        CallSite::new(
+            None,
+            pos_len,
+            kw,
+            splat_pos,
+            None,
+            None,
+            pos_start,
+            BcReg::Self_,
+            dst,
+        )
+    }
+
+    fn load_dynvar(&mut self, slot_id: SlotId, outer: usize, loc: Loc) -> BcReg {
+        let dst = self.push().into();
+        let src = BcLocal(slot_id.0 - 1).into();
+        self.emit(BcIr::LoadDynVar { dst, src, outer }, loc);
+        dst
     }
 
     pub(super) fn gen_each(

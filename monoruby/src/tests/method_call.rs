@@ -313,6 +313,40 @@ mod test {
     }
 
     #[test]
+    fn hash_splat4() {
+        run_test_with_prelude(
+            r#"
+            f(1,2,d:4,a:1,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,a:100,b:200,c:300,d:400)
+              [a,b,c,d,x,y]
+            end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            f(1,2,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,a:100,b:200,c:300,d:400)
+              [a,b,c,d,x,y]
+            end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            f(1,2,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,b:200,c:300)
+              [b,c,x,y]
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn destruct() {
         run_test_with_prelude(
             r#"
@@ -328,7 +362,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_param() {
+    fn block_param() {
         run_test_with_prelude(
             r#"
         f do |a,b|
@@ -353,7 +387,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_param2() {
+    fn block_param2() {
         run_test_with_prelude(
             r#"
         f{}
@@ -435,7 +469,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_call1() {
+    fn block_call1() {
         run_test_with_prelude(
             r#"
         f {|a,b|
@@ -452,7 +486,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_call2() {
+    fn block_call2() {
         run_test_with_prelude(
             r#"
         f {|a,b,c,d|
@@ -469,7 +503,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_nest1() {
+    fn block_nest1() {
         run_test_with_prelude(
             r#"
         f {|a,(b,c,d),e,f|
@@ -485,7 +519,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_nest2() {
+    fn block_nest2() {
         run_test_with_prelude(
             r#"
                 f {|a,(b)|
@@ -501,7 +535,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_array_expand1() {
+    fn block_array_expand1() {
         run_test_with_prelude(
             r#"
             f { |a,(b,c),d|
@@ -518,7 +552,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_array_expand2() {
+    fn block_array_expand2() {
         run_test_with_prelude(
             r#"
             f { |a,b|
@@ -535,7 +569,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_array_expand3() {
+    fn block_array_expand3() {
         run_test_with_prelude(
             r#"
             f { |a, *b|
@@ -551,7 +585,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_optional() {
+    fn block_optional() {
         run_test_with_prelude(
             r#"
         f { |a,b,c=42|
@@ -562,6 +596,105 @@ mod test {
         def f
           yield [1,2]
         end
+        "#,
+        );
+    }
+
+    #[test]
+    fn nested_blockargproxy() {
+        run_test_with_prelude(
+            r#"
+        $x = 0
+        g { 42 }
+        $x
+        "#,
+            r#"
+        def e
+          10.times do
+            $x += yield
+          end
+        end
+
+        def f(&q)
+          10.times do
+            e(&q)
+          end
+        end
+
+        def g(&p)
+          10.times do
+            10.times do
+              f(&p)
+            end
+          end
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn block_arg() {
+        run_test_with_prelude(
+            r##"
+        $x = []
+        f { 100 }
+        p = Proc.new { 200 }
+        f(&p)
+        $x
+    "##,
+            r##"
+        def f(&p)
+            g(&p)
+        end
+                
+        def g(&p)
+            $x << yield
+        end
+    "##,
+        );
+        run_test_with_prelude(
+            r##"
+        $x = []
+        f { 100 }
+        p = Proc.new { 200 }
+        f(&p)
+        $x
+    "##,
+            r##"
+        def f(&p)
+            g(&p)
+        end
+                
+        def g(&p)
+            $x << p.call
+        end
+    "##,
+        );
+    }
+
+    #[test]
+    fn nested_call_opt() {
+        run_test_with_prelude(
+            r#"
+            a = [1,2,3,4,5]
+            [f(100), f(*a)]
+        "#,
+            r#"
+            def f(*x); x; end
+        "#,
+        );
+    }
+
+    #[test]
+    fn rest_discard() {
+        run_test_with_prelude(
+            r#"
+            [f(1,2), f(1,2,3,4,5)]
+        "#,
+            r#"
+            def f(a,b,*)
+              [a,b]
+            end
         "#,
         );
     }
@@ -591,6 +724,232 @@ mod test {
         end
         x
         "#,
+        );
+    }
+
+    #[test]
+    fn test_super() {
+        run_test_with_prelude(
+            r#"
+            D.new.f(42, 100)
+        "#,
+            r#"
+            class C
+                def f(x,y,z,a:1000)
+                    x+y+z+a
+                end
+            end
+
+            class D < C
+                def f(x,y,z=10,a:77)
+                    super x,y,z,a:a
+                end
+            end
+        "#,
+        );
+
+        run_test(
+            r#"
+        $res = []
+
+        class S
+            def f(x)
+                $res << x
+            end
+        end
+
+        class C < S
+            def f(x)
+                3.times do
+                    super x
+                end
+            end
+        end
+
+        C.new.f(200)
+        $res
+        "#,
+        );
+
+        run_test(
+            r#"
+        class S
+          def f(x,y,z)
+            x + y + z
+          end
+        end
+                
+        class C < S
+          def f(*x)
+            super *x
+          end
+        end
+                
+        C.new.f(3,4,5)
+        "#,
+        )
+    }
+
+    #[test]
+    fn test_super2() {
+        run_test_with_prelude(
+            r##"
+            $res = []
+            D.new.f(1,[2,3],f:70)
+            $res
+                "##,
+            r##"
+            class C
+              def f(a,(b,c),d,e:30,f:40)
+                $res << [a,b,c,d,e,f]
+              end
+            end
+
+            class D < C
+              def f(a,(b,c),d=100,e:42,f:10)
+                a = 100
+                c = 50
+                e = 200
+                super
+                1.times do
+                    super
+                end
+              end
+            end
+            "##,
+        );
+
+        run_test_with_prelude(
+            r#"
+        $res = []
+        C.new.f(200, 300, z:400)
+        $res
+        "#,
+            r#" 
+        class S
+            def f(x, y, z:10)
+                $res << x
+                $res << y
+                $res << z
+            end
+        end
+
+        class C < S
+            def f(x, y, z:50)
+                super
+                1.times do
+                    super
+                end
+            end
+        end
+            "#,
+        );
+
+        run_test_with_prelude(
+            r#"
+        $res = []
+        C.new.f(200, 300, a:250)
+        $res
+        "#,
+            r#" 
+        class S
+            def f(x, y, a:10, b:20)
+                $res << x
+                $res << y
+                $res << a
+                $res << b
+            end
+        end
+
+        class C < S
+            def f(x, y, a:50, b:60)
+                super
+                1.times do
+                    super
+                end
+            end
+        end
+            "#,
+        );
+
+        run_test_with_prelude(
+            r#"
+        $res = []
+        C.new.f(100, 200, 300, a:250, c:400)
+        $res
+        "#,
+            r#" 
+        class S
+            def f(*x, **y)
+                $res << x
+                $res << y.sort
+            end
+        end
+
+        class C < S
+            def f(x, *rest, a:50, **kw)
+                super
+                1.times do
+                    super
+                end
+            end
+        end
+            "#,
+        );
+
+        run_test_with_prelude(
+            r#"
+        $res = []
+        C.new.f(100, 200, 300, a:250, c:400)
+        $res
+        "#,
+            r#" 
+        class S
+            def f(x, y, z, a:0, c:0)
+                $res << x
+                $res << y
+                $res << z
+                $res << a
+                $res << c
+            end
+        end
+
+        class C < S
+            def f(*rest, **kw)
+                super
+                1.times do
+                    super
+                end   
+            end
+        end
+            "#,
+        );
+
+        run_test_with_prelude(
+            r#"
+        $res = []
+        C.new.f(200, 300, a:250)
+        $res
+        "#,
+            r#" 
+        class S
+            def f(x, y, a:10, b:20)
+                $res << x
+                $res << y
+                $res << a
+                $res << b
+            end
+        end
+
+        class C < S
+            def f(x, y, a:50, b:60)
+                super
+                1.times do
+                    super
+                end
+            end
+        end
+            "#,
         );
     }
 }

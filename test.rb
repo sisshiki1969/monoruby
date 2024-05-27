@@ -1,6 +1,17 @@
-def get_binding(str)
-  binding
+class C
+  def f(a,(b,c),d,e:30,f:40)
+    puts "#{a} #{b} #{c} #{d} #{e} #{f}"
+  end
 end
-str = "hello"
-p eval("str + ' Fred'")                      #=> "hello Fred"
-p eval("str + ' Fred'", get_binding("bye"))   #=> "bye Fred"
+
+class D < C
+  def f(a,(b,c),d=100,e:42,f:10)
+    a = 100
+    c = 50
+    e = 200
+    __dump
+    super
+  end
+end
+
+D.new.f(1,[2,3],f:70)
