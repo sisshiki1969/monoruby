@@ -549,6 +549,15 @@ impl Funcs {
                     assert_eq!(0, rest);
                     rest = 1;
                 }
+                ParamKind::Delegate => {
+                    if rest == 0 {
+                        args_names.push(None);
+                        rest = 1;
+                    }
+                    assert!(kw_rest_param.is_none());
+                    kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
+                    args_names.push(None);
+                }
                 ParamKind::Keyword(name, init) => {
                     let name = IdentId::get_id_from_string(name);
                     args_names.push(Some(name));

@@ -1,17 +1,14 @@
 class C
-  def f(a,(b,c),d,e:30,f:40)
-    puts "#{a} #{b} #{c} #{d} #{e} #{f}"
+  def f(*rest, **kw)
+    puts "#{rest} #{kw}"
   end
 end
 
 class D < C
-  def f(a,(b,c),d=100,e:42,f:10)
-    a = 100
-    c = 50
-    e = 200
-    __dump
+  def f(a,...)
+    a = 50
     super
   end
 end
 
-D.new.f(1,[2,3],f:70)
+D.new.f(1,*[2,3],e:70,**{f:80, g:90})
