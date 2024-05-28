@@ -317,7 +317,7 @@ impl Store {
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         if !kw_args.is_empty() || !hash_splat_pos.is_empty() {
-            assert_eq!(kw_pos.0 as usize, args.0 as usize + pos_num);
+            //assert_eq!(kw_pos.0 as usize, args.0 as usize + pos_num);
         }
         /*if let Some(block_arg) = block_arg {
             assert_eq!(

@@ -1,14 +1,14 @@
 class C
-  def f(*rest, **kw)
+  def g(*rest, **kw)
     puts "#{rest} #{kw}"
   end
-end
 
-class D < C
-  def f(a,...)
+  def f(a,b,...)
     a = 50
-    super
+    g(1,2,a:100)
+    g(...)
+    g(b,a,...)
   end
 end
 
-D.new.f(1,*[2,3],e:70,**{f:80, g:90})
+C.new.f(1,*[2,3],e:70,**{f:80, g:90})

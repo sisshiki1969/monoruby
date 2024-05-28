@@ -369,6 +369,28 @@ mod test {
         end
         "##,
         );
+
+        run_test_with_prelude(
+            r##"
+        $res = []
+        C.new.f(1,*[2,3],e:70,**{f:80, g:90})
+        $res
+        "##,
+            r##"
+        class C
+          def g(*rest, **kw)
+            puts "#{rest} #{kw}"
+          end
+                
+          def f(a,b,...)
+            a = 50
+            g(1,2,a:100)
+            g(...)
+            g(b,a,...)
+          end
+        end
+        "##,
+        );
     }
 
     #[test]
@@ -975,6 +997,30 @@ mod test {
             end
         end
             "#,
+        );
+
+        run_test_with_prelude(
+            r##"
+        $res = []
+        D.new.f(1,*[2,3],e:70,**{f:80, g:90})
+        $res
+        "##,
+            r##"
+        class C
+          def f(*rest, **kw)
+            $res << [rest, kw.sort]
+          end
+        end
+
+        class D < C
+          def f(a,b,...)
+            a = 50
+            super
+            super(...)
+            super(b,...)
+          end
+        end
+        "##,
         );
     }
 }
