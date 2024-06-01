@@ -58,6 +58,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select"], filter, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
@@ -69,8 +70,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -839,34 +839,56 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     ))
 }
 
+fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let f = |vm: &mut Executor,
+                 globals: &mut Globals,
+                 lhs: Value,
+                 rhs: Value|
+         -> Result<std::cmp::Ordering> {
+            let res = vm
+                .invoke_block(globals, &data, &[lhs, rhs])?
+                .expect_integer()?;
+            Ok(if res == 0 {
+                std::cmp::Ordering::Equal
+            } else if res < 0 {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            })
+        };
+        vm.sort_by(globals, &mut ary, f)?;
+    } else {
+        vm.sort_by(globals, &mut ary, Executor::compare_values)?;
+    }
+    Ok(ary.into())
+}
+
 ///
 /// ### Array#sort!
 ///
 /// - sort! -> self
-/// - [NOT SUPPORTED] sort! {|a, b| ... } -> self
+/// - sort! {|a, b| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.expect_no_block()?;
-    let mut ary = Array::new(lfp.self_val());
-    vm.sort_by(globals, &mut ary, Executor::compare_values)?;
-    Ok(ary.into())
+    let ary = Array::new(lfp.self_val());
+    sort_inner(vm, globals, lfp, ary)
 }
 
 ///
 /// ### Array#sort
 ///
 /// - sort -> Array
-/// - [NOT SUPPORTED] sort {|a, b| ... } -> Array
+/// - sort {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    lfp.expect_no_block()?;
-    let mut ary = Array::new(lfp.self_val().dup());
-    vm.sort_by(globals, &mut ary, Executor::compare_values)?;
-    Ok(ary.into())
+    let ary = Array::new(lfp.self_val().dup());
+    sort_inner(vm, globals, lfp, ary)
 }
 
 ///
@@ -919,6 +941,32 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let mut ary = Array::new(lfp.self_val().dup());
     vm.sort_by(globals, &mut ary, f)?;
     Ok(ary.into())
+}
+
+///
+/// ### Array#filter
+///
+/// - select -> Enumerator
+/// - filter -> Enumerator
+/// - select {|item| ... } -> [object]
+/// - filter {|item| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter.html]
+#[monoruby_builtin]
+fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = Array::new(lfp.self_val());
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut res = vec![];
+        for elem in ary.iter() {
+            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
+                res.push(*elem);
+            };
+        }
+        Ok(Value::array_from_vec(res))
+    } else {
+        vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![])
+    }
 }
 
 ///
@@ -1885,6 +1933,32 @@ mod test {
         [fruits, new_fruits]
         "#,
         );
+        run_test(
+            r##"
+        ary2 = ["9", "7", "10", "11", "8"]
+        [ary2.sort{|a, b| a.to_i <=> b.to_i }, ary2]
+        "##,
+        );
+        run_test(
+            r##"
+        ary2 = ["9", "7", "10", "11", "8"]
+        [ary2.sort, ary2]
+        "##,
+        );
+        run_test(
+            r##"
+        ary2 = ["9", "7", "10", "11", "8"]
+        ary2.sort!{|a, b| a.to_i <=> b.to_i }
+        ary2
+        "##,
+        );
+        run_test(
+            r##"
+        ary2 = ["9", "7", "10", "11", "8"]
+        ary2.sort!
+        ary2
+        "##,
+        );
     }
 
     #[test]
@@ -1911,6 +1985,12 @@ mod test {
         x
         "##,
         );
+    }
+
+    #[test]
+    fn select() {
+        run_test(r##"[1,2,3,4,5].select { |num| num.even? }"##);
+        run_test(r##"[1,2,3,4,5].select(&:even?)"##);
     }
 
     #[test]
