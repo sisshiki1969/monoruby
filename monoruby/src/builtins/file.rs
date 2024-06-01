@@ -28,6 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func(klass, "file?", file_, 1);
     globals.define_builtin_class_func(klass, "path", path, 1);
+    globals.define_builtin_class_func_with(klass, "realpath", realpath, 1, 2, false);
 }
 
 ///
@@ -190,12 +191,7 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
             return Err(MonorubyErr::runtimeerr(err));
         }
     };
-    let home_dir = match dirs::home_dir() {
-        Some(dir) => dir,
-        None => {
-            return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
-        }
-    };
+
     let path = if lfp.try_arg(1).is_none() {
         string_to_path(lfp.arg(0), globals)?
     } else {
@@ -208,24 +204,8 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     let mut res_path = std::path::PathBuf::new();
     res_path.push(current_dir);
 
-    for elem in path.components() {
-        match elem {
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(comp) if comp == "~" => {
-                res_path.clear();
-                res_path.push(home_dir.clone());
-            }
-            std::path::Component::Normal(comp) => res_path.push(comp),
-            std::path::Component::ParentDir => {
-                res_path.pop();
-            }
-            std::path::Component::RootDir => {
-                res_path.clear();
-                res_path.push(std::path::Component::RootDir);
-            }
-            _ => {}
-        };
-    }
+    extend(&mut res_path, path)?;
+
     #[cfg(windows)]
     let res_path = PathBuf::from(
         std::env::var("HOMEDRIVE")
@@ -335,7 +315,73 @@ fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
+///
+/// ### File.realpath
+/// - realpath(pathname, basedir = nil) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
+#[monoruby_builtin]
+fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
+        let path = std::path::PathBuf::from(arg1.expect_string()?);
+        match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "{}:{}",
+                    arg1.as_str(),
+                    err.to_string()
+                )))
+            }
+        }
+    } else {
+        match std::env::current_dir() {
+            Ok(path) => path,
+            Err(_) => {
+                return Err(MonorubyErr::runtimeerr("Failed to get current directory."));
+            }
+        }
+    };
+    pathname.push(std::path::PathBuf::from(lfp.arg(0).expect_string()?));
+    match pathname.canonicalize() {
+        Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
+        Err(err) => Err(MonorubyErr::argumenterr(format!(
+            "{}:{}",
+            pathname.to_string_lossy(),
+            err.to_string()
+        ))),
+    }
+}
+
 // Utils
+
+fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<()> {
+    for elem in extend.components() {
+        match elem {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(comp) if comp == "~" => {
+                path.clear();
+                let home_dir = match dirs::home_dir() {
+                    Some(dir) => dir,
+                    None => {
+                        return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
+                    }
+                };
+                path.push(home_dir);
+            }
+            std::path::Component::Normal(comp) => path.push(comp),
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::RootDir => {
+                path.clear();
+                path.push(std::path::Component::RootDir);
+            }
+            _ => {}
+        };
+    }
+    Ok(())
+}
 
 /// Convert `file` to canonicalized PathBuf.
 fn string_to_canonicalized_path(
@@ -458,5 +504,14 @@ mod test {
         File.path(MyPath.new)
         "##,
         );
+    }
+
+    #[test]
+    fn realpath() {
+        run_test(r##"File.realpath(".")"##);
+        run_test(r##"File.realpath("./../../../")"##);
+        run_test(r##"File.realpath("../monoruby")"##);
+        run_test(r##"File.realpath("..", "/tmp")"##);
+        run_test(r##"File.realpath("tmp", "/")"##);
     }
 }
