@@ -343,7 +343,14 @@ impl Executor {
             .expect(name)
             .as_class_id();
 
-        Value::new_exception_from_err(globals, err, class_id)
+        if let MonorubyErrKind::Load(path) = &err.kind() {
+            let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
+            let v = Value::new_exception_from_err(globals, err, class_id);
+            globals.set_ivar(v, IdentId::get_id("/path"), path).unwrap();
+            v
+        } else {
+            Value::new_exception_from_err(globals, err, class_id)
+        }
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {
@@ -1373,7 +1380,7 @@ impl BcPc {
                 7 => TraceIr::Literal(SlotId::new(op1), self.op2.get_value()),
                 8 => TraceIr::Nil(SlotId::new(op1)),
                 9 => TraceIr::Symbol(SlotId::new(op1), IdentId::from(op2)),
-                10 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
+                10 | 18 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
                 11 => TraceIr::StoreConst(SlotId::new(op1), ConstSiteId(op2)),
                 12..=13 => TraceIr::CondBr(
                     SlotId::new(op1),
@@ -1401,6 +1408,10 @@ impl BcPc {
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 23 => TraceIr::BlockArg(SlotId::new(op1), op2 as usize),
+                24 => TraceIr::CheckCvar {
+                    dst: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
                 25 => TraceIr::LoadGvar {
                     dst: SlotId::new(op1),
                     name: IdentId::from(op2),

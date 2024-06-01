@@ -12,6 +12,43 @@ impl BytecodeGen {
         Ok(ret)
     }
 
+    pub(super) fn push_check_expr(&mut self, expr: Node) -> Result<BcTemp> {
+        let ret = self.sp();
+        match expr.kind {
+            NodeKind::Const {
+                toplevel,
+                name,
+                parent,
+                prefix,
+            } => {
+                let old = self.temp;
+                let dst = self.push().into();
+                //self.gen_store_expr(dst, expr)?;
+                let loc = expr.loc;
+                let base: Option<BcReg> = if let Some(box parent) = parent {
+                    let base = self.gen_temp_expr(parent)?;
+                    Some(base)
+                } else {
+                    None
+                };
+                self.emit_check_const(Some(dst), base, toplevel, name, prefix, loc);
+                assert_eq!(old + 1, self.temp);
+            }
+            NodeKind::ClassVar(name) => {
+                let old = self.temp;
+                let dst = self.push().into();
+                let loc = expr.loc;
+                let name = IdentId::get_id_from_string(name);
+                self.emit_check_cvar(Some(dst), name, loc);
+                assert_eq!(old + 1, self.temp);
+            }
+            _ => {
+                self.gen_expr(expr, UseMode2::Push)?;
+            }
+        }
+        Ok(ret)
+    }
+
     ///
     /// Evaluate *expr* and
     ///

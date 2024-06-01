@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
+    globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
     globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_funcs(
         HASH_CLASS,
@@ -242,6 +243,20 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let iter = ary.as_hashmap().iter().map(|(k, _)| k);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#empty?
+///
+/// - empty? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/empty=3f.html]
+#[monoruby_builtin]
+fn empty_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    lfp.expect_no_block()?;
+    let self_ = lfp.self_val();
+    let b = self_.as_hashmap().is_empty();
+    Ok(Value::bool(b))
 }
 
 ///
@@ -476,6 +491,8 @@ mod test {
         );
         run_test("{}");
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
+        run_test("{}.empty?");
+        run_test("{a:1}.empty?");
     }
 
     #[test]

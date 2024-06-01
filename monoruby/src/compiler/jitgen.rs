@@ -381,7 +381,8 @@ impl JitContext {
         bb_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bb_pos);
-        match pc.trace_ir(store) {
+        let trace_ir = pc.trace_ir(store);
+        match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart(_) => {
                 self.loop_count += 1;
@@ -522,6 +523,9 @@ impl JitContext {
             }
             TraceIr::LoadCvar { dst, name } => {
                 self.ir.jit_load_cvar(bb, pc, name, dst);
+            }
+            TraceIr::CheckCvar { dst, name } => {
+                self.ir.jit_check_cvar(bb, name, dst);
             }
             TraceIr::StoreCvar { src: val, name } => {
                 self.ir.jit_store_cvar(bb, pc, name, val);

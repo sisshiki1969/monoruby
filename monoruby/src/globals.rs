@@ -174,9 +174,12 @@ impl Globals {
             no_jit,
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_from_vec(vec![
-                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
-                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
-                ]),
+                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
+                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
+                //Value::string_from_str(
+                //    "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/3.3.0/x86_64-linux",
+                //),
+            ]),
             gem_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
@@ -243,7 +246,7 @@ impl Globals {
         let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
         let val = Value::string_from_str(&description);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
-        let val = Value::string_from_str(pcg_name);
+        let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
         let val = Value::string_from_str("3.3.0");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);

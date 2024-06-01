@@ -74,6 +74,13 @@ impl HashmapInner {
         HashId(&self as *const _ as usize)
     }
 
+    pub fn is_empty(&self) -> bool {
+        match &self.content {
+            HashContent::Map(box map) => map.is_empty(),
+            HashContent::IdentMap(box map) => map.is_empty(),
+        }
+    }
+
     pub fn get(&self, v: Value) -> Option<Value> {
         match &self.content {
             HashContent::Map(box map) => map.get(&HashKey(v)).copied(),

@@ -4,10 +4,10 @@ use super::*;
 pub struct Binding(Value);
 
 impl Binding {
-    pub(crate) fn new(val: Value) -> Self {
+    /*fn new(val: Value) -> Self {
         assert_eq!(val.ty(), Some(ObjKind::BINDING));
         Binding(val)
-    }
+    }*/
 
     pub(crate) fn try_new(val: Value) -> Option<Self> {
         if val.ty() == Some(ObjKind::BINDING) {

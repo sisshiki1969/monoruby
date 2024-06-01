@@ -339,6 +339,9 @@ impl Globals {
             TraceIr::LoadCvar { dst: ret, name } => {
                 format!("{:?} = {name}", ret)
             }
+            TraceIr::CheckCvar { dst: ret, name } => {
+                format!("{:?} = {name}?", ret)
+            }
             TraceIr::StoreCvar { src, name } => {
                 format!("{name} = {:?}", src)
             }

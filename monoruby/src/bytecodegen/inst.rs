@@ -86,6 +86,13 @@ pub(super) enum BcIr {
         prefix: Vec<IdentId>,
         name: IdentId,
     },
+    CheckConst {
+        dst: BcReg,
+        base: Option<BcReg>,
+        toplevel: bool,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
     StoreConst {
         src: BcReg,
         toplevel: bool,
@@ -102,6 +109,10 @@ pub(super) enum BcIr {
         name: IdentId,
     },
     LoadCvar {
+        dst: BcReg,
+        name: IdentId,
+    },
+    CheckCvar {
         dst: BcReg,
         name: IdentId,
     },

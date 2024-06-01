@@ -113,7 +113,7 @@ impl MonorubyErr {
             MonorubyErrKind::Type(_) => "TypeError",
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
-            MonorubyErrKind::Load => "LoadError",
+            MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Internal => "InternalError",
             MonorubyErrKind::Regex => "RegexError",
             MonorubyErrKind::Runtime => "RuntimeError",
@@ -436,15 +436,18 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn loaderr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Load, msg)
+    pub(crate) fn loaderr(msg: impl ToString, path: PathBuf) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Load(path), msg)
     }
 
     pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
-        MonorubyErr::loaderr(match err {
-            Some(err) => format!("can't load {path:?}. {err}"),
-            None => format!("can't load {path:?}"),
-        })
+        MonorubyErr::loaderr(
+            match err {
+                Some(err) => format!("can't load {path:?}. {err}"),
+                None => format!("can't load {path:?}"),
+            },
+            path.into(),
+        )
     }
 
     pub(crate) fn internalerr(msg: impl ToString) -> MonorubyErr {
@@ -482,7 +485,7 @@ pub enum MonorubyErrKind {
     Type(TypeErrKind),
     Index,
     Frozen,
-    Load,
+    Load(PathBuf),
     Internal,
     Regex,
     Runtime,

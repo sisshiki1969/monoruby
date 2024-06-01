@@ -554,6 +554,20 @@ pub(super) extern "C" fn get_class_var(
 }
 
 ///
+/// Check class variable.
+///
+pub(super) extern "C" fn check_class_var(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Value {
+    match vm.find_class_variable(globals, name) {
+        Ok(val) => val,
+        Err(_) => Value::nil(),
+    }
+}
+
+///
 /// Set class variable.
 ///
 pub(super) extern "C" fn set_class_var(
@@ -823,12 +837,11 @@ pub(super) extern "C" fn handle_error(
             // check exception table.
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
-            if let MonorubyErrKind::MethodReturn(val, target_lfp) =
-                vm.exception().unwrap().kind().clone()
-            {
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(ensure)
-                } else if lfp == target_lfp {
+                } else if lfp == *target_lfp {
+                    let val = *val;
                     vm.take_error();
                     ErrorReturn::return_normal(val)
                 } else {

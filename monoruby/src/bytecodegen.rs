@@ -946,6 +946,33 @@ impl BytecodeGen {
         );
     }
 
+    fn emit_check_const(
+        &mut self,
+        dst: Option<BcReg>,
+        base: Option<BcReg>,
+        toplevel: bool,
+        name: String,
+        prefix: Vec<String>,
+        loc: Loc,
+    ) {
+        let name = IdentId::get_id_from_string(name);
+        let prefix = prefix
+            .into_iter()
+            .map(IdentId::get_id_from_string)
+            .collect();
+        let dst = self.get_reg(dst);
+        self.emit(
+            BcIr::CheckConst {
+                dst,
+                base,
+                toplevel,
+                prefix,
+                name,
+            },
+            loc,
+        );
+    }
+
     fn emit_load_ivar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let reg = self.get_reg(dst);
         self.emit(BcIr::LoadIvar(reg, name), loc);
@@ -959,6 +986,11 @@ impl BytecodeGen {
     fn emit_load_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
         self.emit(BcIr::LoadCvar { dst: ret, name }, loc);
+    }
+
+    fn emit_check_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let ret = self.get_reg(dst);
+        self.emit(BcIr::CheckCvar { dst: ret, name }, loc);
     }
 
     fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {

@@ -21,11 +21,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(klass, "join", join);
     globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
+    globals.define_builtin_class_func(klass, "directory?", directory_, 1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
     globals.define_builtin_class_func(klass, "basename", basename, 1);
     globals.define_builtin_class_func(klass, "extname", extname, 1);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func(klass, "file?", file_, 1);
+    globals.define_builtin_class_func(klass, "path", path, 1);
 }
 
 ///
@@ -268,6 +270,19 @@ fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 }
 
 ///
+/// ### File.directory?
+/// - directory?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
+#[monoruby_builtin]
+fn directory_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+        Ok(path) => Ok(Value::bool(path.is_dir())),
+        Err(_) => Ok(Value::bool(false)),
+    }
+}
+
+///
 /// ### File.extname
 /// - extname(filename) -> String
 ///
@@ -303,6 +318,20 @@ fn file_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_file())),
         Err(_) => Ok(Value::bool(false)),
+    }
+}
+
+///
+/// ### File.path
+/// - path(filename) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/path.html]
+#[monoruby_builtin]
+fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if lfp.arg(0).is_str().is_some() {
+        Ok(lfp.arg(0))
+    } else {
+        vm.invoke_method_inner(globals, IdentId::get_id("to_path"), lfp.arg(0), &[], None)
     }
 }
 
@@ -406,5 +435,28 @@ mod test {
         run_test(r##"File.file?("monoruby")"##);
         run_test(r##"File.file?("README.md")"##);
         run_test(r##"File.file?("readme.md")"##);
+    }
+
+    #[test]
+    fn directory_() {
+        run_test(r##"File.directory?("monoruby")"##);
+        run_test(r##"File.directory?("bin")"##);
+        run_test(r##"File.directory?("README.md")"##);
+        run_test(r##"File.directory?("readme.md")"##);
+    }
+
+    #[test]
+    fn path() {
+        run_test(r##"File.path("/dev/null")"##);
+        run_test(
+            r##"
+        class MyPath
+          def to_path
+            "../"
+          end
+        end
+        File.path(MyPath.new)
+        "##,
+        );
     }
 }

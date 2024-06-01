@@ -544,6 +544,9 @@ impl Codegen {
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
             }
+            AsmInst::CheckCVar { name, using_xmm } => {
+                self.check_cvar(name, using_xmm);
+            }
             AsmInst::StoreCVar {
                 name,
                 src,

@@ -277,7 +277,7 @@ impl BytecodeGen {
         }
         match use_mode {
             UseMode2::Store(dst) => {
-                let tmp = self.push_expr(lhs)?.into();
+                let tmp = self.push_check_expr(lhs)?.into();
                 self.emit_condbr(tmp, exit_pos, true, false);
                 self.gen_store_expr(tmp, rhs)?;
                 self.apply_label(exit_pos);
@@ -285,7 +285,7 @@ impl BytecodeGen {
                 self.emit_mov(dst, tmp);
             }
             _ => {
-                let dst = self.push_expr(lhs)?.into();
+                let dst = self.push_check_expr(lhs)?.into();
                 self.emit_condbr(dst, exit_pos, true, false);
                 self.gen_store_expr(dst, rhs)?;
                 self.apply_label(exit_pos);

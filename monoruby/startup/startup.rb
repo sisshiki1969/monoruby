@@ -119,3 +119,7 @@ class Errno
   ENOTSUP = 95
 end
 
+RUBY_PLATFORM = "x86_64-linux"
+File::ALT_SEPARATOR = nil
+
+require 'rubygems'

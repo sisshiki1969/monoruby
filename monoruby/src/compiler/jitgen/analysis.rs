@@ -276,6 +276,7 @@ impl JitContext {
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
                 | TraceIr::LoadCvar { dst, .. }
+                | TraceIr::CheckCvar { dst, .. }
                 | TraceIr::LoadGvar { dst, .. }
                 | TraceIr::LoadSvar { dst, .. } => {
                     info.def(dst);
