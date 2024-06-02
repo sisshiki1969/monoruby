@@ -95,6 +95,20 @@ impl HashmapInner {
         }
     }
 
+    pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
+    where
+        F: FnOnce(&mut Value),
+    {
+        match &mut self.content {
+            HashContent::Map(map) => {
+                map.entry(HashKey(k)).and_modify(f);
+            }
+            HashContent::IdentMap(map) => {
+                map.entry(IdentKey(k)).and_modify(f);
+            }
+        }
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "{}".to_string(),

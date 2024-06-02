@@ -198,8 +198,8 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// - [NOT SUPPORTED] raise -> ()
 /// - [NOT SUPPORTED] fail -> ()
-/// - raise(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
-/// - fail(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
+/// - raise(error_type, message = nil, [NOT SUPPORTED] backtrace = caller(0), [NOT SUPPORTED] cause: $!) -> ()
+/// - fail(error_type, message = nil, [NOT SUPPORTED] backtrace = caller(0), [NOT SUPPORTED] cause: $!) -> ()
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
 #[monoruby_builtin]

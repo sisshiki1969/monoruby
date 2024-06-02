@@ -1434,6 +1434,8 @@ impl ExceptionInner {
     pub fn kind(&self) -> MonorubyErrKind {
         if self.class_name == IdentId::get_id("StopIteration") {
             return MonorubyErrKind::StopIteration;
+        } else if self.class_name == IdentId::get_id("LoadError") {
+            return MonorubyErrKind::Load(std::path::PathBuf::new());
         }
         MonorubyErrKind::Runtime
     }

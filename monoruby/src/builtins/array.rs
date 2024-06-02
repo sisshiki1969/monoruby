@@ -63,6 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by", sort_by, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "group_by", group_by, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
@@ -966,6 +967,31 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(Value::array_from_vec(res))
     } else {
         vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Enumerable#group_by
+///
+/// - group_by -> Enumerator
+/// - group_by {|obj| ... } -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/group_by.html]
+#[monoruby_builtin]
+fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = Array::new(lfp.self_val());
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut map = IndexMap::default();
+        for elem in ary.iter() {
+            let key = vm.invoke_block(globals, &data, &[*elem])?;
+            map.entry(HashKey(key))
+                .and_modify(|v: &mut Value| v.as_array_mut().push(*elem))
+                .or_insert(Value::array1(*elem));
+        }
+        Ok(Value::hash(map))
+    } else {
+        vm.generate_enumerator(IdentId::get_id("group_by"), lfp.self_val(), vec![])
     }
 }
 
@@ -1957,6 +1983,15 @@ mod test {
         ary2 = ["9", "7", "10", "11", "8"]
         ary2.sort!
         ary2
+        "##,
+        );
+    }
+
+    #[test]
+    fn group_by() {
+        run_test(
+            r##"
+            [*(1..6)].group_by {|i| i%3}
         "##,
         );
     }
