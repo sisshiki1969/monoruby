@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
+    globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -66,6 +67,35 @@ fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
     Ok(lfp.arg(0))
 }
 
+///
+/// ### IO#read
+///
+/// - read(length = nil, [NOT SUPPRTED] outbuf = "") -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
+#[monoruby_builtin]
+fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let length = match lfp.try_arg(0) {
+        Some(v) => {
+            if v.is_nil() {
+                None
+            } else {
+                let length = v.expect_integer()?;
+                if length < 0 {
+                    return Err(MonorubyErr::argumenterr("negative length"));
+                }
+                Some(length as usize)
+            }
+        }
+        None => None,
+    };
+    let buf = lfp.self_val().as_io_mut().read(length)?;
+    if buf.len() == 0 && length.is_some() && length != Some(0) {
+        return Ok(Value::nil());
+    }
+    Ok(Value::string_from_vec(buf))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -76,6 +106,8 @@ mod test {
             r#"
             $stdout << "a"
             $stdout << 5
+            File.open("/dev/null", "w") << 5
+            File.open("/dev/null", "w+") << 5
             $stdin.sync
             $stdin.sync = true
         "#,
@@ -85,5 +117,42 @@ mod test {
             [$stdin.isatty, $stdout.isatty, $stderr.isatty]
         "#,
         )
+    }
+
+    #[test]
+    fn read() {
+        run_test_error(r#"$stdout.read"#);
+        run_test_error(r#"$stderr.read"#);
+        run_test_error(r#"File.open("")"#);
+        run_test_once(
+            r#"
+            f = File.open("Cargo.toml", "r")
+            f.read
+        "#,
+        );
+        run_test_once(
+            r#"
+            f = File.open("Cargo.toml", "r")
+            f.read(17)
+        "#,
+        );
+        run_test_once(
+            r#"
+            f = File.open("/dev/null")
+            f.read
+        "#,
+        );
+        run_test_once(
+            r#"
+            f = File.open("/dev/null", "r")
+            f.read(0)
+        "#,
+        );
+        run_test_once(
+            r#"
+            f = File.open("/dev/null", "r+")
+            f.read(nil)
+        "#,
+        );
     }
 }

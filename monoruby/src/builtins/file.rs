@@ -14,10 +14,10 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap()
         .as_class();
     let klass = globals
-        .define_class_by_str("File", io_class, OBJECT_CLASS)
+        .define_builtin_class_by_str("File", FILE_CLASS, io_class, OBJECT_CLASS)
         .id();
     globals.define_builtin_class_func(klass, "write", write, 2);
-    globals.define_builtin_class_func(klass, "read", read, 1);
+    globals.define_builtin_class_func(klass, "read", file_read, 1);
     globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(klass, "join", join);
     globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
@@ -29,6 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "file?", file_, 1);
     globals.define_builtin_class_func(klass, "path", path, 1);
     globals.define_builtin_class_func_with(klass, "realpath", realpath, 1, 2, false);
+    globals.define_builtin_class_func_with(klass, "open", open, 1, 3, false);
 }
 
 ///
@@ -69,7 +70,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
@@ -351,6 +352,49 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
             err.to_string()
         ))),
     }
+}
+
+///
+/// ### File.open
+///
+/// - open(path, mode = "r", [NOT SUPPORTED] perm = 0666) -> File
+/// - open(path, mode = "r", [NOT SUPPORTED] perm = 0666) {|file| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
+#[monoruby_builtin]
+fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let path = lfp.arg(0).expect_string()?;
+    let mode = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.expect_string()?
+    } else {
+        "r".to_string()
+    };
+    let mut opt = File::options();
+    let opt = match mode.split(':').next().unwrap() {
+        "r" => opt.read(true),
+        "w" => opt.write(true).create(true).truncate(true),
+        "a" => opt.write(true).create(true).append(true),
+        "r+" => opt.read(true).write(true),
+        "w+" => opt.read(true).write(true).create(true).truncate(true),
+        "a+" => opt.read(true).write(true).create(true).append(true),
+        _ => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "Invalid access mode {}",
+                mode
+            )))
+        }
+    };
+    let file = match opt.open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", path, err)));
+        }
+    };
+    let res = Value::new_file(file, path);
+    if let Some(bh) = lfp.block() {
+        return vm.invoke_block_once(globals, bh, &[res]);
+    }
+    Ok(res)
 }
 
 // Utils

@@ -371,6 +371,10 @@ impl Value {
         RValue::new_io_stderr().pack()
     }
 
+    pub(crate) fn new_file(file: std::fs::File, name: String) -> Self {
+        RValue::new_file(file, name).pack()
+    }
+
     pub fn symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }

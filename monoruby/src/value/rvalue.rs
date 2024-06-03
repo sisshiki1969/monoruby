@@ -1087,6 +1087,15 @@ impl RValue {
         Self::new_io(IoInner::stderr())
     }
 
+    pub(super) fn new_file(file: std::fs::File, name: String) -> Self {
+        let inner = IoInner::file(file, name);
+        RValue {
+            header: Header::new(FILE_CLASS, ObjKind::IO),
+            kind: ObjKind::io(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
             header: Header::new(TIME_CLASS, ObjKind::TIME),
