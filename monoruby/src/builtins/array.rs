@@ -71,6 +71,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "any?", any_, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
@@ -1115,6 +1116,34 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     }
     Ok(Value::bool(true))
+}
+
+///
+/// #### Array#any?
+///
+/// - any? -> bool
+/// - any? {|item| ... } -> bool
+/// - [NOT SUPPORTED] any?(pattern) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/any=3f.html]
+#[monoruby_builtin]
+fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = Array::new(lfp.self_val());
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for elem in ary.iter() {
+            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
+                return Ok(Value::bool(true));
+            };
+        }
+    } else {
+        for elem in ary.iter() {
+            if elem.as_bool() {
+                return Ok(Value::bool(true));
+            };
+        }
+    }
+    Ok(Value::bool(false))
 }
 
 ///
