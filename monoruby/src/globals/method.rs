@@ -251,6 +251,29 @@ impl Globals {
         )
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn define_builtin_func_with_kw(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+    ) -> FuncId {
+        self.new_builtin_fn_with_kw(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+            kw_names,
+        )
+    }
+
     pub(crate) fn define_private_builtin_func_rest(
         &mut self,
         class_id: ClassId,

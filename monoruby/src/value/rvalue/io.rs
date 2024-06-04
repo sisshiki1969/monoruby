@@ -92,7 +92,7 @@ impl IoInner {
                     let mut buf = vec![];
                     match stdin.read_to_end(&mut buf) {
                         Ok(_) => {}
-                        Err(e) => return Err(MonorubyErr::rangeerr(e.to_string())),
+                        Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
                     }
                     Ok(buf)
                 }

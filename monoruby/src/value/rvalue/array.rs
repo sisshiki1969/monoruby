@@ -99,9 +99,9 @@ impl ArrayInner {
         self.0.push(value);
     }
 
-    /*pub fn pop(&mut self) -> Option<Value> {
+    pub fn pop(&mut self) -> Option<Value> {
         self.0.pop()
-    }*/
+    }
 
     pub fn truncate(&mut self, new_len: usize) {
         self.0.truncate(new_len);

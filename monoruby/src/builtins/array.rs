@@ -41,6 +41,8 @@ pub(super) fn init(globals: &mut Globals) {
         analysis::v_v_v,
         1,
     );
+    globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
+    globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "[]", index, 1, 2, false);
@@ -426,6 +428,34 @@ fn array_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSite
         gen.xmm_restore(using_xmm);
     });
     ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
+}
+
+///
+/// ### Array#append
+///
+/// - push(*obj) -> self
+/// - append(*obj) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/append.html]
+#[monoruby_builtin]
+fn push(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = Array::new(lfp.self_val());
+    ary.extend(lfp.arg(0).as_array().iter().cloned());
+    Ok(ary.into())
+}
+
+///
+/// ### Array#pop
+///
+/// - pop -> object | nil
+/// - [NOT SUPPORTED] pop(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pop.html]
+#[monoruby_builtin]
+fn pop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = Array::new(lfp.self_val());
+    let res = ary.pop().unwrap_or_default();
+    Ok(res)
 }
 
 ///
@@ -1731,6 +1761,32 @@ mod test {
     fn shl() {
         run_test(r##"a = [1,2,3]; a << 10; a"##);
         run_test(r##"a = [1,2,3]; a.<<(10); a"##);
+    }
+
+    #[test]
+    fn push_pop() {
+        run_test(
+            r##"
+        res = []
+        array = [1, [2, 3], 4]
+        res << array.pop      # => 4
+        res << array.pop      # => [2, 3]
+        res << array          # => [1]
+        res << array.pop      # => 1
+        res << array.pop      # => nil
+        res << array          # => []
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        array = [1, 2, 3]
+        array.push 4
+        array.push [5, 6]
+        array.push 7, 8
+        array 
+        "##,
+        );
     }
 
     #[test]
