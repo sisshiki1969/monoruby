@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 mod case;
+mod comparable;
 mod literal;
 mod method_call;
 mod redefine;

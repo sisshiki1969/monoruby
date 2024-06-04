@@ -33,6 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
     globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
     globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
     globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
@@ -374,6 +375,30 @@ fn kernel_complex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
         Real::zero()
     };
     Ok(Value::complex(r, i))
+}
+
+///
+/// ### Kernel.#Array
+///
+/// - Array(arg) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Array.html]
+#[monoruby_builtin]
+fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_array_ty() {
+        return Ok(arg);
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
+        return vm
+            .invoke_func(globals, func_id, arg, &[], None)
+            .ok_or_else(|| vm.take_error());
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
+        return vm
+            .invoke_func(globals, func_id, arg, &[], None)
+            .ok_or_else(|| vm.take_error());
+    };
+    Ok(Value::array1(arg))
 }
 
 ///
@@ -753,6 +778,31 @@ mod test {
         run_test(r#"Float(' -0.7e-10')"#);
         run_test_error(r#"Float(' -0.7 5')"#);
         run_test_error(r#"Float(' -0.7e-10z')"#);
+    }
+
+    #[test]
+    fn array() {
+        run_test(r#"Array([100])"#);
+        run_test(r#"Array(100)"#);
+        run_test(r#"Array("100")"#);
+        run_test_with_prelude(
+            r#"
+            Array(C.new(3))
+            "#,
+            r#"
+            class C
+              def initialize(x)
+                @x=x
+              end
+              def to_a
+                [@x,@x]
+              end
+              def to_ary
+                [@x,@x,@x]
+              end
+            end
+            "#,
+        );
     }
 
     #[test]
