@@ -1090,6 +1090,30 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     vm.invoke_block_flat_map1(globals, bh, ary.iter().cloned(), size_hint)
 }
 
+fn all_any_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    is_all: bool,
+) -> Result<Value> {
+    let ary = Array::new(lfp.self_val());
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for elem in ary.iter() {
+            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() != is_all {
+                return Ok(Value::bool(!is_all));
+            };
+        }
+    } else {
+        for elem in ary.iter() {
+            if elem.as_bool() != is_all {
+                return Ok(Value::bool(!is_all));
+            };
+        }
+    }
+    Ok(Value::bool(is_all))
+}
+
 ///
 /// #### Array#all?
 ///
@@ -1100,22 +1124,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/all=3f.html]
 #[monoruby_builtin]
 fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = Array::new(lfp.self_val());
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for elem in ary.iter() {
-            if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                return Ok(Value::bool(false));
-            };
-        }
-    } else {
-        for elem in ary.iter() {
-            if !elem.as_bool() {
-                return Ok(Value::bool(false));
-            };
-        }
-    }
-    Ok(Value::bool(true))
+    all_any_inner(vm, globals, lfp, true)
 }
 
 ///
@@ -1128,22 +1137,7 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/any=3f.html]
 #[monoruby_builtin]
 fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = Array::new(lfp.self_val());
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for elem in ary.iter() {
-            if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
-                return Ok(Value::bool(true));
-            };
-        }
-    } else {
-        for elem in ary.iter() {
-            if elem.as_bool() {
-                return Ok(Value::bool(true));
-            };
-        }
-    }
-    Ok(Value::bool(false))
+    all_any_inner(vm, globals, lfp, false)
 }
 
 ///
@@ -2082,12 +2076,20 @@ mod test {
     }
 
     #[test]
-    fn all_() {
+    fn all_any() {
         run_test(r#"[5,  6, 7].all? {|v| v > 0 }"#);
         run_test(r#"[5, -1, 7].all? {|v| v > 0 }"#);
         run_test(r#"[5, -1, 7].all?"#);
         run_test(r#"[5, nil, 7].all?"#);
         run_test(r#"[5, -1, false].all?"#);
+        run_test(r#"[nil, false].all?"#);
+
+        run_test(r#"[5,  6, 7].any? {|v| v > 0 }"#);
+        run_test(r#"[5, -1, 7].any? {|v| v > 0 }"#);
+        run_test(r#"[5, -1, 7].any?"#);
+        run_test(r#"[5, nil, 7].any?"#);
+        run_test(r#"[5, -1, false].any?"#);
+        run_test(r#"[nil, false].any?"#);
     }
 
     #[test]
