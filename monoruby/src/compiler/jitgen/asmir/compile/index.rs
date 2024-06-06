@@ -273,13 +273,10 @@ extern "C" fn set_array_integer_index(
     _globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
-    match base.as_array_mut().set_index(index, src) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    base.as_array_mut()
+        .set_index(index, src)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 #[cfg(test)]

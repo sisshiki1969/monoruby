@@ -663,13 +663,17 @@ impl JitContext {
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
+                let error = self.ir.new_error(bb, pc);
                 self.ir.concat_str(bb, arg, len);
+                self.ir.handle_error(error);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
-                self.ir.concat_regexp(bb, pc, arg, len);
+                let error = self.ir.new_error(bb, pc);
+                self.ir.concat_regexp(bb, arg, len);
+                self.ir.handle_error(error);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {

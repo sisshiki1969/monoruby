@@ -322,13 +322,9 @@ pub(crate) extern "C" fn cmp_cmp_values(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
-    match vm.cmp_cmp_values_inner(globals, lhs, rhs) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    vm.cmp_cmp_values_inner(globals, lhs, rhs)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 pub(crate) extern "C" fn cmp_cmp_values_no_opt(
@@ -337,13 +333,9 @@ pub(crate) extern "C" fn cmp_cmp_values_no_opt(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
-    match vm.cmp_cmp_values_no_opt_inner(globals, lhs, rhs) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    vm.cmp_cmp_values_no_opt_inner(globals, lhs, rhs)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 impl Executor {

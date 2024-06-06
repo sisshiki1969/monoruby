@@ -12,6 +12,7 @@ impl Globals {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
+        dbg!(&file_name);
         if !is_relative {
             if let Some(file) = self.search_lib(file_name) {
                 return self.load_file(file);
@@ -78,6 +79,7 @@ impl Globals {
         path: &std::path::Path,
     ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
         let mut file_body = String::new();
+        dbg!(&path);
         let load_path = if let Some(b"so") = path.extension().map(|s| s.as_bytes()) {
             let mut lib = dirs::home_dir()
                 .unwrap()

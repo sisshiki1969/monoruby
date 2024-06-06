@@ -859,12 +859,14 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_addr(GP::Rdi);
         monoasm! { &mut self.jit,
-            movq rdx, rsi;
-            movq rsi, rdi;
-            movq rdi, r12;
+            movq rcx, rsi;
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::concatenate_string);
             call rax;
         };
+        self.vm_handle_error();
         self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label

@@ -23,13 +23,10 @@ pub(super) extern "C" fn find_method(
         let recv_reg = globals.store[callid].recv;
         let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
         let is_func_call = recv_reg.is_self();
-        match globals.find_method(recv, func_name, is_func_call) {
-            Ok(id) => Some(id),
-            Err(err) => {
-                vm.set_error(err);
-                None
-            }
-        }
+        globals
+            .find_method(recv, func_name, is_func_call)
+            .map_err(|err| vm.set_error(err))
+            .ok()
     } else {
         let self_val = vm.cfp().lfp().self_val();
         let func_id = vm.method_func_id();
@@ -52,13 +49,10 @@ pub(super) extern "C" fn find_method2(
 ) -> Option<FuncId> {
     if let Some(func_name) = globals.store[callid].name {
         let is_func_call = globals.store[callid].recv.is_self();
-        match globals.find_method(recv, func_name, is_func_call) {
-            Ok(id) => Some(id),
-            Err(err) => {
-                vm.set_error(err);
-                None
-            }
-        }
+        globals
+            .find_method(recv, func_name, is_func_call)
+            .map_err(|err| vm.set_error(err))
+            .ok()
     } else {
         let self_val = vm.cfp().lfp().self_val();
         let func_id = vm.method_func_id();
@@ -82,13 +76,10 @@ pub(super) extern "C" fn vm_find_method(
         let recv_reg = globals.store[callid].recv;
         let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
         let is_func_call = globals.store[callid].recv.is_self();
-        match globals.find_method(recv, func_name, is_func_call) {
-            Ok(id) => id,
-            Err(err) => {
-                vm.set_error(err);
-                return None;
-            }
-        }
+        globals
+            .find_method(recv, func_name, is_func_call)
+            .map_err(|err| vm.set_error(err))
+            .ok()?
     } else {
         let self_val = vm.cfp().lfp().self_val();
         let func_id = vm.method_func_id();
@@ -252,16 +243,28 @@ pub(super) extern "C" fn gen_range(
 }
 
 pub(super) extern "C" fn concatenate_string(
-    globals: &Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     arg: *mut Value,
     len: usize,
-) -> Value {
+) -> Option<Value> {
+    concatenate_string_inner(vm, globals, arg, len)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
+fn concatenate_string_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: *mut Value,
+    len: usize,
+) -> Result<Value> {
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += &v.to_s(globals);
+        res += vm.invoke_tos(globals, v).expect_str().unwrap();
     }
-    Value::string(res)
+    Ok(Value::string(res))
 }
 
 pub(super) extern "C" fn concatenate_regexp(

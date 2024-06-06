@@ -622,6 +622,16 @@ impl Executor {
             .ok_or_else(|| self.take_error())
     }
 
+    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Value {
+        match receiver.unpack() {
+            RV::Object(_) => {}
+            _ => return Value::string(receiver.to_s(globals)),
+        }
+        let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
+        self.invoke_func(globals, func_id, receiver, &[], None)
+            .unwrap()
+    }
+
     ///
     /// Invoke block for *block_handler*.
     ///

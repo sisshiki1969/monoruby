@@ -580,13 +580,9 @@ extern "C" fn expect_string(
     vm: &mut Executor, // rdi
     v: Value,          // rcx
 ) -> Option<IdentId> {
-    match v.expect_symbol_or_string() {
-        Ok(sym) => Some(sym),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    v.expect_symbol_or_string()
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
@@ -610,16 +606,11 @@ extern "C" fn find(
     globals: &mut Globals,
     recv: Value,
     func_name: IdentId,
-    //cache: &Cache,
 ) -> Option<FuncId> {
-    //eprintln!("{:#?}", cache);
-    match globals.find_method(recv, func_name, true) {
-        Ok(fid) => Some(fid),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    globals
+        .find_method(recv, func_name, true)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 impl Codegen {

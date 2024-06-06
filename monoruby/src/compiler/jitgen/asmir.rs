@@ -804,16 +804,13 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn concat_regexp(&mut self, bb: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
+    pub(super) fn concat_regexp(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        let len = len as _;
         self.inst.push(AsmInst::ConcatRegexp {
             arg,
             len,
             using_xmm,
         });
-        self.handle_error(error);
     }
 
     pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
@@ -1294,6 +1291,11 @@ pub(super) enum AsmInst {
         len: u16,
         using_xmm: UsingXmm,
     },
+    ConcatRegexp {
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    },
 
     BlockArgProxy {
         ret: SlotId,
@@ -1392,11 +1394,7 @@ pub(super) enum AsmInst {
         len: usize,
         using_xmm: UsingXmm,
     },
-    ConcatRegexp {
-        arg: SlotId,
-        len: usize,
-        using_xmm: UsingXmm,
-    },
+
     AliasMethod {
         new: SlotId,
         old: SlotId,
