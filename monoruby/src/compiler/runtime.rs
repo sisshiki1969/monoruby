@@ -485,7 +485,7 @@ pub(super) extern "C" fn get_index(
 pub(super) extern "C" fn set_index(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut base: Value,
+    base: Value,
     index: Value,
     src: Value,
     class_slot: &mut ClassIdSlot,
@@ -497,7 +497,7 @@ pub(super) extern "C" fn set_index(
         && let Some(idx) = index.try_fixnum()
     {
         class_slot.idx = INTEGER_CLASS;
-        return match base.as_array_mut().set_index(idx, src) {
+        return match base.as_array().set_index(idx, src) {
             Ok(val) => Some(val),
             Err(err) => {
                 vm.set_error(err);

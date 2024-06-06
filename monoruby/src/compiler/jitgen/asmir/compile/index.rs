@@ -267,13 +267,13 @@ impl Codegen {
 }
 
 extern "C" fn set_array_integer_index(
-    mut base: Value,
+    base: Value,
     index: i64,
     vm: &mut Executor,
     _globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
-    base.as_array_mut()
+    base.as_array()
         .set_index(index, src)
         .map_err(|err| vm.set_error(err))
         .ok()

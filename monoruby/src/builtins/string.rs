@@ -825,7 +825,7 @@ fn str_next(self_: &str) -> String {
 fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
-    let arg0 = Array::new(lfp.arg(0));
+    let arg0 = lfp.arg(0).as_array();
     for a in arg0.iter().map(|v| v.expect_str()) {
         if string.starts_with(a?) {
             return Ok(Value::bool(true));
@@ -864,7 +864,7 @@ fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
 fn end_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
-    let arg0 = Array::new(lfp.arg(0));
+    let arg0 = lfp.arg(0).as_array();
     for a in arg0.iter().map(|v| v.expect_str()) {
         if string.ends_with(a?) {
             return Ok(Value::bool(true));
@@ -1411,7 +1411,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Some(block) => {
             let ary = Value::array_from_vec(vec);
             vm.temp_push(ary);
-            let res = scan_inner(vm, globals, block, ary.as_array());
+            let res = scan_inner(vm, globals, block, &ary.as_array());
             vm.temp_pop();
             res?;
             Ok(lfp.self_val())
@@ -1830,7 +1830,7 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
 #[monoruby_builtin]
 fn count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let args = Array::new(lfp.arg(0));
+    let args = lfp.arg(0).as_array();
     let self_ = lfp.self_val();
     let target = self_.as_str();
     let mut c = 0;

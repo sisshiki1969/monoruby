@@ -157,14 +157,14 @@ impl Executor {
     }
 
     pub fn temp_array_push(&mut self, v: Value) {
-        self.temp_stack.last_mut().unwrap().as_array_mut().push(v);
+        self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
 
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
         self.temp_stack
             .last_mut()
             .unwrap()
-            .as_array_mut()
+            .as_array()
             .extend_from_slice(slice);
     }
 

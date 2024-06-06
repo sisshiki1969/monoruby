@@ -462,7 +462,7 @@ impl Globals {
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
         self.load_path
-            .as_array_mut()
+            .as_array()
             .extend(iter.map(|s| Value::string(s)));
     }
 

@@ -9,8 +9,7 @@ use super::*;
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
 #[monoruby_builtin]
 pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg0 = lfp.arg(0);
-    let ary = arg0.as_array();
+    let ary = lfp.arg(0).as_array();
     if ary.len() < 1 {
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }

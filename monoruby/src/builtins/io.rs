@@ -37,10 +37,10 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(b) = lfp.arg(0).try_bytes() {
-        lfp.self_val().as_io_mut().write(b.as_bytes())?;
+        lfp.self_val().as_io_inner_mut().write(b.as_bytes())?;
     } else {
         let s = vm.to_s(globals, lfp.arg(0))?;
-        lfp.self_val().as_io_mut().write(s.as_bytes())?;
+        lfp.self_val().as_io_inner_mut().write(s.as_bytes())?;
     };
     globals.flush_stdout();
     Ok(lfp.self_val())
@@ -55,7 +55,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/isatty.html]
 #[monoruby_builtin]
 fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_io_mut().isatty()))
+    Ok(Value::bool(lfp.self_val().as_io_inner_mut().isatty()))
 }
 
 #[monoruby_builtin]
@@ -90,7 +90,7 @@ fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         None => None,
     };
-    let buf = lfp.self_val().as_io_mut().read(length)?;
+    let buf = lfp.self_val().as_io_inner_mut().read(length)?;
     if buf.len() == 0 && length.is_some() && length != Some(0) {
         return Ok(Value::nil());
     }
@@ -107,7 +107,7 @@ fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
 #[monoruby_builtin]
 fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().as_io_mut().read_line()?;
+    let s = lfp.self_val().as_io_inner_mut().read_line()?;
     Ok(Value::string(s))
 }
 

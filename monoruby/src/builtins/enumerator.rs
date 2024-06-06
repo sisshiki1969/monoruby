@@ -94,7 +94,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             if internal.is_terminated() {
                 return Ok(v);
             }
-            let a = Array::new(v);
+            let a = v.as_array();
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
@@ -135,7 +135,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             if internal.is_terminated() {
                 return Ok(v);
             }
-            let a = Array::new(v);
+            let a = v.as_array();
             res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
             match count.unpack() {
                 RV::Fixnum(i) => count = Value::integer(i + 1),
@@ -252,7 +252,7 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             if internal.is_terminated() {
                 return Ok(v);
             }
-            let a: Array = Array::new(v);
+            let a: Array = v.as_array();
             vm.invoke_block(globals, block_data, &[a.peel()])?;
         }
     }
