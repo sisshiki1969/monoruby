@@ -23,8 +23,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_func_with(STRING_CLASS, "[]", index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
-    globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
-    globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
+    globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
+    globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
+    globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
@@ -593,6 +594,7 @@ fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
 
 ///
 /// ### String#[]
+///
 /// - self[nth] -> String | nil
 /// - self[nth, len] -> String | nil
 /// [NOT SUPPORTED] - self[substr] -> String | nil
@@ -683,6 +685,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 ///
 /// ### String#[]=
+///
 /// - self[nth] = val
 /// - self[nth, len] = val
 /// - [NOT SUPPORTED] self[substr] = val
@@ -814,36 +817,65 @@ fn str_next(self_: &str) -> String {
 
 ///
 /// ### String#start_with?
-/// - start_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// - start_with?(*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
 fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
+    let arg0 = Array::new(lfp.arg(0));
+    for a in arg0.iter().map(|v| v.expect_str()) {
+        if string.starts_with(a?) {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
+}
+
+///
+/// ### String#delete_prefix!
+///
+/// - delete_prefix!(prefix) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
+#[monoruby_builtin]
+fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let string = self_.expect_str()?;
     let arg0 = lfp.arg(0);
     let arg = arg0.expect_str()?;
-    let res = string.starts_with(arg);
-    Ok(Value::bool(res))
+    if string.starts_with(arg) {
+        lfp.self_val().replace_str(&string[arg.len()..]);
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::nil())
+    }
 }
 
 ///
 /// ### String#end_with?
-/// - end_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// - end_with?(*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
 fn end_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
-    let arg0 = lfp.arg(0);
-    let arg = arg0.expect_str()?;
-    let res = string.ends_with(arg);
-    Ok(Value::bool(res))
+    let arg0 = Array::new(lfp.arg(0));
+    for a in arg0.iter().map(|v| v.expect_str()) {
+        if string.ends_with(a?) {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
 }
 
 ///
 /// ### String#split
+///
 /// - split(sep = $;, limit = 0) -> [String]
 /// - split(sep = $;, limit = 0) {|s| ... } -> self
 ///
@@ -973,6 +1005,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 ///
 /// ### String#slice!
+///
 /// - slice!(nth) -> String
 /// - slice!(pos, len) -> String
 /// - [NOT SUPPRTED] slice!(substr) -> String
@@ -1095,6 +1128,7 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 
 ///
 /// ### String#chomp
+///
 /// - chomp(rs = $/) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
@@ -1118,6 +1152,7 @@ fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 
 ///
 /// ### String#chomp!
+///
 /// - chomp!(rs = $/) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
@@ -2418,8 +2453,14 @@ mod test {
     fn with() {
         run_test(r##""string".start_with?("str")"##);
         run_test(r##""string".start_with?("ing")"##);
+        run_test(r##""string".start_with?("jng", "hng", "ing")"##);
+        run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
+        run_test(r##""hello".delete_prefix!("hel")"##);
+        run_test(r##""hello".delete_prefix!("hel")"##);
         run_test(r##""string".end_with?("str")"##);
         run_test(r##""string".end_with?("ing")"##);
+        run_test(r##""string".end_with?("jng", "hng", "ing")"##);
+        run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
     }
 
     #[test]

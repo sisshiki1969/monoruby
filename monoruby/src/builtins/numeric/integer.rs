@@ -59,6 +59,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
 }
 
 ///
@@ -457,6 +459,41 @@ fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(b))
 }
 
+///
+/// ### Numeric#nonzero?
+///
+/// - nonzero? -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/nonzero=3f.html]
+#[monoruby_builtin]
+fn nonzero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if match lfp.self_val().unpack() {
+        RV::Fixnum(i) => i == 0,
+        RV::BigInt(b) => b.is_zero(),
+        _ => unreachable!(),
+    } {
+        Ok(Value::nil())
+    } else {
+        Ok(lfp.self_val())
+    }
+}
+
+///
+/// ### Numeric#zero?
+///
+/// - zero? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/zero=3f.html]
+#[monoruby_builtin]
+fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let b = match lfp.self_val().unpack() {
+        RV::Fixnum(i) => i == 0,
+        RV::BigInt(b) => b.is_zero(),
+        _ => unreachable!(),
+    };
+    Ok(Value::bool(b))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -541,6 +578,14 @@ mod test {
         run_test(
             "8364942539529902342420345356709767546464574458647864843346254643534645647575786.to_i",
         );
+    }
+
+    #[test]
+    fn non_zero() {
+        run_test("253.nonzero?");
+        run_test("0.nonzero?");
+        run_test("253.zero?");
+        run_test("0.zero?");
     }
 
     #[test]

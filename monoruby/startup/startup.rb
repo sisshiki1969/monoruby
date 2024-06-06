@@ -15,12 +15,6 @@ class Process
   end
 end
 
-class Integer
-  def zero?
-    self == 0
-  end
-end
-
 class Hash
   # Hash#to_h
   # to_h -> self

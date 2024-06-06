@@ -12,6 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
+    globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -96,6 +97,20 @@ fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::string_from_vec(buf))
 }
 
+///
+/// ### IO#readline
+///
+/// - readline([NOT SUPPORTED] rs = $/, [NOT SUPPORTED] chomp: false) -> String
+/// - readline([NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
+/// - readline([NOT SUPPORTED] rs, [NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
+#[monoruby_builtin]
+fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let s = lfp.self_val().as_io_mut().read_line()?;
+    Ok(Value::string(s))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -152,6 +167,12 @@ mod test {
             r#"
             f = File.open("/dev/null", "r+")
             f.read(nil)
+        "#,
+        );
+        run_test_once(
+            r#"
+            f = File.open("Cargo.toml", "r")
+            f.readline
         "#,
         );
     }
