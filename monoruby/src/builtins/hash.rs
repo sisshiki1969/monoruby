@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
+    globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
@@ -192,6 +193,27 @@ fn keys(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let keys = lfp.self_val().as_hashmap_inner().values();
     Ok(Value::array_from_vec(keys))
+}
+
+///
+/// ### Hash#delete
+///
+/// - delete(key) -> object | nil
+/// - delete(key) {|key| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete.html]
+#[monoruby_builtin]
+fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut h = lfp.self_val().is_hash().unwrap();
+    let key = lfp.arg(0);
+    let removed_value = h.remove(key);
+    if removed_value.is_none()
+        && let Some(bh) = lfp.block()
+    {
+        return vm.invoke_block_once(globals, bh, &[key]);
+    }
+
+    Ok(removed_value.unwrap_or_default())
 }
 
 ///
@@ -521,6 +543,20 @@ mod test {
             r##"
         h = { one: nil }
         h.fetch(:two)
+        "##,
+        );
+    }
+
+    #[test]
+    fn delete() {
+        run_test(
+            r##"
+        a = []
+        h = {:ab => "some" , :cd => "all"}
+        a << h.delete(:ab) #=> "some"
+        a << h.delete(:ef) #=> nil
+        a << h.delete(:ef){|key|"#{key} Nothing"} #=> "ef Nothing"
+        a
         "##,
         );
     }
