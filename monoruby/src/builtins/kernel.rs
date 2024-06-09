@@ -345,11 +345,11 @@ fn kernel_float(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
         RV::BigInt(num) => return Ok(Value::float(num.to_f64().unwrap())),
         RV::Float(num) => return Ok(Value::float(num)),
         RV::String(b) => {
-            let (f, err) = parse_f64(&b.to_string());
+            let s = b.to_str()?;
+            let (f, err) = parse_f64(&s);
             if err {
                 return Err(MonorubyErr::argumenterr(format!(
-                    "invalid value for Float(): {}",
-                    b.to_string()
+                    "invalid value for Float(): {s}"
                 )));
             }
             return Ok(Value::float(f));

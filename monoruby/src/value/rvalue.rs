@@ -318,7 +318,7 @@ impl std::fmt::Debug for RValue {
                         3 => format!("OBJECT({:?})", self.kind.object),
                         4 => format!("BIGNUM({:?})", self.kind.bignum),
                         5 => format!("FLOAT({:?})", self.kind.float),
-                        6 => format!("STRING({})", self.kind.string.to_string()),
+                        6 => format!("STRING({})", self.kind.string.to_str().unwrap()),
                         7 => format!("TIME({:?})", self.kind.time),
                         8 => format!("ARRAY({:?})", self.kind.array),
                         9 => format!("RANGE({:?})", self.kind.range),

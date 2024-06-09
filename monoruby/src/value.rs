@@ -473,7 +473,7 @@ impl Value {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Complex(_) => self.as_complex().to_s(globals),
             RV::Symbol(id) => id.to_string(),
-            RV::String(s) => s.to_string(),
+            RV::String(s) => s.to_str().unwrap().to_string(),
             RV::Object(rvalue) => rvalue.to_s(globals),
         };
         s
@@ -1252,7 +1252,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Complex(c) => write!(f, "{:?}", &c),
             RV::Symbol(id) => write!(f, ":{}", id),
-            RV::String(s) => write!(f, "\"{}\"", s.to_string()),
+            RV::String(s) => write!(f, "\"{}\"", s.to_str().unwrap()),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),
         }
     }
