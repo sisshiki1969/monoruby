@@ -784,17 +784,6 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
-        //} else {
-        //    (globals.codegen.method_invoker)(
-        //        self,
-        //        globals,
-        //        proc.func_id(),
-        //        Value::nil(),
-        //        args.as_ptr(),
-        //        args.len(),
-        //        None,
-        //    )
-        //}
         .ok_or_else(|| self.take_error())
     }
 
@@ -835,6 +824,18 @@ impl Executor {
             args.len(),
             bh,
         )
+    }
+
+    pub(crate) fn invoke_func_inner(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Result<Value> {
+        self.invoke_func(globals, func_id, receiver, args, bh)
+            .ok_or_else(|| self.take_error())
     }
 }
 

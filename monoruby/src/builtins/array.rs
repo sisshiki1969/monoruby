@@ -89,6 +89,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
+    globals.define_builtin_funcs_with(
+        ARRAY_CLASS,
+        "find_index",
+        &["index"],
+        find_index,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(ARRAY_CLASS, "insert", insert, 1, 1, true);
 }
 
 ///
@@ -1575,6 +1585,75 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     })
 }
 
+///
+/// ### Array#find_index
+///
+/// - find_index(val) -> Integer | nil
+/// - index(val) -> Integer | nil
+/// - find_index {|item| ...} -> Integer | nil
+/// - index {|item| ...} -> Integer | nil
+/// - find_index -> Enumerator
+/// - index -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/find_index.html]
+#[monoruby_builtin]
+fn find_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for (i, v) in ary.iter().enumerate() {
+            if vm.invoke_block(globals, &data, &[*v])?.as_bool() {
+                return Ok(Value::integer(i as i64));
+            }
+        }
+        Ok(Value::nil())
+    } else if let Some(arg0) = lfp.try_arg(0) {
+        let func_id = globals.find_method(arg0, IdentId::_EQ, false)?;
+        for (i, v) in ary.iter().enumerate() {
+            if vm
+                .invoke_func_inner(globals, func_id, arg0, &[*v], None)?
+                .as_bool()
+            {
+                return Ok(Value::integer(i as i64));
+            }
+        }
+        Ok(Value::nil())
+    } else {
+        let id = IdentId::get_id("find_index");
+        vm.generate_enumerator(id, lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Array#insert
+///
+/// - insert(nth, *val) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/insert.html]
+#[monoruby_builtin]
+fn insert(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let val = lfp.arg(1).as_array();
+    if val.len() == 0 {
+        return Ok(lfp.self_val());
+    }
+    let mut ary = lfp.self_val().as_array();
+    let nth = lfp.arg(0).expect_integer()?;
+    let nth = if nth < 0 {
+        let nth = nth + ary.len() as i64 + 1;
+        if nth < 0 {
+            return Err(MonorubyErr::index_too_small(nth, -(ary.len() as i64) - 1));
+        }
+        nth as usize
+    } else {
+        nth as usize
+    };
+    if nth >= ary.len() {
+        ary.resize(nth, Value::nil());
+    }
+    ary.insert_many(nth, val.iter().cloned());
+    Ok(lfp.self_val())
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -2389,6 +2468,28 @@ mod test {
             r##"
         ary = [1, 2, 3]
         [ary.compact!, ary]
+        "##,
+        );
+    }
+
+    #[test]
+    fn find_index() {
+        run_test(r##"[1, 0, 0, 1, 0].index(1) "##);
+        run_test(r##"[1, 0, 0, 0, 0].index(1) "##);
+        run_test(r##"[0, 0, 0, 0, 0].index(1)"##);
+        run_test(r##"[0, 1, 0, 1, 0].index {|v| v > 0}"##);
+    }
+
+    #[test]
+    fn insert() {
+        run_test(
+            r##"
+        res = []
+        ary = [1, 2, 3]
+        res << ary.insert(2, "a", "b")
+        res << ary.insert(-2, "X")
+        res << ary.insert(30, 5, 9)
+        res
         "##,
         );
     }

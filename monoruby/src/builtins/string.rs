@@ -50,7 +50,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
-    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
@@ -1466,6 +1466,10 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// ### String#to_s
 ///
+/// - to_s -> String
+/// - to_str -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
