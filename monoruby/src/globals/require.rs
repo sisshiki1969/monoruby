@@ -14,7 +14,7 @@ impl Globals {
     ) -> Result<Option<(String, std::path::PathBuf)>> {
         if !is_relative {
             if let Some(file) = self.search_lib(file_name) {
-                return self.load_file(dbg!(file));
+                return self.load_file(file);
             }
         } else {
             if file_name.exists() {
