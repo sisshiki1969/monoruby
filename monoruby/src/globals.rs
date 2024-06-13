@@ -113,8 +113,6 @@ pub struct Globals {
     stdout: BufWriter<Stdout>,
     /// library directries.
     load_path: Value,
-    /// gem directries.
-    gem_directories: Vec<String>,
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
@@ -180,7 +178,6 @@ impl Globals {
                 //    "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/3.3.0/x86_64-linux",
                 //),
             ]),
-            gem_directories: vec![],
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "profile")]
@@ -233,12 +230,6 @@ impl Globals {
         let path_list = std::fs::read_to_string(&load_path).unwrap();
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
-
-        // load gem library path
-        let load_path = dirs::home_dir().unwrap().join(".monoruby").join("gem_path");
-        let path_list = std::fs::read_to_string(&load_path).unwrap();
-        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
-        globals.extend_gem_path(list.iter().cloned());
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -464,10 +455,6 @@ impl Globals {
         self.load_path
             .as_array()
             .extend(iter.map(|s| Value::string(s)));
-    }
-
-    pub fn extend_gem_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.gem_directories.extend(iter)
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {
