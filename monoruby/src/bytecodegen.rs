@@ -221,6 +221,7 @@ enum LvalueKind {
     LocalVar {
         dst: BcReg,
     },
+    Discard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1145,6 +1146,7 @@ impl BytecodeGen {
                     self.sourceinfo.clone(),
                 ));
             }
+            NodeKind::DiscardLhs => LvalueKind::Discard,
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
         };
         Ok(lhs)
@@ -1205,6 +1207,9 @@ impl BytecodeGen {
             LvalueKind::LocalVar { dst } => {
                 self.set_temp(old_temp);
                 self.emit_mov(dst, src);
+            }
+            LvalueKind::Discard => {
+                self.set_temp(old_temp);
             }
         }
     }

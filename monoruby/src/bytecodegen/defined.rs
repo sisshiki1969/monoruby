@@ -283,5 +283,6 @@ fn defined_str(node: &Node) -> &'static str {
             Some(node) => defined_str(node),
             None => "nil",
         },
+        NodeKind::DiscardLhs => unreachable!(),
     }
 }
