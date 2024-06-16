@@ -1496,7 +1496,6 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 ///
 /// ### Array#pack
 ///
-/// - [NOT DESCRIBED] pack -> String
 /// - pack(template) -> String
 /// - [NOT SUPPORTED] pack(template, buffer: String.new) -> String
 ///
@@ -1506,16 +1505,29 @@ fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     let arg0 = lfp.arg(0);
     let template = arg0.expect_str()?;
-    if template != "C*" {
+    let mut v = vec![];
+    if template == "C*" {
+        for elem in ary.iter() {
+            let i = elem.coerce_to_i64()? as i8 as u8;
+            v.push(i);
+        }
+    } else if template == "I" {
+        // unsigned int with native endian
+        for elem in ary.iter() {
+            let i = elem.coerce_to_i64()? as i32 as u32;
+            v.extend_from_slice(&u32::to_ne_bytes(i));
+        }
+    } else if template == "N" {
+        // unsigned long with big endian
+        for elem in ary.iter() {
+            let i = elem.coerce_to_i64()? as i32 as u32;
+            v.extend_from_slice(&u32::to_be_bytes(i));
+        }
+    } else {
         return Err(MonorubyErr::argumenterr(format!(
             "template {} is not supported.",
             template
         )));
-    }
-    let mut v = vec![];
-    for elem in ary.iter() {
-        let i = elem.coerce_to_i64()? as i8 as u8;
-        v.push(i);
     }
     Ok(Value::bytes(v))
 }
@@ -2442,6 +2454,8 @@ mod test {
     #[test]
     fn pack() {
         run_test(r#"[*(0..100)].pack("C*")"#);
+        run_test(r#"[0x12345678].pack("I")"#);
+        run_test(r#"[0x12345678].pack("N")"#);
     }
 
     #[test]
