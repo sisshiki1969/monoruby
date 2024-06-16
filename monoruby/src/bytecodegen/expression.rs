@@ -772,10 +772,10 @@ impl BytecodeGen {
         let temp = self.temp;
 
         // At first, we evaluate lvalues and save their info(LhsKind).
-        let mut lhs_kind: Vec<LvalueKind> = vec![];
-        for lhs in &mlhs {
-            lhs_kind.push(self.eval_lvalue(lhs)?);
-        }
+        let lhs_kind: Vec<LvalueKind> = mlhs
+            .iter()
+            .map(|lhs| self.eval_lvalue(&lhs))
+            .collect::<Result<_>>()?;
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
         let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
@@ -793,26 +793,35 @@ impl BytecodeGen {
                 BcIr::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16),
                 Loc::default(),
             );
+            // lhs0, lhs1, .. = rhs
+            //
+            //   temp               rhs   rhs_reg         sp
+            //   v                  v     v               v
+            // -+-----------------+-----+---------------+--
+            //  | lhs working reg | rhs | lhs * lhs_len |
+            // -+-----------------+-----+---------------+--
+            //
             (rhs_reg, Some(rhs))
         } else {
             let rhs_reg = self.sp();
             for rhs in mrhs {
                 self.push_expr(rhs)?;
             }
+            // lhs0, lhs1, .. = rhs0, rhs1, ..
+            //
+            //   temp               rhs_reg         sp
+            //   v                  v               v
+            // -+-----------------+----------------+--
+            //  | lhs working reg | rhs * mrhs_len |
+            // -+-----------------+----------------+--
+            //
             (rhs_reg, None)
         };
-        let mut temp_reg = rhs_reg;
 
         // Finally, assign rvalues to lvalue.
-        for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
-            if let Some(local) = self.is_assign_local(&lhs) {
-                assert!(matches!(kind, LvalueKind::LocalVar { .. }));
-                self.emit_mov(local.into(), temp_reg.into());
-            } else if kind != LvalueKind::Discard {
-                let src = temp_reg.into();
-                self.emit_assign(src, kind, None, loc);
-            }
-            temp_reg += 1;
+        for (i, lhs) in lhs_kind.into_iter().enumerate() {
+            let src = (rhs_reg + i).into();
+            self.emit_assign(src, lhs, None, loc);
         }
 
         self.temp = temp;
@@ -821,19 +830,27 @@ impl BytecodeGen {
         match use_mode {
             UseMode2::Push => {
                 let dst = self.push().into();
-                if ret_val.is_none() {
+                if let Some(src) = ret_val {
+                    self.emit_mov(dst, src);
+                } else {
                     self.emit_array(dst, rhs_reg.into(), mrhs_len, vec![], loc);
                 }
             }
             UseMode2::Ret => {
-                let dst = self.push().into();
-                if ret_val.is_none() {
+                if let Some(src) = ret_val {
+                    self.emit_ret(Some(src))?;
+                } else {
+                    let dst = self.push().into();
+                    self.emit_array(dst, rhs_reg.into(), mrhs_len, vec![], loc);
+                    self.emit_ret(None)?;
+                }
+            }
+            UseMode2::Store(dst) => {
+                if let Some(src) = ret_val {
+                    self.emit_mov(dst, src);
+                } else {
                     self.emit_array(dst, rhs_reg.into(), mrhs_len, vec![], loc);
                 }
-                self.emit_ret(None)?;
-            }
-            UseMode2::Store(r) => {
-                self.emit_array(r, rhs_reg.into(), mrhs_len, vec![], loc);
             }
             UseMode2::NotUse => {}
         }

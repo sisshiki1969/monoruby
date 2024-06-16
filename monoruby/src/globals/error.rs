@@ -149,28 +149,16 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         let msg = format!("unsupported parameter kind {param:?}");
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
     }
 
     pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported lhs {:?}", lhs.kind);
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)
     }
 
     pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported nodekind {:?}", expr.kind);
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, expr.loc, sourceinfo)
     }
 
@@ -180,10 +168,6 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         let msg = msg.to_string();
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
     }
 

@@ -21,27 +21,11 @@ fn main() {
         }
     }
 
-    match Command::new("gem").args(["environment", "paths"]).output() {
-        Ok(output) => {
-            let dest_path = lib_path.clone().join("gem_path");
-            let path_list: Vec<_> = std::str::from_utf8(&output.stdout)
-                .unwrap()
-                .split(':')
-                .map(|s| s.to_string())
-                .collect();
-            let list = path_list.join("\n");
-            fs::write(dest_path, list).unwrap();
-        }
-        Err(_) => {
-            println!("failed to read ruby gem path");
-        }
-    };
-
     for entry in fs::read_dir("startup").unwrap() {
         let path = entry.unwrap().path();
         let file_name = path.file_name().unwrap();
         fs::copy(&path, lib_path.join(file_name)).unwrap();
     }
 
-    //println!("cargo:rerun-if-changed=startup");
+    println!("cargo:rerun-if-changed=startup");
 }

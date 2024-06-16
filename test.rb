@@ -1,1 +1,5 @@
-require 'rubygems'
+a = []
+x = 3
+b = (a[x -= 1], a[x -= 1], a[x -= 1] = [1,2,3,4])
+puts "#{a}"
+puts "#{b}"

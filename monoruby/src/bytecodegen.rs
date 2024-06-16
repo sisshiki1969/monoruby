@@ -894,7 +894,7 @@ impl BytecodeGen {
         self.emit_literal(dst, Value::string(s));
     }
 
-    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
+    fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
         let calsite = CallSite::new(
             None,
             len,
@@ -904,9 +904,9 @@ impl BytecodeGen {
             None,
             src,
             BcReg::Self_,
-            Some(ret),
+            Some(dst),
         );
-        self.emit(BcIr::Array(ret, Box::new(calsite)), loc);
+        self.emit(BcIr::Array(dst, Box::new(calsite)), loc);
     }
 
     fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {
@@ -1058,6 +1058,74 @@ impl BytecodeGen {
     ///
     /// Evaluate *lhs* as a lvalue.
     ///
+    /// ### Constant (e.g. C::D = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// | parent (e.g. C) |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Instance variable (e.g. @a = 1)
+    ///
+    /// ### Class variable (e.g. @@a = 1)
+    ///
+    /// ### Global variable (e.g. $a = 1)
+    ///
+    /// ### Local variable (e.g. a = 1)
+    ///
+    /// ### Dynamic variable (e.g. a = 1)
+    ///
+    /// ### Index assign (e.g. base[idx] = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |       idx       |
+    /// +-----------------+
+    /// |       base      |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Index assign2 (e.g. base[idx0, idx1] = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |      (src)      |
+    /// +-----------------+
+    /// |      idx1       |
+    /// +-----------------+
+    /// |      idx0       |
+    /// +-----------------+
+    /// |      base       |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Method call (e.g. recv.method = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |      recv       |
+    /// +-----------------+
+    ///
+    /// ```
     fn eval_lvalue(&mut self, lhs: &Node) -> Result<LvalueKind> {
         let lhs = match &lhs.kind {
             NodeKind::Const {

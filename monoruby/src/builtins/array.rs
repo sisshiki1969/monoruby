@@ -85,7 +85,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
-    globals.define_builtin_func_with(ARRAY_CLASS, "pack", pack, 0, 1, false);
+    globals.define_builtin_func_with_kw(ARRAY_CLASS, "pack", pack, 1, 1, false, &["buffer"]);
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
@@ -1504,10 +1504,13 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 #[monoruby_builtin]
 fn pack(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    if let Some(arg0) = lfp.try_arg(0)
-        && arg0.expect_str()? != "C*"
-    {
-        unimplemented!()
+    let arg0 = lfp.arg(0);
+    let template = arg0.expect_str()?;
+    if template != "C*" {
+        return Err(MonorubyErr::argumenterr(format!(
+            "template {} is not supported.",
+            template
+        )));
     }
     let mut v = vec![];
     for elem in ary.iter() {
