@@ -42,6 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "gsub!", gsub_, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
@@ -1464,6 +1465,30 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 }
 
 ///
+/// ### String#match?
+///
+/// - match?(regexp, pos = 0) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/match=3f.html]
+#[monoruby_builtin]
+fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let pos = if let Some(arg1) = lfp.try_arg(1) {
+        match arg1.coerce_to_i64()? {
+            pos if pos >= 0 => pos as usize,
+            _ => return Ok(Value::nil()),
+        }
+    } else {
+        0usize
+    };
+    let self_ = lfp.self_val();
+    let given = self_.expect_str()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+
+    let res = RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)?;
+    Ok(Value::bool(!res.is_nil()))
+}
+
+///
 /// ### String#to_s
 ///
 /// - to_s -> String
@@ -2428,6 +2453,10 @@ mod test {
         run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
         run_test(r##"'hoge 髭男 hege bar'.match('髭.', 5)[0]"##);
         run_test(r##"'髭女 髭男 髭面 髭剃'.match('髭.', 5)[0]"##);
+
+        run_test(r##""Ruby".match?(/R.../)"##);
+        run_test(r##""Ruby".match?(/R.../, 1)"##);
+        run_test(r##""Ruby".match?(/P.../)"##);
     }
 
     #[test]
