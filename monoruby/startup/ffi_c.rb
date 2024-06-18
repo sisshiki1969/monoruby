@@ -6,6 +6,12 @@ module FFI
   TypeDefs = {}
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L314
   class Type
+    def initialize(size, alignment)
+      @size = size
+      @alignment = alignment
+    end
+    attr_reader :size, :alignment
+
     class Builtin
       def initialize(native, ffi_type, name)
         @native_type = native
@@ -13,46 +19,54 @@ module FFI
         @name = name
       end
     end
+
     module NativeType
     end
-    VOID = 0
-    BOOL = 1
-    STRING = 2
-    CHAR = 3
-    UCHAR = 4
-    SHORT = 5
-    USHORT = 6
-    INT = 7
-    UINT = 8
-    LONG = 9
-    ULONG = 10
-    LONG_LONG = 11
-    ULONG_LONG = 12
-    FLOAT = 13
-    DOUBLE = 14
-    LONGDOUBLE = 15
-    POINTER = 16
-    INT8 = 17
-    UINT8 = 18
-    INT16 = 19
-    UINT16 = 20
-    INT32 = 21
-    UINT32 = 22
-    INT64 = 23
-    UINT64 = 24
-    BUFFER_IN = 25
-    BUFFER_OUT = 26
-    BUFFER_INOUT = 27
-    VARARGS = 28
+
+    class Mapped
+      def initialize(converter)
+        if !converter.respond_to?(:native_type)
+          raise NoMethodError, "native_type method not implemented"
+        end
+        if !converter.respond_to?(:to_native)
+          raise NoMethodError, "to_native method not implemented"
+        end
+        if !converter.respond_to?(:from_native)
+          raise NoMethodError, "from_native method not implemented"
+        end
+        @type = converter.native_type
+        if !@type.is_a? Type
+          raise TypeError, "native_type did not return instance of FFI::Type"
+        end
+        @converter = converter
+      end
+    end
   end
 
-  def initialize(size, alignment)
-    @size = size
-    @alignment = alignment
-  end
+  Type::VOID = Type.new(0,0)
+  Type::CHAR = Type::SCHAR = Type::INT8 = Type.new(1,1)
+  Type::UCHAR = Type::UINT8 = Type.new(1,1)
+  Type::SHORT = Type::SSHORT = Type::INT16 = Type.new(2,2)
+  Type::USHORT = Type::UINT16 = Type.new(2,2)
+  Type::INT = Type::SINT = Type::INT32 = Type.new(4,4)
+  Type::UINT = Type::UINT32 = Type.new(4,4)
+  Type::LONG_LONG = Type::SLONG_LONG = Type::INT64 = Type.new(8,8)
+  Type::LONG = Type::UINT64 = Type.new(8,8)
 
-  attr_reader :size, :alignment
+  Type::BOOL = Type.new(1,1)
+  Type::STRING = Type.new(8,8)
+  Type::ULONG = Type.new(8,8)
+  Type::ULONG_LONG = Type.new(8,8)
+  Type::FLOAT = Type.new(4,4)
+  Type::DOUBLE = Type.new(8,8)
+  Type::LONGDOUBLE = Type.new(16,16)
+  Type::POINTER = Type.new(8,8)
+  Type::BUFFER_IN = Type.new(8,8)
+  Type::BUFFER_OUT = Type.new(8,8)
+  Type::BUFFER_INOUT = Type.new(8,8)
+  Type::VARARGS = Type.new(0,0)
 end
+
 
 # struct Type_ {
 #     NativeType nativeType;

@@ -164,6 +164,7 @@ class Errno
   ENOLCK = 37
   ENOSYS = 38
   ENOTSUP = 95
+  ENOENT = 2
 end
 
 RUBY_PLATFORM = "x86_64-linux"

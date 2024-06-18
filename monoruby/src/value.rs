@@ -127,7 +127,7 @@ impl Value {
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
-        let mut obj_class = Some(self.real_class(globals));
+        let mut obj_class = Some(self.get_class_obj(globals));
         while let Some(obj_class_inner) = obj_class {
             if obj_class_inner.id() == class {
                 return true;

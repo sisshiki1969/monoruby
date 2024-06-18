@@ -27,5 +27,5 @@ fn main() {
         fs::copy(&path, lib_path.join(file_name)).unwrap();
     }
 
-    println!("cargo:rerun-if-changed=startup");
+    //println!("cargo:rerun-if-changed=startup");
 }
