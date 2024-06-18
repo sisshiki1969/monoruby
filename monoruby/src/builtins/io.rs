@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 1, false);
     globals.define_builtin_func(IO_CLASS, "readline", readline, 0);
+    globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
@@ -107,8 +108,44 @@ fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
 #[monoruby_builtin]
 fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().as_io_inner_mut().read_line()?;
+    let s = match lfp.self_val().as_io_inner_mut().read_line()? {
+        Some(s) => s,
+        None => return Err(MonorubyErr::runtimeerr("end of file reached")),
+    };
     Ok(Value::string(s))
+}
+
+///
+/// ### IO#each
+///
+/// - each(rs = $/, chomp: false) {|line| ... } -> self
+/// - each(limit, chomp: false) {|line| ... } -> self
+/// - each(rs, limit, chomp: false) {|line| ... } -> self
+/// - each(rs = $/, chomp: false) -> Enumerator
+/// - each(limit, chomp: false) -> Enumerator
+/// - each(rs, limit, chomp: false) -> Enumerator
+///
+/// - each_line(rs = $/, chomp: false) {|line| ... } -> self
+/// - each_line(limit, chomp: false) {|line| ... } -> self
+/// - each_line(rs, limit, chomp: false) {|line| ... } -> self
+/// - each_line(rs = $/, chomp: false) -> Enumerator
+/// - each_line(limit, chomp: false) -> Enumerator
+/// - each_line(rs, limit, chomp: false) -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/each.html]
+#[monoruby_builtin]
+fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    if let Some(bh) = lfp.block() {
+        let p = vm.get_block_data(globals, bh)?;
+        while let Some(s) = io.read_line()? {
+            vm.invoke_block(globals, &p, &[Value::string(s)])?;
+        }
+    } else {
+        unimplemented!()
+    };
+    Ok(lfp.self_val())
 }
 
 #[cfg(test)]
@@ -174,6 +211,20 @@ mod test {
             f = File.open("Cargo.toml", "r")
             f.readline
         "#,
+        );
+    }
+
+    #[test]
+    fn each_line() {
+        run_test_once(
+            r##"
+        f = File.open("a.rb");
+        res = []
+        f.each_line do |line|
+            res << line
+        end
+        res
+        "##,
         );
     }
 }

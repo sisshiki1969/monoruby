@@ -122,14 +122,14 @@ impl IoInner {
         }
     }
 
-    pub fn read_line(&mut self) -> Result<String> {
+    pub fn read_line(&mut self) -> Result<Option<String>> {
         match self {
             Self::Stdin => {
                 let mut buf = String::new();
                 std::io::stdin()
                     .read_line(&mut buf)
                     .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-                Ok(buf)
+                Ok(Some(buf))
             }
             Self::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
@@ -140,9 +140,9 @@ impl IoInner {
                     .read_line(&mut buf)
                     .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
                 if size == 0 {
-                    return Err(MonorubyErr::runtimeerr("end of file reached"));
+                    return Ok(None);
                 }
-                Ok(buf)
+                Ok(Some(buf))
             }
         }
     }
