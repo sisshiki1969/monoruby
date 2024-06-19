@@ -241,6 +241,9 @@ impl StringInner {
         &self.content
     }
 
+    ///
+    /// Get the length in char of the string `self`.
+    ///
     pub fn length(&self) -> usize {
         match self.ty {
             Encoding::Ascii8 => self.content.len(),
@@ -249,20 +252,20 @@ impl StringInner {
     }
 
     ///
-    /// Convert `i` to the position of the char in the string with `len` chars.
+    /// Convert `char_pos` to the true position in char of the string `self`.
     ///
     /// Return None if `i` is out of range.
     ///
-    pub fn conv_index(&self, i: i64) -> Option<usize> {
+    pub fn conv_index(&self, char_pos: i64) -> Option<usize> {
         let len = self.length();
-        if i >= 0 {
-            if i <= len as i64 {
-                Some(i as usize)
+        if char_pos >= 0 {
+            if char_pos <= len as i64 {
+                Some(char_pos as usize)
             } else {
                 None
             }
         } else {
-            match len as i64 + i {
+            match len as i64 + char_pos {
                 n if n < 0 => None,
                 n => Some(n as usize),
             }

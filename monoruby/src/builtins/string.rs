@@ -654,33 +654,42 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let lhs = lhs.check_utf8()?;
-        let nth = if lfp.try_arg(1).is_none() {
-            0
+        let nth = if let Some(i) = lfp.try_arg(1) {
+            i.coerce_to_i64()?
         } else {
-            lfp.arg(1).coerce_to_i64()?
+            0
         };
-        match re.captures(lhs)? {
-            None => return Ok(Value::nil()),
-            Some(captures) => {
-                vm.save_captures(&captures, &lhs);
-                let len = captures.len() as i64;
-                let nth = if nth >= 0 {
-                    nth as usize
-                } else {
-                    match len + nth {
-                        i if i > 0 => i as usize,
-                        _ => return Ok(Value::nil()),
-                    }
-                };
-                match captures.get(nth) {
-                    Some(m) => Ok(Value::string_from_str(m.as_str())),
-                    None => Ok(Value::nil()),
-                }
-            }
-        }
+        string_match_index(vm, lhs, re, nth)
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
+    }
+}
+
+fn string_match_index(
+    vm: &mut Executor,
+    s: &StringInner,
+    re: &RegexpInner,
+    nth: i64,
+) -> Result<Value> {
+    let lhs = s.check_utf8()?;
+    match re.captures(lhs)? {
+        None => return Ok(Value::nil()),
+        Some(captures) => {
+            vm.save_captures(&captures, &lhs);
+            let len = captures.len() as i64;
+            let nth = if nth >= 0 {
+                nth as usize
+            } else {
+                match len + nth {
+                    i if i > 0 => i as usize,
+                    _ => return Ok(Value::nil()),
+                }
+            };
+            match captures.get(nth) {
+                Some(m) => Ok(Value::string_from_str(m.as_str())),
+                None => Ok(Value::nil()),
+            }
+        }
     }
 }
 
