@@ -244,11 +244,12 @@ impl StringInner {
     ///
     /// Get the length in char of the string `self`.
     ///
-    pub fn length(&self) -> usize {
-        match self.ty {
+    pub fn char_length(&self) -> Result<usize> {
+        let len = match self.ty {
             Encoding::Ascii8 => self.content.len(),
-            Encoding::Utf8 => self.check_utf8().unwrap().chars().count(),
-        }
+            Encoding::Utf8 => self.check_utf8()?.chars().count(),
+        };
+        Ok(len)
     }
 
     ///
@@ -256,20 +257,35 @@ impl StringInner {
     ///
     /// Return None if `i` is out of range.
     ///
-    pub fn conv_index(&self, char_pos: i64) -> Option<usize> {
-        let len = self.length();
+    pub fn conv_char_index(&self, char_pos: i64) -> Result<Option<usize>> {
+        let len = self.char_length()?;
         if char_pos >= 0 {
             if char_pos <= len as i64 {
-                Some(char_pos as usize)
+                Ok(Some(char_pos as usize))
             } else {
-                None
+                Ok(None)
             }
         } else {
             match len as i64 + char_pos {
-                n if n < 0 => None,
-                n => Some(n as usize),
+                n if n < 0 => Ok(None),
+                n => Ok(Some(n as usize)),
             }
         }
+    }
+
+    pub fn byte_to_char_index(&self, byte_pos: usize) -> Result<usize> {
+        for (i, (pos, _)) in self.check_utf8()?.char_indices().enumerate() {
+            if pos == byte_pos {
+                return Ok(i);
+            } else if pos > byte_pos {
+                return Err(MonorubyErr::runtimeerr(format!(
+                    "invalid byte position: {byte_pos}"
+                )));
+            }
+        }
+        Err(MonorubyErr::runtimeerr(format!(
+            "invalid byte position: {byte_pos}"
+        )))
     }
 
     pub fn get_range(&self, index: usize, len: usize) -> std::ops::Range<usize> {

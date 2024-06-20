@@ -21,7 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<<", shl, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
-    globals.define_builtin_func_with(STRING_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
@@ -610,7 +611,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = self_.as_bytes();
     let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
-        let index = match lhs.conv_index(i) {
+        let index = match lhs.conv_char_index(i)? {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
@@ -639,7 +640,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             info.start.expect_integer()?,
             info.end.expect_integer()? - info.exclude_end() as i64,
         );
-        let (start, len) = match (lhs.conv_index(start), lhs.conv_index(end)) {
+        let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
                 if start > end {
                     (start, 0)
@@ -1498,6 +1499,41 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 }
 
 ///
+/// ### String#index
+///
+/// - index(pattern, pos = 0) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/index.html]
+#[monoruby_builtin]
+fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let char_pos = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.coerce_to_i64()?
+    } else {
+        0
+    };
+    let self_ = lfp.self_val();
+    let given = self_.is_bytes().unwrap();
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+
+    let char_pos = match given.conv_char_index(char_pos)? {
+        Some(pos) => pos,
+        None => return Ok(Value::nil()),
+    };
+
+    let s = given.check_utf8()?;
+    let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
+    match re.captures_from_pos(s, byte_pos)? {
+        None => Ok(Value::nil()),
+        Some(captures) => {
+            vm.save_captures(&captures, s);
+            let start = captures.get(0).unwrap().start();
+            let char_pos = given.byte_to_char_index(start)?;
+            Ok(Value::integer(char_pos as i64))
+        }
+    }
+}
+
+///
 /// ### String#to_s
 ///
 /// - to_s -> String
@@ -1518,7 +1554,7 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let length = lfp.self_val().as_bytes().length();
+    let length = lfp.self_val().as_bytes().char_length()?;
     Ok(Value::integer(length as i64))
 }
 
@@ -2471,6 +2507,18 @@ mod test {
     #[test]
     fn length() {
         run_test(r##""本日は快晴なり".length"##);
+    }
+
+    #[test]
+    fn index() {
+        run_test(r##""超時空要塞".index(/時/)"##);
+        run_test(r##""超時空要塞".index(/海/)"##);
+        run_test(r##""超時空要塞".index(/時/, 3)"##);
+        run_test(r##""超時空要塞".index(/時/, 30)"##);
+        run_test(r##""超時空要塞".index(/時/, -30)"##);
+        run_test(r##""超時空要塞".index(/時/, -3)"##);
+        run_test(r##""超時空要塞".index(/時/, -4)"##);
+        run_test(r##""超時空要塞".index(/時/, -4.0)"##);
     }
 
     #[test]

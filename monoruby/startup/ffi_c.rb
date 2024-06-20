@@ -43,6 +43,43 @@ module FFI
     end
   end
 
+  class DynamicLibrary
+    RTLD_LAZY = 1
+    RTLD_NOW = 2
+    RTLD_LOCAL = 4
+    RTLD_GLOBAL = 8
+  end
+
+  # struct AbstractMemory_ {
+  #     char* address; /* Use char* instead of void* to ensure adding to it works correctly */
+  #     long size;
+  #     int flags;
+  #     int typeSize;
+  # };
+
+  class AbstractMemory
+    def initialize(address, size)
+      @address = address
+      @size = size
+    end
+    attr_reader :address, :size
+  end
+
+  # typedef struct Pointer {
+  #     AbstractMemory memory;
+  #     VALUE rbParent;
+  #     char* storage; /* start of malloc area */
+  #     bool autorelease;
+  #     bool allocated;
+  # } Pointer;
+
+  class Pointer < AbstractMemory
+    def initialize(type, address = type)
+      @type = type
+      @address = address
+    end
+  end
+
   Type::VOID = Type.new(0,0)
   Type::CHAR = Type::SCHAR = Type::INT8 = Type.new(1,1)
   Type::UCHAR = Type::UINT8 = Type.new(1,1)
