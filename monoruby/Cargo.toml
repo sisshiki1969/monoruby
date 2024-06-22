@@ -30,6 +30,7 @@ gc-stress = []
 profile = ["dump-bc"]
 perf = []
 test = []
+require = []
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
