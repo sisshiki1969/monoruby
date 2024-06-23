@@ -113,8 +113,6 @@ pub struct Globals {
     stdout: BufWriter<Stdout>,
     /// library directries.
     load_path: Value,
-    /// gem directries.
-    gem_directories: Vec<String>,
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
@@ -174,10 +172,12 @@ impl Globals {
             no_jit,
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_from_vec(vec![
-                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
-                Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
-                ]),
-            gem_directories: vec![],
+                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
+                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
+                //Value::string_from_str(
+                //    "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/3.3.0/x86_64-linux",
+                //),
+            ]),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "profile")]
@@ -231,19 +231,13 @@ impl Globals {
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
 
-        // load gem library path
-        let load_path = dirs::home_dir().unwrap().join(".monoruby").join("gem_path");
-        let path_list = std::fs::read_to_string(&load_path).unwrap();
-        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
-        globals.extend_gem_path(list.iter().cloned());
-
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
         let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
         let val = Value::string_from_str(&description);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
-        let val = Value::string_from_str(pcg_name);
+        let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
         let val = Value::string_from_str("3.3.0");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
@@ -366,8 +360,18 @@ impl Globals {
         info.data_ref()
     }
 
-    pub fn gc_enable(flag: bool) {
-        alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = flag);
+    ///
+    /// Set GC enable flag.
+    ///
+    /// ### return
+    /// GC enable flag before set.
+    ///
+    pub fn gc_enable(flag: bool) -> bool {
+        alloc::ALLOC.with(|alloc| {
+            let old = alloc.borrow().gc_enabled;
+            alloc.borrow_mut().gc_enabled = flag;
+            old
+        })
     }
 
     pub fn flush_stdout(&mut self) {
@@ -459,12 +463,8 @@ impl Globals {
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
         self.load_path
-            .as_array_mut()
+            .as_array()
             .extend(iter.map(|s| Value::string(s)));
-    }
-
-    pub fn extend_gem_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.gem_directories.extend(iter)
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {

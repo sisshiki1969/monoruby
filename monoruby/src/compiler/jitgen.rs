@@ -381,7 +381,8 @@ impl JitContext {
         bb_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bb_pos);
-        match pc.trace_ir(store) {
+        let trace_ir = pc.trace_ir(store);
+        match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart(_) => {
                 self.loop_count += 1;
@@ -523,6 +524,9 @@ impl JitContext {
             TraceIr::LoadCvar { dst, name } => {
                 self.ir.jit_load_cvar(bb, pc, name, dst);
             }
+            TraceIr::CheckCvar { dst, name } => {
+                self.ir.jit_check_cvar(bb, name, dst);
+            }
             TraceIr::StoreCvar { src: val, name } => {
                 self.ir.jit_store_cvar(bb, pc, name, val);
             }
@@ -659,13 +663,17 @@ impl JitContext {
             TraceIr::ConcatStr(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
+                let error = self.ir.new_error(bb, pc);
                 self.ir.concat_str(bb, arg, len);
+                self.ir.handle_error(error);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 self.ir.write_back_range(bb, arg, len);
                 self.ir.unlink(bb, dst);
-                self.ir.concat_regexp(bb, pc, arg, len);
+                let error = self.ir.new_error(bb, pc);
+                self.ir.concat_regexp(bb, arg, len);
+                self.ir.handle_error(error);
                 self.ir.rax2acc(bb, dst);
             }
             TraceIr::ExpandArray(src, dst, len) => {

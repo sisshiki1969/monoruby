@@ -111,6 +111,18 @@ mod test {
     }
 
     #[test]
+    fn class_variables4() {
+        run_test(
+            r##"
+            class C
+              @@x ||= 100
+              @@x
+            end
+        "##,
+        );
+    }
+
+    #[test]
     fn constant() {
         run_test_with_prelude(
             r#"
@@ -133,6 +145,14 @@ mod test {
           ::E = 100
           Object::E
             "#,
+        );
+        run_test(
+            r##"
+            class C
+              D ||= 100
+              D
+            end
+        "##,
         );
     }
 }

@@ -774,6 +774,11 @@ impl AsmIr {
         self.handle_error(error);
     }
 
+    pub(super) fn check_cvar(&mut self, bb: &BBContext, name: IdentId) {
+        let using_xmm = bb.get_using_xmm();
+        self.inst.push(AsmInst::CheckCVar { name, using_xmm });
+    }
+
     pub(super) fn store_cvar(&mut self, bb: &BBContext, pc: BcPc, name: IdentId, src: SlotId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
@@ -799,16 +804,13 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn concat_regexp(&mut self, bb: &BBContext, pc: BcPc, arg: SlotId, len: u16) {
+    pub(super) fn concat_regexp(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        let len = len as _;
         self.inst.push(AsmInst::ConcatRegexp {
             arg,
             len,
             using_xmm,
         });
-        self.handle_error(error);
     }
 
     pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
@@ -860,6 +862,12 @@ impl AsmIr {
     ) {
         self.unlink(bb, dst);
         self.load_cvar(bb, pc, name);
+        self.rax2acc(bb, dst);
+    }
+
+    pub(super) fn jit_check_cvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
+        self.unlink(bb, dst);
+        self.check_cvar(bb, name);
         self.rax2acc(bb, dst);
     }
 
@@ -1283,6 +1291,11 @@ pub(super) enum AsmInst {
         len: u16,
         using_xmm: UsingXmm,
     },
+    ConcatRegexp {
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    },
 
     BlockArgProxy {
         ret: SlotId,
@@ -1321,6 +1334,10 @@ pub(super) enum AsmInst {
         src: GP,
     },
     LoadCVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    CheckCVar {
         name: IdentId,
         using_xmm: UsingXmm,
     },
@@ -1377,11 +1394,7 @@ pub(super) enum AsmInst {
         len: usize,
         using_xmm: UsingXmm,
     },
-    ConcatRegexp {
-        arg: SlotId,
-        len: usize,
-        using_xmm: UsingXmm,
-    },
+
     AliasMethod {
         new: SlotId,
         old: SlotId,

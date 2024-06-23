@@ -157,14 +157,14 @@ impl Executor {
     }
 
     pub fn temp_array_push(&mut self, v: Value) {
-        self.temp_stack.last_mut().unwrap().as_array_mut().push(v);
+        self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
 
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
         self.temp_stack
             .last_mut()
             .unwrap()
-            .as_array_mut()
+            .as_array()
             .extend_from_slice(slice);
     }
 
@@ -237,6 +237,10 @@ impl Executor {
         is_relative: bool,
     ) -> Result<bool> {
         if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
+            #[cfg(feature = "require")]
+            {
+                eprintln!("require: {:?}\n{}", &path, &file_body);
+            }
             self.enter_class_context();
             let res = self.exec_script(globals, file_body, &path);
             self.exit_class_context();
@@ -343,7 +347,14 @@ impl Executor {
             .expect(name)
             .as_class_id();
 
-        Value::new_exception_from_err(globals, err, class_id)
+        if let MonorubyErrKind::Load(path) = &err.kind() {
+            let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
+            let v = Value::new_exception_from_err(globals, err, class_id);
+            globals.set_ivar(v, IdentId::get_id("/path"), path).unwrap();
+            v
+        } else {
+            Value::new_exception_from_err(globals, err, class_id)
+        }
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {
@@ -615,6 +626,16 @@ impl Executor {
             .ok_or_else(|| self.take_error())
     }
 
+    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Value {
+        match receiver.unpack() {
+            RV::Object(_) => {}
+            _ => return Value::string(receiver.to_s(globals)),
+        }
+        let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
+        self.invoke_func(globals, func_id, receiver, &[], None)
+            .unwrap()
+    }
+
     ///
     /// Invoke block for *block_handler*.
     ///
@@ -767,17 +788,6 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
-        //} else {
-        //    (globals.codegen.method_invoker)(
-        //        self,
-        //        globals,
-        //        proc.func_id(),
-        //        Value::nil(),
-        //        args.as_ptr(),
-        //        args.len(),
-        //        None,
-        //    )
-        //}
         .ok_or_else(|| self.take_error())
     }
 
@@ -818,6 +828,18 @@ impl Executor {
             args.len(),
             bh,
         )
+    }
+
+    pub(crate) fn invoke_func_inner(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Result<Value> {
+        self.invoke_func(globals, func_id, receiver, args, bh)
+            .ok_or_else(|| self.take_error())
     }
 }
 
@@ -1373,7 +1395,7 @@ impl BcPc {
                 7 => TraceIr::Literal(SlotId::new(op1), self.op2.get_value()),
                 8 => TraceIr::Nil(SlotId::new(op1)),
                 9 => TraceIr::Symbol(SlotId::new(op1), IdentId::from(op2)),
-                10 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
+                10 | 18 => TraceIr::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
                 11 => TraceIr::StoreConst(SlotId::new(op1), ConstSiteId(op2)),
                 12..=13 => TraceIr::CondBr(
                     SlotId::new(op1),
@@ -1401,6 +1423,10 @@ impl BcPc {
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
                 23 => TraceIr::BlockArg(SlotId::new(op1), op2 as usize),
+                24 => TraceIr::CheckCvar {
+                    dst: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
                 25 => TraceIr::LoadGvar {
                     dst: SlotId::new(op1),
                     name: IdentId::from(op2),

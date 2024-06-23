@@ -545,22 +545,21 @@ fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> u
     let req_num = info.req_num();
     unsafe {
         let v = callee_lfp.register(1).unwrap();
-        if v.try_array_ty().is_some() {
+        if let Some(src) = v.try_array_ty() {
             let ptr = callee_lfp.register_ptr(1);
-            return block_expand_array(v, ptr as _, req_num);
+            return block_expand_array(src, ptr as _, req_num);
         }
     }
     arg_num
 }
 
-fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
-    let ary = Array::new(src);
-    let len = ary.len();
+fn block_expand_array(src: Array, dst: *mut Value, min_len: usize) -> usize {
+    let len = src.len();
     for i in 0..len {
-        unsafe { *dst.sub(i) = ary[i] }
+        unsafe { *dst.sub(i) = src[i] }
     }
     for i in 0..len {
-        unsafe { *dst.sub(i) = ary[i] }
+        unsafe { *dst.sub(i) = src[i] }
     }
     if min_len <= len {
         len

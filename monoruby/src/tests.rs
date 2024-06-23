@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 mod case;
+mod comparable;
 mod literal;
 mod method_call;
 mod redefine;
@@ -389,6 +390,18 @@ mod test {
             r##"
         d = (a,b,c = 100)
         [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        c = (a,b, = [1,2,3,4,5])
+        [a,b,c]
+        "##,
+        );
+        run_test(
+            r##"
+        c = (a,b, = 100)
+        [a,b,c]
         "##,
         );
     }

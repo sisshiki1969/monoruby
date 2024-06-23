@@ -344,7 +344,7 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
 fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let args = Array::new(lfp.arg(0));
+    let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
@@ -419,7 +419,7 @@ fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 #[monoruby_builtin]
 fn private_class_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let singleton = globals.get_singleton(lfp.self_val());
-    let arg = Array::new(lfp.arg(0));
+    let arg = lfp.arg(0).as_array();
     let (_, names) = extract_names(arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Private)?;
     Ok(lfp.self_val())
@@ -471,7 +471,7 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 #[monoruby_builtin]
 fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg = Array::new(lfp.arg(0));
+    let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Private)
 }
 
@@ -483,7 +483,7 @@ fn private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 #[monoruby_builtin]
 fn protected(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg = Array::new(lfp.arg(0));
+    let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Protected)
 }
 
@@ -495,7 +495,7 @@ fn protected(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 #[monoruby_builtin]
 fn public(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let arg = Array::new(lfp.arg(0));
+    let arg = lfp.arg(0).as_array();
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Public)
 }
 

@@ -101,7 +101,7 @@ impl Enumerator {
                 "iteration reached an end".to_string(),
             ));
         }
-        Ok(Array::new(v))
+        Ok(v.as_array())
     }
 }
 

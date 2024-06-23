@@ -62,9 +62,14 @@ fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
 fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let rest = lfp.arg(0);
+    let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
-    for arg in rest.as_array().iter() {
+    if rest.len() == 1
+        && let Some(arg) = rest[0].try_array_ty()
+    {
+        rest = arg;
+    }
+    for arg in rest.iter() {
         if let Some(s) = arg.is_str() {
             v.push(regex::escape(s));
         } else if let Some(re) = arg.is_regex() {

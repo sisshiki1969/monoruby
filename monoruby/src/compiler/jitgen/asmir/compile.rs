@@ -544,6 +544,9 @@ impl Codegen {
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
             }
+            AsmInst::CheckCVar { name, using_xmm } => {
+                self.check_cvar(name, using_xmm);
+            }
             AsmInst::StoreCVar {
                 name,
                 src,
@@ -624,22 +627,15 @@ impl Codegen {
                 arg,
                 len,
                 using_xmm,
-            } => self.concat_string(arg, len, using_xmm),
+            } => {
+                self.concat_string(arg, len, using_xmm);
+            }
             AsmInst::ConcatRegexp {
                 arg,
                 len,
                 using_xmm,
             } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    lea rdx, [r14 - (conv(arg))];
-                    movq rcx, (len);
-                    movq rax, (runtime::concatenate_regexp);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
+                self.concat_regexp(arg, len, using_xmm);
             }
             AsmInst::AliasMethod {
                 new,
@@ -851,10 +847,24 @@ impl Codegen {
     fn concat_string(&mut self, arg: SlotId, len: u16, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-            movq rdi, r12;
-            lea rsi, [r14 - (conv(arg))];
-            movq rdx, (len);
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea rdx, [r14 - (conv(arg))];
+            movq rcx, (len);
             movq rax, (runtime::concatenate_string);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+    }
+
+    fn concat_regexp(&mut self, arg: SlotId, len: u16, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea rdx, [r14 - (conv(arg))];
+            movq rcx, (len);
+            movq rax, (runtime::concatenate_regexp);
             call rax;
         );
         self.xmm_restore(using_xmm);

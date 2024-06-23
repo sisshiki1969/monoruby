@@ -14,18 +14,22 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap()
         .as_class();
     let klass = globals
-        .define_class_by_str("File", io_class, OBJECT_CLASS)
+        .define_builtin_class_by_str("File", FILE_CLASS, io_class, OBJECT_CLASS)
         .id();
     globals.define_builtin_class_func(klass, "write", write, 2);
-    globals.define_builtin_class_func(klass, "read", read, 1);
+    globals.define_builtin_class_func(klass, "read", file_read, 1);
     globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(klass, "join", join);
     globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
+    globals.define_builtin_class_func(klass, "directory?", directory_, 1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
     globals.define_builtin_class_func(klass, "basename", basename, 1);
     globals.define_builtin_class_func(klass, "extname", extname, 1);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func(klass, "file?", file_, 1);
+    globals.define_builtin_class_func(klass, "path", path, 1);
+    globals.define_builtin_class_func_with(klass, "realpath", realpath, 1, 2, false);
+    globals.define_builtin_class_func_with(klass, "open", open, 1, 3, false);
 }
 
 ///
@@ -66,7 +70,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let filename = string_to_path(lfp.arg(0), globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
@@ -188,12 +192,7 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
             return Err(MonorubyErr::runtimeerr(err));
         }
     };
-    let home_dir = match dirs::home_dir() {
-        Some(dir) => dir,
-        None => {
-            return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
-        }
-    };
+
     let path = if lfp.try_arg(1).is_none() {
         string_to_path(lfp.arg(0), globals)?
     } else {
@@ -206,24 +205,8 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     let mut res_path = std::path::PathBuf::new();
     res_path.push(current_dir);
 
-    for elem in path.components() {
-        match elem {
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(comp) if comp == "~" => {
-                res_path.clear();
-                res_path.push(home_dir.clone());
-            }
-            std::path::Component::Normal(comp) => res_path.push(comp),
-            std::path::Component::ParentDir => {
-                res_path.pop();
-            }
-            std::path::Component::RootDir => {
-                res_path.clear();
-                res_path.push(std::path::Component::RootDir);
-            }
-            _ => {}
-        };
-    }
+    extend(&mut res_path, path)?;
+
     #[cfg(windows)]
     let res_path = PathBuf::from(
         std::env::var("HOMEDRIVE")
@@ -268,6 +251,19 @@ fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 }
 
 ///
+/// ### File.directory?
+/// - directory?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
+#[monoruby_builtin]
+fn directory_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+        Ok(path) => Ok(Value::bool(path.is_dir())),
+        Err(_) => Ok(Value::bool(false)),
+    }
+}
+
+///
 /// ### File.extname
 /// - extname(filename) -> String
 ///
@@ -306,7 +302,130 @@ fn file_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
+///
+/// ### File.path
+/// - path(filename) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/path.html]
+#[monoruby_builtin]
+fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if lfp.arg(0).is_str().is_some() {
+        Ok(lfp.arg(0))
+    } else {
+        vm.invoke_method_inner(globals, IdentId::get_id("to_path"), lfp.arg(0), &[], None)
+    }
+}
+
+///
+/// ### File.realpath
+/// - realpath(pathname, basedir = nil) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
+#[monoruby_builtin]
+fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
+        let path = std::path::PathBuf::from(arg1.expect_string()?);
+        match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "{}:{}",
+                    arg1.as_str(),
+                    err.to_string()
+                )))
+            }
+        }
+    } else {
+        match std::env::current_dir() {
+            Ok(path) => path,
+            Err(_) => {
+                return Err(MonorubyErr::runtimeerr("Failed to get current directory."));
+            }
+        }
+    };
+    pathname.push(std::path::PathBuf::from(lfp.arg(0).expect_string()?));
+    match pathname.canonicalize() {
+        Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
+        Err(err) => Err(MonorubyErr::argumenterr(format!(
+            "{}:{}",
+            pathname.to_string_lossy(),
+            err.to_string()
+        ))),
+    }
+}
+
+///
+/// ### File.open
+///
+/// - open(path, mode = "r", [NOT SUPPORTED] perm = 0666) -> File
+/// - open(path, mode = "r", [NOT SUPPORTED] perm = 0666) {|file| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
+#[monoruby_builtin]
+fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let path = lfp.arg(0).expect_string()?;
+    let mode = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.expect_string()?
+    } else {
+        "r".to_string()
+    };
+    let mut opt = File::options();
+    let opt = match mode.split(':').next().unwrap() {
+        "r" => opt.read(true),
+        "w" => opt.write(true).create(true).truncate(true),
+        "a" => opt.write(true).create(true).append(true),
+        "r+" => opt.read(true).write(true),
+        "w+" => opt.read(true).write(true).create(true).truncate(true),
+        "a+" => opt.read(true).write(true).create(true).append(true),
+        _ => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "Invalid access mode {}",
+                mode
+            )))
+        }
+    };
+    let file = match opt.open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", path, err)));
+        }
+    };
+    let res = Value::new_file(file, path);
+    if let Some(bh) = lfp.block() {
+        return vm.invoke_block_once(globals, bh, &[res]);
+    }
+    Ok(res)
+}
+
 // Utils
+
+fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<()> {
+    for elem in extend.components() {
+        match elem {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(comp) if comp == "~" => {
+                path.clear();
+                let home_dir = match dirs::home_dir() {
+                    Some(dir) => dir,
+                    None => {
+                        return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
+                    }
+                };
+                path.push(home_dir);
+            }
+            std::path::Component::Normal(comp) => path.push(comp),
+            std::path::Component::ParentDir => {
+                path.pop();
+            }
+            std::path::Component::RootDir => {
+                path.clear();
+                path.push(std::path::Component::RootDir);
+            }
+            _ => {}
+        };
+    }
+    Ok(())
+}
 
 /// Convert `file` to canonicalized PathBuf.
 fn string_to_canonicalized_path(
@@ -406,5 +525,37 @@ mod test {
         run_test(r##"File.file?("monoruby")"##);
         run_test(r##"File.file?("README.md")"##);
         run_test(r##"File.file?("readme.md")"##);
+    }
+
+    #[test]
+    fn directory_() {
+        run_test(r##"File.directory?("monoruby")"##);
+        run_test(r##"File.directory?("bin")"##);
+        run_test(r##"File.directory?("README.md")"##);
+        run_test(r##"File.directory?("readme.md")"##);
+    }
+
+    #[test]
+    fn path() {
+        run_test(r##"File.path("/dev/null")"##);
+        run_test(
+            r##"
+        class MyPath
+          def to_path
+            "../"
+          end
+        end
+        File.path(MyPath.new)
+        "##,
+        );
+    }
+
+    #[test]
+    fn realpath() {
+        run_test(r##"File.realpath(".")"##);
+        run_test(r##"File.realpath("./../../../")"##);
+        run_test(r##"File.realpath("../monoruby")"##);
+        run_test(r##"File.realpath("..", "/tmp")"##);
+        run_test(r##"File.realpath("tmp", "/")"##);
     }
 }

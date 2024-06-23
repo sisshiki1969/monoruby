@@ -15,12 +15,6 @@ class Process
   end
 end
 
-class Integer
-  def zero?
-    self == 0
-  end
-end
-
 class Hash
   # Hash#to_h
   # to_h -> self
@@ -111,11 +105,69 @@ module Enumerable
 end
 
 module Comparable
+  def ==(other)
+    case res = self <=> other
+    when Integer
+      res == 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def !=(other)
+    case res = self <=> other
+    when Integer
+      res != 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def >=(other)
+    case res = self <=> other
+    when Integer
+      res >= 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def >(other)
+    case res = self <=> other
+    when Integer
+      res > 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def <=(other)
+    case res = self <=> other
+    when Integer
+      res <= 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+  
+  def <(other)
+    case res = self <=> other
+    when Integer
+      res < 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
 end
 
 class Errno
   ENOLCK = 37
   ENOSYS = 38
   ENOTSUP = 95
+  ENOENT = 2
 end
 
+RUBY_PLATFORM = "x86_64-linux"
+File::ALT_SEPARATOR = nil
+
+require 'rubygems'

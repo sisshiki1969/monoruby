@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
 fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let args = Array::new(lfp.arg(0));
+    let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }

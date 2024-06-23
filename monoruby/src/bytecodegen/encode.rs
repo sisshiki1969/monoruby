@@ -304,6 +304,19 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&reg);
                 Bc::from(enc_wl(17, op1.0, name.get()))
             }
+            BcIr::CheckConst {
+                dst,
+                base,
+                toplevel,
+                prefix,
+                name,
+            } => {
+                // 18
+                let op1 = self.slot_id(&dst);
+                let base = base.map(|base| self.slot_id(&base));
+                let op2 = store.add_constsite(base, name, prefix, toplevel);
+                Bc::from(enc_wl(18, op1.0, op2.0))
+            }
             BcIr::ClassDef {
                 ret,
                 base,
@@ -368,6 +381,11 @@ impl BytecodeGen {
                 // 23
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(23, op1.0, outer as u32))
+            }
+            BcIr::CheckCvar { dst, name } => {
+                // 24
+                let op1 = self.slot_id(&dst);
+                Bc::from(enc_wl(24, op1.0, name.get()))
             }
             BcIr::LoadGvar { dst, name } => {
                 // 25

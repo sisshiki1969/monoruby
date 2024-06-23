@@ -33,6 +33,7 @@ pub const COMPLEX_CLASS: ClassId = ClassId::new(24);
 pub const NUMERIC_CLASS: ClassId = ClassId::new(25);
 pub const BINDING_CLASS: ClassId = ClassId::new(26);
 pub const UMETHOD_CLASS: ClassId = ClassId::new(27);
+pub const FILE_CLASS: ClassId = ClassId::new(28);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]

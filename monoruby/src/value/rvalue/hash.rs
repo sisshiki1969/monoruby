@@ -74,6 +74,13 @@ impl HashmapInner {
         HashId(&self as *const _ as usize)
     }
 
+    pub fn is_empty(&self) -> bool {
+        match &self.content {
+            HashContent::Map(box map) => map.is_empty(),
+            HashContent::IdentMap(box map) => map.is_empty(),
+        }
+    }
+
     pub fn get(&self, v: Value) -> Option<Value> {
         match &self.content {
             HashContent::Map(box map) => map.get(&HashKey(v)).copied(),
@@ -85,6 +92,20 @@ impl HashmapInner {
         match &mut self.content {
             HashContent::Map(map) => map.shift_remove(&HashKey(k)),
             HashContent::IdentMap(map) => map.shift_remove(&IdentKey(k)),
+        }
+    }
+
+    pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
+    where
+        F: FnOnce(&mut Value),
+    {
+        match &mut self.content {
+            HashContent::Map(map) => {
+                map.entry(HashKey(k)).and_modify(f);
+            }
+            HashContent::IdentMap(map) => {
+                map.entry(IdentKey(k)).and_modify(f);
+            }
         }
     }
 

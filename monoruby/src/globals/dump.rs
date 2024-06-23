@@ -339,6 +339,9 @@ impl Globals {
             TraceIr::LoadCvar { dst: ret, name } => {
                 format!("{:?} = {name}", ret)
             }
+            TraceIr::CheckCvar { dst: ret, name } => {
+                format!("{:?} = {name}?", ret)
+            }
             TraceIr::StoreCvar { src, name } => {
                 format!("{name} = {:?}", src)
             }
@@ -350,9 +353,12 @@ impl Globals {
                     "{:?} = ${}",
                     ret,
                     match id {
-                        0 => "&".to_string(),
-                        1 => "'".to_string(),
-                        n => (n - 100).to_string(),
+                        ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
+                        ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
+                        ruruby_parse::SPECIAL_LOADPATH => "$LOAD_PATH".to_string(),
+                        ruruby_parse::SPECIAL_LOADEDFEATURES => "$LOADED_FEATURES".to_string(),
+                        n if n >= 100 => (n - 100).to_string(),
+                        _ => unreachable!(),
                     }
                 )
             }

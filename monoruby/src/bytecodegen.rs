@@ -221,6 +221,7 @@ enum LvalueKind {
     LocalVar {
         dst: BcReg,
     },
+    Discard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -893,7 +894,7 @@ impl BytecodeGen {
         self.emit_literal(dst, Value::string(s));
     }
 
-    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
+    fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
         let calsite = CallSite::new(
             None,
             len,
@@ -903,9 +904,9 @@ impl BytecodeGen {
             None,
             src,
             BcReg::Self_,
-            Some(ret),
+            Some(dst),
         );
-        self.emit(BcIr::Array(ret, Box::new(calsite)), loc);
+        self.emit(BcIr::Array(dst, Box::new(calsite)), loc);
     }
 
     fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {
@@ -946,6 +947,33 @@ impl BytecodeGen {
         );
     }
 
+    fn emit_check_const(
+        &mut self,
+        dst: Option<BcReg>,
+        base: Option<BcReg>,
+        toplevel: bool,
+        name: String,
+        prefix: Vec<String>,
+        loc: Loc,
+    ) {
+        let name = IdentId::get_id_from_string(name);
+        let prefix = prefix
+            .into_iter()
+            .map(IdentId::get_id_from_string)
+            .collect();
+        let dst = self.get_reg(dst);
+        self.emit(
+            BcIr::CheckConst {
+                dst,
+                base,
+                toplevel,
+                prefix,
+                name,
+            },
+            loc,
+        );
+    }
+
     fn emit_load_ivar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let reg = self.get_reg(dst);
         self.emit(BcIr::LoadIvar(reg, name), loc);
@@ -959,6 +987,11 @@ impl BytecodeGen {
     fn emit_load_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
         self.emit(BcIr::LoadCvar { dst: ret, name }, loc);
+    }
+
+    fn emit_check_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let ret = self.get_reg(dst);
+        self.emit(BcIr::CheckCvar { dst: ret, name }, loc);
     }
 
     fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {
@@ -1025,6 +1058,74 @@ impl BytecodeGen {
     ///
     /// Evaluate *lhs* as a lvalue.
     ///
+    /// ### Constant (e.g. C::D = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// | parent (e.g. C) |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Instance variable (e.g. @a = 1)
+    ///
+    /// ### Class variable (e.g. @@a = 1)
+    ///
+    /// ### Global variable (e.g. $a = 1)
+    ///
+    /// ### Local variable (e.g. a = 1)
+    ///
+    /// ### Dynamic variable (e.g. a = 1)
+    ///
+    /// ### Index assign (e.g. base[idx] = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |       idx       |
+    /// +-----------------+
+    /// |       base      |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Index assign2 (e.g. base[idx0, idx1] = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |      (src)      |
+    /// +-----------------+
+    /// |      idx1       |
+    /// +-----------------+
+    /// |      idx0       |
+    /// +-----------------+
+    /// |      base       |
+    /// +-----------------+
+    /// |                 |
+    ///
+    /// ```
+    ///
+    /// ### Method call (e.g. recv.method = 1)
+    ///
+    /// ```text
+    ///
+    /// +-----------------+
+    /// |                 | <= sp
+    /// +-----------------+
+    /// |      recv       |
+    /// +-----------------+
+    ///
+    /// ```
     fn eval_lvalue(&mut self, lhs: &Node) -> Result<LvalueKind> {
         let lhs = match &lhs.kind {
             NodeKind::Const {
@@ -1113,6 +1214,7 @@ impl BytecodeGen {
                     self.sourceinfo.clone(),
                 ));
             }
+            NodeKind::DiscardLhs => LvalueKind::Discard,
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
         };
         Ok(lhs)
@@ -1173,6 +1275,9 @@ impl BytecodeGen {
             LvalueKind::LocalVar { dst } => {
                 self.set_temp(old_temp);
                 self.emit_mov(dst, src);
+            }
+            LvalueKind::Discard => {
+                self.set_temp(old_temp);
             }
         }
     }

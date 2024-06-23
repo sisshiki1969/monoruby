@@ -208,6 +208,18 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
+    pub(super) fn check_cvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (name.get());
+            movq rax, (runtime::check_class_var);
+            call rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
     pub(super) fn store_cvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
@@ -248,7 +260,7 @@ impl Codegen {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            movl rsi, r12;
+            movq rsi, r12;
             movl rdx, (id);
             movq rax, (runtime::get_special_var);
             call rax;

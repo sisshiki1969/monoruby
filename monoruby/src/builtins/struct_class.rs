@@ -18,7 +18,7 @@ pub(crate) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let args = Array::new(lfp.arg(0));
+    let args = lfp.arg(0).as_array();
 
     let mut new_struct = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = new_struct.as_class_id();
@@ -80,10 +80,10 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
     let struct_class = self_val.class().get_obj(globals);
-    let members_val = globals
+    let members = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
-        .unwrap();
-    let members = Array::new(members_val);
+        .unwrap()
+        .as_array();
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
@@ -104,11 +104,10 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if let Some(name) = globals.store[class_id].get_name_id() {
         inspect += &format!("{name}");
     };
-    let name = Array::new(
-        globals
-            .get_ivar(struct_class, IdentId::get_id("/members"))
-            .unwrap(),
-    );
+    let name = globals
+        .get_ivar(struct_class, IdentId::get_id("/members"))
+        .unwrap()
+        .as_array();
 
     if name.len() != 0 {
         for x in name.iter() {

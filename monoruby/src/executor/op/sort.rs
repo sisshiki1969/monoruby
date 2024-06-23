@@ -2,7 +2,7 @@ use super::*;
 
 impl Executor {
     ///
-    /// Execute merge sort for Vec of *Value*s.
+    /// Execute merge sort for Vec of *Value*s with `compare`.
     ///
     pub(crate) fn sort_by<F>(
         &mut self,
@@ -18,6 +18,17 @@ impl Executor {
             Result::Ok(ord == std::cmp::Ordering::Less)
         };
         self.merge_sort(globals, vec, f)
+    }
+
+    ///
+    /// Execute merge sort for Vec of *Value*s with `<=>`.
+    ///
+    pub(crate) fn sort(&mut self, globals: &mut Globals, vec: &mut [Value]) -> Result<()> {
+        let is_less = |vm: &mut Executor, globals: &mut Globals, a: Value, b: Value| {
+            let ord = Executor::compare_values(vm, globals, a, b)?;
+            Result::Ok(ord == std::cmp::Ordering::Less)
+        };
+        self.merge_sort(globals, vec, is_less)
     }
 
     fn merge_sort<F>(

@@ -15,11 +15,6 @@ impl Default for Array {
 }
 
 impl Array {
-    pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::ARRAY));
-        Self(val)
-    }
-
     pub fn id(self) -> u64 {
         self.0.id()
     }
@@ -42,9 +37,9 @@ impl Array {
         Self(Value::array2(v1, v2))
     }
 
-    pub fn dup(inner: &ArrayInner) -> Self {
+    /*pub fn dup(inner: &ArrayInner) -> Self {
         Self(Value::array(inner.clone()))
-    }
+    }*/
 }
 
 #[repr(transparent)]
@@ -99,9 +94,9 @@ impl ArrayInner {
         self.0.push(value);
     }
 
-    /*pub fn pop(&mut self) -> Option<Value> {
+    pub fn pop(&mut self) -> Option<Value> {
         self.0.pop()
-    }*/
+    }
 
     pub fn truncate(&mut self, new_len: usize) {
         self.0.truncate(new_len);

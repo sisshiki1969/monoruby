@@ -10,13 +10,6 @@ impl std::cmp::PartialEq for Module {
 }
 
 impl Module {
-    pub(crate) fn new(val: Value) -> Self {
-        match val.rvalue().ty() {
-            ObjKind::CLASS | ObjKind::MODULE => Self(val),
-            _ => unreachable!(),
-        }
-    }
-
     pub(crate) fn get(self) -> Value {
         self.0
     }

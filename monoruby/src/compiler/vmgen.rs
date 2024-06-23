@@ -263,10 +263,12 @@ impl Codegen {
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
+        self.dispatch[18] = self.vm_check_const();
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
         self.dispatch[23] = self.vm_block_arg();
+        self.dispatch[24] = self.vm_check_cvar();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[27] = self.vm_load_cvar();
@@ -857,12 +859,14 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_addr(GP::Rdi);
         monoasm! { &mut self.jit,
-            movq rdx, rsi;
-            movq rsi, rdi;
-            movq rdi, r12;
+            movq rcx, rsi;
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::concatenate_string);
             call rax;
         };
+        self.vm_handle_error();
         self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label

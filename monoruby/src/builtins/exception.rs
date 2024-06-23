@@ -23,12 +23,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("SignalException", standarderr, OBJECT_CLASS);
 
     let scripterr = globals.define_class_by_str("ScriptError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("LoadError", scripterr, OBJECT_CLASS);
+    let loaderr = globals.define_class_by_str("LoadError", scripterr, OBJECT_CLASS);
+    globals.define_builtin_func(loaderr.id(), "path", loaderror_path, 0);
+    globals.define_class_by_str("SyntaxError", scripterr, OBJECT_CLASS);
+    globals.define_class_by_str("NotImplementedError", scripterr, OBJECT_CLASS);
 
     globals.define_class_by_str("ArgumentError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("FiberError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("IOError", standarderr, OBJECT_CLASS);
+    let ioerr = globals.define_class_by_str("IOError", standarderr, OBJECT_CLASS);
+    globals.define_class_by_str("EOFError", ioerr, OBJECT_CLASS);
+
     let indexerr = globals.define_class_by_str("IndexError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("KeyError", indexerr, OBJECT_CLASS);
     globals.define_class_by_str("StopIteration", indexerr, OBJECT_CLASS);
@@ -73,6 +78,20 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     };
     let kind = class_id.get_name_id(globals);
     Ok(Value::new_exception(kind, msg, vec![], class_id))
+}
+
+///
+/// ### LoadError#path
+///
+/// - path -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/LoadError/i/path.html]
+#[monoruby_builtin]
+fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    Ok(globals
+        .get_ivar(self_, IdentId::get_id("/path"))
+        .unwrap_or_default())
 }
 
 ///

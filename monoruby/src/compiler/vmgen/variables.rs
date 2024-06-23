@@ -25,6 +25,28 @@ extern "C" fn vm_get_constant(
     }
 }
 
+extern "C" fn vm_check_constant(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+    const_version: usize,
+) -> Value {
+    let (cached_version, cached_base_class, cache_val) = &globals.store[site_id].cache;
+    let base_class = globals.store[site_id]
+        .base
+        .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+    if *cached_version == const_version && *cached_base_class == base_class {
+        return cache_val.unwrap_or_default();
+    };
+    match vm.find_constant(globals, site_id) {
+        Ok((val, base_class)) => {
+            globals.store[site_id].cache = (const_version, base_class, Some(val));
+            val
+        }
+        Err(_) => Value::nil(),
+    }
+}
+
 impl Codegen {
     //
     // +---+---+---+---++---+---+---+---+
@@ -45,6 +67,32 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
+        monoasm! { &mut self.jit,
+            movq [r13 - 8], rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|ret|constId||     Value     |
+    // +---+---+---+---++---+---+---+---+
+    //
+    pub(super) fn vm_check_const(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let const_version = self.const_version;
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;  // ConstSiteId
+            movq rcx, [rip + const_version]; // usize
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_check_constant);
+            call rax;
+        };
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
@@ -146,6 +194,34 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    ///
+    /// Check class variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | name  |dst| op||               |
+    /// +---+---+---+---++---+---+---+---+
+    ///    rdi   r15
+    /// ~~~
+    /// - name: name of class variable (IdentId)
+    /// - dst: destination slot (SlotId)
+    ///
+    pub(super) fn vm_check_cvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movl rdx, rdi; // name: IdentId
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq rax, (runtime::check_class_var);
+            call rax;
+        };
         self.vm_store_r15();
         self.fetch_and_dispatch();
         label

@@ -112,6 +112,8 @@ impl IdentId {
     pub const UTF_8: IdentId = id!(48);
     pub const ASCII_8BIT: IdentId = id!(49);
     pub const _ENCODING: IdentId = id!(50);
+    pub const TO_ARY: IdentId = id!(51);
+    pub const TO_A: IdentId = id!(52);
 }
 
 impl IdentId {
@@ -202,7 +204,7 @@ impl IdentifierTable {
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
-            table: vec![String::new(); 50],
+            table: vec![String::new(); 100],
         };
         table.set_id("initialize", IdentId::INITIALIZE);
         table.set_id("Object", IdentId::OBJECT);
@@ -256,6 +258,8 @@ impl IdentifierTable {
         table.set_id("UTF_8", IdentId::UTF_8);
         table.set_id("ASCII_8BIT", IdentId::ASCII_8BIT);
         table.set_id("/encoding", IdentId::_ENCODING);
+        table.set_id("to_ary", IdentId::TO_ARY);
+        table.set_id("to_a", IdentId::TO_A);
         table
     }
 

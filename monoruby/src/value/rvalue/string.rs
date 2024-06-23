@@ -36,7 +36,7 @@ pub struct StringInner {
 }
 
 impl StringInner {
-    pub fn to_string(&self) -> String {
+    pub fn to_str(&self) -> Result<std::borrow::Cow<str>> {
         match self.ty {
             Encoding::Ascii8 => {
                 let mut res = String::new();
@@ -47,17 +47,14 @@ impl StringInner {
                         res += &format!(r#"\x{:0>2X}"#, c);
                     }
                 }
-                res
+                Ok(std::borrow::Cow::Owned(res))
             }
             Encoding::Utf8 => match std::str::from_utf8(self) {
-                Ok(s) => s.to_string(),
-                Err(err) => {
-                    let s = String::from_utf8_lossy(self).to_string();
-                    panic!("invalid byte sequence: {s} {err}");
-                    //Err(MonorubyErr::runtimeerr(format!(
-                    //    "invalid byte sequence: {s}",
-                    //)))
-                }
+                Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
+                Err(err) => Err(MonorubyErr::runtimeerr(format!(
+                    "invalid byte sequence: {}",
+                    err.to_string()
+                ))),
             },
         }
     }
@@ -206,7 +203,7 @@ impl StringInner {
             Ok(s) => Ok(s),
             Err(_) => Err(MonorubyErr::runtimeerr(format!(
                 "invalid byte sequence. {:?}",
-                self.to_string()
+                self.to_str()
             ))),
         }
     }
@@ -244,32 +241,51 @@ impl StringInner {
         &self.content
     }
 
-    pub fn length(&self) -> usize {
-        match self.ty {
+    ///
+    /// Get the length in char of the string `self`.
+    ///
+    pub fn char_length(&self) -> Result<usize> {
+        let len = match self.ty {
             Encoding::Ascii8 => self.content.len(),
-            Encoding::Utf8 => self.check_utf8().unwrap().chars().count(),
-        }
+            Encoding::Utf8 => self.check_utf8()?.chars().count(),
+        };
+        Ok(len)
     }
 
     ///
-    /// Convert `i` to the position of the char in the string with `len` chars.
+    /// Convert `char_pos` to the true position in char of the string `self`.
     ///
     /// Return None if `i` is out of range.
     ///
-    pub fn conv_index(&self, i: i64) -> Option<usize> {
-        let len = self.length();
-        if i >= 0 {
-            if i <= len as i64 {
-                Some(i as usize)
+    pub fn conv_char_index(&self, char_pos: i64) -> Result<Option<usize>> {
+        let len = self.char_length()?;
+        if char_pos >= 0 {
+            if char_pos <= len as i64 {
+                Ok(Some(char_pos as usize))
             } else {
-                None
+                Ok(None)
             }
         } else {
-            match len as i64 + i {
-                n if n < 0 => None,
-                n => Some(n as usize),
+            match len as i64 + char_pos {
+                n if n < 0 => Ok(None),
+                n => Ok(Some(n as usize)),
             }
         }
+    }
+
+    pub fn byte_to_char_index(&self, byte_pos: usize) -> Result<usize> {
+        for (i, (pos, _)) in self.check_utf8()?.char_indices().enumerate() {
+            if pos == byte_pos {
+                return Ok(i);
+            } else if pos > byte_pos {
+                return Err(MonorubyErr::runtimeerr(format!(
+                    "invalid byte position: {byte_pos}"
+                )));
+            }
+        }
+        Err(MonorubyErr::runtimeerr(format!(
+            "invalid byte position: {byte_pos}"
+        )))
     }
 
     pub fn get_range(&self, index: usize, len: usize) -> std::ops::Range<usize> {

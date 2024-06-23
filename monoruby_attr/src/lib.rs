@@ -42,11 +42,11 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let base = ast.ident.clone();
     let inner = Ident::new(&format!("{base}Inner"), Span::call_site());
     let as_ref = Ident::new(
-        &format!("as_{}", base.to_string().to_lowercase()),
+        &format!("as_{}_inner", base.to_string().to_lowercase()),
         Span::call_site(),
     );
     let as_ref_mut = Ident::new(
-        &format!("as_{}_mut", base.to_string().to_lowercase()),
+        &format!("as_{}_inner_mut", base.to_string().to_lowercase()),
         Span::call_site(),
     );
     //let objkind = Ident::new(&base.to_string().to_uppercase(), Span::call_site());
@@ -100,6 +100,10 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #base {
+            pub fn new_unchecked(val: Value) -> Self{
+                #base(val)
+            }
+
             pub fn as_ptr(self) -> *mut RValue {
                 self.0.id() as _
             }

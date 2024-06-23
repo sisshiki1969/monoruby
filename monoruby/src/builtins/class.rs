@@ -96,6 +96,7 @@ pub(super) fn gen_class_new(
             dst,
             ..
         } = *callsite;
+        ir.writeback_acc(bb);
         ir.write_back_callargs(bb, callsite);
         ir.unlink(bb, dst);
         ir.stack2reg(recv, GP::Rdi);

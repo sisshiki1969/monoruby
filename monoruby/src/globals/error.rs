@@ -113,7 +113,7 @@ impl MonorubyErr {
             MonorubyErrKind::Type(_) => "TypeError",
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
-            MonorubyErrKind::Load => "LoadError",
+            MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Internal => "InternalError",
             MonorubyErrKind::Regex => "RegexError",
             MonorubyErrKind::Runtime => "RuntimeError",
@@ -149,28 +149,16 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         let msg = format!("unsupported parameter kind {param:?}");
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
     }
 
     pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported lhs {:?}", lhs.kind);
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)
     }
 
     pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported nodekind {:?}", expr.kind);
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, expr.loc, sourceinfo)
     }
 
@@ -180,10 +168,6 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         let msg = msg.to_string();
-        eprintln!(
-            "{}",
-            ansi_term::Colour::Red.paint(format!("warning: {msg}"))
-        );
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
     }
 
@@ -436,15 +420,18 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn loaderr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Load, msg)
+    pub(crate) fn loaderr(msg: impl ToString, path: PathBuf) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Load(path), msg)
     }
 
     pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
-        MonorubyErr::loaderr(match err {
-            Some(err) => format!("can't load {path:?}. {err}"),
-            None => format!("can't load {path:?}"),
-        })
+        MonorubyErr::loaderr(
+            match err {
+                Some(err) => format!("can't load {path:?}. {err}"),
+                None => format!("can't load {path:?}"),
+            },
+            path.into(),
+        )
     }
 
     pub(crate) fn internalerr(msg: impl ToString) -> MonorubyErr {
@@ -482,7 +469,7 @@ pub enum MonorubyErrKind {
     Type(TypeErrKind),
     Index,
     Frozen,
-    Load,
+    Load(PathBuf),
     Internal,
     Regex,
     Runtime,

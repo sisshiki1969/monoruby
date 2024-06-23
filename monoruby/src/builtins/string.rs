@@ -21,10 +21,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<<", shl, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
-    globals.define_builtin_func_with(STRING_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
-    globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
-    globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
+    globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
+    globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
+    globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
@@ -41,6 +42,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "gsub!", gsub_, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
@@ -49,7 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
-    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "to_s", &["to_str"], tos, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
@@ -593,6 +596,7 @@ fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
 
 ///
 /// ### String#[]
+///
 /// - self[nth] -> String | nil
 /// - self[nth, len] -> String | nil
 /// [NOT SUPPORTED] - self[substr] -> String | nil
@@ -607,7 +611,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = self_.as_bytes();
     let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
-        let index = match lhs.conv_index(i) {
+        let index = match lhs.conv_char_index(i)? {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
@@ -636,7 +640,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             info.start.expect_integer()?,
             info.end.expect_integer()? - info.exclude_end() as i64,
         );
-        let (start, len) = match (lhs.conv_index(start), lhs.conv_index(end)) {
+        let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
                 if start > end {
                     (start, 0)
@@ -651,38 +655,48 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let lhs = lhs.check_utf8()?;
-        let nth = if lfp.try_arg(1).is_none() {
-            0
+        let nth = if let Some(i) = lfp.try_arg(1) {
+            i.coerce_to_i64()?
         } else {
-            lfp.arg(1).coerce_to_i64()?
+            0
         };
-        match re.captures(lhs)? {
-            None => return Ok(Value::nil()),
-            Some(captures) => {
-                vm.save_captures(&captures, &lhs);
-                let len = captures.len() as i64;
-                let nth = if nth >= 0 {
-                    nth as usize
-                } else {
-                    match len + nth {
-                        i if i > 0 => i as usize,
-                        _ => return Ok(Value::nil()),
-                    }
-                };
-                match captures.get(nth) {
-                    Some(m) => Ok(Value::string_from_str(m.as_str())),
-                    None => Ok(Value::nil()),
-                }
-            }
-        }
+        string_match_index(vm, lhs, re, nth)
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
     }
 }
 
+fn string_match_index(
+    vm: &mut Executor,
+    s: &StringInner,
+    re: &RegexpInner,
+    nth: i64,
+) -> Result<Value> {
+    let lhs = s.check_utf8()?;
+    match re.captures(lhs)? {
+        None => return Ok(Value::nil()),
+        Some(captures) => {
+            vm.save_captures(&captures, &lhs);
+            let len = captures.len() as i64;
+            let nth = if nth >= 0 {
+                nth as usize
+            } else {
+                match len + nth {
+                    i if i > 0 => i as usize,
+                    _ => return Ok(Value::nil()),
+                }
+            };
+            match captures.get(nth) {
+                Some(m) => Ok(Value::string_from_str(m.as_str())),
+                None => Ok(Value::nil()),
+            }
+        }
+    }
+}
+
 ///
 /// ### String#[]=
+///
 /// - self[nth] = val
 /// - self[nth, len] = val
 /// - [NOT SUPPORTED] self[substr] = val
@@ -814,36 +828,65 @@ fn str_next(self_: &str) -> String {
 
 ///
 /// ### String#start_with?
-/// - start_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// - start_with?(*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
 #[monoruby_builtin]
 fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
+    let arg0 = lfp.arg(0).as_array();
+    for a in arg0.iter().map(|v| v.expect_str()) {
+        if string.starts_with(a?) {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
+}
+
+///
+/// ### String#delete_prefix!
+///
+/// - delete_prefix!(prefix) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
+#[monoruby_builtin]
+fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let string = self_.expect_str()?;
     let arg0 = lfp.arg(0);
     let arg = arg0.expect_str()?;
-    let res = string.starts_with(arg);
-    Ok(Value::bool(res))
+    if string.starts_with(arg) {
+        lfp.self_val().replace_str(&string[arg.len()..]);
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::nil())
+    }
 }
 
 ///
 /// ### String#end_with?
-/// - end_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// - end_with?(*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
 #[monoruby_builtin]
 fn end_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let string = self_.expect_str()?;
-    let arg0 = lfp.arg(0);
-    let arg = arg0.expect_str()?;
-    let res = string.ends_with(arg);
-    Ok(Value::bool(res))
+    let arg0 = lfp.arg(0).as_array();
+    for a in arg0.iter().map(|v| v.expect_str()) {
+        if string.ends_with(a?) {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
 }
 
 ///
 /// ### String#split
+///
 /// - split(sep = $;, limit = 0) -> [String]
 /// - split(sep = $;, limit = 0) {|s| ... } -> self
 ///
@@ -973,6 +1016,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 ///
 /// ### String#slice!
+///
 /// - slice!(nth) -> String
 /// - slice!(pos, len) -> String
 /// - [NOT SUPPRTED] slice!(substr) -> String
@@ -1095,6 +1139,7 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 
 ///
 /// ### String#chomp
+///
 /// - chomp(rs = $/) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
@@ -1118,6 +1163,7 @@ fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 
 ///
 /// ### String#chomp!
+///
 /// - chomp!(rs = $/) -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/chomp.html]
@@ -1376,7 +1422,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Some(block) => {
             let ary = Value::array_from_vec(vec);
             vm.temp_push(ary);
-            let res = scan_inner(vm, globals, block, ary.as_array());
+            let res = scan_inner(vm, globals, block, &ary.as_array());
             vm.temp_pop();
             res?;
             Ok(lfp.self_val())
@@ -1429,8 +1475,71 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 }
 
 ///
+/// ### String#match?
+///
+/// - match?(regexp, pos = 0) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/match=3f.html]
+#[monoruby_builtin]
+fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let pos = if let Some(arg1) = lfp.try_arg(1) {
+        match arg1.coerce_to_i64()? {
+            pos if pos >= 0 => pos as usize,
+            _ => return Ok(Value::nil()),
+        }
+    } else {
+        0usize
+    };
+    let self_ = lfp.self_val();
+    let given = self_.expect_str()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+
+    let res = RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)?;
+    Ok(Value::bool(!res.is_nil()))
+}
+
+///
+/// ### String#index
+///
+/// - index(pattern, pos = 0) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/index.html]
+#[monoruby_builtin]
+fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let char_pos = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.coerce_to_i64()?
+    } else {
+        0
+    };
+    let self_ = lfp.self_val();
+    let given = self_.is_bytes().unwrap();
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+
+    let char_pos = match given.conv_char_index(char_pos)? {
+        Some(pos) => pos,
+        None => return Ok(Value::nil()),
+    };
+
+    let s = given.check_utf8()?;
+    let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
+    match re.captures_from_pos(s, byte_pos)? {
+        None => Ok(Value::nil()),
+        Some(captures) => {
+            vm.save_captures(&captures, s);
+            let start = captures.get(0).unwrap().start();
+            let char_pos = given.byte_to_char_index(start)?;
+            Ok(Value::integer(char_pos as i64))
+        }
+    }
+}
+
+///
 /// ### String#to_s
 ///
+/// - to_s -> String
+/// - to_str -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
@@ -1445,7 +1554,7 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let length = lfp.self_val().as_bytes().length();
+    let length = lfp.self_val().as_bytes().char_length()?;
     Ok(Value::integer(length as i64))
 }
 
@@ -1795,7 +1904,7 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
 #[monoruby_builtin]
 fn count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let args = Array::new(lfp.arg(0));
+    let args = lfp.arg(0).as_array();
     let self_ = lfp.self_val();
     let target = self_.as_str();
     let mut c = 0;
@@ -2389,11 +2498,27 @@ mod test {
         run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
         run_test(r##"'hoge 髭男 hege bar'.match('髭.', 5)[0]"##);
         run_test(r##"'髭女 髭男 髭面 髭剃'.match('髭.', 5)[0]"##);
+
+        run_test(r##""Ruby".match?(/R.../)"##);
+        run_test(r##""Ruby".match?(/R.../, 1)"##);
+        run_test(r##""Ruby".match?(/P.../)"##);
     }
 
     #[test]
     fn length() {
         run_test(r##""本日は快晴なり".length"##);
+    }
+
+    #[test]
+    fn index() {
+        run_test(r##""超時空要塞".index(/時/)"##);
+        run_test(r##""超時空要塞".index(/海/)"##);
+        run_test(r##""超時空要塞".index(/時/, 3)"##);
+        run_test(r##""超時空要塞".index(/時/, 30)"##);
+        run_test(r##""超時空要塞".index(/時/, -30)"##);
+        run_test(r##""超時空要塞".index(/時/, -3)"##);
+        run_test(r##""超時空要塞".index(/時/, -4)"##);
+        run_test(r##""超時空要塞".index(/時/, -4.0)"##);
     }
 
     #[test]
@@ -2418,8 +2543,14 @@ mod test {
     fn with() {
         run_test(r##""string".start_with?("str")"##);
         run_test(r##""string".start_with?("ing")"##);
+        run_test(r##""string".start_with?("jng", "hng", "ing")"##);
+        run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
+        run_test(r##""hello".delete_prefix!("hel")"##);
+        run_test(r##""hello".delete_prefix!("hel")"##);
         run_test(r##""string".end_with?("str")"##);
         run_test(r##""string".end_with?("ing")"##);
+        run_test(r##""string".end_with?("jng", "hng", "ing")"##);
+        run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
     }
 
     #[test]

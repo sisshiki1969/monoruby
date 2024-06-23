@@ -284,7 +284,8 @@ impl BytecodeGen {
             | NodeKind::SingletonMethodDef(..)
             | NodeKind::ClassDef { .. }
             | NodeKind::SingletonClassDef { .. }
-            | NodeKind::Redo => {}
+            | NodeKind::Redo
+            | NodeKind::DiscardLhs => {}
             NodeKind::CompStmt(nodes)
             | NodeKind::InterporatedString(nodes)
             | NodeKind::Array(nodes, ..)

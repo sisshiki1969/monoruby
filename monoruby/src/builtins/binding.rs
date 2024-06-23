@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let binding = self_val.as_binding();
+    let binding = self_val.as_binding_inner();
     let v = if let Some(fid) = binding.func_id() {
         globals[fid].as_ruby_func().local_variables()
     } else {

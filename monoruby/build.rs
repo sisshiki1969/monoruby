@@ -1,6 +1,6 @@
 use dirs;
-use std::fs;
 use std::process::Command;
+use std::{fs, io};
 
 fn main() {
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
@@ -21,27 +21,33 @@ fn main() {
         }
     }
 
-    match Command::new("gem").args(["environment", "paths"]).output() {
-        Ok(output) => {
-            let dest_path = lib_path.clone().join("gem_path");
-            let path_list: Vec<_> = std::str::from_utf8(&output.stdout)
-                .unwrap()
-                .split(':')
-                .map(|s| s.to_string())
-                .collect();
-            let list = path_list.join("\n");
-            fs::write(dest_path, list).unwrap();
-        }
-        Err(_) => {
-            println!("failed to read ruby gem path");
-        }
-    };
+    let mut directories = vec![(std::path::PathBuf::from("startup"), lib_path)];
 
-    for entry in fs::read_dir("startup").unwrap() {
-        let path = entry.unwrap().path();
-        let file_name = path.file_name().unwrap();
-        fs::copy(&path, lib_path.join(file_name)).unwrap();
+    while let Some((from_dir, to_dir)) = directories.pop() {
+        directories.extend(copy_dir(from_dir, to_dir).unwrap());
     }
 
     //println!("cargo:rerun-if-changed=startup");
+}
+
+fn copy_dir(
+    from_dir: std::path::PathBuf,
+    to_dir: std::path::PathBuf,
+) -> io::Result<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+    match to_dir.try_exists() {
+        Ok(true) => {}
+        _ => fs::create_dir(&to_dir)?,
+    }
+    let mut directories = vec![];
+    for entry in fs::read_dir(&from_dir)? {
+        let from = entry.unwrap().path();
+        let from_name = from.file_name().unwrap();
+        let to = to_dir.join(from_name);
+        if from.is_dir() {
+            directories.push((from, to));
+            continue;
+        }
+        fs::copy(&from, &to)?;
+    }
+    Ok(directories)
 }

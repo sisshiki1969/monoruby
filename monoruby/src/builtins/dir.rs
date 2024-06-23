@@ -10,6 +10,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Dir").id();
     globals.define_builtin_class_func_with_kw(klass, "glob", glob, 1, 2, false, &["base", "sort"]);
+    globals.define_builtin_class_func(klass, "home", home, 0);
 }
 
 #[derive(Debug, Clone)]
@@ -49,8 +50,8 @@ enum PathComponent {
 ///
 /// ### Dir.[]
 ///
-/// - glob(pattern, [NOT SUPPORTED] flags = 0, [NOT SUPPORTED] base: nil, [NOT SUPPORTED] sort: true) -> [String]
-/// - glob(pattern, [NOT SUPPORTED] flags = 0, [NOT SUPPORTED] base: nil, [NOT SUPPORTED] sort: true) {|file| ...} -> nil
+/// - glob(pattern, [NOT SUPPORTED] flags = 0, base: nil, [NOT SUPPORTED] sort: true) -> [String]
+/// - glob(pattern, [NOT SUPPORTED] flags = 0, base: nil, [NOT SUPPORTED] sort: true) {|file| ...} -> nil
 ///
 /// #### Arguments
 ///
@@ -64,6 +65,15 @@ enum PathComponent {
 fn glob(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let pat_val = lfp.arg(0);
+    let base = if let Some(base) = lfp.try_arg(2) {
+        if base.is_nil() {
+            None
+        } else {
+            Some(base.expect_string()?)
+        }
+    } else {
+        None
+    };
     let mut pattern = pat_val
         .expect_str()?
         .split(std::path::MAIN_SEPARATOR_STR)
@@ -74,6 +84,14 @@ fn glob(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Ok(Value::array_empty());
         }
         PathPair::new(PathBuf::from("/"), PathBuf::from("/"))
+    } else if let Some(base) = base {
+        let mut path = std::env::current_dir().unwrap();
+        path.push(base);
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(_) => return Ok(Value::array_empty()),
+        };
+        PathPair::new(path, PathBuf::new())
     } else {
         PathPair::new(std::env::current_dir().unwrap(), PathBuf::new())
     };
@@ -136,6 +154,22 @@ fn traverse_dir(
     }
 }
 
+///
+/// ### Dir.home
+///
+/// - home -> String | nil
+/// - [NOT SUPPORTED] home(user) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/home.html]
+#[monoruby_builtin]
+fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
+    let home = match dirs::home_dir() {
+        Some(home) => home,
+        None => return Ok(Value::nil()),
+    };
+    Ok(Value::string(home.to_string_lossy().to_string()))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -155,5 +189,11 @@ mod test {
         run_test(r#"Dir.glob("/")"#);
         run_test(r#"Dir.glob(".")"#);
         run_test(r#"Dir.glob("")"#);
+        run_test(r#"Dir.glob("*", base: "src/builtins")"#);
+    }
+
+    #[test]
+    fn home() {
+        run_test(r#"Dir.home"#);
     }
 }

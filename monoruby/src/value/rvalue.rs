@@ -318,7 +318,7 @@ impl std::fmt::Debug for RValue {
                         3 => format!("OBJECT({:?})", self.kind.object),
                         4 => format!("BIGNUM({:?})", self.kind.bignum),
                         5 => format!("FLOAT({:?})", self.kind.float),
-                        6 => format!("STRING({})", self.kind.string.to_string()),
+                        6 => format!("STRING({})", self.kind.string.to_str().unwrap()),
                         7 => format!("TIME({:?})", self.kind.time),
                         8 => format!("ARRAY({:?})", self.kind.array),
                         9 => format!("RANGE({:?})", self.kind.range),
@@ -1087,6 +1087,15 @@ impl RValue {
         Self::new_io(IoInner::stderr())
     }
 
+    pub(super) fn new_file(file: std::fs::File, name: String) -> Self {
+        let inner = IoInner::file(file, name);
+        RValue {
+            header: Header::new(FILE_CLASS, ObjKind::IO),
+            kind: ObjKind::io(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
             header: Header::new(TIME_CLASS, ObjKind::TIME),
@@ -1434,6 +1443,8 @@ impl ExceptionInner {
     pub fn kind(&self) -> MonorubyErrKind {
         if self.class_name == IdentId::get_id("StopIteration") {
             return MonorubyErrKind::StopIteration;
+        } else if self.class_name == IdentId::get_id("LoadError") {
+            return MonorubyErrKind::Load(std::path::PathBuf::new());
         }
         MonorubyErrKind::Runtime
     }
