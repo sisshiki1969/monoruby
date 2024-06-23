@@ -955,8 +955,10 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         res
     };
     let mut ary = lfp.self_val().as_array();
-    eprintln!("sort_by!: {}", ary.to_s(globals));
-    vm.sort_by(globals, &mut ary, f)?;
+    let gc_enabled = Globals::gc_enable(false);
+    let res = vm.sort_by(globals, &mut ary, f);
+    Globals::gc_enable(gc_enabled);
+    res?;
     Ok(ary.into())
 }
 
@@ -977,15 +979,11 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
              rhs: Value|
      -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-        eprintln!("lhs: {}", lhs.to_s(globals));
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        eprintln!("rhs: {}", rhs.to_s(globals));
         let res = Executor::compare_values(vm, globals, lhs, rhs);
         res
     };
     let mut ary = lfp.self_val().dup().as_array();
-    eprintln!("sort_by: {}", ary.to_s(globals));
-
     let gc_enabled = Globals::gc_enable(false);
     let res = vm.sort_by(globals, &mut ary, f);
     Globals::gc_enable(gc_enabled);
