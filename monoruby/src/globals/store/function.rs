@@ -299,7 +299,7 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl std::default::Default for Funcs {
     fn default() -> Self {
-        let mut info = MonoVec::with_capacity(256);
+        let mut info = MonoVec::with_capacity(8192);
         info.push(FuncInfo::default());
         Self {
             info,

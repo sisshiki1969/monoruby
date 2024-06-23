@@ -260,7 +260,7 @@ impl Codegen {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            movl rsi, r12;
+            movq rsi, r12;
             movl rdx, (id);
             movq rax, (runtime::get_special_var);
             call rax;
