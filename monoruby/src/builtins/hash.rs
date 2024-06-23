@@ -342,7 +342,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_hashmap_inner();
     let mut ary = inner.keys();
-    vm.sort_by(globals, &mut ary, Executor::compare_values)?;
+    vm.sort(globals, &mut ary)?;
     let res: Vec<_> = ary
         .into_iter()
         .map(|k| Value::array2(k, inner.get(k).unwrap()))

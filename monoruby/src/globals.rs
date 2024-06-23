@@ -360,8 +360,18 @@ impl Globals {
         info.data_ref()
     }
 
-    pub fn gc_enable(flag: bool) {
-        alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = flag);
+    ///
+    /// Set GC enable flag.
+    ///
+    /// ### return
+    /// GC enable flag before set.
+    ///
+    pub fn gc_enable(flag: bool) -> bool {
+        alloc::ALLOC.with(|alloc| {
+            let old = alloc.borrow().gc_enabled;
+            alloc.borrow_mut().gc_enabled = flag;
+            old
+        })
     }
 
     pub fn flush_stdout(&mut self) {
