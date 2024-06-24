@@ -885,11 +885,7 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let f = |vm: &mut Executor,
-                 globals: &mut Globals,
-                 lhs: Value,
-                 rhs: Value|
-         -> Result<std::cmp::Ordering> {
+        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
             let res = vm
                 .invoke_block(globals, &data, &[lhs, rhs])?
                 .expect_integer()?;
@@ -901,7 +897,7 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
                 std::cmp::Ordering::Greater
             })
         };
-        vm.sort_by(globals, &mut ary, f)?;
+        executor::op::sort_by(&mut ary, f)?;
     } else {
         vm.sort(globals, &mut ary)?;
     }
@@ -945,11 +941,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
-    let f = |vm: &mut Executor,
-             globals: &mut Globals,
-             lhs: Value,
-             rhs: Value|
-     -> Result<std::cmp::Ordering> {
+    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
         let res = Executor::compare_values(vm, globals, lhs, rhs);
@@ -957,7 +949,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     };
     let mut ary = lfp.self_val().as_array();
     let gc_enabled = Globals::gc_enable(false);
-    let res = vm.sort_by(globals, &mut ary, f);
+    let res = executor::op::sort_by(&mut ary, f);
     Globals::gc_enable(gc_enabled);
     res?;
     Ok(ary.into())
@@ -974,11 +966,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
-    let f = |vm: &mut Executor,
-             globals: &mut Globals,
-             lhs: Value,
-             rhs: Value|
-     -> Result<std::cmp::Ordering> {
+    let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
         let res = Executor::compare_values(vm, globals, lhs, rhs);
@@ -986,7 +974,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     };
     let mut ary = lfp.self_val().dup().as_array();
     let gc_enabled = Globals::gc_enable(false);
-    let res = vm.sort_by(globals, &mut ary, f);
+    let res = executor::op::sort_by(&mut ary, f);
     Globals::gc_enable(gc_enabled);
     res?;
     Ok(ary.into())

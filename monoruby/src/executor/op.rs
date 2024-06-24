@@ -6,6 +6,7 @@ mod sort;
 pub(crate) use binary_ops::*;
 use num::{BigInt, ToPrimitive};
 use paste::paste;
+pub(crate) use sort::*;
 
 //
 // Generic operations.
