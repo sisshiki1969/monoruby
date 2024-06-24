@@ -149,9 +149,15 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     globals: &mut Globals,
-    block_handler: BlockHandler,
+    block_handler: Option<BlockHandler>,
 ) -> Option<Value> {
-    match vm.generate_proc(globals, block_handler) {
+    let bh = match block_handler {
+        Some(bh) => bh,
+        None => {
+            return Some(Value::nil());
+        }
+    };
+    match vm.generate_proc(globals, bh) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);

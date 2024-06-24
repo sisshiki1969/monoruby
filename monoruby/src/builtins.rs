@@ -48,7 +48,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS);
     module::init(globals);
     class::init(globals);
-    kernel::init(globals);
+    let kernel = kernel::init(globals);
     exception::init(globals);
     numeric::init(globals);
     string::init(globals);
@@ -71,6 +71,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     binding::init(globals);
     dir::init(globals);
     main_object::init(globals);
+    OBJECT_CLASS.get_module(globals).include_module(kernel);
 }
 
 #[derive(Debug, Clone, Copy)]

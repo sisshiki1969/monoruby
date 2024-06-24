@@ -89,6 +89,18 @@ class Symbol
 end
 
 class Thread
+  @@current = Thread.new
+  def self.current
+    @@current
+  end
+  def [](key)
+    @keys ||= {}
+    @keys[key]
+  end
+  def []=(key, value)
+    @keys ||= {}
+    @keys[key] = value
+  end
   class Mutex
     def synchronize
       yield

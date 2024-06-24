@@ -31,6 +31,14 @@ impl Module {
         class
     }
 
+    pub fn get_real_superclass(&self) -> Option<Module> {
+        let mut class = self.superclass()?;
+        while class.is_iclass() {
+            class = class.superclass()?;
+        }
+        Some(class)
+    }
+
     pub fn is_exception(&self) -> bool {
         let mut module = *self;
         if module.id() == EXCEPTION_CLASS {
@@ -84,6 +92,10 @@ impl ModuleInner {
         self.superclass
     }
 
+    pub fn set_superclass(&mut self, super_class: Option<Module>) {
+        self.superclass = super_class;
+    }
+
     pub fn superclass_value(&self) -> Option<Value> {
         self.superclass.map(|m| m.0)
     }
@@ -92,8 +104,12 @@ impl ModuleInner {
         self.superclass.map(|m| m.id())
     }
 
-    pub fn class_type(&self) -> ModuleType {
-        self.class_type.clone()
+    pub fn class_type(&self) -> &ModuleType {
+        &self.class_type
+    }
+
+    pub fn is_iclass(&self) -> bool {
+        self.class_type == ModuleType::IClass
     }
 
     pub fn is_singleton(&self) -> Option<Value> {

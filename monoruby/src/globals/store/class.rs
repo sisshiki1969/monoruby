@@ -6,34 +6,35 @@ mod constants;
 mod instance_var;
 pub(crate) use instance_var::*;
 
-pub const OBJECT_CLASS: ClassId = ClassId::new(1);
-pub const CLASS_CLASS: ClassId = ClassId::new(2);
-pub const NIL_CLASS: ClassId = ClassId::new(3);
-pub const TRUE_CLASS: ClassId = ClassId::new(4);
-pub const FALSE_CLASS: ClassId = ClassId::new(5);
-pub const INTEGER_CLASS: ClassId = ClassId::new(6);
-pub const FLOAT_CLASS: ClassId = ClassId::new(7);
-pub const STRING_CLASS: ClassId = ClassId::new(8);
-pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
-pub const TIME_CLASS: ClassId = ClassId::new(10);
-pub const ARRAY_CLASS: ClassId = ClassId::new(11);
-pub const RANGE_CLASS: ClassId = ClassId::new(12);
-pub const PROC_CLASS: ClassId = ClassId::new(13);
-pub const HASH_CLASS: ClassId = ClassId::new(14);
-pub const REGEXP_CLASS: ClassId = ClassId::new(15);
-pub const MODULE_CLASS: ClassId = ClassId::new(16);
-pub const IO_CLASS: ClassId = ClassId::new(17);
-pub const EXCEPTION_CLASS: ClassId = ClassId::new(18);
-pub const STRUCT_CLASS: ClassId = ClassId::new(19);
-pub const METHOD_CLASS: ClassId = ClassId::new(20);
-pub const FIBER_CLASS: ClassId = ClassId::new(21);
-pub const ENUMERATOR_CLASS: ClassId = ClassId::new(22);
-pub const GENERATOR_CLASS: ClassId = ClassId::new(23);
-pub const COMPLEX_CLASS: ClassId = ClassId::new(24);
-pub const NUMERIC_CLASS: ClassId = ClassId::new(25);
-pub const BINDING_CLASS: ClassId = ClassId::new(26);
-pub const UMETHOD_CLASS: ClassId = ClassId::new(27);
-pub const FILE_CLASS: ClassId = ClassId::new(28);
+pub const BASIC_OBJECT_CLASS: ClassId = ClassId::new(1);
+pub const OBJECT_CLASS: ClassId = ClassId::new(2);
+pub const CLASS_CLASS: ClassId = ClassId::new(3);
+pub const NIL_CLASS: ClassId = ClassId::new(4);
+pub const TRUE_CLASS: ClassId = ClassId::new(5);
+pub const FALSE_CLASS: ClassId = ClassId::new(6);
+pub const INTEGER_CLASS: ClassId = ClassId::new(7);
+pub const FLOAT_CLASS: ClassId = ClassId::new(8);
+pub const STRING_CLASS: ClassId = ClassId::new(9);
+pub const SYMBOL_CLASS: ClassId = ClassId::new(10);
+pub const TIME_CLASS: ClassId = ClassId::new(11);
+pub const ARRAY_CLASS: ClassId = ClassId::new(12);
+pub const RANGE_CLASS: ClassId = ClassId::new(13);
+pub const PROC_CLASS: ClassId = ClassId::new(14);
+pub const HASH_CLASS: ClassId = ClassId::new(15);
+pub const REGEXP_CLASS: ClassId = ClassId::new(16);
+pub const MODULE_CLASS: ClassId = ClassId::new(17);
+pub const IO_CLASS: ClassId = ClassId::new(18);
+pub const EXCEPTION_CLASS: ClassId = ClassId::new(19);
+pub const STRUCT_CLASS: ClassId = ClassId::new(20);
+pub const METHOD_CLASS: ClassId = ClassId::new(21);
+pub const FIBER_CLASS: ClassId = ClassId::new(22);
+pub const ENUMERATOR_CLASS: ClassId = ClassId::new(23);
+pub const GENERATOR_CLASS: ClassId = ClassId::new(24);
+pub const COMPLEX_CLASS: ClassId = ClassId::new(25);
+pub const NUMERIC_CLASS: ClassId = ClassId::new(26);
+pub const BINDING_CLASS: ClassId = ClassId::new(27);
+pub const UMETHOD_CLASS: ClassId = ClassId::new(28);
+pub const FILE_CLASS: ClassId = ClassId::new(29);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -42,33 +43,35 @@ pub struct ClassId(NonZeroU32);
 impl std::fmt::Debug for ClassId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.u32() {
-            1 => write!(f, "OBJECT"),
-            2 => write!(f, "CLASS"),
-            3 => write!(f, "NIL"),
-            4 => write!(f, "TRUE"),
-            5 => write!(f, "FALSE"),
-            6 => write!(f, "INTEGER"),
-            7 => write!(f, "FLOAT"),
-            8 => write!(f, "STRING"),
-            9 => write!(f, "SYMBOL"),
-            10 => write!(f, "TIME"),
-            11 => write!(f, "ARRAY"),
-            12 => write!(f, "RANGE"),
-            13 => write!(f, "PROC"),
-            14 => write!(f, "HASH"),
-            15 => write!(f, "REGEXP"),
-            16 => write!(f, "MODULE"),
-            17 => write!(f, "IO"),
-            18 => write!(f, "EXCEPTION"),
-            19 => write!(f, "STRUCT"),
-            20 => write!(f, "METHOD"),
-            21 => write!(f, "FIBER"),
-            22 => write!(f, "ENUMERATOR"),
-            23 => write!(f, "GENERATOR"),
-            24 => write!(f, "COMPLEX"),
-            25 => write!(f, "NUMERIC"),
-            26 => write!(f, "BINDING"),
-            27 => write!(f, "UMETHOD"),
+            1 => write!(f, "BASICOBJECT"),
+            2 => write!(f, "OBJECT"),
+            3 => write!(f, "CLASS"),
+            4 => write!(f, "NIL"),
+            5 => write!(f, "TRUE"),
+            6 => write!(f, "FALSE"),
+            7 => write!(f, "INTEGER"),
+            8 => write!(f, "FLOAT"),
+            9 => write!(f, "STRING"),
+            10 => write!(f, "SYMBOL"),
+            11 => write!(f, "TIME"),
+            12 => write!(f, "ARRAY"),
+            13 => write!(f, "RANGE"),
+            14 => write!(f, "PROC"),
+            15 => write!(f, "HASH"),
+            16 => write!(f, "REGEXP"),
+            17 => write!(f, "MODULE"),
+            18 => write!(f, "IO"),
+            19 => write!(f, "EXCEPTION"),
+            20 => write!(f, "STRUCT"),
+            21 => write!(f, "METHOD"),
+            22 => write!(f, "FIBER"),
+            23 => write!(f, "ENUMERATOR"),
+            24 => write!(f, "GENERATOR"),
+            25 => write!(f, "COMPLEX"),
+            26 => write!(f, "NUMERIC"),
+            27 => write!(f, "BINDING"),
+            28 => write!(f, "UMETHOD"),
+            29 => write!(f, "FILE"),
             n => write!(f, "ClassId({n})"),
         }
     }

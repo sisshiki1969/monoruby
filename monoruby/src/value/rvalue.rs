@@ -749,7 +749,7 @@ impl RValue {
                     ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                     ObjKind::CLASS | ObjKind::MODULE => {
                         let class = self.as_module();
-                        ObjKind::class(class.id(), class.superclass(), class.class_type())
+                        ObjKind::class(class.id(), class.superclass(), class.class_type().clone())
                     }
                     ObjKind::OBJECT => ObjKind::object(),
                     ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),

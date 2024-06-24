@@ -70,7 +70,10 @@ pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 #[monoruby_builtin]
 fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class();
-    Ok(class.superclass_value().unwrap_or_default())
+    match class.get_real_superclass() {
+        Some(class) => Ok(class.into()),
+        None => Ok(Value::nil()),
+    }
 }
 
 /// ### Class#allocate

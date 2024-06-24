@@ -906,7 +906,7 @@ impl Executor {
                 if let Some(superclass) = superclass {
                     assert!(is_module != 1);
                     let superclass_id = superclass.expect_class(globals)?;
-                    if Some(superclass_id) != val.as_class().superclass_id() {
+                    if Some(superclass_id) != val.as_class().get_real_superclass().map(|m| m.id()) {
                         return Err(MonorubyErr::superclass_mismatch(name));
                     }
                 }

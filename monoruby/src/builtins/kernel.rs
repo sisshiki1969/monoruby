@@ -7,10 +7,9 @@ use std::{io::Write, mem::transmute};
 // Kernel module
 //
 
-pub(super) fn init(globals: &mut Globals) {
+pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_module("Kernel");
     let kernel_class = klass.id();
-    OBJECT_CLASS.get_module(globals).include_module(klass);
     globals.define_builtin_inline_func(
         kernel_class,
         "nil?",
@@ -64,6 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(kernel_class, "___dlopen", dlopen, 1);
     globals.define_builtin_module_func(kernel_class, "___dlsym", dlsym, 2);
     globals.define_builtin_module_func(kernel_class, "___call", dlcall, 4);
+    klass
 }
 
 ///

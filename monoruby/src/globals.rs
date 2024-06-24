@@ -171,13 +171,7 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
-            load_path: Value::array_from_vec(vec![
-                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/fiddle-1.1.2/lib"),
-                //Value::string_from_str("/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/gems/3.3.0/gems/json_pure-2.7.2/lib"),
-                //Value::string_from_str(
-                //    "/home/monochrome/.rbenv/versions/3.3.0/lib/ruby/3.3.0/x86_64-linux",
-                //),
-            ]),
+            load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "profile")]
@@ -193,7 +187,16 @@ impl Globals {
             #[cfg(feature = "emit-bc")]
             startup_flag: false,
         };
-        globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
+
+        let mut object_class =
+            globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
+        let basic_object = globals.define_builtin_class_by_str(
+            "BasicObject",
+            BASIC_OBJECT_CLASS,
+            None,
+            OBJECT_CLASS,
+        );
+        object_class.set_superclass(Some(basic_object));
         assert_eq!(
             FuncId::new(1),
             globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
