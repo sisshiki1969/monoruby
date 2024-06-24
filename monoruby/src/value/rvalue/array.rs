@@ -131,17 +131,19 @@ impl ArrayInner {
 
     /// Retains only elements which f(elem) returns true.
     ///
-    /// Returns true when one or some elements were removed.
-    pub fn retain<F>(&mut self, mut f: F) -> Result<bool>
+    /// Returns Some(last_value) when one or some elements were removed.
+    pub fn retain<F>(&mut self, mut f: F) -> Result<Option<Value>>
     where
         F: FnMut(&Value) -> Result<bool>,
     {
         let len = self.len();
         let mut del = 0;
+        let mut removed = None;
         {
             let v = &mut **self;
             for i in 0..len {
                 if !f(&v[i])? {
+                    removed = Some(v[i]);
                     del += 1;
                 } else if del > 0 {
                     v.swap(i - del, i);
@@ -151,7 +153,7 @@ impl ArrayInner {
         if del > 0 {
             self.truncate(len - del);
         }
-        Ok(del != 0)
+        Ok(removed)
     }
 
     pub fn to_s(&self, globals: &Globals) -> String {

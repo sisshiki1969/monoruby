@@ -89,6 +89,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "delete", delete, 1);
     globals.define_builtin_funcs_with(
         ARRAY_CLASS,
         "find_index",
@@ -1409,6 +1410,7 @@ fn uniq_noblock(mut ary: Array) -> Result<bool> {
             Ok(h.insert(HashKey(*x)))
         }
     })
+    .map(|removed| removed.is_some())
 }
 
 fn uniq_block(
@@ -1438,10 +1440,10 @@ fn uniq_inner(
         Ok(h.insert(HashKey(res)))
     });
     vm.temp_pop();
-    res
+    res.map(|removed| removed.is_some())
 }
 
-///
+///e
 /// ### Array#slice!
 ///
 /// - slice!(nth) -> object | nil
@@ -1599,11 +1601,34 @@ fn compact(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
-    Ok(if ary.retain(|v| Ok(!v.is_nil()))? {
+    Ok(if ary.retain(|v| Ok(!v.is_nil()))?.is_some() {
         lfp.self_val()
     } else {
         Value::nil()
     })
+}
+
+///
+/// ### Array#delete
+///
+/// - delete(val) -> object | nil
+/// - delete(val) {...} -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete.html]
+#[monoruby_builtin]
+fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    let arg0 = lfp.arg(0);
+    let mut f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
+    if let Some(last) = ary.retain(|v| f(v))? {
+        Ok(last)
+    } else {
+        if let Some(bh) = lfp.block() {
+            vm.invoke_block_once(globals, bh, &[])
+        } else {
+            Ok(Value::nil())
+        }
+    }
 }
 
 ///
@@ -2491,6 +2516,22 @@ mod test {
             r##"
         ary = [1, 2, 3]
         [ary.compact!, ary]
+        "##,
+        );
+    }
+
+    #[test]
+    fn delete() {
+        run_test(
+            r##"
+        res = []
+        a = [1, 2, 3, 2.0, 1]
+        res << a.delete(2)
+        res << a
+        res << a.delete(1) {"wow"}
+        res << a.delete(1) {"wow"}
+        res << a
+        res
         "##,
         );
     }

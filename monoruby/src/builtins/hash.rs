@@ -14,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
-    globals.define_builtin_func(HASH_CLASS, "each", each, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
     globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
@@ -221,12 +221,19 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// - each {|key, value| ... } -> self
 /// - each_pair {|key, value| ... } -> self
-/// - [NOT SUPPORTED] each -> Enumerator
+/// - each -> Enumerator
+/// - each_pair -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("each");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
     let ary = lfp.self_val();
     let data = vm.get_block_data(globals, bh)?;
     for (k, v) in ary.as_hashmap_inner().iter() {
@@ -239,12 +246,18 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// ### Hash#each_value
 ///
 /// - each_value {|value| ... } -> self
-/// - [NOT SUPPORTED] each_value -> Enumerator
+/// - each_value -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_value.html]
 #[monoruby_builtin]
 fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("each_value");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
     let ary = lfp.self_val();
     let iter = ary.as_hashmap_inner().iter().map(|(_, v)| v);
     vm.invoke_block_iter1(globals, bh, iter)?;
@@ -255,12 +268,18 @@ fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// ### Hash#each_key
 ///
 /// - each_key {|value| ... } -> self
-/// - [NOT SUPPORTED] each_key -> Enumerator
+/// - each_key -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_key.html]
 #[monoruby_builtin]
 fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("each_key");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
     let ary = lfp.self_val();
     let iter = ary.as_hashmap_inner().iter().map(|(k, _)| k);
     vm.invoke_block_iter1(globals, bh, iter)?;
