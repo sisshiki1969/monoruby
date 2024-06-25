@@ -1472,11 +1472,7 @@ impl BcPc {
                     TraceIr::MethodCall { callid }
                 }
                 32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
-                34 => TraceIr::Yield { callid: op2.into() },
-                35 => TraceIr::Array {
-                    dst: SlotId::new(op1),
-                    callid: CallSiteId::from(op2),
-                },
+                34..=35 => TraceIr::Yield { callid: op2.into() },
                 36 => TraceIr::OptCase {
                     cond: SlotId::new(op1),
                     optid: OptCaseId::from(op2),
@@ -1485,6 +1481,10 @@ impl BcPc {
                 38 => TraceIr::Lambda {
                     dst: SlotId::new(op1),
                     func_id: FuncId::new(op2),
+                },
+                39 => TraceIr::Array {
+                    dst: SlotId::new(op1),
+                    callid: CallSiteId::from(op2),
                 },
                 _ => unreachable!("{:016x}", op),
             }

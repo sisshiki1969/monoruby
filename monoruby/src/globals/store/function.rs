@@ -937,7 +937,8 @@ impl FuncInfo {
 
     pub(crate) fn single_arg_expand(&self) -> bool {
         let is_rest = self.ext.params.is_rest();
-        self.meta().is_block_style() && (self.ext.params.max_positional_args() > 1 || is_rest)
+        self.meta().is_block_style()
+            && (self.ext.params.max_positional_args() + if is_rest { 1 } else { 0 } > 1)
     }
 
     pub(crate) fn discard_excess_positional_args(&self) -> bool {

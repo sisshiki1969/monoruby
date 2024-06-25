@@ -91,7 +91,7 @@ impl Codegen {
     /// |pos|arg|rcv| op|| class |version|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
-    pub(super) fn vm_yield(&mut self) -> CodePtr {
+    pub(super) fn vm_yield(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         self.get_proc_data();
         // rax: outer, rdx: FuncId
@@ -103,7 +103,7 @@ impl Codegen {
             subq rsp, 8;
         };
         self.set_block_self_outer();
-        self.call(true);
+        self.call(is_simple);
         self.fetch_and_dispatch();
         label
     }

@@ -423,12 +423,16 @@ impl BytecodeGen {
                 self.encode_call(store, opcode, callsite, loc)?
             }
             BcIr::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
-            BcIr::Yield(box callsite) => self.encode_call(store, 34, callsite, loc)?,
+            BcIr::Yield(box callsite) => {
+                // 34, 35
+                let opcode = if callsite.is_simple() { 34 } else { 35 };
+                self.encode_call(store, opcode, callsite, loc)?
+            }
             BcIr::Array(ret, box callsite) => {
-                // 35
+                // 39
                 let op1 = self.slot_id(&ret);
                 let callid = self.new_callsite(store, callsite, loc)?;
-                Bc::from(enc_wl(35, op1.0, callid.get()))
+                Bc::from(enc_wl(39, op1.0, callid.get()))
             }
             BcIr::DefinedYield { ret } => {
                 // 64

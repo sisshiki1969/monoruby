@@ -278,11 +278,13 @@ impl Codegen {
         self.dispatch[31] = vm_call;
         self.dispatch[32] = vm_call;
         self.dispatch[33] = vm_call;
-        self.dispatch[34] = self.vm_yield();
-        self.dispatch[35] = self.vm_array();
+        self.dispatch[34] = self.vm_yield(true);
+        self.dispatch[35] = self.vm_yield(false);
+
         self.dispatch[36] = self.vm_optcase(branch);
         self.dispatch[37] = self.vm_nilbr(branch);
         self.dispatch[38] = self.vm_lambda();
+        self.dispatch[39] = self.vm_array();
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
