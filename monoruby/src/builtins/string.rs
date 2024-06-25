@@ -673,10 +673,9 @@ fn string_match_index(
     nth: i64,
 ) -> Result<Value> {
     let lhs = s.check_utf8()?;
-    match re.captures(lhs)? {
-        None => return Ok(Value::nil()),
+    match re.captures(lhs, vm)? {
+        None => Ok(Value::nil()),
         Some(captures) => {
-            vm.save_captures(&captures, &lhs);
             let len = captures.len() as i64;
             let nth = if nth >= 0 {
                 nth as usize
@@ -1088,10 +1087,9 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         } else {
             lfp.arg(1).coerce_to_i64()?
         };
-        match info.captures(&lhs)? {
-            None => return Ok(Value::nil()),
+        match info.captures(&lhs, vm)? {
+            None => Ok(Value::nil()),
             Some(captures) => {
-                vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 let nth = if nth >= 0 {
                     nth as usize
@@ -1522,10 +1520,9 @@ fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 
     let s = given.check_utf8()?;
     let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
-    match re.captures_from_pos(s, byte_pos)? {
+    match re.captures_from_pos(s, byte_pos, vm)? {
         None => Ok(Value::nil()),
         Some(captures) => {
-            vm.save_captures(&captures, s);
             let start = captures.get(0).unwrap().start();
             let char_pos = given.byte_to_char_index(start)?;
             Ok(Value::integer(char_pos as i64))
@@ -2301,13 +2298,24 @@ mod test {
 
     #[test]
     fn gsub() {
-        run_test(r##""abcdefgdef".gsub(/def/, "!!")"##);
-        run_test(r##""2.5".gsub(".", ",")"##);
         run_test(
             r##"
-        "abcdefgdddefjklefl".gsub(/d*ef/) {
+        res = "abcdefgdef".gsub(/def/, "!!")
+        [res, $&, $']
+        "##,
+        );
+        run_test(
+            r##"
+        res = "2.5".gsub(".", ",")
+        [res, $&, $']
+        "##,
+        );
+        run_test(
+            r##"
+        res = "abcdefgdddefjklefl".gsub(/d*ef/) {
             |matched| "+" + matched + "+"
         }
+        [res, $&, $']
         "##,
         );
         run_test_error(
@@ -2330,21 +2338,22 @@ mod test {
         run_test(
             r##"
         s = "abcdefghdefr"
-        s.gsub!(/def/, "!!")
-        s
+        res = s.gsub!(/def/, "!!")
+        [res, s, $&, $']
         "##,
         );
         run_test(
             r##"
         s = "2.5.3..75841."
-        s.gsub!(".", ",")
-        s
+        res = s.gsub!(".", ",")
+        [res, s, $&, $']
         "##,
         );
         run_test(
             r##"
         s = "abcdefghdefr"
-        s.gsub!(/def1/, "!!")
+        res = s.gsub!(/def1/, "!!")
+        [res, s, $&, $']
         "##,
         );
     }
@@ -2473,14 +2482,29 @@ mod test {
 
     #[test]
     fn scan() {
-        run_test(r##""foobar".scan(/../)"##);
-        run_test(r##""foobar".scan("o")"##);
-        run_test(r##""foobarbazfoobarbaz".scan(/ba./)"##);
+        run_test(
+            r##"
+        res = "foobar".scan(/../)
+        [res, $&, $']
+        "##,
+        );
+        run_test(
+            r##"
+        res = "foobar".scan("o")
+        [res, $&, $']
+        "##,
+        );
+        run_test(
+            r##"
+        res = "foobarbazfoobarbaz".scan(/ba./)
+        [res, $&, $']
+        "##,
+        );
         run_test(
             r##"
         a = []
-        "foobarbazfoobarbaz".scan(/ba./) {|s| a << s.upcase }
-        a
+        res = "foobarbazfoobarbaz".scan(/ba./) {|s| a << s.upcase }
+        [res, a, $&, $']
         "##,
         );
     }

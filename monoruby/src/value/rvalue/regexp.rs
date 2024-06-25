@@ -77,9 +77,25 @@ impl RegexpInner {
         }
     }
 
-    pub fn captures<'a>(&self, given: &'a str) -> Result<Option<Captures<'a>>> {
-        match self.0.captures(given) {
-            Ok(res) => Ok(res),
+    pub fn captures<'a>(&self, given: &'a str, vm: &mut Executor) -> Result<Option<Captures<'a>>> {
+        self.captures_from_pos(given, 0, vm)
+    }
+
+    pub fn captures_from_pos<'a>(
+        &self,
+        given: &'a str,
+        pos: usize,
+        vm: &mut Executor,
+    ) -> Result<Option<Captures<'a>>> {
+        match self.0.captures_from_pos(given, pos) {
+            Ok(res) => {
+                if let Some(captures) = &res {
+                    vm.save_capture_special_variables(captures, given)
+                } else {
+                    vm.clear_capture_special_variables();
+                }
+                Ok(res)
+            }
             Err(err) => Err(MonorubyErr::internalerr(format!(
                 "Capture failed. {:?}",
                 err
@@ -87,7 +103,7 @@ impl RegexpInner {
         }
     }
 
-    pub fn captures_from_pos<'a>(
+    pub fn captures_from_pos_no_save<'a>(
         &self,
         given: &'a str,
         pos: usize,
@@ -108,12 +124,9 @@ impl RegexpInner {
     /// Find the leftmost-first match for `given`.
     /// Returns `Match`s.
     pub fn find_one<'a>(&self, vm: &mut Executor, given: &'a str) -> Result<Option<Match<'a>>> {
-        match self.captures(given)? {
+        match self.captures(given, vm)? {
             None => Ok(None),
-            Some(captures) => {
-                vm.save_captures(&captures, given);
-                Ok(captures.get(0))
-            }
+            Some(captures) => Ok(captures.get(0)),
         }
     }
 }
@@ -157,11 +170,12 @@ impl RegexpInner {
             given: &str,
             bh: BlockHandler,
         ) -> Result<(String, bool)> {
-            let (start, end, matched_str) = match re.captures_from_pos(given, 0)? {
-                None => return Ok((given.to_string(), false)),
+            let (start, end, matched_str) = match re.captures(given, vm)? {
+                None => {
+                    return Ok((given.to_string(), false));
+                }
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
-                    vm.save_captures(&captures, given);
                     (m.start(), m.end(), m.as_str())
                 }
             };
@@ -225,12 +239,12 @@ impl RegexpInner {
             let mut i = 0;
             let data = vm.get_block_data(globals, bh)?;
             loop {
-                let (start, end, matched_str) = match re.captures_from_pos(given, i)? {
+                let (start, end, matched_str) = match re.captures_from_pos_no_save(given, i)? {
                     None => break,
                     Some(captures) => {
                         let m = captures.get(0).unwrap();
                         i = m.end() + usize::from(m.start() == m.end());
-                        vm.save_captures(&captures, given);
+                        vm.save_capture_special_variables(&captures, given);
                         (m.start(), m.end(), m.as_str())
                     }
                 };
@@ -271,10 +285,9 @@ impl RegexpInner {
             Some((pos, _)) => pos,
             None => return Ok(Value::nil()),
         };
-        match re.captures_from_pos(given, byte_pos)? {
+        match re.captures_from_pos(given, byte_pos, vm)? {
             None => Ok(Value::nil()),
             Some(captures) => {
-                vm.save_captures(&captures, given);
                 if let Some(bh) = block {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
                     vm.invoke_block_once(globals, bh, &[matched])
@@ -293,8 +306,9 @@ impl RegexpInner {
         let mut ary = vec![];
         let mut idx = 0;
         let mut last_captures = None;
+        vm.clear_capture_special_variables();
         loop {
-            match self.captures_from_pos(given, idx)? {
+            match self.captures_from_pos_no_save(given, idx)? {
                 None => break,
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
@@ -325,7 +339,7 @@ impl RegexpInner {
             };
         }
         if let Some(c) = last_captures {
-            vm.save_captures(&c, given)
+            vm.save_capture_special_variables(&c, given)
         }
         Ok(ary)
     }
@@ -344,12 +358,13 @@ impl RegexpInner {
     ) -> Result<(String, bool)> {
         let mut range = vec![];
         let mut i = 0;
+        vm.clear_capture_special_variables();
         let mut last_captures = None;
         loop {
             if i >= given.len() {
                 break;
             }
-            match self.captures_from_pos(given, i)? {
+            match self.captures_from_pos_no_save(given, i)? {
                 None => break,
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
@@ -371,7 +386,7 @@ impl RegexpInner {
         }
 
         if let Some(c) = last_captures {
-            vm.save_captures(&c, given)
+            vm.save_capture_special_variables(&c, given)
         }
 
         Ok((res, !range.is_empty()))
@@ -387,12 +402,11 @@ impl RegexpInner {
         given: &'a str,
         replace: &str,
     ) -> Result<(String, Option<Captures<'a>>)> {
-        match self.captures(given)? {
+        match self.captures(given, vm)? {
             None => Ok((given.to_string(), None)),
             Some(captures) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
-                vm.save_captures(&captures, given);
                 let mut rep = "".to_string();
                 let mut escape = false;
                 for ch in replace.chars() {

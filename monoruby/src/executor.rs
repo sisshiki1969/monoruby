@@ -981,7 +981,7 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
-    pub(crate) fn clear_special_variables(&mut self) {
+    pub(crate) fn clear_capture_special_variables(&mut self) {
         self.sp_last_match = None;
         self.sp_post_match = None;
         self.sp_matches.clear();
@@ -995,7 +995,7 @@ impl Executor {
     ///
     /// - $' <- The string after $&.
     ///
-    pub(crate) fn save_captures(&mut self, captures: &Captures, given: &str) {
+    pub(crate) fn save_capture_special_variables(&mut self, captures: &Captures, given: &str) {
         //let id1 = IdentId::get_id("$&");
         //let id2 = IdentId::get_id("$'");
         match captures.get(0) {

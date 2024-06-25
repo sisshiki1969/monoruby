@@ -122,7 +122,7 @@ fn teq(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if lfp.arg(0).is_nil() {
-        vm.clear_special_variables();
+        vm.clear_capture_special_variables();
         return Ok(Value::nil());
     }
     let self_ = lfp.self_val();
@@ -161,7 +161,7 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
-fn match_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn match_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given_val = lfp.arg(0);
@@ -179,7 +179,7 @@ fn match_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
         None => return Ok(Value::bool(false)),
     };
     Ok(Value::bool(
-        regex.captures_from_pos(given, byte_pos)?.is_some(),
+        regex.captures_from_pos(given, byte_pos, vm)?.is_some(),
     ))
 }
 
