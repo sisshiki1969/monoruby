@@ -335,7 +335,6 @@ impl BytecodeGen {
         }
         let loc = expr.loc;
         match expr.kind {
-            NodeKind::Redo => unimplemented!("Redo"),
             NodeKind::Nil
             | NodeKind::Bool(_)
             | NodeKind::SelfValue
@@ -546,17 +545,14 @@ impl BytecodeGen {
             NodeKind::Break(box val) => {
                 let LoopInfo {
                     break_dest, ret, ..
-                } = match self.loops.last().cloned() {
-                    Some(data) => data,
+                } = match self.loops.last() {
+                    Some(data) => data.clone(),
                     None => {
                         if self.is_block() {
                             self.gen_break(val, use_mode)?;
                             return Ok(());
                         } else {
-                            return Err(MonorubyErr::escape_from_eval(
-                                loc,
-                                self.sourceinfo.clone(),
-                            ));
+                            return Err(self.escape_from_eval("break", loc));
                         }
                     }
                 };
@@ -572,17 +568,14 @@ impl BytecodeGen {
                 return Ok(());
             }
             NodeKind::Next(box val) => {
-                let LoopInfo { next_dest, .. } = match self.loops.last().cloned() {
-                    Some(data) => data,
+                let LoopInfo { next_dest, .. } = match self.loops.last() {
+                    Some(data) => data.clone(),
                     None => {
                         if self.is_block() {
                             self.gen_return(val, use_mode)?;
                             return Ok(());
                         } else {
-                            return Err(MonorubyErr::escape_from_eval(
-                                loc,
-                                self.sourceinfo.clone(),
-                            ));
+                            return Err(self.escape_from_eval("next", loc));
                         }
                     }
                 };
@@ -591,6 +584,24 @@ impl BytecodeGen {
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
+                return Ok(());
+            }
+            NodeKind::Redo => {
+                if use_mode == UseMode2::Push {
+                    self.push();
+                }
+                let LoopInfo { redo_dest, .. } = match self.loops.last() {
+                    Some(data) => data,
+                    None => {
+                        if self.is_block() {
+                            self.emit(BcIr::Br(self.redo_label), loc);
+                            return Ok(());
+                        } else {
+                            return Err(self.escape_from_eval("redo", loc));
+                        }
+                    }
+                };
+                self.emit(BcIr::Br(*redo_dest), loc);
                 return Ok(());
             }
             NodeKind::Return(box val) => {
@@ -972,7 +983,7 @@ impl BytecodeGen {
         let string = format!("(?{}){}", option, string);
         let re = match RegexpInner::new(string) {
             Ok(re) => re,
-            Err(err) => return Err(MonorubyErr::syntax(err, loc, self.sourceinfo.clone())),
+            Err(err) => return Err(self.syntax_error(err, loc)),
         };
         Ok(Value::regexp(re))
     }

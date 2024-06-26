@@ -204,19 +204,11 @@ impl BytecodeGen {
         let old = self.temp;
         // TODO: We must check this in parser
         if arglist.delegate {
-            return Err(MonorubyErr::syntax(
-                "Delegate argument should not be given".to_string(),
-                loc,
-                self.sourceinfo.clone(),
-            ));
+            return Err(self.syntax_error("Delegate argument should not be given", loc));
         }
         // yield does not accept block.
         if arglist.block.is_some() {
-            return Err(MonorubyErr::syntax(
-                "Block argument should not be given".to_string(),
-                loc,
-                self.sourceinfo.clone(),
-            ));
+            return Err(self.syntax_error("Block argument should not be given", loc));
         }
 
         let callid =

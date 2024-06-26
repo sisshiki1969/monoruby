@@ -100,6 +100,7 @@ fn compile_func(store: &mut Store, func_id: FuncId, binding: Option<LvarCollecto
         }
         gen.apply_label(next);
     }
+    gen.apply_label(gen.redo_label);
     gen.gen_expr(ast, UseMode2::Ret)?;
     gen.replace_init(info);
     gen.into_bytecode(store, loc)?;
@@ -369,6 +370,7 @@ enum Functions {
 struct LoopInfo {
     break_dest: Label,
     next_dest: Label,
+    redo_dest: Label,
     ret: Option<BcReg>,
 }
 
@@ -497,6 +499,8 @@ struct BytecodeGen {
     literals: Vec<Value>,
     /// The name of the block param.
     block_param: Option<IdentId>,
+    /// The label for redo.
+    redo_label: Label,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -529,13 +533,14 @@ impl BytecodeGen {
             mother,
             ir: vec![],
             sp: vec![],
-            labels: vec![],
+            labels: vec![None], // The first label is for redo.
             loops: vec![],
             ensure: vec![],
             locals: IndexMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
             block_param: info.block_param(),
+            redo_label: Label(0),
             temp: 0,
             temp_num: 0,
             non_temp_num: 0,
@@ -601,10 +606,17 @@ impl BytecodeGen {
         }
     }
 
-    fn loop_push(&mut self, break_dest: Label, next_dest: Label, ret: Option<BcReg>) {
+    fn loop_push(
+        &mut self,
+        break_dest: Label,
+        next_dest: Label,
+        redo_dest: Label,
+        ret: Option<BcReg>,
+    ) {
         self.loops.push(LoopInfo {
             break_dest,
             next_dest,
+            redo_dest,
             ret,
         });
     }
@@ -1208,11 +1220,7 @@ impl BytecodeGen {
                 // 0 => $&
                 // 1 => $'
                 // 100 + n => $n
-                return Err(MonorubyErr::cant_set_variable(
-                    *id,
-                    lhs.loc,
-                    self.sourceinfo.clone(),
-                ));
+                return Err(self.cant_set_variable(*id, lhs.loc));
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
@@ -1373,6 +1381,38 @@ impl BytecodeGen {
             },
             Loc::default(),
         );
+    }
+}
+
+//
+// Error handling.
+//
+impl BytecodeGen {
+    fn syntax_error(&self, msg: impl Into<String>, loc: Loc) -> MonorubyErr {
+        MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone())
+    }
+
+    fn escape_from_eval(&self, msg: &str, loc: Loc) -> MonorubyErr {
+        MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone())
+    }
+
+    fn cant_set_variable(&self, id: u32, loc: Loc) -> MonorubyErr {
+        // 0 => $&
+        // 1 => $'
+        // 100 + n => $n
+        self.syntax_error(
+            format!(
+                "can't set variable ${}.",
+                match id {
+                    ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
+                    ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
+                    ruruby_parse::SPECIAL_LOADPATH => "LOAD_PATH".to_string(),
+                    ruruby_parse::SPECIAL_LOADEDFEATURES => "LOADED_FEATURES".to_string(),
+                    n => (n - 100).to_string(),
+                }
+            ),
+            loc,
+        )
     }
 }
 

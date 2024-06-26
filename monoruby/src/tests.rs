@@ -1779,6 +1779,7 @@ mod test {
         run_test(r#"defined? break"#);
         run_test(r#"defined? return"#);
         run_test(r#"defined? next"#);
+        run_test(r#"defined? redo"#);
         run_test(r#"defined? a=z"#);
         run_test(r#"defined? a+=z"#);
         run_test(r#"defined? (def f;end)"#);
@@ -1867,6 +1868,55 @@ mod test {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn redo() {
+        run_test(
+            r#"
+        res = []
+        flag = false
+        for x in 0..100
+          res << x
+          if x % 7 == 6 && !flag
+            flag = true
+            redo
+          end
+        end
+        res
+        "#,
+        );
+        run_test(
+            r#"
+        res = []
+        flag = false
+        x = 0
+        while x <= 100
+          res << x
+          if x % 7 == 6 && !flag
+            flag = true
+            redo
+          end
+          x += 1
+        end
+        res << x
+        res
+        "#,
+        );
+        /*run_test(
+            r#"
+        res = []
+        flag = false
+        5.times do |x|
+          res << x
+          if x % 7 == 6 && !flag
+            flag = true
+            redo
+          end
+        end
+        res
+        "#,
+        );*/
     }
 
     #[test]

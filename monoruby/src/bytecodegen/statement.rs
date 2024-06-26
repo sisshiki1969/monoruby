@@ -21,11 +21,14 @@ impl BytecodeGen {
             let counter = self.assign_local(name);
             let break_dest = self.new_label();
             let next_dest = self.new_label();
-            let ret = match use_value {
-                true => Some(self.sp().into()),
-                false => None,
+            let ret = if use_value {
+                Some(self.sp().into())
+            } else {
+                None
             };
-            self.loop_push(break_dest, next_dest, ret);
+            let loop_start = self.new_label();
+            let loop_exit = self.new_label();
+            self.loop_push(break_dest, next_dest, loop_start, ret);
             // +------+
             // | iter | (when use_value)
             // +------+
@@ -33,8 +36,6 @@ impl BytecodeGen {
             // +------+
             // | dst  |
             // +------+
-            let loop_entry = self.new_label();
-            let loop_exit = self.new_label();
             self.gen_store_expr(counter.into(), start)?;
             let end = if use_value {
                 let iter = self.push();
@@ -52,7 +53,7 @@ impl BytecodeGen {
             } else {
                 self.push_expr(end)?.into()
             };
-            self.apply_label(loop_entry);
+            self.apply_label(loop_start);
             self.emit(BcIr::LoopStart, loc);
             let dst = self.push().into();
             self.emit(
@@ -82,7 +83,7 @@ impl BytecodeGen {
                 ),
                 loc,
             );
-            self.emit_br(loop_entry);
+            self.emit_br(loop_start);
 
             self.apply_label(loop_exit);
             self.pop(); // pop *end*
@@ -115,7 +116,7 @@ impl BytecodeGen {
             true => Some(self.push_nil()),
             false => None,
         };
-        self.loop_push(loop_exit, loop_start, ret);
+        self.loop_push(loop_exit, loop_start, loop_start, ret);
         let loc = body.loc;
         self.apply_label(loop_start);
         self.emit(BcIr::LoopStart, loc);
@@ -139,20 +140,20 @@ impl BytecodeGen {
         body: Node,
         use_value: bool,
     ) -> Result<()> {
-        let loop_pos = self.new_label();
+        let loop_start = self.new_label();
         let break_dest = self.new_label();
         let next_dest = self.new_label();
         let ret = match use_value {
             true => Some(self.sp().into()),
             false => None,
         };
-        self.loop_push(break_dest, next_dest, ret);
+        self.loop_push(break_dest, next_dest, loop_start, ret);
         let loc = body.loc;
-        self.apply_label(loop_pos);
+        self.apply_label(loop_start);
         self.emit(BcIr::LoopStart, loc);
         self.gen_expr(body, UseMode2::NotUse)?;
         self.apply_label(next_dest);
-        self.gen_opt_condbr(cond_op, cond, loop_pos)?;
+        self.gen_opt_condbr(cond_op, cond, loop_start)?;
 
         if use_value {
             self.push_nil();
@@ -392,11 +393,9 @@ impl BytecodeGen {
             });
         } else {
             if let Some(else_) = else_ {
-                return Err(MonorubyErr::syntax(
-                    "else without rescue is useless. (SyntaxError)".to_string(),
-                    else_.loc,
-                    self.sourceinfo.clone(),
-                ));
+                return Err(
+                    self.syntax_error("else without rescue is useless. (SyntaxError)", else_.loc)
+                );
             }
             // no rescue branch.
             if let Some(box ensure) = &ensure {
