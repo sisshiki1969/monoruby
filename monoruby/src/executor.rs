@@ -239,7 +239,7 @@ impl Executor {
         if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
             #[cfg(feature = "require")]
             {
-                eprintln!("require: {:?}\n{}", &path, &file_body);
+                eprintln!("require: {:?}", &path);
             }
             self.enter_class_context();
             let res = self.exec_script(globals, file_body, &path);
