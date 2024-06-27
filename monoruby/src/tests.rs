@@ -1903,20 +1903,21 @@ mod test {
         res
         "#,
         );
-        /*run_test(
+        run_test(
             r#"
         res = []
         flag = false
-        5.times do |x|
+        100.times do |x|
           res << x
           if x % 7 == 6 && !flag
             flag = true
             redo
           end
+          flag = false
         end
         res
         "#,
-        );*/
+        );
     }
 
     #[test]
