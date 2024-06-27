@@ -40,7 +40,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     globals.define_builtin_func(MODULE_CLASS, "remove_method", remove_method, 1);
-    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
+    globals.define_builtin_func_with(MODULE_CLASS, "method_defined?", method_defined, 1, 2, false);
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "private_method_defined?",
+        private_method_defined,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
     // private methods
@@ -400,14 +408,45 @@ fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 
 ///
 /// ### Module#method_defined?
-/// - method_defined?(name, [NOT SUPPORTED] inherit=true) -> bool
+///
+/// - method_defined?(name, inherit=true) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
 fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let func_name = lfp.arg(0).expect_symbol_or_string()?;
-    Ok(Value::bool(globals.method_defined(class_id, func_name)))
+    let inherit = if let Some(arg) = lfp.try_arg(1) {
+        arg.as_bool()
+    } else {
+        true
+    };
+    Ok(Value::bool(
+        match globals.method_defined(class_id, func_name, inherit) {
+            Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
+            None => false,
+        },
+    ))
+}
+
+///
+/// ### Module#private_method_defined?
+///
+/// - private_method_defined?(name, inherit=true) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_method_defined=3f.html]
+#[monoruby_builtin]
+fn private_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let func_name = lfp.arg(0).expect_symbol_or_string()?;
+    let inherit = if let Some(arg) = lfp.try_arg(1) {
+        arg.as_bool()
+    } else {
+        true
+    };
+    Ok(Value::bool(
+        globals.method_defined(class_id, func_name, inherit) == Some(Visibility::Private),
+    ))
 }
 
 ///
@@ -1005,7 +1044,7 @@ mod test {
     #[test]
     fn method_defined() {
         run_test_once(
-            r#"
+            r##"
         module A
           def method1()  end
           def protected_method1()  end
@@ -1021,17 +1060,24 @@ mod test {
           def method3()  end
         end
         x = []
-        x << A.method_defined?(:method1)              #=> true
-        x << C.method_defined?("method1")             #=> true
-        x << C.method_defined?("method2")             #=> true
-        # x << C.method_defined? "method2", true      #=> true
-        # x << C.method_defined? "method2", false     #=> false
-        x << C.method_defined?("method3")             #=> true
-        x << C.method_defined?("protected_method1")   #=> true
-        x << C.method_defined?("method4")             #=> false
-        x << C.method_defined?("private_method2")     #=> false
+        x << A.method_defined?(:method1)                        #=> true
+        x << A.private_method_defined?(:method1)                #=> false
+        x << C.method_defined?("method1")                       #=> true
+        x << C.private_method_defined?("method1")               #=> false
+        x << C.method_defined?("method2")                       #=> true
+        x << C.method_defined?("method2", true)                 #=> true
+        x << C.method_defined?("method2", false)                #=> false
+        x << C.method_defined?("method3")                       #=> true
+        x << C.method_defined?("protected_method1")             #=> true
+        x << C.method_defined?("method4")                       #=> false
+        x << C.method_defined?("private_method2")               #=> false
+        x << C.private_method_defined?("private_method2")       #=> true
+        x << C.private_method_defined?("private_method2", true) #=> true
+        x << C.private_method_defined?("private_method2", false)#=> false
+        x << B.private_method_defined?("private_method2", true) #=> true
+        x << B.private_method_defined?("private_method2", false)#=> true
         x
-        "#,
+        "##,
         )
     }
 }

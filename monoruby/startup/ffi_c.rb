@@ -1,5 +1,6 @@
 require_relative 'ffi/type.rb'
 require_relative 'ffi/dynamic_library.rb'
+require_relative 'ffi/struct_layout.rb'
 
 #
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305

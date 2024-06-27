@@ -2,27 +2,47 @@
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305
 #
 module FFI
-  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L319
-  TypeDefs = {}
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L314
   class Type
-    def initialize(size, alignment)
-      @size = size
-      @alignment = alignment
+    def initialize(val)
+      if val.is_a?(Integer)
+        @native_type = va;
+      elsif val.is_a?(Type)
+        @native_type = val.native_type
+        @ffi_type = val.ffi_type
+      end
     end
-    attr_reader :size, :alignment
 
-    class Builtin
+    attr_reader :native_type, :ffi_type
+
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L172
+    def inspect
+      "#<#{self.class}::%p size=#{@ffi_type.size} alignment=#{@ffi_type.alignment}>"
+    end
+
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L142
+    def size
+      @ffi_type.size
+    end
+
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L157
+    def alignment
+      @ffi_type.alignment
+    end
+    
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L333
+    class Builtin < Type
       def initialize(native, ffi_type, name)
         @native_type = native
         @ffi_type = ffi_type
         @name = name
       end
     end
-
+    
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L372
     module NativeType
     end
-
+    
     class Mapped
       def initialize(converter)
         if !converter.respond_to?(:native_type)
@@ -43,28 +63,131 @@ module FFI
     end
   end
 
-  Type::VOID = Type.new(0,0)
-  Type::CHAR = Type::SCHAR = Type::INT8 = Type.new(1,1)
-  Type::UCHAR = Type::UINT8 = Type.new(1,1)
-  Type::SHORT = Type::SSHORT = Type::INT16 = Type.new(2,2)
-  Type::USHORT = Type::UINT16 = Type.new(2,2)
-  Type::INT = Type::SINT = Type::INT32 = Type.new(4,4)
-  Type::UINT = Type::UINT32 = Type.new(4,4)
-  Type::LONG_LONG = Type::SLONG_LONG = Type::INT64 = Type.new(8,8)
-  Type::LONG = Type::UINT64 = Type.new(8,8)
+  class FFIType
+    def initialize(size, alignment, type, elements = nil)
+      @size = size
+      @alignment = alignment
+      @type = type
+      @elements = elements
+    end
+    attr_reader :size, :alignment
 
-  Type::BOOL = Type.new(1,1)
-  Type::STRING = Type.new(8,8)
-  Type::ULONG = Type.new(8,8)
-  Type::ULONG_LONG = Type.new(8,8)
-  Type::FLOAT = Type.new(4,4)
-  Type::DOUBLE = Type.new(8,8)
-  Type::LONGDOUBLE = Type.new(16,16)
-  Type::POINTER = Type.new(8,8)
-  Type::BUFFER_IN = Type.new(8,8)
-  Type::BUFFER_OUT = Type.new(8,8)
-  Type::BUFFER_INOUT = Type.new(8,8)
-  Type::VARARGS = Type.new(0,0)
+    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/include/ffi.h.in#L60
+    VOID = FFIType.new(0, 0, 0)
+    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/src/types.c#L69
+    UCHAR = UINT8 = FFIType.new(1, 1, 5)
+    SINT8 = FFIType.new(1, 1, 6)
+    UINT16 = FFIType.new(2, 2, 7)
+    SINT16 = FFIType.new(2, 2, 8)
+    UINT32 = FFIType.new(4, 4, 9)
+    SINT32 = FFIType.new(4, 4, 10)
+    ULONG = UINT64 = FFIType.new(8, 8, 11)
+    LONG = SINT64 = FFIType.new(8, 8, 12)
+
+    POINTER = FFIType.new(8, 8, 14)
+    FLOAT = FFIType.new(4, 4, 2)
+    DOUBLE = FFIType.new(8, 8, 3)
+    LONGDOUBLE = FFIType.new(16, 16, 4)
+  end
+  
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L319
+  TypeDefs = {}
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Types.h#L38
+  NATIVE_VOID = 0
+  NATIVE_INT8 = 1
+  NATIVE_UINT8 = 2
+  NATIVE_INT16 = 3
+  NATIVE_UINT16 = 4
+  NATIVE_INT32 = 5
+  NATIVE_UINT32 = 6
+  NATIVE_INT64 = 7
+  NATIVE_UINT64 = 8
+  NATIVE_LONG = 9
+  NATIVE_ULONG = 10
+  NATIVE_FLOAT32 = 11
+  NATIVE_FLOAT64 = 12
+  NATIVE_LONGDOUBLE = 13
+  NATIVE_POINTER = 14
+  NATIVE_FUNCTION = 15
+  NATIVE_BUFFER_IN = 16
+  NATIVE_BUFFER_OUT = 17
+  NATIVE_BUFFER_INOUT = 18
+  NATIVE_BOOL = 19
+  # An immutable string.  Nul terminated, but only copies in to the native function
+  NATIVE_STRING = 20
+  # The function takes a variable number of arguments
+  NATIVE_VARARGS = 21
+  # Struct-by-value param or result
+  NATIVE_STRUCT = 22
+  # An array type definition
+  NATIVE_ARRAY = 23
+  # Custom native type
+  NATIVE_MAPPED = 24
+
+#  #define T(x, ffiType) do { \
+#      VALUE t = Qnil; \
+#      rb_define_const(rbffi_TypeClass, #x, t = builtin_type_new(classBuiltinType, NATIVE_##x, ffiType, #x)); \
+#      rb_define_const(moduleNativeType, #x, t); \
+#      rb_define_const(moduleFFI, "TYPE_" #x, t); \
+#  } while(0)
+
+#  #define A(old_type, new_type) do { \
+#      VALUE t = rb_const_get(rbffi_TypeClass, rb_intern(#old_type)); \
+#      rb_const_set(rbffi_TypeClass, rb_intern(#new_type), t); \
+#  } while(0)
+
+  def self.T(x, ffi_type)
+    eval "FFI::TYPE_#{x} = Type::NativeType::#{x} = Type::#{x} = Type::Builtin.new(NATIVE_#{x}, FFIType::#{ffi_type}, \"#{x}\")"
+  end
+
+  def self.A(old_type, new_type)
+    eval "Type::#{new_type} = Type::#{old_type}"
+  end
+
+  T("VOID", "VOID")
+  T("INT8", "SINT8")
+  A("INT8", "SCHAR")
+  A("INT8", "CHAR")
+  T("UINT8", "UINT8")
+  A("UINT8", "UCHAR")
+
+  T("INT16", "SINT16");
+  A("INT16", "SHORT");
+  A("INT16", "SSHORT");
+  T("UINT16", "UINT16");
+  A("UINT16", "USHORT");
+  T("INT32", "SINT32");
+  A("INT32", "INT");
+  A("INT32", "SINT");
+  T("UINT32", "UINT32");
+  A("UINT32", "UINT");
+  T("INT64", "SINT64");
+  A("INT64", "LONG_LONG");
+  A("INT64", "SLONG_LONG");
+  T("UINT64", "UINT64");
+  A("UINT64", "ULONG_LONG");
+  T("LONG", "LONG");
+  A("LONG", "SLONG");
+  T("ULONG", "ULONG");
+  T("FLOAT32", "FLOAT");
+  A("FLOAT32", "FLOAT");
+  T("FLOAT64", "DOUBLE");
+  A("FLOAT64", "DOUBLE");
+  T("LONGDOUBLE", "LONGDOUBLE");
+  T("POINTER", "POINTER");
+  T("STRING", "POINTER");
+  T("BUFFER_IN", "POINTER");
+  T("BUFFER_OUT", "POINTER");
+  T("BUFFER_INOUT", "POINTER");
+  T("BOOL", "UCHAR");
+  T("VARARGS", "VOID");
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L259
+  module_function
+  def custom_typedefs
+    {}
+  end
 end
 
 
@@ -95,55 +218,3 @@ end
 #     return obj;
 # }
 
-#  #define T(x, ffiType) do { \
-#      VALUE t = Qnil; \
-#      rb_define_const(rbffi_TypeClass, #x, t = builtin_type_new(classBuiltinType, NATIVE_##x, ffiType, #x)); \
-#      rb_define_const(moduleNativeType, #x, t); \
-#      rb_define_const(moduleFFI, "TYPE_" #x, t); \
-#  } while(0)
-
-#  #define A(old_type, new_type) do { \
-#      VALUE t = rb_const_get(rbffi_TypeClass, rb_intern(#old_type)); \
-#      rb_const_set(rbffi_TypeClass, rb_intern(#new_type), t); \
-#  } while(0)
-
-#  /*
-#   * Document-constant: FFI::Type::Builtin::VOID
-#   */
-#  T(VOID, &ffi_type_void);
-#  T(INT8, &ffi_type_sint8);
-#  A(INT8, SCHAR);
-#  A(INT8, CHAR);
-#  T(UINT8, &ffi_type_uint8);
-#  A(UINT8, UCHAR);
-
-#  T(INT16, &ffi_type_sint16);
-#  A(INT16, SHORT);
-#  A(INT16, SSHORT);
-#  T(UINT16, &ffi_type_uint16);
-#  A(UINT16, USHORT);
-#  T(INT32, &ffi_type_sint32);
-#  A(INT32, INT);
-#  A(INT32, SINT);
-#  T(UINT32, &ffi_type_uint32);
-#  A(UINT32, UINT);
-#  T(INT64, &ffi_type_sint64);
-#  A(INT64, LONG_LONG);
-#  A(INT64, SLONG_LONG);
-#  T(UINT64, &ffi_type_uint64);
-#  A(UINT64, ULONG_LONG);
-#  T(LONG, &ffi_type_slong);
-#  A(LONG, SLONG);
-#  T(ULONG, &ffi_type_ulong);
-#  T(FLOAT32, &ffi_type_float);
-#  A(FLOAT32, FLOAT);
-#  T(FLOAT64, &ffi_type_double);
-#  A(FLOAT64, DOUBLE);
-#  T(LONGDOUBLE, &ffi_type_longdouble);
-#  T(POINTER, &ffi_type_pointer);
-#  T(STRING, &ffi_type_pointer);
-#  T(BUFFER_IN, &ffi_type_pointer);
-#  T(BUFFER_OUT, &ffi_type_pointer);
-#  T(BUFFER_INOUT, &ffi_type_pointer);
-#  T(BOOL, &ffi_type_uchar);
-#  T(VARARGS, &ffi_type_void);
