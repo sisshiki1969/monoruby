@@ -198,8 +198,8 @@ pub(crate) enum TraceIr {
     ConcatRegexp(Option<SlotId>, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
     AliasMethod {
-        new: SlotId,
-        old: SlotId,
+        new: IdentId,
+        old: IdentId,
     },
     DefinedYield {
         dst: SlotId,

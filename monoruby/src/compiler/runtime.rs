@@ -689,12 +689,10 @@ pub(super) extern "C" fn alias_method(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
-    new: Value,
-    old: Value,
+    new: IdentId,
+    old: IdentId,
     meta: Meta,
 ) -> Option<Value> {
-    let new = new.try_symbol().unwrap();
-    let old = old.try_symbol().unwrap();
     match if meta.is_class_def() {
         globals.alias_method_for_class(self_val.as_class().id(), new, old)
     } else {

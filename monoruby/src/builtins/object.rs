@@ -113,8 +113,7 @@ fn extend(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     }
     let mut class = globals.get_singleton(lfp.self_val());
     for v in args.iter().cloned().rev() {
-        v.expect_module(globals)?;
-        class.include_module(v.as_class());
+        class.include_module(v.expect_module(globals)?);
     }
     Ok(lfp.self_val())
 }
@@ -148,7 +147,7 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/is_a=3f.html]
 #[monoruby_builtin]
 fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class = lfp.arg(0).expect_class_or_module(globals)?;
+    let class = lfp.arg(0).expect_class_or_module(globals)?.id();
     Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
 
@@ -253,7 +252,7 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let b =
-        lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?;
+        lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?.id();
     Ok(Value::bool(b))
 }
 

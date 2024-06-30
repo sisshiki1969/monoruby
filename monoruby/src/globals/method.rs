@@ -9,9 +9,18 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         visi: Visibility,
-        num: usize,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw: &[&str],
     ) -> FuncId {
-        self.new_builtin_fn_with_kw(class_id, name, address, visi, num, num, false, &[])
+        let func_id = self
+            .store
+            .add_builtin_func(name, address, min, max, rest, kw);
+        let method_name = IdentId::get_id(name);
+        self.gen_wrapper(func_id);
+        self.add_method(class_id, method_name, func_id, visi);
+        func_id
     }
 
     fn new_builtin_fn_rest(
@@ -21,32 +30,7 @@ impl Globals {
         address: BuiltinFn,
         visi: Visibility,
     ) -> FuncId {
-        self.new_builtin_fn_with_kw(class_id, name, address, visi, 0, 0, true, &[])
-    }
-
-    fn new_builtin_fn_with_kw(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        visi: Visibility,
-        min: usize,
-        max: usize,
-        rest: bool,
-        kw_names: &[&str],
-    ) -> FuncId {
-        let func_id = self.store.add_builtin_func_with_kw(
-            name.to_string(),
-            address,
-            min,
-            max,
-            rest,
-            kw_names,
-        );
-        let method_name = IdentId::get_id(name);
-        self.gen_wrapper(func_id);
-        self.add_method(class_id, method_name, func_id, visi);
-        func_id
+        self.new_builtin_fn(class_id, name, address, visi, 0, 0, true, &[])
     }
 
     fn new_basic_op(
@@ -98,7 +82,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let fid = self.new_builtin_fn_with_kw(class_id, name, address, visi, min, max, rest, &[]);
+        let fid = self.new_builtin_fn(class_id, name, address, visi, min, max, rest, &[]);
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, visi);
         }
@@ -139,7 +123,16 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        self.new_builtin_fn(class_id, name, address, Visibility::Public, arg_num)
+        self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            arg_num,
+            arg_num,
+            false,
+            &[],
+        )
     }
 
     pub(crate) fn define_basic_op(
@@ -239,7 +232,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        self.new_builtin_fn_with_kw(
+        self.new_builtin_fn(
             class_id,
             name,
             address,
@@ -284,7 +277,7 @@ impl Globals {
         rest: bool,
         kw_names: &[&str],
     ) -> FuncId {
-        self.new_builtin_fn_with_kw(
+        self.new_builtin_fn(
             class_id,
             name,
             address,
@@ -312,9 +305,9 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        let func_id =
-            self.store
-                .add_builtin_func(name.to_string(), address, arg_num, arg_num, false);
+        let func_id = self
+            .store
+            .add_builtin_func(name, address, arg_num, arg_num, false, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -325,9 +318,7 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
     ) -> FuncId {
-        let func_id = self
-            .store
-            .add_builtin_func(name.to_string(), address, 0, 0, true);
+        let func_id = self.store.add_builtin_func(name, address, 0, 0, true, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -343,7 +334,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func(name.to_string(), address, min, max, rest);
+            .add_builtin_func(name, address, min, max, rest, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -358,9 +349,9 @@ impl Globals {
         rest: bool,
         kw: &[&str],
     ) -> FuncId {
-        let func_id =
-            self.store
-                .add_builtin_func_with_kw(name.to_string(), address, min, max, rest, kw);
+        let func_id = self
+            .store
+            .add_builtin_func(name, address, min, max, rest, kw);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -411,7 +402,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let func_id = self.new_builtin_fn_with_kw(
+        let func_id = self.new_builtin_fn(
             class_id,
             name,
             address,
@@ -489,7 +480,7 @@ impl Globals {
         rest: bool,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
-        self.new_builtin_fn_with_kw(
+        self.new_builtin_fn(
             class_id,
             name,
             address,
@@ -512,7 +503,7 @@ impl Globals {
         kw_names: &[&str],
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).id();
-        self.new_builtin_fn_with_kw(
+        self.new_builtin_fn(
             class_id,
             name,
             address,

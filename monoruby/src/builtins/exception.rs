@@ -70,7 +70,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
 fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_id = lfp.self_val().expect_class(globals)?;
+    let class_id = lfp.self_val().expect_class(globals)?.id();
     let msg = if let Some(msg) = lfp.try_arg(0) {
         msg.expect_string()?
     } else {
@@ -102,7 +102,7 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
 fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_id = lfp.self_val().expect_class(globals)?;
+    let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name_id(globals);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
         let status = arg0.expect_integer()?;

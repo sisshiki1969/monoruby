@@ -37,8 +37,7 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let superclass = if lfp.try_arg(0).is_none() {
         None
     } else {
-        lfp.arg(0).expect_class(globals)?;
-        Some(lfp.arg(0).as_class())
+        Some(lfp.arg(0).expect_class(globals)?)
     };
     let obj = globals.new_unnamed_class(superclass);
     Ok(obj)

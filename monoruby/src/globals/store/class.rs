@@ -155,7 +155,7 @@ pub(crate) enum ConstState {
     Autoload(std::path::PathBuf),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ClassInfo {
     ///
     /// the constant name which this class object is bound.

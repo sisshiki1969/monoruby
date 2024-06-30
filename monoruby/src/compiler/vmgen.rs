@@ -816,23 +816,19 @@ impl Codegen {
     /// Alias method
     ///
     /// ~~~text
+    ///                  -8      -4
     /// +---+---+---+---++---+---+---+---+
-    /// | op|   |new|old||       |       |
+    /// | op|   |   |   ||  new  |  old  |
     /// +---+---+---+---++---+---+---+---+
     ///
-    /// new: a register for a new symbol
-    /// old: a register for a old symbol
+    /// new: a new symbol
+    /// old: a old symbol
     /// ~~~
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
         monoasm! { &mut self.jit,
-            movl rcx, rdi;  // new
-            negq rcx;
-            movq rcx, [r14 + rcx * 8 - (LFP_SELF)];
-            movl r8, rsi;  // old
-            negq r8;
-            movq r8, [r14 + r8 * 8 - (LFP_SELF)];
+            movl rcx, [r13 - 8];  // new
+            movl r8, [r13 - 4];  // old
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, [r14 - (LFP_SELF)];

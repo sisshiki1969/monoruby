@@ -21,14 +21,14 @@ impl Executor {
         base: ClassId,
         name: &[&str],
     ) -> Result<Value> {
-        let mut class = base;
+        let mut class = base.get_module(globals);
         for name in name {
             let name = IdentId::get_id(name);
             class = self
-                .get_constant_checked(globals, class, name)?
+                .get_constant_checked(globals, class.id(), name)?
                 .expect_class_or_module(globals)?;
         }
-        Ok(class.get_obj(globals))
+        Ok(class.as_val())
     }
 
     ///

@@ -647,8 +647,8 @@ impl Codegen {
                     movq rdi, rbx;
                     movq rsi, r12;
                     movq rdx, [r14 - (LFP_SELF)];
-                    movq rcx, [r14 - (conv(new))];
-                    movq r8, [r14 - (conv(old))];
+                    movl rcx, (new.get());
+                    movl r8, (old.get());
                     movq r9, [r14 - (LFP_META)];
                     movq rax, (runtime::alias_method);
                     call rax;

@@ -427,7 +427,7 @@ impl Executor {
             ..
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
-            base.expect_class_or_module(globals)?
+            base.expect_class_or_module(globals)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -437,11 +437,13 @@ impl Executor {
             let parent = prefix.remove(0);
             self.search_constant_checked(globals, parent, current_func)?
                 .expect_class_or_module(globals)?
+                .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?;
+                .expect_class_or_module(globals)?
+                .id();
         }
         let v = self.get_constant_checked(globals, parent, name)?;
         Ok((v, base))
@@ -462,7 +464,7 @@ impl Executor {
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
             let base = unsafe { self.get_slot(base) }.unwrap();
-            base.expect_class_or_module(globals)?
+            base.expect_class_or_module(globals)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -472,11 +474,13 @@ impl Executor {
             let current_func = self.method_func_id();
             self.search_constant_checked(globals, parent, current_func)?
                 .expect_class_or_module(globals)?
+                .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?;
+                .expect_class_or_module(globals)?
+                .id();
         }
         globals.set_constant(parent, name, val);
         Ok(())
@@ -897,27 +901,26 @@ impl Executor {
         is_module: u32,
     ) -> Result<Value> {
         let parent = match base {
-            Some(base) => base.expect_class_or_module(globals)?,
+            Some(base) => base.expect_class_or_module(globals)?.id(),
             None => self.context_class_id(),
         };
         let self_val = match self.get_constant(globals, parent, name)? {
             Some(val) => {
-                val.expect_class_or_module(globals)?;
+                let val = val.expect_class_or_module(globals)?;
                 if let Some(superclass) = superclass {
                     assert!(is_module != 1);
-                    let superclass_id = superclass.expect_class(globals)?;
-                    if Some(superclass_id) != val.as_class().get_real_superclass().map(|m| m.id()) {
+                    let superclass_id = superclass.expect_class(globals)?.id();
+                    if Some(superclass_id) != val.get_real_superclass().map(|m| m.id()) {
                         return Err(MonorubyErr::superclass_mismatch(name));
                     }
                 }
-                val.as_class()
+                val
             }
             None => {
                 let superclass = match superclass {
                     Some(superclass) => {
                         assert!(is_module != 1);
-                        superclass.expect_class(globals)?;
-                        superclass.as_class()
+                        superclass.expect_class(globals)?
                     }
                     None => globals.object_class(),
                 };
@@ -1275,6 +1278,13 @@ impl Bc {
         }
     }
 
+    pub(super) fn from_with_ident2(op1: u64, id1: IdentId, id2: IdentId) -> Self {
+        Self {
+            op1,
+            op2: Bc2::ident2(id1, id2),
+        }
+    }
+
     pub(super) fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
         Self {
             op1,
@@ -1606,10 +1616,10 @@ impl BcPc {
                     stack_offset: op3 as usize,
                 }),
                 171 => TraceIr::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
-                173 => TraceIr::AliasMethod {
-                    new: SlotId::new(op2),
-                    old: SlotId::new(op3),
-                },
+                173 => {
+                    let (new, old) = self.op2.get_ident2();
+                    TraceIr::AliasMethod { new, old }
+                }
                 174 => TraceIr::Hash {
                     dst: SlotId::new(op1),
                     args: SlotId::new(op2),

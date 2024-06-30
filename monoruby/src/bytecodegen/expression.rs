@@ -673,8 +673,8 @@ impl BytecodeGen {
                 match (new.kind, old.kind) {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
                         let temp = self.temp;
-                        let new = self.push_symbol(IdentId::get_id_from_string(new));
-                        let old = self.push_symbol(IdentId::get_id_from_string(old));
+                        let new = IdentId::get_id_from_string(new);
+                        let old = IdentId::get_id_from_string(old);
                         self.temp = temp;
                         self.emit(BcIr::AliasMethod { new, old }, loc);
                     }

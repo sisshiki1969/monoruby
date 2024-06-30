@@ -79,8 +79,8 @@ impl Globals {
         {
             eprintln!("warning: already initialized constant {name}")
         }
-        if let Some(id) = val.is_class() {
-            self.store[id].set_name_id(name)
+        if let Some(klass) = val.is_class() {
+            self.store[klass.id()].set_name_id(name)
         }
     }
 
@@ -140,16 +140,16 @@ impl Globals {
     ///
     /// Get constant names in the class of *class_id* and its superclasses and included Modules except Object class and its superclasses.
     ///
-    pub fn get_constant_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
+    pub fn get_constant_names_inherit(&self, mut class: Module) -> Vec<IdentId> {
         let mut names = vec![];
         loop {
-            names.extend(self.store[class_id].constants.keys().cloned());
-            match class_id.get_module(self).superclass_id() {
+            names.extend(self.store[class.id()].constants.keys().cloned());
+            match class.superclass() {
                 Some(superclass) => {
-                    if superclass == OBJECT_CLASS {
+                    if superclass.id() == OBJECT_CLASS {
                         break;
                     }
-                    class_id = superclass;
+                    class = superclass;
                 }
                 None => break,
             }

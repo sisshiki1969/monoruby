@@ -22,8 +22,7 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
     let mut class = OBJECT_CLASS.get_module(globals);
     for v in args.iter().cloned().rev() {
-        v.expect_module(globals)?;
-        class.include_module(v.as_class());
+        class.include_module(v.expect_module(globals)?);
     }
     Ok(OBJECT_CLASS.get_obj(globals))
 }

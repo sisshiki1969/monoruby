@@ -38,6 +38,8 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
+    globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
+    globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     globals.define_builtin_func(MODULE_CLASS, "remove_method", remove_method, 1);
     globals.define_builtin_func_with(MODULE_CLASS, "method_defined?", method_defined, 1, 2, false);
@@ -67,7 +69,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let rhs = match lfp.arg(0).is_class_or_module() {
-        Some(class) => class,
+        Some(class) => class.id(),
         None => return Ok(Value::bool(false)),
     };
     let lhs = lfp.self_val().as_class_id();
@@ -269,11 +271,11 @@ fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
 fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+    let class = lfp.self_val().expect_class_or_module(globals)?;
     let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
-        globals.get_constant_names_inherit(class_id)
+        globals.get_constant_names_inherit(class)
     } else {
-        globals.get_constant_names(class_id)
+        globals.get_constant_names(class.id())
     };
     let iter = v.into_iter().map(Value::symbol);
     Ok(Value::array_from_iter(iter))
@@ -358,9 +360,45 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
     let mut class = lfp.self_val().as_class();
     for v in args.iter().cloned().rev() {
-        v.expect_module(globals)?;
-        class.include_module(v.as_class());
+        class.include_module(v.expect_module(globals)?);
     }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#prepend
+/// - prepend(*modules) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend.html]
+#[monoruby_builtin]
+fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.len() == 0 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+    }
+    let self_ = lfp.self_val();
+    for v in args.iter().cloned().rev() {
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("prepend_features"),
+            v,
+            &[self_],
+            None,
+        )?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#prepend_features
+/// - prepend_features(mod) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend_features.html]
+#[monoruby_builtin]
+fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let prepend_module = lfp.arg(0).expect_module(globals)?;
+    let mut class = lfp.self_val().as_class();
+    class.prepend_module(prepend_module);
     Ok(lfp.self_val())
 }
 
@@ -810,6 +848,37 @@ mod test {
               include
             end
             "#,
+        );
+    }
+
+    #[test]
+    fn prepend() {
+        run_test(
+            r##"
+        class Recorder
+          RECORDS = []
+        end
+
+        module X
+          def self.prepend_features(mod)
+            Recorder::RECORDS << mod
+          end
+        end
+
+        class A
+          prepend X
+        end
+
+        class B
+          include X
+        end
+
+        class C
+          prepend X
+        end
+
+        Recorder::RECORDS
+        "##,
         );
     }
 

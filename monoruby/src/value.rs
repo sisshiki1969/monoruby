@@ -104,7 +104,7 @@ impl Value {
 
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         if let Some(class) = self.is_class_or_module() {
-            globals.get_metaclass(class)
+            globals.get_metaclass(class.id())
         } else {
             globals.get_singleton(self)
         }
@@ -790,26 +790,26 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
-        match self.ty()? {
-            ObjKind::CLASS | ObjKind::MODULE => Some(unsafe { self.rvalue().as_class_id() }),
+    pub(crate) fn is_class_or_module(&self) -> Option<Module> {
+        match self.try_rvalue()?.ty() {
+            ObjKind::CLASS | ObjKind::MODULE => Some(Module::new_unchecked(*self)),
             _ => None,
         }
     }
 
-    pub(crate) fn is_class(&self) -> Option<ClassId> {
-        let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjKind::CLASS => Some(unsafe { rv.as_class_id() }),
-            _ => None,
+    pub(crate) fn is_class(&self) -> Option<Module> {
+        if self.try_rvalue()?.ty() == ObjKind::CLASS {
+            Some(Module::new_unchecked(*self))
+        } else {
+            None
         }
     }
 
-    pub(crate) fn is_module(&self) -> Option<ClassId> {
-        let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjKind::MODULE => Some(unsafe { rv.as_class_id() }),
-            _ => None,
+    pub(crate) fn is_module(&self) -> Option<Module> {
+        if self.try_rvalue()?.ty() == ObjKind::MODULE {
+            Some(Module::new_unchecked(*self))
+        } else {
+            None
         }
     }
 
@@ -872,7 +872,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_class_or_module(&self, globals: &Globals) -> Result<ClassId> {
+    pub(crate) fn expect_class_or_module(&self, globals: &Globals) -> Result<Module> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
@@ -889,7 +889,7 @@ impl Value {
         }
     }*/
 
-    pub(crate) fn expect_class(&self, globals: &Globals) -> Result<ClassId> {
+    pub(crate) fn expect_class(&self, globals: &Globals) -> Result<Module> {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
@@ -899,9 +899,9 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_module(&self, globals: &Globals) -> Result<ClassId> {
+    pub(crate) fn expect_module(&self, globals: &Globals) -> Result<Module> {
         match self.is_module() {
-            Some(class) => Ok(class),
+            Some(module) => Ok(module),
             None => {
                 let name = self.to_s(globals);
                 Err(MonorubyErr::is_not_class(name))
@@ -1127,7 +1127,6 @@ impl Value {
             } => {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
-                //assert_eq!(0, prefix.len());
                 if prefix.len() == 0 {
                     let constant = IdentId::get_id(name);
                     globals
@@ -1140,14 +1139,14 @@ impl Value {
                     for id in &prefix[1..] {
                         module = globals
                             .get_constant_noautoload(
-                                module.is_class_or_module().unwrap(),
+                                module.is_class_or_module().unwrap().id(),
                                 IdentId::get_id(id),
                             )
                             .unwrap();
                     }
                     globals
                         .get_constant_noautoload(
-                            module.is_class_or_module().unwrap(),
+                            module.is_class_or_module().unwrap().id(),
                             IdentId::get_id(name),
                         )
                         .unwrap()

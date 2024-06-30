@@ -245,27 +245,15 @@ impl Store {
 
     pub(super) fn add_builtin_func(
         &mut self,
-        name: String,
+        name: &str,
         address: BuiltinFn,
         min: usize,
         max: usize,
         rest: bool,
+        kw: &[&str],
     ) -> FuncId {
         self.functions
-            .add_native_func(name, address, min, max, rest)
-    }
-
-    pub(super) fn add_builtin_func_with_kw(
-        &mut self,
-        name: String,
-        address: BuiltinFn,
-        min: usize,
-        max: usize,
-        rest: bool,
-        kw_names: &[&str],
-    ) -> FuncId {
-        self.functions
-            .add_native_func_with_kw(name, address, min, max, rest, kw_names)
+            .add_native_func(name.to_string(), address, min, max, rest, kw)
     }
 
     pub(super) fn add_basic_op(

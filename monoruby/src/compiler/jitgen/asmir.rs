@@ -823,7 +823,7 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn alias_method(&mut self, bb: &BBContext, pc: BcPc, new: SlotId, old: SlotId) {
+    pub(super) fn alias_method(&mut self, bb: &BBContext, pc: BcPc, new: IdentId, old: IdentId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
         self.inst.push(AsmInst::AliasMethod {
@@ -1396,8 +1396,8 @@ pub(super) enum AsmInst {
     },
 
     AliasMethod {
-        new: SlotId,
-        old: SlotId,
+        new: IdentId,
+        old: IdentId,
         using_xmm: UsingXmm,
     },
     DefinedYield {

@@ -407,24 +407,10 @@ impl Funcs {
         min: usize,
         max: usize,
         rest: bool,
-    ) -> FuncId {
-        let id = self.next_func_id();
-        self.info
-            .push(FuncInfo::new_native(id, name, address, min, max, rest));
-        id
-    }
-
-    pub(super) fn add_native_func_with_kw(
-        &mut self,
-        name: String,
-        address: BuiltinFn,
-        min: usize,
-        max: usize,
-        rest: bool,
         kw_names: &[&str],
     ) -> FuncId {
         let id = self.next_func_id();
-        self.info.push(FuncInfo::new_native_with_kw(
+        self.info.push(FuncInfo::new_native(
             id, name, address, min, max, rest, kw_names,
         ));
         id
@@ -750,17 +736,6 @@ impl FuncInfo {
     }
 
     fn new_native(
-        func_id: FuncId,
-        name: String,
-        address: BuiltinFn,
-        min: usize,
-        max: usize,
-        rest: bool,
-    ) -> Self {
-        Self::new_native_with_kw(func_id, name, address, min, max, rest, &[])
-    }
-
-    fn new_native_with_kw(
         func_id: FuncId,
         name: String,
         address: BuiltinFn,

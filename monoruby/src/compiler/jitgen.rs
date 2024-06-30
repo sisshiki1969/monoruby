@@ -684,7 +684,7 @@ impl JitContext {
                 self.ir.expand_array(bb, dst, len);
             }
             TraceIr::AliasMethod { new, old } => {
-                self.ir.write_back_slots(bb, &[new, old]);
+                //self.ir.write_back_slots(bb, &[new, old]);
                 self.ir.alias_method(bb, pc, new, old);
             }
             TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {

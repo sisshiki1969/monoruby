@@ -552,11 +552,7 @@ impl BytecodeGen {
                 Bc::from(enc_www(171, op1.0, op2.0, len))
             }
             BcIr::InitBlock(fn_info) => Bc::from_fn_info(enc_www_fn_info(172, &fn_info), &fn_info),
-            BcIr::AliasMethod { new, old } => {
-                let op1 = self.slot_id(&new);
-                let op2 = self.slot_id(&old);
-                Bc::from(enc_www(173, 0, op1.0, op2.0))
-            }
+            BcIr::AliasMethod { new, old } => Bc::from_with_ident2(enc_www(173, 0, 0, 0), new, old),
             BcIr::Hash { ret, args, len } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&args);

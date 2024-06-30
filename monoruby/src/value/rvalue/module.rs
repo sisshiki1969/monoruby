@@ -3,11 +3,11 @@ use super::*;
 #[monoruby_object]
 pub struct Module(Value);
 
-impl std::cmp::PartialEq for Module {
+/*impl std::cmp::PartialEq for Module {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
-}
+}*/
 
 impl Module {
     pub(crate) fn get(self) -> Value {
@@ -19,8 +19,14 @@ impl Module {
     }
 
     pub(crate) fn include_module(&mut self, module: Module) {
-        let module = module.make_iclass(self.superclass());
-        self.superclass = Some(module);
+        let include_module = module.make_iclass(self.superclass());
+        self.superclass = Some(include_module);
+    }
+
+    pub(crate) fn prepend_module(&mut self, module: Module) {
+        let substitute = self.make_iclass(self.superclass());
+        let prepend_module = module.make_iclass(Some(substitute));
+        self.superclass = Some(prepend_module);
     }
 
     pub fn get_real_class(&self) -> Module {

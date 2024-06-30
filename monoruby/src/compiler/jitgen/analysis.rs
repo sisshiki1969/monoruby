@@ -187,10 +187,7 @@ impl JitContext {
             let pc = BcPc::from(pc);
             match pc.trace_ir(store) {
                 TraceIr::InitMethod { .. } => {}
-                TraceIr::AliasMethod { new, old } => {
-                    info.r#use(new);
-                    info.r#use(old);
-                }
+                TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
                 TraceIr::EnsureEnd => {

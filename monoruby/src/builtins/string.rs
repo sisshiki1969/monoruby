@@ -2032,7 +2032,8 @@ fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let enc = self_.as_bytes().encoding();
     let enc_class = vm
         .get_constant_checked(globals, OBJECT_CLASS, IdentId::get_id("Encoding"))?
-        .expect_class(globals)?;
+        .expect_class(globals)?
+        .id();
     let res = match enc {
         Encoding::Ascii8 => {
             vm.get_constant_checked(globals, enc_class, IdentId::get_id("ASCII_8BIT"))?

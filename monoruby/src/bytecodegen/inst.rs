@@ -220,8 +220,8 @@ pub(super) enum BcIr {
     ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     AliasMethod {
-        new: BcReg,
-        old: BcReg,
+        new: IdentId,
+        old: IdentId,
     },
     DefinedYield {
         ret: BcReg,
@@ -346,8 +346,18 @@ impl Bc2 {
         Self(((id2 as u64) << 32) + (id1 as u64))
     }
 
-    pub fn get_value(&self) -> Value {
+    pub(crate) fn ident2(id1: IdentId, id2: IdentId) -> Self {
+        Self(((id2.get() as u64) << 32) + (id1.get() as u64))
+    }
+
+    pub(crate) fn get_value(&self) -> Value {
         Value::from(self.0)
+    }
+
+    pub(crate) fn get_ident2(&self) -> (IdentId, IdentId) {
+        let id1 = IdentId::from(self.0 as u32);
+        let id2 = IdentId::from((self.0 >> 32) as u32);
+        (id1, id2)
     }
 }
 
