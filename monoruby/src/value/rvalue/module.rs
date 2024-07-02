@@ -23,6 +23,28 @@ impl Module {
         self.superclass = Some(include_module);
     }
 
+    ///
+    /// Prepend `module` to `self`
+    ///
+    /// ```text
+    ///
+    ///  +-------+      +-------+
+    ///  | super |      | super |
+    ///  +-------+      +-------+
+    ///      |              |
+    ///  +-------+      +-------+
+    ///  | _self +--m   | *self +--m
+    ///  +-------+      +-------+
+    ///                     |
+    ///                 +-------+
+    ///                 |prepend|
+    ///                 +-------+
+    ///                     |
+    ///                 +-------+
+    ///                 | _self |
+    ///                 +-------+
+    ///
+    /// ```
     pub(crate) fn prepend_module(&mut self, module: Module) {
         let substitute = self.make_iclass(self.superclass());
         let prepend_module = module.make_iclass(Some(substitute));
