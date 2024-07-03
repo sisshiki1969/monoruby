@@ -267,7 +267,11 @@ fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string()?;
     let entry = globals.find_method_entry_for_class(receiver.class(), method_name)?;
-    Ok(Value::new_method(receiver, entry.func_id(), entry.owner()))
+    Ok(Value::new_method(
+        receiver,
+        entry.func_id().unwrap(),
+        entry.owner(),
+    ))
 }
 
 ///

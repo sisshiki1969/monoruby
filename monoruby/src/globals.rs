@@ -32,8 +32,8 @@ pub(crate) struct MethodTableEntry {
 }
 
 impl MethodTableEntry {
-    pub fn func_id(&self) -> FuncId {
-        self.func_id.unwrap()
+    pub fn func_id(&self) -> Option<FuncId> {
+        self.func_id
     }
 
     pub fn owner(&self) -> ClassId {

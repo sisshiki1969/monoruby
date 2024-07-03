@@ -478,18 +478,18 @@ impl Globals {
     ///
     fn add_method_inner(
         &mut self,
-        class_id: ClassId,
+        owner: ClassId,
         name: IdentId,
         func_id: FuncId,
         visibility: Visibility,
         is_basic_op: bool,
     ) {
-        self.store[func_id].set_owner_class(class_id);
+        self.store[func_id].set_owner_class(owner);
         self.insert_method(
-            class_id,
+            owner,
             name,
             MethodTableEntry {
-                owner: class_id,
+                owner,
                 func_id: Some(func_id),
                 visibility,
                 is_basic_op,
@@ -505,15 +505,15 @@ impl Globals {
 
     pub(crate) fn add_empty_method(
         &mut self,
-        class_id: ClassId,
+        owner: ClassId,
         name: IdentId,
         visibility: Visibility,
     ) {
         self.insert_method(
-            class_id,
+            owner,
             name,
             MethodTableEntry {
-                owner: class_id,
+                owner,
                 func_id: None,
                 visibility,
                 is_basic_op: false,
@@ -579,7 +579,10 @@ impl Globals {
                     }
                     _ => {}
                 }
-                Ok(entry.func_id())
+                match entry.func_id() {
+                    Some(func_id) => Ok(func_id),
+                    None => Err(MonorubyErr::method_not_found(func_name, recv)),
+                }
             }
             None => Err(MonorubyErr::method_not_found(func_name, recv)),
         }
@@ -640,8 +643,7 @@ impl Globals {
     ///
     pub(crate) fn check_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
         let class_id = obj.class();
-        self.check_method_for_class(class_id, name)
-            .map(|e| e.func_id())
+        self.check_method_for_class(class_id, name)?.func_id()
     }
 
     ///
@@ -649,9 +651,11 @@ impl Globals {
     ///
     pub(crate) fn check_public_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
         let class_id = obj.class();
-        match self.check_method_for_class(class_id, name) {
-            Some(entry) if entry.visibility == Visibility::Public => Some(entry.func_id()),
-            _ => None,
+        let entry = self.check_method_for_class(class_id, name)?;
+        if entry.visibility == Visibility::Public {
+            entry.func_id()
+        } else {
+            None
         }
     }
 
@@ -661,12 +665,21 @@ impl Globals {
     pub(crate) fn check_super(
         &mut self,
         self_val: Value,
+        class_context: ClassId,
         name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    ) -> Option<FuncId> {
         let class_id = self_val.class();
-        let MethodTableEntry { owner, .. } = self.check_method_for_class(class_id, name)?;
-        let superclass = owner.get_module(self).superclass_id()?;
-        self.check_method_for_class(superclass, name)
+
+        let mut module = class_id.get_module(self);
+        loop {
+            if module.id() == class_context {
+                module = module.superclass().unwrap();
+                break;
+            }
+            module = module.superclass().unwrap();
+        }
+        let MethodTableEntry { func_id, .. } = self.check_method_for_class(module.id(), name)?;
+        func_id
     }
 
     ///

@@ -698,7 +698,12 @@ impl Globals {
             Some(func) => func,
             None => return Err(MonorubyErr::method_not_found(old_name, obj)),
         };
-        self.add_method(obj.class(), new_name, entry.func_id(), entry.visibility);
+        self.add_method(
+            obj.class(),
+            new_name,
+            entry.func_id().unwrap(),
+            entry.visibility,
+        );
         Ok(())
     }
 
@@ -712,7 +717,12 @@ impl Globals {
         old_name: IdentId,
     ) -> Result<()> {
         let entry = self.find_method_entry_for_class(class_id, old_name)?;
-        self.add_method(class_id, new_name, entry.func_id(), entry.visibility);
+        self.add_method(
+            class_id,
+            new_name,
+            entry.func_id().unwrap(),
+            entry.visibility,
+        );
         Ok(())
     }
 }

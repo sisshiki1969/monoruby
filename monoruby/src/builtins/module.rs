@@ -421,7 +421,16 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
             ))
         }
     };
-    Ok(Value::new_unbound_method(entry.func_id(), entry.owner()))
+    let func_id = match entry.func_id() {
+        Some(id) => id,
+        None => {
+            return Err(MonorubyErr::undefined_method(
+                method_name,
+                klass.id().get_name_id(globals),
+            ))
+        }
+    };
+    Ok(Value::new_unbound_method(func_id, entry.owner()))
 }
 
 ///
@@ -533,7 +542,8 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
             let name = v.expect_symbol_or_string()?;
             let func_id = globals
                 .find_method_entry_for_class(class_id, name)?
-                .func_id();
+                .func_id()
+                .unwrap();
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
         Ok(arg0)
@@ -833,6 +843,65 @@ mod test {
               include M1, M2 
             end
             "#,
+        );
+        run_test_with_prelude(
+            r#"
+            $res = []
+            C.new.f
+            $res
+            "#,
+            r#"
+        module M1
+          def f
+            $res << "M1"
+          end
+        end
+
+        module M2
+          def f
+            $res << "M2"
+            super
+          end
+        end
+
+        class C
+          include M1
+          include M2
+          def f
+            $res << "C"
+            super
+          end
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            $res = []
+            C.new.f
+            $res
+            "#,
+            r#"
+        module M1
+          def f
+            $res << "M1"
+          end
+        end
+
+        module M2
+          def f
+            $res << "M2"
+            super
+          end
+        end
+
+        class C
+          include M2,M1
+          def f
+            $res << "C"
+            super
+          end
+        end
+        "#,
         );
         run_test_error(
             r#"
