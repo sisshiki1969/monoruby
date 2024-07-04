@@ -61,7 +61,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         1,
     );
 
-    globals.define_builtin_module_func(kernel_class, "___dlopen", dlopen, 1);
+    globals.define_builtin_module_func_with(kernel_class, "___dlopen", dlopen, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "___dlsym", dlsym, 2);
     globals.define_builtin_module_func(kernel_class, "___call", dlcall, 4);
     klass
@@ -655,25 +655,55 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 ///
 /// Kernel.#___dlopen
 ///
-/// - dlopen(lib) -> Fiddle::Handle
+/// - dlopen(lib, flag = RTLD_LAZY) -> Fiddle::Handle
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiddle/m/dlopen.html]
 #[monoruby_builtin]
 fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
-    let lib = if let Some(s) = arg0.try_bytes() {
-        s.as_bytes().to_vec()
-    } else if arg0.is_nil() {
-        let handle = unsafe { libc::dlopen(0 as _, libc::RTLD_LAZY) };
-        return Ok(Value::integer(handle as usize as i64));
+    let flags = if let Some(arg1) = lfp.try_arg(1) {
+        match i32::try_from(arg1.expect_integer()?) {
+            Ok(f) => f,
+            Err(_) => return Err(MonorubyErr::argumenterr("Illegale flag value.")),
+        }
     } else {
-        vm.invoke_method_inner(globals, IdentId::get_id("to_str"), arg0, &[], None)?
-            .expect_string()?
-            .into_bytes()
+        libc::RTLD_LAZY
     };
-    let lib = std::ffi::CString::new(lib).unwrap();
-    let handle = unsafe { libc::dlopen(lib.as_ptr(), libc::RTLD_LAZY) };
+    let lib = if let Some(s) = arg0.try_bytes() {
+        Some(s.as_bytes().to_vec())
+    } else if arg0.is_nil() {
+        None
+    } else {
+        Some(
+            vm.invoke_method_inner(globals, IdentId::get_id("to_str"), arg0, &[], None)?
+                .expect_string()?
+                .into_bytes(),
+        )
+    };
+    let lib = lib.map(|s| std::ffi::CString::new(s).unwrap());
+    let handle = unsafe {
+        libc::dlopen(
+            match &lib {
+                Some(lib) => lib.as_ptr(),
+                None => 0 as _,
+            },
+            flags,
+        )
+    };
+    if handle.is_null() {
+        let message = unsafe { std::ffi::CString::from_raw(libc::dlerror()) }
+            .into_string()
+            .unwrap();
+        let path = match lib {
+            Some(lib) => lib.to_string_lossy().to_string(),
+            None => "".to_string(),
+        };
+        return Err(MonorubyErr::loaderr(
+            message,
+            std::path::PathBuf::from(path),
+        ));
+    }
     Ok(Value::integer(handle as usize as i64))
 }
 

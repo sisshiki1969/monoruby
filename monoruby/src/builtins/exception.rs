@@ -59,6 +59,8 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+
+    globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
 }
 
 ///
@@ -78,6 +80,21 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     };
     let kind = class_id.get_name_id(globals);
     Ok(Value::new_exception(kind, msg, vec![], class_id))
+}
+
+///
+/// ### Exception#message
+///
+/// - message -> String
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/message.html]
+#[monoruby_builtin]
+fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let ex = self_.is_exception().unwrap();
+    Err(MonorubyErr::runtimeerr(ex.get_error_message()))
+    //Ok(Value::string(ex.get_error_message()))
 }
 
 ///
