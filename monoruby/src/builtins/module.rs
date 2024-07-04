@@ -358,9 +358,9 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let mut class = lfp.self_val().as_class();
+    let class = lfp.self_val().as_class();
     for v in args.iter().cloned().rev() {
-        class.include_module(v.expect_module(globals)?);
+        globals.include_module(class, v.expect_module(globals)?)?;
     }
     Ok(lfp.self_val())
 }
@@ -396,9 +396,9 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend_features.html]
 #[monoruby_builtin]
 fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let prepend_module = lfp.arg(0).expect_module(globals)?;
-    let mut class = lfp.self_val().as_class();
-    class.prepend_module(prepend_module);
+    let base = lfp.arg(0).expect_class_or_module(globals)?;
+    let prepend_module = lfp.self_val().as_class();
+    globals.prepend_module(base, prepend_module)?;
     Ok(lfp.self_val())
 }
 
@@ -903,6 +903,42 @@ mod test {
         end
         "#,
         );
+        run_test_with_prelude(
+            r#"
+            C.new.f
+            "#,
+            r#"
+            module M
+              def f
+                "M"
+              end
+            end
+
+            module M1
+              include M
+            end
+
+            module M2
+              include M1
+            end
+
+            class C
+              include M2
+            end
+        "#,
+        );
+        run_test_error(
+            r#"
+            module M
+            end
+            module M2
+              include M
+            end
+            module M
+              include M2
+            end
+            "#,
+        );
         run_test_error(
             r#"
             class M; end
@@ -948,6 +984,48 @@ mod test {
 
         Recorder::RECORDS
         "##,
+        );
+        run_test_with_prelude(
+            r##"
+            $res = []
+            a = A.new
+            a.foo
+            # (1x) (2x)(ここの super で A#foo を呼びだす) (1a) (3x) の順に実行される
+            # >> X1
+            # >> A
+            # >> X2
+            $res
+            "##,
+            r##"
+            # super と prepend の組み合わせの例
+            module X
+              def foo
+                $res << "X1" # (1x)
+                super # (2x)
+                $res << "X2" # (3x)
+              end
+            end
+
+            class A
+              prepend X
+
+              def foo
+                $res << "A" #(1a)
+              end
+            end
+        "##,
+        );
+        run_test_error(
+            r#"
+            module M
+            end
+            module M2
+              prepend M
+            end
+            module M
+              prepend M2
+            end
+            "#,
         );
     }
 

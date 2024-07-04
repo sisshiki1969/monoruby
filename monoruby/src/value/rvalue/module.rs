@@ -3,24 +3,67 @@ use super::*;
 #[monoruby_object]
 pub struct Module(Value);
 
-/*impl std::cmp::PartialEq for Module {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}*/
-
 impl Module {
     pub(crate) fn get(self) -> Value {
         self.0
+    }
+
+    pub(crate) fn is_module(&self) -> bool {
+        match self.0.try_rvalue() {
+            Some(rvalue) => rvalue.ty() == ObjKind::MODULE,
+            None => false,
+        }
     }
 
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         self.0.change_class(new_class_id);
     }
 
-    pub(crate) fn include_module(&mut self, module: Module) {
+    ///
+    /// Include `module` to `self`.
+    ///
+    /// We must ensure `module` does not include `self` cyclically.
+    ///
+    pub(crate) fn include_module(&mut self, mut module: Module) -> Result<()> {
+        if self.check_cyclic(module) {
+            return Err(MonorubyErr::argumenterr("cyclic include detected"));
+        }
+        let mut base = *self;
+        loop {
+            base.include(module);
+            base = base.superclass().unwrap();
+            if let Some(superclass) = module.superclass()
+                && superclass.is_iclass()
+            {
+                module = superclass;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn include(&mut self, module: Module) {
         let include_module = module.make_iclass(self.superclass());
         self.superclass = Some(include_module);
+    }
+
+    ///
+    /// Check whether `self` is cyclically included in `module`.
+    ///
+    fn check_cyclic(self, mut module: Module) -> bool {
+        if module.id() == self.id() {
+            return true;
+        }
+        while let Some(superclass) = module.superclass()
+            && superclass.is_module()
+        {
+            if superclass.id() == self.id() {
+                return true;
+            }
+            module = superclass;
+        }
+        false
     }
 
     ///
@@ -33,27 +76,30 @@ impl Module {
     ///  +-------+      +-------+
     ///      |              |
     ///  +-------+      +-------+
-    ///  | _self +--m   | *self +--m
-    ///  +-------+      +-------+
-    ///                     |
-    ///                 +-------+
-    ///                 |prepend|
-    ///                 +-------+
-    ///                     |
-    ///                 +-------+
-    ///                 | _self |
+    ///  | _self |-->m  | origin|-->m
+    ///  +-------+      +-------+ <-+
+    ///                     |       |
+    ///                 +-------+   |
+    ///                 |prepend|   |
+    ///                 +-------+   |
+    ///                     |     origin
+    ///                 +-------+   |
+    ///                 | _self |---+
     ///                 +-------+
     ///
     /// ```
-    pub(crate) fn prepend_module(&mut self, module: Module) {
-        let substitute = self.make_iclass(self.superclass());
-        let prepend_module = module.make_iclass(Some(substitute));
-        self.superclass = Some(prepend_module);
+    pub(crate) fn prepend_module(&mut self, module: Module) -> Result<()> {
+        if self.origin.is_none() {
+            let origin = self.make_iclass(self.superclass());
+            self.superclass = Some(origin);
+            self.origin = Some(origin);
+        }
+        self.include_module(module)
     }
 
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
-        while !class.is_real_class() {
+        while class.is_singleton().is_some() {
             class = class.superclass().unwrap();
         }
         class
@@ -90,24 +136,36 @@ impl Module {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModuleType {
     RealClass,
-    Singleton(Value),
+    //Singleton(Value),
     IClass,
 }
 
 #[derive(Debug, Clone)]
 pub struct ModuleInner {
+    /// ClassId of thiis module/class.
     class_id: ClassId,
-    /// super class object.
+    /// super class object of this module.
     superclass: Option<Module>,
     /// is singleton class?
+    singleton: Option<Value>,
+    /// origin of this module/class (for prepend)
+    origin: Option<Module>,
+    /// the type of this module/class
     class_type: ModuleType,
 }
 
 impl ModuleInner {
-    pub fn new(class_id: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
+    pub fn new(
+        class_id: ClassId,
+        superclass: Option<Module>,
+        singleton: Option<Value>,
+        class_type: ModuleType,
+    ) -> Self {
         Self {
             class_id,
             superclass,
+            singleton,
+            origin: None,
             class_type,
         }
     }
@@ -141,13 +199,10 @@ impl ModuleInner {
     }
 
     pub fn is_singleton(&self) -> Option<Value> {
-        match self.class_type {
-            ModuleType::Singleton(obj) => Some(obj),
-            _ => None,
-        }
+        self.singleton
     }
 
-    pub fn is_real_class(&self) -> bool {
-        matches!(self.class_type, ModuleType::RealClass)
+    pub fn has_origin(&self) -> bool {
+        self.origin.is_some()
     }
 }

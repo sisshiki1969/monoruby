@@ -100,7 +100,18 @@ impl ObjKind {
 
     fn class(class: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
         Self {
-            class: ManuallyDrop::new(ModuleInner::new(class, superclass, class_type)),
+            class: ManuallyDrop::new(ModuleInner::new(class, superclass, None, class_type)),
+        }
+    }
+
+    fn singleton_class(class: ClassId, superclass: Option<Module>, singleton: Value) -> Self {
+        Self {
+            class: ManuallyDrop::new(ModuleInner::new(
+                class,
+                superclass,
+                Some(singleton),
+                ModuleType::RealClass,
+            )),
         }
     }
 
@@ -909,6 +920,18 @@ impl RValue {
         RValue {
             header: Header::new(CLASS_CLASS, ObjKind::CLASS),
             kind: ObjKind::class(id, superclass, class_type),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_singleton_class(
+        id: ClassId,
+        superclass: Option<Module>,
+        singleton: Value,
+    ) -> Self {
+        RValue {
+            header: Header::new(CLASS_CLASS, ObjKind::CLASS),
+            kind: ObjKind::singleton_class(id, superclass, singleton),
             var_table: None,
         }
     }

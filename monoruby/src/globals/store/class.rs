@@ -440,6 +440,16 @@ impl Globals {
         singleton
     }
 
+    pub fn include_module(&mut self, mut base: Module, module: Module) -> Result<()> {
+        self.class_version_inc();
+        base.include_module(module)
+    }
+
+    pub fn prepend_module(&mut self, mut base: Module, module: Module) -> Result<()> {
+        self.class_version_inc();
+        base.prepend_module(module)
+    }
+
     ///
     /// Add a new public method *func* with *name* to the class of *class_id*.
     ///
@@ -678,7 +688,7 @@ impl Globals {
             }
             module = module.superclass().unwrap();
         }
-        let MethodTableEntry { func_id, .. } = self.check_method_for_class(module.id(), name)?;
+        let MethodTableEntry { func_id, .. } = self.search_method(module, name)?;
         func_id
     }
 
@@ -712,7 +722,7 @@ impl Globals {
                 }
             };
         }
-        let entry = self.search_method(class_id, name);
+        let entry = self.search_method(class_id.get_module(self), name);
         self.global_method_cache
             .insert((name, class_id), class_version, entry.clone());
         entry
@@ -723,11 +733,12 @@ impl Globals {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    fn search_method(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
+    fn search_method(&self, mut module: Module, name: IdentId) -> Option<MethodTableEntry> {
         let mut visi = None;
-        let mut module = class_id.get_module(self);
         loop {
-            if let Some(entry) = self.get_method(module.id(), name) {
+            if !module.has_origin()
+                && let Some(entry) = self.get_method(module.id(), name)
+            {
                 if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
                         visi

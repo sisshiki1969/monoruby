@@ -69,11 +69,10 @@ pub(super) extern "C" fn vm_find_method(
 }
 
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
-    let fid = vm.method_func_id();
-    let class_context = globals[fid].owner_class().unwrap();
-    let self_val = vm.cfp().lfp().self_val();
     let func_id = vm.method_func_id();
-    let func_name = globals.store[func_id].name().unwrap();
+    let self_val = vm.cfp().lfp().self_val();
+    let class_context = globals[func_id].owner_class().unwrap();
+    let func_name = globals[func_id].name().unwrap();
     match globals.check_super(self_val, class_context, func_name) {
         Some(func_id) => Some(func_id),
         None => {

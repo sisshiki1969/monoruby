@@ -19,6 +19,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         0,
     );
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
+    globals.define_builtin_module_func_rest(kernel_class, "gets", gets);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func(kernel_class, "proc", proc, 0);
     globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
@@ -117,6 +118,22 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
     globals.flush_stdout();
     Ok(Value::nil())
+}
+
+///
+/// ### Kernel.#gets
+///
+/// - gets(rs = $/) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
+#[monoruby_builtin]
+fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+    let mut buffer = String::new();
+    match std::io::stdin().read_line(&mut buffer) {
+        Ok(_) => {}
+        Err(_) => return Ok(Value::nil()),
+    }
+    Ok(Value::string(buffer))
 }
 
 ///

@@ -268,7 +268,7 @@ impl Value {
         superclass: Option<Module>,
         attach_obj: Value,
     ) -> Self {
-        RValue::new_class(id, superclass, ModuleType::Singleton(attach_obj)).pack()
+        RValue::new_singleton_class(id, superclass, attach_obj).pack()
     }
 
     pub(crate) fn module_empty(id: ClassId, superclass: Option<Module>) -> Self {
