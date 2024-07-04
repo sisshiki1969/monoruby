@@ -60,7 +60,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
-    globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select"], filter, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
@@ -1003,6 +1005,64 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Ok(Value::array_from_vec(res))
     } else {
         vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Array#filter!
+///
+/// - select! {|item| block } -> self | nil
+/// - select! -> Enumerator
+/// - filter! {|item| block } -> self | nil
+/// - filter! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter=21.html]
+#[monoruby_builtin]
+fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let changed = ary
+            .retain(|v| {
+                vm.invoke_block(globals, &data, &[*v])
+                    .map(|res| res.as_bool())
+            })?
+            .is_some();
+        Ok(if changed {
+            lfp.self_val()
+        } else {
+            Value::nil()
+        })
+    } else {
+        vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Array#reject!
+///
+/// - reject! {|x| ... } -> self | nil
+/// - reject! -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
+#[monoruby_builtin]
+fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let changed = ary
+            .retain(|v| {
+                vm.invoke_block(globals, &data, &[*v])
+                    .map(|res| !res.as_bool())
+            })?
+            .is_some();
+        Ok(if changed {
+            lfp.self_val()
+        } else {
+            Value::nil()
+        })
+    } else {
+        vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![])
     }
 }
 
@@ -2218,6 +2278,23 @@ mod test {
     fn select() {
         run_test(r##"[1,2,3,4,5].select { |num| num.even? }"##);
         run_test(r##"[1,2,3,4,5].select(&:even?)"##);
+        run_test(r##"[1,2,3,4,5].reject! { |num| num.even? }"##);
+        run_test(r##"[1,2,3,4,5].reject! { true }"##);
+        run_test(r##"[1,2,3,4,5].reject!(&:even?)"##);
+        run_test(
+            r##"
+        a = %w{ a b c d e f }
+        b = a.select! {|v| v =~ /[a-z]/ }   # => nil
+        [a, b] # => [["a", "b", "c", "d", "e", "f"], nil]
+        "##,
+        );
+        run_test(
+            r##"
+        a = %w{ a b c d e f }
+        b = a.select! {|v| v =~ /[c-e]/ }
+        [a, b]
+        "##,
+        );
     }
 
     #[test]

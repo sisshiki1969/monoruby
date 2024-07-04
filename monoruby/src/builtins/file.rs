@@ -22,6 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(klass, "join", join);
     globals.define_builtin_class_func_with(klass, "expand_path", expand_path, 1, 2, false);
     globals.define_builtin_class_func(klass, "directory?", directory_, 1);
+    globals.define_builtin_class_func(klass, "symlink?", symlink_, 1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
     globals.define_builtin_class_func(klass, "basename", basename, 1);
     globals.define_builtin_class_func(klass, "extname", extname, 1);
@@ -259,6 +260,19 @@ fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 fn directory_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
         Ok(path) => Ok(Value::bool(path.is_dir())),
+        Err(_) => Ok(Value::bool(false)),
+    }
+}
+
+///
+/// ### File.symlink?
+/// - symlink?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/symlink=3f.html]
+#[monoruby_builtin]
+fn symlink_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match string_to_canonicalized_path(globals, lfp.arg(0), "1st arg") {
+        Ok(path) => Ok(Value::bool(path.is_symlink())),
         Err(_) => Ok(Value::bool(false)),
     }
 }
