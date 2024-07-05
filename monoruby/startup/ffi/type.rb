@@ -6,7 +6,7 @@ module FFI
   class Type
     def initialize(val)
       if val.is_a?(Integer)
-        @native_type = va;
+        @native_type = val;
       elsif val.is_a?(Type)
         @native_type = val.native_type
         @ffi_type = val.ffi_type

@@ -3,14 +3,53 @@ module FFI
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructLayout.c#L690
   class StructLayout < Type
 
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Struct.h#L65C1-L91C7
+
+    # struct StructLayout_ {
+    #     Type base;
+    #     StructField** fields;
+    #     int fieldCount;
+    #     int size;
+    #     int align;
+    #     ffi_type** ffiTypes;
+    # 
+    #     /*
+    #     * We use the fieldName's minor 8 Bits as index to a 256 entry cache.
+    #     * This avoids full ruby hash lookups for repeated lookups.
+    #     */
+    #     #define FIELD_CACHE_LOOKUP(this, sym) ( &(this)->cache_row[((sym) >> 8) & 0xff] )
+    #     #define FIELD_CACHE_ROWS 0x100
+    # 
+    #     struct field_cache_entry {
+    #       VALUE fieldName;
+    #       StructField *field;
+    #     } cache_row[FIELD_CACHE_ROWS];
+    # 
+    #     /** The number of reference tracking fields in this struct */
+    #     int referenceFieldCount;
+    # 
+    #     VALUE rbFieldNames;
+    #     VALUE rbFieldMap;
+    #     VALUE rbFields;
+    # };
+
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructLayout.c#L483
     def initialize(fields, size, align)
       @fieldcount = fields.size
       @field_map = {}
-      @field_names = ::Array.new(@fieldcount)
-      @fields = ::Array.new(@fieldcount)
+      @field_names = []
+      @fields = []
       @size = size
       @align = align
+      @ffi_types = []
+
+      for i in 0...@fieldcount
+        field = fields[i]
+        name = field.name
+        @field_map[name] = field
+        @fields.push(field)
+        @field_names.push(name)
+      end
     end
 
     class Field
