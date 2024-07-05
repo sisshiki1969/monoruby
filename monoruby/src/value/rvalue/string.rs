@@ -52,8 +52,9 @@ impl StringInner {
             Encoding::Utf8 => match std::str::from_utf8(self) {
                 Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
                 Err(err) => Err(MonorubyErr::runtimeerr(format!(
-                    "invalid byte sequence: {}",
-                    err.to_string()
+                    "invalid byte sequence: {} {}",
+                    err.to_string(),
+                    String::from_utf8_lossy(&self.content)
                 ))),
             },
         }

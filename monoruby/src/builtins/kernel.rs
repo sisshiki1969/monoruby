@@ -692,9 +692,14 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         )
     };
     if handle.is_null() {
-        let message = unsafe { std::ffi::CString::from_raw(libc::dlerror()) }
-            .into_string()
-            .unwrap();
+        let err = unsafe { libc::dlerror() };
+        if err.is_null() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "both of dlopen() and dlerror() returned NULL. {:?}",
+                lib
+            )));
+        }
+        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_str().unwrap().to_string() } };
         let path = match lib {
             Some(lib) => lib.to_string_lossy().to_string(),
             None => "".to_string(),

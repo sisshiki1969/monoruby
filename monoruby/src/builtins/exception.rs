@@ -93,8 +93,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let ex = self_.is_exception().unwrap();
-    Err(MonorubyErr::runtimeerr(ex.get_error_message()))
-    //Ok(Value::string(ex.get_error_message()))
+    Ok(Value::string(ex.get_error_message()))
 }
 
 ///

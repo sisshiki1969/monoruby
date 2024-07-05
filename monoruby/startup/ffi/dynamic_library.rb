@@ -1,9 +1,9 @@
   module FFI
     class DynamicLibrary
+      RTLD_LOCAL = 0
       RTLD_LAZY = 1
       RTLD_NOW = 2
-      RTLD_LOCAL = 4
-      RTLD_GLOBAL = 8
+      RTLD_GLOBAL = 256
 
       attr_reader :handle, :name
 
@@ -14,7 +14,7 @@
 
       def self.open(name, flags)
         handle = ___dlopen(name, flags)
-        self.new(handle, name ? name : "")
+        self.new(handle, name || "[current process]")
       end
     end
   end
