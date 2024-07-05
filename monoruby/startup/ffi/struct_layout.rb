@@ -1,7 +1,18 @@
 
 module FFI  
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructLayout.c#L690
-  class StructLayout
+  class StructLayout < Type
+
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructLayout.c#L483
+    def initialize(fields, size, align)
+      @fieldcount = fields.size
+      @field_map = {}
+      @field_names = ::Array.new(@fieldcount)
+      @fields = ::Array.new(@fieldcount)
+      @size = size
+      @align = align
+    end
+
     class Field
       # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructLayout.c#L141
       def initialize(name, offset, type)
@@ -48,15 +59,17 @@ module FFI
         @type
       end
     end
-    class Number
+    class Number < Field
     end
-    class String
+    class String < Field
     end
-    class Pointer
+    class Pointer < Field
     end
-    class Function
+    class Function < Field
     end
-    class Array
+    class Array < Field
+    end
+    class CharArray < Struct::InlineArray
     end
   end
 end

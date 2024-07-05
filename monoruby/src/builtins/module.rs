@@ -9,6 +9,8 @@ pub(super) fn init(globals: &mut Globals) {
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
+    globals.define_builtin_func(MODULE_CLASS, "<", lt, 1);
+    globals.define_builtin_func(MODULE_CLASS, ">", gt, 1);
     globals.define_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_accessor", attr_accessor);
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_reader", attr_reader);
@@ -74,6 +76,44 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     let lhs = lfp.self_val().as_class_id();
     Ok(Value::bool(lhs == rhs))
+}
+
+fn less_than(lhs: Module, rhs: Module) -> Value {
+    if rhs.id() == lhs.id() {
+        Value::bool(false)
+    } else if rhs.is_ancestor_of(lhs) {
+        Value::bool(true)
+    } else if lhs.is_ancestor_of(rhs) {
+        Value::bool(false)
+    } else {
+        Value::nil()
+    }
+}
+
+///
+/// ### Module#<
+///
+/// - self < other -> bool | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3c.html]
+#[monoruby_builtin]
+fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let rhs = lfp.arg(0).expect_class_or_module(globals)?;
+    let lhs = lfp.self_val().as_class();
+    Ok(less_than(lhs, rhs))
+}
+
+///
+/// ### Module#>
+///
+/// - self > other -> bool | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3e.html]
+#[monoruby_builtin]
+fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let rhs = lfp.arg(0).expect_class_or_module(globals)?;
+    let lhs = lfp.self_val().as_class();
+    Ok(less_than(rhs, lhs))
 }
 
 ///
@@ -648,6 +688,36 @@ mod test {
         end
         S === C.new"#,
         );
+    }
+
+    #[test]
+    fn compare() {
+        run_test(
+            r#"
+        module Foo
+        end
+        class Bar
+          include Foo
+        end
+        class Baz < Bar
+        end
+        class Qux
+        end
+        res = []
+        res << (Bar < Foo)     # => true
+        res << (Baz < Bar)     # => true
+        res << (Baz < Foo)     # => true
+        res << (Baz < Qux)     # => nil
+        res << (Baz > Qux)     # => nil
+        res
+        "#,
+        );
+        run_test_error(
+            r##"
+        module Foo; end
+        Foo < Object.new
+        "##,
+        )
     }
 
     #[test]

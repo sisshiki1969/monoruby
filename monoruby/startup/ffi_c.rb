@@ -1,7 +1,3 @@
-require_relative 'ffi/type.rb'
-require_relative 'ffi/dynamic_library.rb'
-require_relative 'ffi/struct_layout.rb'
-
 #
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305
 #
@@ -19,21 +15,6 @@ module FFI
       @size = size
     end
     attr_reader :address, :size
-  end
-
-  # typedef struct Pointer {
-  #     AbstractMemory memory;
-  #     VALUE rbParent;
-  #     char* storage; /* start of malloc area */
-  #     bool autorelease;
-  #     bool allocated;
-  # } Pointer;
-
-  class Pointer < AbstractMemory
-    def initialize(type, address = type)
-      @type = type
-      @address = address
-    end
   end
 
   # https://github.com/ffi/ffi/blob/master/ext/ffi_c/Platform.c
@@ -57,3 +38,9 @@ module FFI
     ADDRESS_SIZE = 64
   end
 end
+
+require_relative 'ffi/pointer.rb'
+require_relative 'ffi/function.rb'
+require_relative 'ffi/type.rb'
+require_relative 'ffi/dynamic_library.rb'
+require_relative 'ffi/struct_layout.rb'

@@ -60,8 +60,34 @@ module FFI
         end
         @converter = converter
       end
+    end    
+  end
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/FunctionInfo.c#L292
+  class FunctionType < Type
+  end
+  
+  CallbackInfo = FunctionType
+  FunctionInfo = FunctionType
+  Type::Function = FunctionType
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Struct.c#L820
+  class Struct
+    class InlineArray
     end
   end
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/StructByValue.c#L166
+  class StructByValue < Type
+  end
+
+  Type::Struct = StructByValue
+
+  # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/ArrayType.c#L172
+  class ArrayType < Type
+  end
+
+  Type::Array = ArrayType
 
   class FFIType
     def initialize(size, alignment, type, elements = nil)

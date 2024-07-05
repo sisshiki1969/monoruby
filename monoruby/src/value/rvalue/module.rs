@@ -15,6 +15,19 @@ impl Module {
         }
     }
 
+    ///
+    /// Check whether `self` is an ancestor of `module`.
+    ///
+    pub(crate) fn is_ancestor_of(self, mut module: Module) -> bool {
+        while let Some(superclass) = module.superclass() {
+            if superclass.id() == self.id() {
+                return true;
+            }
+            module = superclass;
+        }
+        false
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         self.0.change_class(new_class_id);
     }
