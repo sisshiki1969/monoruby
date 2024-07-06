@@ -40,6 +40,7 @@ module FFI
 end
 
 require_relative 'ffi/pointer.rb'
+require_relative 'ffi/memory_pointer.rb'
 require_relative 'ffi/function.rb'
 require_relative 'ffi/type.rb'
 require_relative 'ffi/dynamic_library.rb'

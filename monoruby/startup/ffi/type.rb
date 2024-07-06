@@ -2,14 +2,65 @@
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305
 #
 module FFI
+  # typedef struct _ffi_type
+  # {
+  #   size_t size;
+  #   unsigned short alignment;
+  #   unsigned short type;
+  #   struct _ffi_type **elements;
+  # } ffi_type;
+  class FFIType
+    def initialize(size, alignment, type, elements = nil)
+      @size = size
+      @alignment = alignment
+      @type = type
+      @elements = elements
+    end
+    attr_reader :size, :alignment
+
+    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/include/ffi.h.in#L60
+    VOID = FFIType.new(0, 0, 0)
+    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/src/types.c#L69
+    UCHAR = UINT8 = FFIType.new(1, 1, 5)
+    SINT8 = FFIType.new(1, 1, 6)
+    UINT16 = FFIType.new(2, 2, 7)
+    SINT16 = FFIType.new(2, 2, 8)
+    UINT32 = FFIType.new(4, 4, 9)
+    SINT32 = FFIType.new(4, 4, 10)
+    ULONG = UINT64 = FFIType.new(8, 8, 11)
+    LONG = SINT64 = FFIType.new(8, 8, 12)
+
+    POINTER = FFIType.new(8, 8, 14)
+    FLOAT = FFIType.new(4, 4, 2)
+    DOUBLE = FFIType.new(8, 8, 3)
+    LONGDOUBLE = FFIType.new(16, 16, 4)
+  end
+
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L314
+  # struct Type_ {
+  #     NativeType nativeType;
+  #     ffi_type* ffiType;
+  # };
+
   class Type
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L96
+    def self.allocate
+      obj = super
+      obj.instance_variable_set(:@native_type, -1)
+      obj.instance_variable_set(:@ffi_type, FFIType::VOID)
+      obj
+    end
+
+    # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L114
     def initialize(val)
       if val.is_a?(Integer)
         @native_type = val;
+        @ffi_type = FFIType::VOID
       elsif val.is_a?(Type)
         @native_type = val.native_type
         @ffi_type = val.ffi_type
+      else
+        raise ArgumentError, "wrong type"
       end
     end
 
@@ -89,32 +140,7 @@ module FFI
 
   Type::Array = ArrayType
 
-  class FFIType
-    def initialize(size, alignment, type, elements = nil)
-      @size = size
-      @alignment = alignment
-      @type = type
-      @elements = elements
-    end
-    attr_reader :size, :alignment
 
-    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/include/ffi.h.in#L60
-    VOID = FFIType.new(0, 0, 0)
-    # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/src/types.c#L69
-    UCHAR = UINT8 = FFIType.new(1, 1, 5)
-    SINT8 = FFIType.new(1, 1, 6)
-    UINT16 = FFIType.new(2, 2, 7)
-    SINT16 = FFIType.new(2, 2, 8)
-    UINT32 = FFIType.new(4, 4, 9)
-    SINT32 = FFIType.new(4, 4, 10)
-    ULONG = UINT64 = FFIType.new(8, 8, 11)
-    LONG = SINT64 = FFIType.new(8, 8, 12)
-
-    POINTER = FFIType.new(8, 8, 14)
-    FLOAT = FFIType.new(4, 4, 2)
-    DOUBLE = FFIType.new(8, 8, 3)
-    LONGDOUBLE = FFIType.new(16, 16, 4)
-  end
   
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L319
   TypeDefs = {}
@@ -217,10 +243,7 @@ module FFI
 end
 
 
-# struct Type_ {
-#     NativeType nativeType;
-#     ffi_type* ffiType;
-# };
+
 
 # typedef struct BuiltinType_ {
 #     Type type;
