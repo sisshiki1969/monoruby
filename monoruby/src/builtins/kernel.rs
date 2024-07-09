@@ -64,6 +64,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "___dlopen", dlopen, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "___dlsym", dlsym, 2);
     globals.define_builtin_module_func(kernel_class, "___call", dlcall, 4);
+    globals.define_builtin_module_func_with(kernel_class, "___malloc", malloc, 1, 2, false);
+    globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
+    globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
     klass
 }
 
@@ -778,6 +781,62 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(res)
 }
 
+///
+/// Kernel.#___malloc
+///
+/// - malloc(size, clear) -> Integer
+///
+#[monoruby_builtin]
+fn malloc(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let size = lfp.arg(0).expect_integer()? as usize;
+    let clear = if let Some(clear) = lfp.try_arg(1) {
+        clear.as_bool()
+    } else {
+        false
+    };
+    let handle = unsafe {
+        if clear {
+            libc::calloc(1, size)
+        } else {
+            libc::malloc(size)
+        }
+    };
+    if handle.is_null() {
+        return Err(MonorubyErr::runtimeerr(
+            "failed to allocate memory size = {size}",
+        ));
+    }
+    Ok(Value::integer(handle as usize as i64))
+}
+
+///
+/// Kernel.#___memcpy
+///
+/// - memcpyv(dst, value, size)
+///
+#[monoruby_builtin]
+fn memcpyv(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let dest = lfp.arg(0).expect_integer()? as *mut u8;
+    let value = lfp.arg(1).expect_integer()?;
+    let n = lfp.arg(2).expect_integer()? as usize;
+    unsafe { libc::memcpy(dest as _, &value as *const i64 as _, n) };
+    Ok(lfp.arg(0))
+}
+
+///
+/// Kernel.#___read_memory
+///
+/// - read_memory(ptr, length)
+///
+#[monoruby_builtin]
+fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ptr = lfp.arg(0).expect_integer()? as *mut u8;
+    let len = lfp.arg(1).expect_integer()? as usize;
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let ary = Value::bytes_from_slice(slice);
+    Ok(ary)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -883,5 +942,16 @@ mod test {
         run_test(r#"warn("woo", :boo, 100)"#);
         run_test_error(r#"warn(uplevel:1)"#);
         run_test_error(r#"warn(category:100)"#);
+    }
+
+    #[test]
+    fn mem() {
+        run_test_no_result_check(
+            r##"
+            ptr = ___malloc(32, true)
+            ___memcpyv(ptr + 8, 0x12345678, 4)
+            __assert(___read_memory(ptr, 32), "\x00\x00\x00\x00\x00\x00\x00\x00xV4\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+        "##,
+        );
     }
 }

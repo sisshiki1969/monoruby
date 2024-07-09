@@ -600,6 +600,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjKind::GENERATOR => self.as_generator().mark(alloc),
                 ObjKind::BINDING => self.as_binding().mark(alloc),
+                ObjKind::UMETHOD => {}
                 _ => unreachable!("mark {:016x} {}", self.id(), self.ty()),
             }
         }

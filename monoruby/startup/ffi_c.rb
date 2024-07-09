@@ -2,20 +2,6 @@
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305
 #
 module FFI
-  # struct AbstractMemory_ {
-  #     char* address; /* Use char* instead of void* to ensure adding to it works correctly */
-  #     long size;
-  #     int flags;
-  #     int typeSize;
-  # };
-
-  class AbstractMemory
-    def initialize(address, size)
-      @address = address
-      @size = size
-    end
-    attr_reader :address, :size
-  end
 
   # https://github.com/ffi/ffi/blob/master/ext/ffi_c/Platform.c
   class Platform
@@ -39,9 +25,10 @@ module FFI
   end
 end
 
+require_relative 'ffi/type.rb'
+require_relative 'ffi/abstract_memory.rb'
 require_relative 'ffi/pointer.rb'
 require_relative 'ffi/memory_pointer.rb'
 require_relative 'ffi/function.rb'
-require_relative 'ffi/type.rb'
 require_relative 'ffi/dynamic_library.rb'
 require_relative 'ffi/struct_layout.rb'

@@ -68,6 +68,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
+    globals.define_builtin_func(STRING_CLASS, "unpack", unpack, 1);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
@@ -2057,6 +2058,46 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### String#unpack
+///
+/// - unpack(template) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack.html]
+#[monoruby_builtin]
+fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let b = self_.as_bytes().iter();
+    let mut ary = Vec::new();
+
+    macro_rules! pack {
+        ($size: expr, $type: ident) => {
+            for chunk in b.array_chunks::<$size>() {
+                let bytes = chunk.map(|e| *e);
+                let i = $type::from_ne_bytes(bytes);
+                ary.push(Value::integer(i as i64))
+            }
+        };
+    }
+
+    match lfp.arg(0).expect_str()? {
+        "q*" => pack!(8, i64),
+        "Q*" => pack!(8, u64),
+        "l*" => pack!(4, i32),
+        "L*" => pack!(4, u32),
+        "s*" => pack!(2, i16),
+        "S*" => pack!(2, u16),
+        "c*" => pack!(1, i8),
+        "C*" => pack!(1, u8),
+        _ => {
+            return Err(MonorubyErr::argumenterr(
+                "Currently, the template character is not supported.",
+            ))
+        }
+    };
+    Ok(Value::array_from_vec(ary))
+}
+
+///
 /// ### String#unpack1
 ///
 /// - unpack1(format) -> object
@@ -2846,6 +2887,12 @@ mod test {
         run_test(r#""\x00".unpack1('C')"#);
         run_test(r#""\x00\x01".unpack1('c')"#);
         run_test(r#""\x00\x01".unpack1('C')"#);
+
+        //run_test(r#""\x01\xFE".unpack("c*")"#);
+        run_test(r#""Ruby".unpack("c*")"#);
+        run_test(r#""戦闘妖精雪風".unpack("c*")"#);
+        //run_test(r#""\x01\xFE".unpack("C*")"#);
+        run_test(r#""Ruby".unpack("C*")"#);
     }
 
     #[test]
