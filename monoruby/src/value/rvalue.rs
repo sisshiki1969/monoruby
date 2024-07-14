@@ -15,6 +15,7 @@ pub use ivar_table::*;
 pub use method::*;
 pub use module::*;
 pub use regexp::RegexpInner;
+pub(crate) use string::pack::*;
 pub use string::{Encoding, StringInner};
 
 mod array;

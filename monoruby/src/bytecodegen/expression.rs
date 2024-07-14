@@ -97,6 +97,7 @@ impl BytecodeGen {
             NodeKind::Float(f) => self.emit_float(dst, f),
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
             NodeKind::String(s) => self.emit_string(dst, s),
+            NodeKind::Bytes(b) => self.emit_bytes(dst, b),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(dst, nodes, loc)?,
             NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
@@ -344,6 +345,7 @@ impl BytecodeGen {
             | NodeKind::Float(_)
             | NodeKind::Imaginary(_)
             | NodeKind::String(_)
+            | NodeKind::Bytes(_)
             | NodeKind::Array(..)
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }

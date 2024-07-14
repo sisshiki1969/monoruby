@@ -186,7 +186,10 @@ pub fn run_test_error(code: &str) {
     eprintln!("{code}");
     let mut globals = Globals::new(1, false);
     match globals.run(code, std::path::Path::new(".")) {
-        Ok(_) => panic!(),
+        Ok(v) => {
+            eprintln!("{}", v.inspect(&globals));
+            panic!()
+        }
         Err(err) => err.show_error_message_and_all_loc(&globals),
     }
 }

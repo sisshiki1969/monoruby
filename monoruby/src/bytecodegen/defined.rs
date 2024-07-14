@@ -234,6 +234,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Imaginary(_)
         | NodeKind::Symbol(_)
         | NodeKind::String(_)
+        | NodeKind::Bytes(_)
         | NodeKind::InterporatedString(_)
         | NodeKind::RegExp(..)
         | NodeKind::Range { .. }

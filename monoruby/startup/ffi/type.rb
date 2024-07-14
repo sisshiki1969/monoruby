@@ -2,6 +2,16 @@
 # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L305
 #
 module FFI
+  FFI_FIRST_ABI = 1,
+  FFI_UNIX64 = 2,
+  FFI_LAST_ABI = 5,
+  FFI_DEFAULT_ABI = FFI_UNIX64
+
+  FFI_OK = 0
+  FFI_BAD_TYPEDEF = 1
+  FFI_BAD_ABI = 2
+  FFI_BAD_ARGTYPE = 3
+
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L227
   # int rbffi_type_size(VALUE type)
   def self.ffi_type_size(type)
@@ -198,7 +208,7 @@ module FFI
         enums = options[:enums]
         blocking = options[:blocking]
       end
-      if !param_types.is_a?(Array)
+      if !param_types.is_a?(::Array)
         raise TypeError, "param_types must be an Array"
       end
       @paramter_count = param_types.size
