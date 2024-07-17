@@ -1,12 +1,12 @@
 module Fiddle
   SIZEOF_LONG = 8
   WINDOWS = false
-  module_function
-  def dlopen(lib)
-    h = Kernel.___dlopen(lib)
-    raise DLError.new("dlopen failed") if h == 0
-    Handle.new(h)
-  end
+  #module_function
+  #def dlopen(lib)
+  #  h = Kernel.___dlopen(lib)
+  #  raise DLError.new("dlopen failed") if h == 0
+  #  Handle.new(h)
+  #end
   module Types
     VOID = 0
     VOIDP = 1
@@ -19,7 +19,10 @@ module Fiddle
     RTLD_GLOBAL = 0
     RTLD_LAZY = 0
     RTLD_NOW = 0
-    def initialize(handle)
+    def initialize(library)
+      handle = Kernel.___dlopen(library)
+      raise DLError.new("dlopen failed") if handle == 0
+      @library = library
       @handle = handle
     end
     def [](name)

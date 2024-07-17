@@ -758,13 +758,56 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     }
     let ptr = lfp.arg(0).expect_integer()? as usize;
-    let f: extern "C" fn(u64, u64) -> u64 = unsafe { transmute(ptr) };
     let args = lfp.arg(1).expect_array()?;
     let args_type = lfp.arg(2).expect_array()?;
     let ret_type = lfp.arg(3).expect_integer()?;
-    let a1 = conv(args[0], args_type[0].expect_integer()? as u32)?;
-    let a2 = conv(args[1], args_type[1].expect_integer()? as u32)?;
-    let res = f(a1, a2);
+    let res = match args.len() {
+        0 => {
+            let f: extern "C" fn() -> u64 = unsafe { transmute(ptr) };
+            f()
+        }
+        1 => {
+            let f: extern "C" fn(u64) -> u64 = unsafe { transmute(ptr) };
+            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            f(a0)
+        }
+        2 => {
+            let f: extern "C" fn(u64, u64) -> u64 = unsafe { transmute(ptr) };
+            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+            f(a0, a1)
+        }
+        3 => {
+            let f: extern "C" fn(u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
+            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
+            f(a0, a1, a2)
+        }
+        4 => {
+            let f: extern "C" fn(u64, u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
+            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
+            let a3 = conv(args[3], args_type[3].expect_integer()? as u32)?;
+            f(a0, a1, a2, a3)
+        }
+        5 => {
+            let f: extern "C" fn(u64, u64, u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
+            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
+            let a3 = conv(args[3], args_type[3].expect_integer()? as u32)?;
+            let a4 = conv(args[4], args_type[4].expect_integer()? as u32)?;
+            f(a0, a1, a2, a3, a4)
+        }
+        x => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "arguments too many: {}",
+                x
+            )))
+        }
+    };
     let res = match ret_type {
         // VOID = 0
         // VOIDP = 1

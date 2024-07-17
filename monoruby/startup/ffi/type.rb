@@ -211,7 +211,7 @@ module FFI
       if !param_types.is_a?(::Array)
         raise TypeError, "param_types must be an Array"
       end
-      @paramter_count = param_types.size
+      @parameter_count = param_types.size
       @parameter_types = []
       @ffi_parameter_types = []
       @native_parameter_types = []
@@ -245,15 +245,17 @@ module FFI
       if !@return_type
         raise TypeError, "invalid return Type (#{@return_type.inspect})"
       end
-
+      
       if @return_type.is_a?(StructByValue)
         @has_struct = true
       end
-
+      
       @ffi_return_type = @return_type.ffi_type
 
       @abi = FFI_DEFAULT_ABI
 
+      puts @ffi_return_type.size
+      puts "ffi_prep_cif: #{@ffi_cif}, #{@abi}, #{@parameter_count}, #{@ffi_return_type}, #{@ffi_parameter_types}"
       status = ffi_prep_cif(@ffi_cif, @abi, @parameter_count, @ffi_return_type, @ffi_parameter_types)
       case status
       when FFI_BAD_ABI
