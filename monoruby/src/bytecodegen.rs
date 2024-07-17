@@ -915,6 +915,10 @@ impl BytecodeGen {
         self.emit_literal(dst, Value::string(s));
     }
 
+    fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
+        self.emit_literal(dst, Value::bytes(b));
+    }
+
     fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
         let calsite = CallSite::new(
             None,
@@ -1619,6 +1623,7 @@ impl Visitor {
             | NodeKind::Float(_)
             | NodeKind::Imaginary(_)
             | NodeKind::String(_)
+            | NodeKind::Bytes(_)
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
             | NodeKind::ClassVar(_)

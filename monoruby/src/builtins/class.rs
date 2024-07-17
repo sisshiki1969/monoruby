@@ -44,14 +44,13 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 }
 
 /// ### Class#new
+///
 /// - new(*args, &block) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
-///
-/// TODO: We must call Object#initialize.
 #[monoruby_builtin]
 pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let obj = __allocate(vm, globals, lfp)?;
+    let obj = vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None)?;
     vm.invoke_method_if_exists(
         globals,
         IdentId::INITIALIZE,

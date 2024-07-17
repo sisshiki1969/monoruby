@@ -68,6 +68,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
     globals.define_builtin_func(STRING_CLASS, "b", b, 0);
     globals.define_builtin_func(STRING_CLASS, "unpack1", unpack1, 1);
+    globals.define_builtin_func(STRING_CLASS, "unpack", unpack, 1);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "force_encoding", force_encoding, 1);
     globals.define_builtin_func(STRING_CLASS, "valid_encoding?", valid_encoding, 0);
@@ -2057,6 +2058,18 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### String#unpack
+///
+/// - unpack(template) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unpack.html]
+#[monoruby_builtin]
+fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    rvalue::unpack(&self_.as_bytes(), lfp.arg(0).expect_str()?)
+}
+
+///
 /// ### String#unpack1
 ///
 /// - unpack1(format) -> object
@@ -2065,44 +2078,7 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let b = self_.as_bytes();
-
-    macro_rules! pack {
-        ($size: expr, $type: ident) => {
-            if b.len() < $size {
-                Ok(Value::nil())
-            } else {
-                let bytes = &b[0..$size];
-                let i = $type::from_ne_bytes(bytes.try_into().unwrap());
-                Ok(Value::integer(i as i64))
-            }
-        };
-    }
-
-    match lfp.arg(0).expect_str()? {
-        "q" => pack!(8, i64),
-        "Q" => {
-            if b.len() < 8 {
-                return Ok(Value::nil());
-            }
-            let bytes = &b[0..8];
-            let i = u64::from_ne_bytes(bytes.try_into().unwrap());
-            let v = match i64::try_from(i) {
-                Ok(i) => Value::integer(i),
-                Err(_) => Value::bigint(BigInt::from(i)),
-            };
-            Ok(v)
-        }
-        "l" => pack!(4, i32),
-        "L" => pack!(4, u32),
-        "s" => pack!(2, i16),
-        "S" => pack!(2, u16),
-        "c" => pack!(1, i8),
-        "C" => pack!(1, u8),
-        _ => Err(MonorubyErr::argumenterr(
-            "Currently, the template character is not supported.",
-        )),
-    }
+    rvalue::unpack1(&self_.as_bytes(), lfp.arg(0).expect_str()?)
 }
 
 ///
@@ -2820,7 +2796,9 @@ mod test {
     }
 
     #[test]
-    fn encoding() {
+    fn pack_unpack() {
+        run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack('csl')"#);
+
         run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('q')"#);
         run_test(r#""\x00\x01\x02\x03\x04\x05\x06".unpack1('Q')"#);
         run_test(r#""\x00\x01\x02\x03\x04\x05\x06\x07".unpack1('q')"#);
@@ -2846,6 +2824,42 @@ mod test {
         run_test(r#""\x00".unpack1('C')"#);
         run_test(r#""\x00\x01".unpack1('c')"#);
         run_test(r#""\x00\x01".unpack1('C')"#);
+
+        run_test(r#""\x01\xFE".unpack1("c*")"#);
+        run_test(r#""Ruby".unpack("c*")"#);
+        run_test(r#""Ruby".unpack1("c*")"#);
+        run_test(r#""戦闘妖精雪風".unpack("c*")"#);
+        run_test(r#""戦闘妖精雪風".unpack1("c*")"#);
+        run_test(r#""\x01\xFE".unpack1("C*")"#);
+        run_test(r#""Ruby".unpack("C*")"#);
+        run_test(r#""Ruby".unpack1("C*")"#);
+
+        run_test(r#""\x01\xFE".unpack("c*")"#);
+        run_test(r#"[1, -2].pack("c*")"#);
+        run_test(r#"[1, 254].pack("c*")"#);
+        run_test(r#""\x01\xFE".unpack("C*")"#);
+        run_test(r#"[1, -2].pack("C*")"#);
+        run_test(r#"[1, 254].pack("C*")"#);
+
+        run_test(r#""\x01\x02\xFE\xFD".unpack("s*")"#);
+        run_test(r#"[513, 65022].pack("s*")"#);
+        run_test(r#"[513, -514].pack("s*")"#);
+        run_test(r#""\x01\x02\xFE\xFD".unpack("s*")"#);
+        run_test(r#"[258, 65277].pack("s*")"#);
+        run_test(r#"[258, -259].pack("s*")"#);
+
+        run_test(r#"[0,1,-1,32767,-32768,65535].pack("n*")"#);
+        run_test(r#""\x00\x00\x00\x01\xFF\xFF\x7F\xFF\x80\x00\xFF\xFF".unpack("n*")"#);
+
+        run_test(r#"[0,1,-1].pack("N*")"#);
+        run_test(r#""\x00\x00\x00\x00\x00\x00\x00\x01\xFF\xFF\xFF\xFF".unpack("N*")"#);
+
+        run_test(r#"[97, 98].pack("CxC")"#);
+        run_test(r#"[97, 98].pack("Cx3C")"#);
+        run_test(r#""abc".unpack("CxC")"#);
+        run_test_error(r#""abc".unpack("Cx3C")"#);
+        run_test(r#"[97, 98, 99].pack("CCXC")"#);
+        run_test(r#""abcdef".unpack("x*XC")"#);
     }
 
     #[test]
@@ -2855,7 +2869,8 @@ mod test {
 
     #[test]
     fn dump() {
-        run_test(r#""abc\r\n\f\x90'\b10\\\"魁\u1234".dump"#);
+        run_test(r#""abc\r\n\f\x70'\b10\\\"魁\u1234".dump"#);
+        run_test(r#""abc\r\n\f\x80'\b10\\\"魁\u1234".b"#);
     }
 
     #[test]

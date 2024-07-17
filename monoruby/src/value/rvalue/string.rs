@@ -2,6 +2,7 @@ use super::*;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 
+pub mod pack;
 mod printable;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -114,6 +114,7 @@ impl IdentId {
     pub const _ENCODING: IdentId = id!(50);
     pub const TO_ARY: IdentId = id!(51);
     pub const TO_A: IdentId = id!(52);
+    pub const ALLOCATE: IdentId = id!(53);
 }
 
 impl IdentId {
@@ -260,6 +261,7 @@ impl IdentifierTable {
         table.set_id("/encoding", IdentId::_ENCODING);
         table.set_id("to_ary", IdentId::TO_ARY);
         table.set_id("to_a", IdentId::TO_A);
+        table.set_id("allocate", IdentId::ALLOCATE);
         table
     }
 

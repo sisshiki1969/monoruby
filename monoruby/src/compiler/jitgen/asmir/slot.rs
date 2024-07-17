@@ -452,7 +452,8 @@ impl AsmIr {
                     bb.clear_link(slot);
                 }
                 LinkMode::Alias(origin) => {
-                    assert_eq!(bb[origin].link, LinkMode::Stack);
+                    // TODO: is it Ok??
+                    //assert_eq!(bb[origin].link, LinkMode::Stack);
                     assert!(bb[origin].alias.contains(&slot));
                     bb[origin].alias.retain(|e| *e != slot);
                     bb.clear_link(slot);

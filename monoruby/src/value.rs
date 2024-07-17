@@ -1115,6 +1115,7 @@ impl Value {
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
             NodeKind::String(s) => Value::string_from_str(s),
+            NodeKind::Bytes(b) => Value::bytes_from_slice(b),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast(node, globals));
                 Value::array_from_iter(iter)
