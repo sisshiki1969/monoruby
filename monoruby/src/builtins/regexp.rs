@@ -33,10 +33,10 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
-fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn regexp_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string()?;
-    let regexp = RegexpInner::from_string(globals, string)?;
+    let regexp = RegexpInner::from_string(string)?;
     let val = Value::regexp(regexp);
     Ok(val)
 }
@@ -61,7 +61,7 @@ fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/union.html]
 #[monoruby_builtin]
-fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn regexp_union(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
     let mut v = vec![];
     if rest.len() == 1
@@ -79,7 +79,7 @@ fn regexp_union(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         }
     }
 
-    Ok(Value::regexp(RegexpInner::union(globals, &v)?))
+    Ok(Value::regexp(RegexpInner::union(&v)?))
 }
 
 ///

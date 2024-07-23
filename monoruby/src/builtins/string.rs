@@ -557,10 +557,10 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=7e.html]
 #[monoruby_builtin]
-fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn match_(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let given = self_val.expect_str()?;
-    let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
+    let regex = &lfp.arg(0).expect_regexp_or_string()?;
     let res = match regex.find_one(vm, given)? {
         Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
@@ -1328,7 +1328,7 @@ fn sub_main(
         }
         let given = self_val.expect_str()?;
         let replace = arg1.expect_str()?;
-        RegexpInner::replace_one(vm, globals, lfp.arg(0), &given, &replace)
+        RegexpInner::replace_one(vm, lfp.arg(0), &given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1383,7 +1383,7 @@ fn gsub_main(
         }
         let given = self_val.expect_str()?;
         let replace = arg1.expect_str()?;
-        RegexpInner::replace_all(vm, globals, lfp.arg(0), &given, &replace)
+        RegexpInner::replace_all(vm, lfp.arg(0), &given, &replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1407,7 +1407,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.expect_str()?;
     let vec = if let Some(s) = lfp.arg(0).is_str() {
-        let re = RegexpInner::from_escaped(globals, &s)?;
+        let re = RegexpInner::from_escaped(&s)?;
         re.find_all(vm, &given)?
     } else if let Some(re) = lfp.arg(0).is_regex() {
         re.find_all(vm, &given)?
@@ -1468,7 +1468,7 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str()?;
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).expect_regexp_or_string()?;
 
     RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)
 }
@@ -1491,7 +1491,7 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str()?;
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).expect_regexp_or_string()?;
 
     let res = RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)?;
     Ok(Value::bool(!res.is_nil()))
@@ -1504,7 +1504,7 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/index.html]
 #[monoruby_builtin]
-fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn string_index(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_i64()?
     } else {
@@ -1512,7 +1512,7 @@ fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     };
     let self_ = lfp.self_val();
     let given = self_.is_bytes().unwrap();
-    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
+    let re = lfp.arg(0).expect_regexp_or_string()?;
 
     let char_pos = match given.conv_char_index(char_pos)? {
         Some(pos) => pos,

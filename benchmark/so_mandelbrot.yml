@@ -53,4 +53,4 @@ benchmark:
   mandelbrot: |
     do_it
 
-loop_count: 10000
+loop_count: 10

@@ -1,9 +1,7 @@
-use fancy_regex::Regex;
 use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use super::*;
 
@@ -103,8 +101,6 @@ pub struct Globals {
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
     global_method_cache: GlobalMethodCache,
-    /// regex cache.
-    regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
     pub(super) warning: u8,
     /// suppress jit compilation.
@@ -167,7 +163,6 @@ impl Globals {
             store: Store::new(),
             global_vars: HashMap::default(),
             global_method_cache: GlobalMethodCache::default(),
-            regexp_cache: HashMap::default(),
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
@@ -446,16 +441,6 @@ impl Globals {
             }
         }
         lfp
-    }
-
-    // Handling regex.
-
-    pub(crate) fn set_regex(&mut self, k: String, v: Rc<Regex>) -> Option<Rc<Regex>> {
-        self.regexp_cache.insert(k, v)
-    }
-
-    pub(crate) fn get_regex(&self, k: &str) -> Option<&Rc<Regex>> {
-        self.regexp_cache.get(k)
     }
 
     // Handling library load path.

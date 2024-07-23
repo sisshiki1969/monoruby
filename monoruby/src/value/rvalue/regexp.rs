@@ -1,13 +1,26 @@
 use super::*;
 use fancy_regex::{CaptureMatches, Captures, Match, Regex};
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::{LazyLock, RwLock};
+
+static HASHMAP_CACHE: LazyLock<RwLock<HashMapCache>> =
+    LazyLock::new(|| RwLock::new(HashMapCache::new()));
+
+#[derive(Debug, Default)]
+struct HashMapCache(HashMap<String, Arc<Regex>>);
+
+impl HashMapCache {
+    fn new() -> Self {
+        Self(HashMap::default())
+    }
+}
 
 #[derive(Clone, Debug)]
-pub struct RegexpInner(Rc<Regex>);
+pub struct RegexpInner(Arc<Regex>);
 
 impl PartialEq for RegexpInner {
     fn eq(&self, other: &Self) -> bool {
-        if Rc::ptr_eq(&self.0, &other.0) {
+        if Arc::ptr_eq(&self.0, &other.0) {
             return true;
         }
         self.as_str() == other.as_str()
@@ -26,36 +39,38 @@ impl RegexpInner {
         self.0.as_str()
     }
 
-    pub fn union(globals: &mut Globals, v: &[String]) -> Result<Self> {
+    pub fn union(v: &[String]) -> Result<Self> {
         let s = v
             .iter()
             .map(|re| format!("(?:{})", re))
             .collect::<Vec<_>>()
             .join("|");
-        Self::from_string(globals, s)
+        Self::from_string(s)
     }
 
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
-    pub fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Result<Self> {
+    pub fn from_escaped(escaped_str: &str) -> Result<Self> {
         let string = regex::escape(escaped_str);
-        RegexpInner::from_string(globals, string)
+        RegexpInner::from_string(string)
     }
 
     /// Create `RegexpInfo` from `reg_str`.
     /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
     /// between fancy_regex crate and Regexp class of Ruby.
-    pub fn from_string(globals: &mut Globals, reg_str: impl Into<String>) -> Result<Self> {
+    pub fn from_string(reg_str: impl Into<String>) -> Result<Self> {
         let mut reg_str = reg_str.into();
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
         };
-        match globals.get_regex(&reg_str) {
-            Some(re) => Ok(RegexpInner(re.clone())),
-            None => match Regex::new(&reg_str) {
+        match HASHMAP_CACHE.write().unwrap().0.entry(reg_str.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                Ok(RegexpInner(entry.get().clone()))
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => match Regex::new(&reg_str) {
                 Ok(regexp) => {
-                    let regex = Rc::new(regexp);
-                    globals.set_regex(reg_str, regex.clone());
+                    let regex = Arc::new(regexp);
+                    entry.insert(regex.clone());
                     Ok(RegexpInner(regex))
                 }
                 Err(err) => Err(MonorubyErr::regexerr(err)),
@@ -70,7 +85,7 @@ impl RegexpInner {
         };
         match Regex::new(&reg_str) {
             Ok(regexp) => {
-                let regex = Rc::new(regexp);
+                let regex = Arc::new(regexp);
                 Ok(RegexpInner(regex))
             }
             Err(err) => Err(err.to_string()),
@@ -137,13 +152,12 @@ impl RegexpInner {
     /// Replaces the leftmost-first match with `replace`.
     pub(crate) fn replace_one(
         vm: &mut Executor,
-        globals: &mut Globals,
         re_val: Value,
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(globals, &s)?;
+            let re = Self::from_escaped(&s)?;
             re.replace_once(vm, given, replace)
                 .map(|(s, c)| (s, c.is_some()))
         } else if let Some(re) = re_val.is_regex() {
@@ -189,7 +203,7 @@ impl RegexpInner {
         }
 
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(globals, &s)?;
+            let re = Self::from_escaped(&s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, bh)
@@ -203,13 +217,12 @@ impl RegexpInner {
     /// Replaces all non-overlapping matches in `given` string with `replace`.
     pub(crate) fn replace_all(
         vm: &mut Executor,
-        globals: &mut Globals,
         regexp: Value,
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
         if let Some(s) = regexp.is_str() {
-            let re = Self::from_escaped(globals, &s)?;
+            let re = Self::from_escaped(&s)?;
             re.replace_repeat(vm, given, replace)
         } else if let Some(re) = regexp.is_regex() {
             re.replace_repeat(vm, given, replace)
@@ -262,7 +275,7 @@ impl RegexpInner {
         }
 
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(globals, &s)?;
+            let re = Self::from_escaped(&s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, bh)

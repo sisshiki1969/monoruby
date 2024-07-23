@@ -492,13 +492,6 @@ impl Value {
     }
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct F2 {
-    f1: f64,
-    f2: f64,
-}
-
 impl Value {
     ///
     /// Check if `self` is a packed value.
@@ -935,11 +928,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Result<RegexpInner> {
+    pub(crate) fn expect_regexp_or_string(&self) -> Result<RegexpInner> {
         if let Some(re) = self.is_regex() {
             Ok(re.clone())
         } else if let Some(s) = self.is_str() {
-            RegexpInner::from_string(globals, s)
+            RegexpInner::from_string(s)
         } else {
             Err(MonorubyErr::is_not_regexp_nor_string(*self))
         }

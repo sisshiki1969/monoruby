@@ -272,7 +272,7 @@ pub(super) extern "C" fn concatenate_regexp(
         let v = unsafe { *arg.sub(i) };
         res += &v.to_s(globals);
     }
-    let inner = match RegexpInner::from_string(globals, res) {
+    let inner = match RegexpInner::from_string(res) {
         Ok(inner) => inner,
         Err(err) => {
             vm.set_error(err);
