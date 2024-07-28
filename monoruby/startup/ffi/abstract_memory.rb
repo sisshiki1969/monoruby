@@ -1,9 +1,9 @@
 module FFI
   # struct AbstractMemory_ {
-  #     char* address; /* Use char* instead of void* to ensure adding to it works correctly */
-  #     long size;
-  #     int flags;
-  #     int typeSize;
+  #     char* address; // @memory_address
+  #     long size;     // @memory_size
+  #     int flags;     // @memory_flags
+  #     int typeSize;  // @memory_type_size
   # };
 
   class AbstractMemory
@@ -16,7 +16,7 @@ module FFI
 
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/AbstractMemory.c#L330
     def size
-      self.memory_size
+      @memory_size
     end
 
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/AbstractMemory.c#L545

@@ -25,6 +25,7 @@ module FFI
   end
 end
 
+require_relative 'ffi/method_handle.rb'
 require_relative 'ffi/type.rb'
 require_relative 'ffi/abstract_memory.rb'
 require_relative 'ffi/pointer.rb'

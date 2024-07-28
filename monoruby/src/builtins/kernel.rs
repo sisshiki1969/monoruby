@@ -1,4 +1,5 @@
 use super::*;
+use libffi;
 use num::ToPrimitive;
 use num::Zero;
 use std::{io::Write, mem::transmute};
@@ -67,6 +68,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "___malloc", malloc, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
+    globals.define_builtin_module_func(kernel_class, "___libffi_ffi_prep_cif", ffi_prep_cif, 3);
+    globals.define_builtin_module_func(kernel_class, "___libffi_ffi_size", ffi_size, 1);
+    globals.define_builtin_module_func(kernel_class, "___libffi_ffi_alignment", ffi_alignment, 1);
     klass
 }
 
@@ -878,6 +882,64 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     let ary = Value::bytes_from_slice(slice);
     Ok(ary)
+}
+
+fn get_ffi_type(ffi_type_id: i64) -> Result<*mut libffi::low::ffi_type> {
+    unsafe {
+        let mut ffi_type = match ffi_type_id {
+            0 => libffi::low::types::void,
+            2 => libffi::low::types::float,
+            3 => libffi::low::types::double,
+            4 => libffi::low::types::longdouble,
+            5 => libffi::low::types::uint8,
+            6 => libffi::low::types::sint8,
+            7 => libffi::low::types::uint16,
+            8 => libffi::low::types::sint16,
+            9 => libffi::low::types::uint32,
+            10 => libffi::low::types::sint32,
+            11 => libffi::low::types::uint64,
+            12 => libffi::low::types::sint64,
+            14 => libffi::low::types::pointer,
+            _ => return Err(MonorubyErr::argumenterr("invalid ffi_type: {ffi_type_id}")),
+        };
+        assert_eq!(ffi_type_id as u16, ffi_type.type_);
+        Ok(&mut ffi_type as *mut _)
+    }
+}
+
+///
+/// Kernel.#___read_memory
+///
+/// - ___libffi_ffi_prep_cif(abi, ffi_return_type, ffi_parameter_types)
+///
+#[monoruby_builtin]
+fn ffi_prep_cif(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let abi = lfp.arg(0).expect_integer()? as u32;
+    let rtype = get_ffi_type(lfp.arg(1).expect_integer()?)?;
+    let mut atypes = lfp
+        .arg(2)
+        .expect_array()?
+        .iter()
+        .map(|v| -> Result<_> { get_ffi_type(v.expect_integer()?) })
+        .collect::<Result<Vec<_>>>()?;
+    let nargs = atypes.len();
+    let mut cif = libffi::low::ffi_cif::default();
+    match unsafe { libffi::low::prep_cif(&mut cif, abi, nargs, rtype, atypes.as_mut_ptr()) } {
+        Ok(_) => Ok(Value::nil()),
+        Err(e) => Err(MonorubyErr::argumenterr(format!("{:?}", e))),
+    }
+}
+
+#[monoruby_builtin]
+fn ffi_size(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ffi_type = get_ffi_type(lfp.arg(0).expect_integer()?)?;
+    Ok(Value::integer(unsafe { *ffi_type }.size as i64))
+}
+
+#[monoruby_builtin]
+fn ffi_alignment(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ffi_type = get_ffi_type(lfp.arg(0).expect_integer()?)?;
+    Ok(Value::integer(unsafe { *ffi_type }.alignment as i64))
 }
 
 #[cfg(test)]

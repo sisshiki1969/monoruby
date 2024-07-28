@@ -21,7 +21,7 @@ module FFI
       when Symbol
         type = TypeDefs[type]
         if type.is_a?(Type)
-          type.ffi_type.size
+          type.size
         elsif type.respond_to?(:size)
           type.size
         else
@@ -59,31 +59,21 @@ module FFI
   #   struct _ffi_type **elements;
   # } ffi_type;
   class FFIType
-    attr_reader :size, :alignment
-
-    def initialize(size, alignment, type, elements = nil)
-      @size = size
-      @alignment = alignment
-      @type = type
-      @elements = elements
-    end
-
     # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/include/ffi.h.in#L60
-    VOID = FFIType.new(0, 0, 0)
     # https://github.com/libffi/libffi/blob/9c9e8368e49804c4f7c35ac9f0d7c1d0d533308b/src/types.c#L69
-    UCHAR = UINT8 = FFIType.new(1, 1, 5)
-    SINT8 = FFIType.new(1, 1, 6)
-    UINT16 = FFIType.new(2, 2, 7)
-    SINT16 = FFIType.new(2, 2, 8)
-    UINT32 = FFIType.new(4, 4, 9)
-    SINT32 = FFIType.new(4, 4, 10)
-    ULONG = UINT64 = FFIType.new(8, 8, 11)
-    LONG = SINT64 = FFIType.new(8, 8, 12)
-
-    POINTER = FFIType.new(8, 8, 14)
-    FLOAT = FFIType.new(4, 4, 2)
-    DOUBLE = FFIType.new(8, 8, 3)
-    LONGDOUBLE = FFIType.new(16, 16, 4)
+    VOID = 0
+    FLOAT = 2
+    DOUBLE = 3
+    LONGDOUBLE = 4
+    UCHAR = UINT8 = 5
+    SINT8 = 6
+    UINT16 = 7
+    SINT16 = 8
+    UINT32 = 9
+    SINT32 = 10
+    ULONG = UINT64 = 11
+    LONG = SINT64 = 12
+    POINTER = 14
   end
 
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L314
@@ -133,7 +123,7 @@ module FFI
     # @return [Integer]
     # Return type's size, in bytes.
     def size
-      @ffi_type.size
+      ___libffi_ffi_size(@ffi_type)
     end
 
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L157
@@ -141,7 +131,7 @@ module FFI
     # @return [Integer]
     # Get Type alignment.
     def alignment
-      @ffi_type.alignment
+      ___libffi_ffi_alignment(@ffi_type)
     end
     
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Type.c#L333
@@ -179,6 +169,7 @@ module FFI
 
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/FunctionInfo.c#L292
   class FunctionType < Type
+    attr_reader :parameter_count
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/FunctionInfo.c#L76
     def allocate
       obj = super
@@ -254,19 +245,18 @@ module FFI
 
       @abi = FFI_DEFAULT_ABI
 
-      puts @ffi_return_type.size
-      puts "ffi_prep_cif: #{@ffi_cif}, #{@abi}, #{@parameter_count}, #{@ffi_return_type}, #{@ffi_parameter_types}"
-      status = ffi_prep_cif(@ffi_cif, @abi, @parameter_count, @ffi_return_type, @ffi_parameter_types)
-      case status
-      when FFI_BAD_ABI
-       raise ArgumentError, "Invalid ABI specified"
-      when FFI_BAD_TYPEDEF
-       raise ArgumentError, "Invalid argument type specified"
-      when FFI_OK
-      else
-       raise ArgumentError, "Unknown FFI error"
-      end
+      ___libffi_ffi_prep_cif(@abi, @ffi_return_type, @ffi_parameter_types)
+      #case status
+      #when FFI_BAD_ABI
+      # raise ArgumentError, "Invalid ABI specified"
+      #when FFI_BAD_TYPEDEF
+      # raise ArgumentError, "Invalid argument type specified"
+      #when FFI_OK
+      #else
+      # raise ArgumentError, "Unknown FFI error"
+      #end
     # fnInfo->invoke = rbffi_GetInvoker(fnInfo);
+      self
     end
 
     # call-seq: return_type

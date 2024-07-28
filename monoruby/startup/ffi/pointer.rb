@@ -8,7 +8,6 @@ module FFI
   #     bool allocated;
   # } Pointer;
 
-
   # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Pointer.c#L504
   class Pointer < AbstractMemory
     # https://github.com/ffi/ffi/blob/ecfb225096ae76ba2a5e8115f046bd0ac23095e6/ext/ffi_c/Pointer.c#L85

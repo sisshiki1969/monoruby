@@ -61,6 +61,7 @@ bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "5.0.1"
 globset = "0.4.14"
+libffi = "3.2.0"
 
 [build-dependencies]
 dirs = "5.0.1"

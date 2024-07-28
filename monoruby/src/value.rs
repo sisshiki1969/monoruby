@@ -492,12 +492,12 @@ impl Value {
     }
 }
 
-#[repr(C)]
+/*#[repr(C)]
 #[derive(Debug)]
 pub struct F2 {
     f1: f64,
     f2: f64,
-}
+}*/
 
 impl Value {
     ///

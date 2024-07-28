@@ -99,7 +99,7 @@ impl<T> MonoVec<T> {
     }*/
 }
 
-pub struct IvarTableIntoIter<T> {
+/*pub struct IvarTableIntoIter<T> {
     _buf: RawVec<T>, // we don't actually care about this. Just need it to live.
     iter: RawIter<T>,
 }
@@ -120,7 +120,7 @@ impl<T> Drop for IvarTableIntoIter<T> {
     fn drop(&mut self) {
         for _ in &mut *self {}
     }
-}
+}*/
 
 #[repr(C)]
 struct RawVec<T> {
@@ -231,12 +231,12 @@ fn alloc<T>(capacity: usize) -> ptr::NonNull<T> {
     }
 }
 
-struct RawIter<T> {
+/*struct RawIter<T> {
     start: *const T,
     end: *const T,
 }
 
-/*impl RawIter {
+impl RawIter {
     unsafe fn new(slice: &[T]) -> Self {
         RawIter {
             start: slice.as_ptr(),
@@ -247,7 +247,7 @@ struct RawIter<T> {
             },
         }
     }
-}*/
+}
 
 impl<T> Iterator for RawIter<T> {
     type Item = T;
@@ -268,4 +268,4 @@ impl<T> Iterator for RawIter<T> {
         let len = (self.end as usize - self.start as usize) / elem_size;
         (len, Some(len))
     }
-}
+}*/
