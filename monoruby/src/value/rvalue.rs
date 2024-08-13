@@ -686,13 +686,13 @@ impl RValue {
 
     pub(crate) fn get_ivar(&self, globals: &Globals, name: IdentId) -> Option<Value> {
         let class_id = self.class();
-        let id = globals.store[class_id].get_ivarid(name)?;
+        let id = globals.store.classes[class_id].get_ivarid(name)?;
         self.get_var(id)
     }
 
     pub(crate) fn get_ivars(&self, globals: &Globals) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
-        globals.store[class_id]
+        globals.store.classes[class_id]
             .ivar_names()
             .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
             .collect()

@@ -2,6 +2,7 @@ use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, Sourc
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU8;
 
 use super::*;
 
@@ -16,6 +17,8 @@ pub(crate) use dump::log_deoptimize;
 pub use error::*;
 use prng::*;
 pub use store::*;
+
+pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
 pub(crate) type InlineGen =
     dyn Fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, CallSiteId, BcPc);
@@ -101,8 +104,6 @@ pub struct Globals {
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
     global_method_cache: GlobalMethodCache,
-    /// warning level.
-    pub(super) warning: u8,
     /// suppress jit compilation.
     no_jit: bool,
     /// stdout.
@@ -155,6 +156,9 @@ impl alloc::GC<RValue> for Globals {
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
         assert_eq!(64, std::mem::size_of::<FuncInfo>());
+
+        WARNING.store(warning, std::sync::atomic::Ordering::Relaxed);
+
         let main_object = Value::object(OBJECT_CLASS);
 
         let mut globals = Self {
@@ -163,7 +167,6 @@ impl Globals {
             store: Store::new(),
             global_vars: HashMap::default(),
             global_method_cache: GlobalMethodCache::default(),
-            warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
@@ -554,7 +557,7 @@ impl Globals {
     pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
             let class_obj = class.get_module(self);
-            match self.store[class].get_name_id() {
+            match self.store.classes[class].get_name_id() {
                 Some(_) => {
                     let v: Vec<_> = class
                         .get_parents(self)

@@ -72,7 +72,7 @@ impl AsmIr {
                         self.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
-                    let ivar_id = store[recv_class].get_ivarid(ivar_name)?;
+                    let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
                     self.attr_reader(ivar_id);
                 }
             }
@@ -81,7 +81,7 @@ impl AsmIr {
                 assert!(!store[callid].kw_may_exists());
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
-                let ivar_id = store[recv_class].get_ivarid(ivar_name)?;
+                let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_to_reg(bb, args, GP::Rdx);
                 self.attr_writer(bb, pc, ivar_id);
             }

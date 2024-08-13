@@ -24,7 +24,7 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     for v in args.iter().cloned().rev() {
         globals.include_module(class, v.expect_module(globals)?)?;
     }
-    Ok(OBJECT_CLASS.get_obj(globals))
+    Ok(OBJECT_CLASS.get_module(globals).as_val())
 }
 
 #[cfg(test)]

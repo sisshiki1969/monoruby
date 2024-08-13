@@ -85,7 +85,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals
         .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
         .unwrap();
-    globals.set_constant(enc.id(), IdentId::UTF_8, val);
+    globals
+        .store
+        .classes
+        .set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
         .set_ivar(
@@ -101,12 +104,17 @@ pub(super) fn init(globals: &mut Globals) {
             Value::string_from_str("ASCII-8BIT"),
         )
         .unwrap();
-    globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
+    globals
+        .store
+        .classes
+        .set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
 }
 
 fn encoding_class(globals: &Globals) -> ClassId {
     globals
+        .store
+        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
         .unwrap()
         .as_class_id()

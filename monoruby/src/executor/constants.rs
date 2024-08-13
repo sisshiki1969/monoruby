@@ -42,14 +42,14 @@ impl Executor {
         class_id: ClassId,
         name: IdentId,
     ) -> Result<Option<Value>> {
-        match globals.get_constant(class_id, name) {
+        match globals.store.classes.get_constant(class_id, name) {
             None => return Ok(None),
             Some(ConstState::Loaded(v)) => return Ok(Some(*v)),
             Some(ConstState::Autoload(file_name)) => {
                 self.require(globals, &file_name.clone(), false)?;
             }
         };
-        match globals.get_constant(class_id, name) {
+        match globals.store.classes.get_constant(class_id, name) {
             None => Ok(None),
             Some(ConstState::Loaded(v)) => Ok(Some(*v)),
             Some(ConstState::Autoload(_)) => Ok(None),
@@ -122,7 +122,7 @@ impl Executor {
             .iter()
             .rev();
         for m in stack {
-            if globals.get_constant(m.id(), name).is_some() {
+            if globals.store.classes.get_constant(m.id(), name).is_some() {
                 return self.get_constant(globals, m.id(), name);
             }
         }

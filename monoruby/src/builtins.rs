@@ -71,7 +71,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     binding::init(globals);
     dir::init(globals);
     main_object::init(globals);
-    globals.object_class().include_module(kernel).unwrap();
+    globals
+        .store
+        .classes
+        .object_class()
+        .include_module(kernel)
+        .unwrap();
 }
 
 #[derive(Debug, Clone, Copy)]

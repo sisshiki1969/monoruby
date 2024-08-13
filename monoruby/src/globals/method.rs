@@ -111,7 +111,7 @@ impl Globals {
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, Visibility::Private);
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.add_public_method(class_id, method_name, func_id);
         func_id
     }
@@ -456,7 +456,7 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
@@ -466,7 +466,7 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.new_builtin_fn_rest(class_id, name, address, Visibility::Public)
     }
 
@@ -479,7 +479,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.new_builtin_fn(
             class_id,
             name,
@@ -502,7 +502,7 @@ impl Globals {
         rest: bool,
         kw_names: &[&str],
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.new_builtin_fn(
             class_id,
             name,
@@ -525,7 +525,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.new_builtin_fns(
             class_id,
             name,
@@ -549,7 +549,7 @@ impl Globals {
         min: usize,
         rest: bool,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(
             class_id,
             name,
@@ -570,7 +570,7 @@ impl Globals {
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(
             class_id,
             name,
@@ -592,7 +592,7 @@ impl Globals {
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).id();
+        let class_id = self.store.classes.get_metaclass(class_id).id();
         self.define_builtin_inline_funcs_with(
             class_id,
             name,
@@ -613,7 +613,7 @@ impl Globals {
         address: BuiltinFn,
         arg_num: usize,
     ) -> FuncId {
-        let class_id = self.get_singleton(obj).id();
+        let class_id = self.store.classes.get_singleton(obj).id();
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
@@ -626,7 +626,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let class_id = self.get_singleton(obj).id();
+        let class_id = self.store.classes.get_singleton(obj).id();
         self.define_builtin_func_with(class_id, name, address, min, max, rest)
     }
 

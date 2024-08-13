@@ -8,6 +8,8 @@ use num::ToPrimitive;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_module("Math").id();
     let standarderr = globals
+        .store
+        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("StandardError"))
         .unwrap()
         .as_class();

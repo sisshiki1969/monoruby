@@ -482,7 +482,7 @@ impl Executor {
                 .expect_class_or_module(globals)?
                 .id();
         }
-        globals.set_constant(parent, name, val);
+        globals.store.classes.set_constant(parent, name, val);
         Ok(())
     }
 
@@ -922,9 +922,12 @@ impl Executor {
                         assert!(is_module != 1);
                         superclass.expect_class(globals)?
                     }
-                    None => globals.object_class(),
+                    None => globals.store.classes.object_class(),
                 };
-                globals.define_class(name, Some(superclass), parent, is_module == 1)
+                globals
+                    .store
+                    .classes
+                    .define_class(name, Some(superclass), parent, is_module == 1)
             }
         };
         self.push_class_context(self_val.id());

@@ -39,7 +39,7 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     } else {
         Some(lfp.arg(0).expect_class(globals)?)
     };
-    let obj = globals.new_unnamed_class(superclass);
+    let obj = globals.store.classes.new_unnamed_class(superclass);
     Ok(obj)
 }
 

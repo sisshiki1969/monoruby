@@ -104,9 +104,9 @@ impl Value {
 
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         if let Some(class) = self.is_class_or_module() {
-            globals.get_metaclass(class.id())
+            globals.store.classes.get_metaclass(class.id())
         } else {
-            globals.get_singleton(self)
+            globals.store.classes.get_singleton(self)
         }
         .as_val()
     }
@@ -1124,14 +1124,20 @@ impl Value {
                 if prefix.len() == 0 {
                     let constant = IdentId::get_id(name);
                     globals
+                        .store
+                        .classes
                         .get_constant_noautoload(OBJECT_CLASS, constant)
                         .unwrap()
                 } else {
                     let mut module = globals
+                        .store
+                        .classes
                         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id(&prefix[0]))
                         .unwrap();
                     for id in &prefix[1..] {
                         module = globals
+                            .store
+                            .classes
                             .get_constant_noautoload(
                                 module.is_class_or_module().unwrap().id(),
                                 IdentId::get_id(id),
@@ -1139,6 +1145,8 @@ impl Value {
                             .unwrap();
                     }
                     globals
+                        .store
+                        .classes
                         .get_constant_noautoload(
                             module.is_class_or_module().unwrap().id(),
                             IdentId::get_id(name),

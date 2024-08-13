@@ -33,7 +33,7 @@ impl Globals {
             Some(rval) => rval,
             None => return vec![],
         };
-        self.store[class_id]
+        self.store.classes[class_id]
             .ivar_names
             .iter()
             .filter_map(|(name, id)| rval.get_var(*id).map(|v| (*name, v)))
@@ -57,7 +57,7 @@ impl Globals {
     }
 
     fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
-        let table = &mut self.store[class_id].ivar_names;
+        let table = &mut self.store.classes[class_id].ivar_names;
         match table.get(&ivar_name) {
             Some(id) => *id,
             None => {
@@ -89,7 +89,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     if class_id == cache.class_id {
         return rval.get_var(cache.ivar_id).unwrap_or_default();
     }
-    let ivar_id = match globals.store[class_id].get_ivarid(name) {
+    let ivar_id = match globals.store.classes[class_id].get_ivarid(name) {
         Some(id) => id,
         None => return Value::nil(),
     };

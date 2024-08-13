@@ -13,7 +13,48 @@ pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
 
-//#[derive(Default)]
+pub(crate) struct ClassInfoTable {
+    table: Vec<ClassInfo>,
+}
+
+impl std::ops::Index<ClassId> for ClassInfoTable {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &Self::Output {
+        &self.table[index.u32() as usize]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for ClassInfoTable {
+    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
+        &mut self.table[index.u32() as usize]
+    }
+}
+
+impl ClassInfoTable {
+    pub(crate) fn new() -> Self {
+        Self {
+            table: vec![ClassInfo::new(); 40],
+        }
+    }
+
+    pub(super) fn add_class(&mut self) -> ClassId {
+        let id = self.table.len();
+        self.table.push(ClassInfo::new());
+        ClassId::new(id as u32)
+    }
+
+    pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+        let id = self.table.len();
+        let info = self[original_class].copy();
+        self.table.push(info);
+        ClassId::new(id as u32)
+    }
+
+    pub(super) fn def_builtin_class(&mut self, class: ClassId) {
+        self[class] = ClassInfo::new();
+    }
+}
+
 pub(crate) struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
@@ -24,7 +65,7 @@ pub(crate) struct Store {
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
     /// class table.
-    classes: Vec<ClassInfo>,
+    pub classes: ClassInfoTable,
     /// inline method info.
     inline_method: Vec<(Box<InlineGen>, InlineAnalysis, String)>,
 }
@@ -81,19 +122,6 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
-impl std::ops::Index<ClassId> for Store {
-    type Output = ClassInfo;
-    fn index(&self, index: ClassId) -> &Self::Output {
-        &self.classes[index.u32() as usize]
-    }
-}
-
-impl std::ops::IndexMut<ClassId> for Store {
-    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.classes[index.u32() as usize]
-    }
-}
-
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -102,7 +130,7 @@ impl alloc::GC<RValue> for Store {
                 v.mark(alloc)
             }
         });
-        self.classes.iter().for_each(|info| info.mark(alloc));
+        self.classes.table.iter().for_each(|info| info.mark(alloc));
     }
 }
 
@@ -113,26 +141,9 @@ impl Store {
             constsite_info: vec![],
             callsite_info: vec![],
             optcase_info: vec![],
-            classes: vec![ClassInfo::new(); 40],
+            classes: ClassInfoTable::new(),
             inline_method: vec![],
         }
-    }
-
-    pub(super) fn add_class(&mut self) -> ClassId {
-        let id = self.classes.len();
-        self.classes.push(ClassInfo::new());
-        ClassId::new(id as u32)
-    }
-
-    pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
-        let id = self.classes.len();
-        let info = self[original_class].copy();
-        self.classes.push(info);
-        ClassId::new(id as u32)
-    }
-
-    pub(super) fn def_builtin_class(&mut self, class: ClassId) {
-        self[class] = ClassInfo::new();
     }
 }
 

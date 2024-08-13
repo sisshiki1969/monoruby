@@ -115,31 +115,17 @@ impl ClassId {
 
     /// Get *Module* for *ClassId*.
     pub(crate) fn get_module(self, globals: &Globals) -> Module {
-        globals.get_class_obj(self)
-    }
-
-    /// Get Class object for *ClassId*.
-    pub(crate) fn get_obj(self, globals: &Globals) -> Value {
-        self.get_module(globals).as_val()
+        globals.store.classes.get_module(self)
     }
 
     pub(crate) fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
-        let mut class = self;
-        let mut parents = vec![globals.store[self].name.unwrap()];
-        while let Some(parent) = globals.store[class].parent {
-            if parent == OBJECT_CLASS {
-                break;
-            }
-            parents.push(globals.store[parent].name.unwrap());
-            class = parent;
-        }
-        parents
+        globals.store.classes.get_parents(self)
     }
 
     /// Get class name(IdentId) of *ClassId*.
     pub(crate) fn get_name_id(self, globals: &Globals) -> IdentId {
-        let class = self.get_module(globals);
-        match globals.store[self].name {
+        let class = globals.store.classes.get_module(self);
+        match globals.store.classes[self].name {
             Some(id) => id,
             None => IdentId::get_id_from_string(match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
@@ -229,6 +215,10 @@ impl ClassInfo {
         }
     }
 
+    pub(crate) fn get_module(&self) -> Module {
+        self.object.unwrap()
+    }
+
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
         self.ivar_names.get(&name).cloned()
     }
@@ -264,111 +254,13 @@ impl ClassInfo {
     }
 }
 
-impl Globals {
-    fn get_class_obj(&self, class_id: ClassId) -> Module {
-        self.store[class_id].object.unwrap()
+impl ClassInfoTable {
+    fn get_module(&self, class_id: ClassId) -> Module {
+        self[class_id].object.unwrap()
     }
 
     pub fn object_class(&self) -> Module {
-        self.get_class_obj(OBJECT_CLASS)
-    }
-
-    pub(crate) fn define_module(&mut self, name: &str) -> Module {
-        let object_class = self.object_class();
-        let name_id = IdentId::get_id(name);
-        self.define_class(name_id, Some(object_class), OBJECT_CLASS, true)
-    }
-
-    pub(crate) fn define_builtin_class_under_obj(
-        &mut self,
-        name: &str,
-        class_id: ClassId,
-    ) -> Module {
-        let object_class = self.object_class();
-        self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
-    }
-
-    pub(crate) fn define_class_by_str(
-        &mut self,
-        name: &str,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        let name_id = IdentId::get_id(name);
-        self.define_class(name_id, superclass, parent, false)
-    }
-
-    pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
-        let name_id = IdentId::get_id(name);
-        let object_class = self.object_class();
-        self.define_class(name_id, Some(object_class), OBJECT_CLASS, false)
-    }
-
-    pub(crate) fn define_builtin_class_by_str(
-        &mut self,
-        name: &str,
-        class_id: ClassId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        let name_id = IdentId::get_id(name);
-        self.define_builtin_class(name_id, class_id, superclass, parent)
-    }
-
-    pub(crate) fn define_class(
-        &mut self,
-        name_id: IdentId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-        is_module: bool,
-    ) -> Module {
-        let class_id = self.store.add_class();
-        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
-        self.get_metaclass(class_id);
-        obj
-    }
-
-    // TODO: we must name the unnamed class when the class object is assigned to constant later.
-    pub(crate) fn new_unnamed_class(&mut self, superclass: Option<Module>) -> Value {
-        let class_id = self.store.add_class();
-        let superclass = match superclass {
-            Some(class) => class,
-            None => self.object_class(),
-        };
-        let class_obj = Value::class_empty(class_id, Some(superclass));
-        self.store[class_id].object = Some(class_obj.as_class());
-        class_obj
-    }
-
-    fn define_builtin_class(
-        &mut self,
-        name_id: IdentId,
-        class_id: ClassId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        self.store.def_builtin_class(class_id);
-        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
-    }
-
-    fn generate_class_obj(
-        &mut self,
-        name_id: IdentId,
-        class_id: ClassId,
-        superclass: Option<Module>,
-        parent: ClassId,
-        is_module: bool,
-    ) -> Module {
-        let class_obj = if is_module {
-            Value::module_empty(class_id, superclass)
-        } else {
-            Value::class_empty(class_id, superclass)
-        };
-        self.store[class_id].object = Some(class_obj.as_class());
-        self.store[class_id].name = Some(name_id);
-        self.store[class_id].parent = Some(parent);
-        self.set_constant(parent, name_id, class_obj);
-        class_obj.as_class()
+        self.get_module(OBJECT_CLASS)
     }
 
     fn new_singleton_class(
@@ -377,10 +269,34 @@ impl Globals {
         base: Value,
         original_class: ClassId,
     ) -> Module {
-        let id = self.store.copy_class(original_class);
+        let id = self.copy_class(original_class);
         let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
-        self.store[id].object = Some(class_obj);
+        self[id].object = Some(class_obj);
         class_obj
+    }
+
+    // TODO: we must name the unnamed class when the class object is assigned to constant later.
+    pub(crate) fn new_unnamed_class(&mut self, superclass: Option<Module>) -> Value {
+        let class_id = self.add_class();
+        let superclass = match superclass {
+            Some(class) => class,
+            None => self.object_class(),
+        };
+        let class_obj = Value::class_empty(class_id, Some(superclass));
+        self[class_id].object = Some(class_obj.as_class());
+        class_obj
+    }
+
+    pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<IdentId> {
+        let mut parents = vec![self[class].name.unwrap()];
+        while let Some(parent) = self[class].parent {
+            if parent == OBJECT_CLASS {
+                break;
+            }
+            parents.push(self[parent].name.unwrap());
+            class = parent;
+        }
+        parents
     }
 
     ///
@@ -389,15 +305,15 @@ impl Globals {
     /// If not exists, create a new metaclass.
     ///
     pub(crate) fn get_metaclass(&mut self, original: ClassId) -> Module {
-        let original_obj = self.get_class_obj(original);
+        let original_obj = self.get_module(original);
         if original_obj.as_val().ty() == Some(ObjKind::CLASS) {
-            let class = original_obj.as_val().get_class_obj(self);
+            let class = self[original_obj.as_val().class()].get_module();
             if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
                 return class;
             }
             let super_singleton = match original_obj.superclass_id() {
                 Some(id) => self.get_metaclass(id),
-                None => CLASS_CLASS.get_module(self),
+                None => self.get_module(CLASS_CLASS),
             };
             let mut original_obj = original_obj.as_val();
             let mut singleton = self.new_singleton_class(super_singleton, original_obj, class.id());
@@ -405,7 +321,7 @@ impl Globals {
             let class_class = if class.id() == original {
                 singleton.id()
             } else {
-                self.get_class_obj(class.id()).id()
+                self.get_module(class.id()).id()
             };
             singleton.change_class(class_class);
             #[cfg(debug_assertions)]
@@ -425,7 +341,7 @@ impl Globals {
     /// If not exists, create a new singleton class.
     ///
     pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Module {
-        let org_class = obj.get_class_obj(self);
+        let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
             return org_class;
         }
@@ -438,6 +354,187 @@ impl Globals {
             assert_eq!(singleton.id(), obj.class());
         }
         singleton
+    }
+
+    ///
+    /// Get a method with *name* in the class of *class_id*.
+    ///   
+    /// If not found, simply return None with no error.
+    ///
+    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
+        self[class_id].methods.get(&name)
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    /// This fn checks whole superclass chain everytime called.
+    ///
+    fn search_method(&self, mut module: Module, name: IdentId) -> Option<MethodTableEntry> {
+        let mut visi = None;
+        loop {
+            if !module.has_origin()
+                && let Some(entry) = self.get_method(module.id(), name)
+            {
+                if entry.func_id.is_some() {
+                    let visibility = if let Some(visi) = visi {
+                        visi
+                    } else {
+                        entry.visibility
+                    };
+                    return Some(MethodTableEntry {
+                        visibility,
+                        ..entry.clone()
+                    });
+                } else if visi.is_none() {
+                    visi = Some(entry.visibility);
+                }
+            }
+            module = module.superclass()?;
+        }
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(crate) fn check_super(
+        &mut self,
+        self_val: Value,
+        class_context: ClassId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        let class_id = self_val.class();
+
+        let mut module = self.get_module(class_id);
+        loop {
+            if module.id() == class_context {
+                module = module.superclass().unwrap();
+                break;
+            }
+            module = module.superclass().unwrap();
+        }
+        let MethodTableEntry { func_id, .. } = self.search_method(module, name)?;
+        func_id
+    }
+
+    ///
+    /// Get method names in the class of *class_id*.
+    ///  
+    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self[class_id].methods.keys().cloned().collect()
+    }
+
+    pub(crate) fn get_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
+        let mut names = vec![];
+        loop {
+            names.extend(self[class_id].methods.keys().cloned());
+            match self.get_module(class_id).superclass_id() {
+                Some(superclass) => {
+                    if superclass == OBJECT_CLASS {
+                        break;
+                    }
+                    class_id = superclass;
+                }
+                None => break,
+            }
+        }
+        names
+    }
+
+    pub(crate) fn define_class(
+        &mut self,
+        name_id: IdentId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        is_module: bool,
+    ) -> Module {
+        let class_id = self.add_class();
+        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
+        self.get_metaclass(class_id);
+        obj
+    }
+
+    fn define_builtin_class(
+        &mut self,
+        name_id: IdentId,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+    ) -> Module {
+        self.def_builtin_class(class_id);
+        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
+    }
+
+    fn generate_class_obj(
+        &mut self,
+        name_id: IdentId,
+        class_id: ClassId,
+        superclass: Option<Module>,
+        parent: ClassId,
+        is_module: bool,
+    ) -> Module {
+        let class_obj = if is_module {
+            Value::module_empty(class_id, superclass)
+        } else {
+            Value::class_empty(class_id, superclass)
+        };
+        self[class_id].object = Some(class_obj.as_class());
+        self[class_id].name = Some(name_id);
+        self[class_id].parent = Some(parent);
+        self.set_constant(parent, name_id, class_obj);
+        class_obj.as_class()
+    }
+}
+
+impl Globals {
+    pub(crate) fn define_module(&mut self, name: &str) -> Module {
+        let object_class = self.store.classes.object_class();
+        let name_id = IdentId::get_id(name);
+        self.store
+            .classes
+            .define_class(name_id, Some(object_class), OBJECT_CLASS, true)
+    }
+
+    pub(crate) fn define_builtin_class_under_obj(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+    ) -> Module {
+        let object_class = self.store.classes.object_class();
+        self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
+    }
+
+    pub(crate) fn define_class_by_str(
+        &mut self,
+        name: &str,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.store
+            .classes
+            .define_class(name_id, superclass, parent, false)
+    }
+
+    pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
+        let name_id = IdentId::get_id(name);
+        let object_class = self.store.classes.object_class();
+        self.store
+            .classes
+            .define_class(name_id, Some(object_class), OBJECT_CLASS, false)
+    }
+
+    pub(crate) fn define_builtin_class_by_str(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.store
+            .classes
+            .define_builtin_class(name_id, class_id, superclass, parent)
     }
 
     pub fn include_module(&mut self, mut base: Module, module: Module) -> Result<()> {
@@ -547,7 +644,7 @@ impl Globals {
             let desc = self.func_description(func_id);
             self.codegen.perf_write(info, &desc);
         }
-        let singleton = self.get_metaclass(class_id).id();
+        let singleton = self.store.classes.get_metaclass(class_id).id();
         self.store[func_id].set_owner_class(class_id);
         self.insert_method(
             singleton,
@@ -602,7 +699,7 @@ impl Globals {
     /// remove method.
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Option<()> {
-        self.store[class_id].methods.remove(&func_name)?;
+        self.store.classes[class_id].methods.remove(&func_name)?;
         Some(())
     }
 
@@ -618,7 +715,10 @@ impl Globals {
         Some(if inherit {
             self.check_method_for_class(class_id, func_name)?.visibility
         } else {
-            self.get_method(class_id, func_name)?.visibility
+            self.store
+                .classes
+                .get_method(class_id, func_name)?
+                .visibility
         })
     }
 
@@ -672,29 +772,6 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(crate) fn check_super(
-        &mut self,
-        self_val: Value,
-        class_context: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
-        let class_id = self_val.class();
-
-        let mut module = class_id.get_module(self);
-        loop {
-            if module.id() == class_context {
-                module = module.superclass().unwrap();
-                break;
-            }
-            module = module.superclass().unwrap();
-        }
-        let MethodTableEntry { func_id, .. } = self.search_method(module, name)?;
-        func_id
-    }
-
-    ///
-    /// Check whether a method *name* of class *class_id* exists.
-    ///
     pub(crate) fn check_method_for_class(
         &mut self,
         class_id: ClassId,
@@ -722,39 +799,13 @@ impl Globals {
                 }
             };
         }
-        let entry = self.search_method(class_id.get_module(self), name);
+        let entry = self
+            .store
+            .classes
+            .search_method(self.store.classes.get_module(class_id), name);
         self.global_method_cache
             .insert((name, class_id), class_version, entry.clone());
         entry
-    }
-
-    ///
-    /// Check whether a method *name* of class *class_id* exists.
-    ///
-    /// This fn checks whole superclass chain everytime called.
-    ///
-    fn search_method(&self, mut module: Module, name: IdentId) -> Option<MethodTableEntry> {
-        let mut visi = None;
-        loop {
-            if !module.has_origin()
-                && let Some(entry) = self.get_method(module.id(), name)
-            {
-                if entry.func_id.is_some() {
-                    let visibility = if let Some(visi) = visi {
-                        visi
-                    } else {
-                        entry.visibility
-                    };
-                    return Some(MethodTableEntry {
-                        visibility,
-                        ..entry.clone()
-                    });
-                } else if visi.is_none() {
-                    visi = Some(entry.visibility);
-                }
-            }
-            module = module.superclass()?;
-        }
     }
 
     pub(crate) fn change_method_visibility_for_class(
@@ -765,7 +816,7 @@ impl Globals {
     ) -> Result<()> {
         for name in names {
             self.find_method_entry_for_class(class_id, *name)?;
-            match self.store[class_id].methods.get_mut(name) {
+            match self.store.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visi;
                 }
@@ -779,43 +830,10 @@ impl Globals {
     }
 
     ///
-    /// Get method names in the class of *class_id*.
-    ///  
-    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.store[class_id].methods.keys().cloned().collect()
-    }
-
-    pub(crate) fn get_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
-        let mut names = vec![];
-        loop {
-            names.extend(self.store[class_id].methods.keys().cloned());
-            match class_id.get_module(self).superclass_id() {
-                Some(superclass) => {
-                    if superclass == OBJECT_CLASS {
-                        break;
-                    }
-                    class_id = superclass;
-                }
-                None => break,
-            }
-        }
-        names
-    }
-
-    ///
-    /// Get a method with *name* in the class of *class_id*.
-    ///   
-    /// If not found, simply return None with no error.
-    ///
-    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
-        self.store[class_id].methods.get(&name)
-    }
-
-    ///
     /// If the re-defined method is "basic operation", return true.
     ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
-        if let Some(old) = self.store[class_id].methods.insert(name, entry)
+        if let Some(old) = self.store.classes[class_id].methods.insert(name, entry)
             && old.is_basic_op
         {
             self.set_bop_redefine();
