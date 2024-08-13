@@ -7,8 +7,8 @@
 #![feature(let_chains)]
 #![feature(step_trait)]
 #![feature(naked_functions)]
-#![feature(offset_of_nested)]
 #![feature(iter_array_chunks)]
+#![feature(offset_of_nested)]
 
 mod alloc;
 mod builtins;
