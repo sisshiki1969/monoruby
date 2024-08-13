@@ -82,7 +82,9 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
-    let struct_class = self_val.class().get_module(globals).as_val();
+    let struct_class = globals.store.classes[self_val.class()]
+        .get_module()
+        .as_val();
     let members = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap()
@@ -103,7 +105,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();
-    let struct_class = class_id.get_module(globals).as_val();
+    let struct_class = globals.store.classes[class_id].get_module().as_val();
     if let Some(name) = globals.store.classes[class_id].get_name_id() {
         inspect += &format!("{name}");
     };
@@ -131,7 +133,9 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 
 #[monoruby_builtin]
 fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_obj = lfp.self_val().class().get_module(globals).as_val();
+    let class_obj = globals.store.classes[lfp.self_val().class()]
+        .get_module()
+        .as_val();
     let members = globals
         .get_ivar(class_obj, IdentId::get_id("/members"))
         .unwrap();

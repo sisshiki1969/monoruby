@@ -19,8 +19,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
 
-    let yielder =
-        globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
+    let yielder = globals.define_class_by_str(
+        "Yielder",
+        globals.store.classes[ARRAY_CLASS].get_module(),
+        ENUMERATOR_CLASS,
+    );
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
     globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
     globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
@@ -28,7 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_by_str(
         "Generator",
         GENERATOR_CLASS,
-        OBJECT_CLASS.get_module(globals),
+        globals.store.classes.object_class(),
         ENUMERATOR_CLASS,
     );
     globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new, 0);

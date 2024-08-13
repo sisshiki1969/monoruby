@@ -115,7 +115,7 @@ impl Value {
     /// Get class object of *self.
     ///
     pub(crate) fn get_class_obj(self, globals: &Globals) -> Module {
-        self.class().get_module(globals)
+        globals.store.classes[self.class()].get_module()
     }
 
     pub(crate) fn real_class(self, globals: &Globals) -> Module {

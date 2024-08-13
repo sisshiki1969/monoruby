@@ -556,11 +556,13 @@ impl Globals {
     /// Get class name of *ClassId*.
     pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
-            let class_obj = class.get_module(self);
+            let class_obj = self.store.classes[class].get_module();
             match self.store.classes[class].get_name_id() {
                 Some(_) => {
-                    let v: Vec<_> = class
-                        .get_parents(self)
+                    let v: Vec<_> = self
+                        .store
+                        .classes
+                        .get_parents(class)
                         .into_iter()
                         .rev()
                         .map(|name| name.to_string())

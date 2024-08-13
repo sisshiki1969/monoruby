@@ -21,7 +21,7 @@ impl Executor {
         base: ClassId,
         name: &[&str],
     ) -> Result<Value> {
-        let mut class = base.get_module(globals);
+        let mut class = globals.store.classes[base].get_module();
         for name in name {
             let name = IdentId::get_id(name);
             class = self
@@ -104,8 +104,8 @@ impl Executor {
             .as_ruby_func()
             .lexical_context
             .last()
-            .unwrap_or(&OBJECT_CLASS.get_module(globals))
-            .to_owned();
+            .cloned()
+            .unwrap_or(globals.store.classes.object_class());
 
         self.search_constant_superclass_checked(globals, module, name)
     }

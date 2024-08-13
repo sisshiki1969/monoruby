@@ -113,15 +113,6 @@ impl ClassId {
         )
     }
 
-    /// Get *Module* for *ClassId*.
-    pub(crate) fn get_module(self, globals: &Globals) -> Module {
-        globals.store.classes.get_module(self)
-    }
-
-    pub(crate) fn get_parents(self, globals: &Globals) -> Vec<IdentId> {
-        globals.store.classes.get_parents(self)
-    }
-
     /// Get class name(IdentId) of *ClassId*.
     pub(crate) fn get_name_id(self, globals: &Globals) -> IdentId {
         let class = globals.store.classes.get_module(self);
