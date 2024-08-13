@@ -69,6 +69,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
     globals.define_builtin_module_func(kernel_class, "___libffi_ffi_prep_cif", ffi_prep_cif, 3);
+    globals.define_builtin_module_func(kernel_class, "___libffi_ffi_call", ffi_call, 3);
     globals.define_builtin_module_func(kernel_class, "___libffi_ffi_size", ffi_size, 1);
     globals.define_builtin_module_func(kernel_class, "___libffi_ffi_alignment", ffi_alignment, 1);
     klass
@@ -908,7 +909,7 @@ fn get_ffi_type(ffi_type_id: i64) -> Result<*mut libffi::low::ffi_type> {
 }
 
 ///
-/// Kernel.#___read_memory
+/// Kernel.#___libffi_ffi_prep_cif
 ///
 /// - ___libffi_ffi_prep_cif(abi, ffi_return_type, ffi_parameter_types)
 ///
@@ -925,9 +926,29 @@ fn ffi_prep_cif(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let nargs = atypes.len();
     let mut cif = libffi::low::ffi_cif::default();
     match unsafe { libffi::low::prep_cif(&mut cif, abi, nargs, rtype, atypes.as_mut_ptr()) } {
-        Ok(_) => Ok(Value::nil()),
+        Ok(_) => {
+            let buf: Vec<u8> =
+                unsafe { std::slice::from_raw_parts(&cif as *const _ as *const u8, 32).to_vec() };
+            let v = Value::bytes(buf);
+            dbg!(cif);
+            Ok(v)
+        }
         Err(e) => Err(MonorubyErr::argumenterr(format!("{:?}", e))),
     }
+}
+
+///
+/// Kernel.#___libffi_ffi_call
+///
+/// - ___libffi_ffi_call(cif, fun, args)
+///
+#[monoruby_builtin]
+fn ffi_call(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let cif = arg0.expect_bytes()?.as_ptr() as *mut libffi::low::ffi_cif;
+    let fun = libffi::low::CodePtr::from_ptr(lfp.arg(1).expect_integer()? as *mut std::ffi::c_void);
+    let res = unsafe { libffi::low::call::<u64>(cif, fun, std::ptr::null_mut()) };
+    Ok(Value::integer(res as i64))
 }
 
 #[monoruby_builtin]

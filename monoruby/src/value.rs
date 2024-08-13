@@ -927,7 +927,7 @@ impl Value {
         self.expect_bytes()?.check_utf8()
     }
 
-    fn expect_bytes(&self) -> Result<&StringInner> {
+    pub(crate) fn expect_bytes(&self) -> Result<&StringInner> {
         if let Some(s) = self.is_bytes() {
             Ok(s)
         } else {

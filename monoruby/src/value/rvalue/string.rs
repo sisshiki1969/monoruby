@@ -61,6 +61,10 @@ impl StringInner {
         }
     }
 
+    pub fn as_ptr(&self) -> *const u8 {
+        self.content.as_ptr()
+    }
+
     pub fn dump(&self) -> String {
         match self.ty {
             Encoding::Ascii8 => {

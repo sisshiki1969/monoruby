@@ -245,17 +245,11 @@ module FFI
 
       @abi = FFI_DEFAULT_ABI
 
-      ___libffi_ffi_prep_cif(@abi, @ffi_return_type, @ffi_parameter_types)
-      #case status
-      #when FFI_BAD_ABI
-      # raise ArgumentError, "Invalid ABI specified"
-      #when FFI_BAD_TYPEDEF
-      # raise ArgumentError, "Invalid argument type specified"
-      #when FFI_OK
-      #else
-      # raise ArgumentError, "Unknown FFI error"
-      #end
-    # fnInfo->invoke = rbffi_GetInvoker(fnInfo);
+      @cif = ___libffi_ffi_prep_cif(@abi, @ffi_return_type, @ffi_parameter_types)
+      @invoker = Proc.new do |*args|
+        raise RuntimeError, "FunctionType#invoke not implemented"
+      end
+      # fnInfo->invoke = rbffi_GetInvoker(fnInfo);
       self
     end
 
