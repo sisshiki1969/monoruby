@@ -1,3 +1,5 @@
+use indexmap::IndexMap;
+
 use super::*;
 
 //
@@ -17,6 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "select", &["filter"], select, 0);
     globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
     globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_funcs(
@@ -284,6 +287,34 @@ fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let iter = ary.as_hashmap_inner().iter().map(|(k, _)| k);
     vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#select
+///
+/// - select -> Enumerator
+/// - select {|key, value| ... } -> Hash
+/// - filter -> Enumerator
+/// - filter {|key, value| ... } -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/filter.html]
+#[monoruby_builtin]
+fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("select");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut inner = HashmapInner::new(IndexMap::default(), None);
+    for (k, v) in lfp.self_val().as_hashmap_inner().iter() {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            inner.insert(k, v);
+        }
+    }
+    Ok(Value::hash_from_inner(inner))
 }
 
 ///
@@ -612,6 +643,19 @@ mod test {
             a << k
         }
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn select() {
+        run_test(
+            r##"
+        res = []
+        h = { "a" => 100, "b" => 200, "c" => 300 }
+        res << h.select {|k,v| k > "a"}  #=> {"b" => 200, "c" => 300}
+        res << h.select {|k,v| v < 200}  #=> {"a" => 100}
+        res
         "##,
         );
     }

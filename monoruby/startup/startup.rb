@@ -1,3 +1,7 @@
+RUBY_PLATFORM = "x86_64-linux"
+version = `ruby -e "print RUBY_VERSION"`
+RUBY_VERSION = RUBY_ENGINE_VERSION = version
+
 require 'rbconfig' 
 class Process
   CLOCK_REALTIME = 0
@@ -183,7 +187,6 @@ class Errno
   ENOENT = 2
 end
 
-RUBY_PLATFORM = "x86_64-linux"
 File::ALT_SEPARATOR = nil
 require 'rubygems'
 require 'pp'

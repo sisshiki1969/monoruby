@@ -1444,7 +1444,7 @@ impl Header {
     }
 
     fn class(&self) -> ClassId {
-        assert!(self.is_live());
+        assert!(self.is_live(), "dead RVALUE. {:?}", unsafe { self.meta });
         unsafe { self.meta.class }
     }
 

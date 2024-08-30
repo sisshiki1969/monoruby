@@ -240,9 +240,9 @@ impl Globals {
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
-        let val = Value::string_from_str("3.3.0");
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+        //let val = Value::string_from_str("3.3.0");
+        //globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
+        //globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals
     }
 
