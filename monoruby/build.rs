@@ -4,7 +4,6 @@ use std::{fs, io};
 
 fn main() {
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
-    println!("lib_path: {:?}", lib_path);
     match lib_path.try_exists() {
         Ok(true) => {}
         _ => fs::create_dir(&lib_path).unwrap(),
@@ -17,7 +16,32 @@ fn main() {
             fs::write(dest_path, load_path).unwrap();
         }
         Err(_) => {
-            println!("failed to read ruby library path");
+            eprintln!("failed to read ruby library path");
+        }
+    }
+
+    match Command::new("ruby")
+        .args(["-e", "puts(RUBY_VERSION)"])
+        .output()
+    {
+        Ok(output) => {
+            let dest_path = lib_path.clone().join("ruby_version");
+            let load_path = std::str::from_utf8(&output.stdout).unwrap();
+            fs::write(dest_path, load_path).unwrap();
+        }
+        Err(_) => {
+            eprintln!("failed to read ruby version");
+        }
+    }
+
+    match Command::new("which").args(["ruby"]).output() {
+        Ok(output) => {
+            let dest_path = lib_path.clone().join("ruby_path");
+            let load_path = std::str::from_utf8(&output.stdout).unwrap();
+            fs::write(dest_path, load_path).unwrap();
+        }
+        Err(_) => {
+            eprintln!("failed to read ruby path");
         }
     }
 

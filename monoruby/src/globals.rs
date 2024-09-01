@@ -240,9 +240,16 @@ impl Globals {
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
-        //let val = Value::string_from_str("3.3.0");
-        //globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
-        //globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+
+        let version_path = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby")
+            .join("ruby_version");
+        let ruby_version = std::fs::read_to_string(&version_path).unwrap();
+
+        let val = Value::string_from_vec(ruby_version.into_bytes());
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals
     }
 

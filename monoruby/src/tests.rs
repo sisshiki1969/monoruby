@@ -1,7 +1,7 @@
 use super::*;
 use ruruby_parse::Parser;
-use std::io::Write;
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf};
+use tempfile::NamedTempFile;
 
 mod case;
 mod comparable;
@@ -215,17 +215,15 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
     res
 }
 
-fn spawn_ruby() -> std::process::Child {
-    std::process::Command::new("ruby")
-        //.args(&["-C", "ruby"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|err| panic!("couldn't spawn ruby.: {}", err))
-}
-
 fn run_ruby(globals: &mut Globals, code: &str) -> Value {
-    let mut process = spawn_ruby();
+    let ruby_path = dirs::home_dir()
+        .unwrap()
+        .join(".monoruby")
+        .join("ruby_path");
+    let ruby_path = std::fs::read_to_string(&ruby_path)
+        .unwrap()
+        .trim_end()
+        .to_string();
 
     let code = format!(
         r#"
@@ -235,21 +233,16 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
         "#,
         code
     );
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    tmpfile.write_all(code.as_bytes()).unwrap();
 
-    match process.stdin.take().unwrap().write_all(code.as_bytes()) {
-        Err(why) => panic!("couldn't write to ruby stdin: {}", why),
-        Ok(_) => eprintln!("sent code to ruby: {}", code),
-    }
-
-    let res = match process.wait_with_output() {
-        Err(why) => panic!("couldn't read ruby stdout: {}", why),
-        Ok(res) => {
-            if !res.status.success() {
-                eprintln!("ruby exited with: {}", res.status);
-            }
-            let res = String::from_utf8(res.stdout);
-            eprintln!("{:?}", res);
-            res.unwrap()
+    let res = match std::process::Command::new(dbg!(ruby_path))
+        .args([tmpfile.path()])
+        .output()
+    {
+        Ok(output) => String::from_utf8(output.stdout).unwrap(),
+        Err(err) => {
+            panic!("failed to invoke ruby. {}", err);
         }
     };
 

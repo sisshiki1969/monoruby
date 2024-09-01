@@ -1,6 +1,4 @@
 RUBY_PLATFORM = "x86_64-linux"
-version = `ruby -e "print RUBY_VERSION"`
-RUBY_VERSION = RUBY_ENGINE_VERSION = version
 
 require 'rbconfig' 
 class Process

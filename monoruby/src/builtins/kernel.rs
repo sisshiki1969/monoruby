@@ -219,6 +219,8 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// - [NOT SUPPORTED] raise -> ()
 /// - [NOT SUPPORTED] fail -> ()
+/// - raise(message, [NOT SUPPORTED]cause: $!) -> ()
+/// - fail(message, [NOT SUPPORTED]cause: $!) -> ()
 /// - raise(error_type, message = nil, [NOT SUPPORTED] backtrace = caller(0), [NOT SUPPORTED] cause: $!) -> ()
 /// - fail(error_type, message = nil, [NOT SUPPORTED] backtrace = caller(0), [NOT SUPPORTED] cause: $!) -> ()
 ///
@@ -240,6 +242,8 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
             return Err(err);
         }
+    } else if let Some(message) = lfp.arg(0).is_bytes() {
+        return Err(MonorubyErr::runtimeerr(message.to_str()?));
     }
     Err(MonorubyErr::typeerr(
         "exception class/object expected",
@@ -985,6 +989,7 @@ mod test {
         run_test(r#"warn("woo", :boo, 100)"#);
         run_test_error(r#"warn(uplevel:1)"#);
         run_test_error(r#"warn(category:100)"#);
+        run_test_error(r#"raise "Woo""#);
     }
 
     #[test]
