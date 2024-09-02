@@ -79,7 +79,7 @@ fn glob(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         .peekable();
     let path = if pattern.peek() == Some(&"") {
         pattern.next();
-        if pattern.peek() == None {
+        if pattern.peek().is_none() {
             return Ok(Value::array_empty());
         }
         PathPair::new(PathBuf::from("/"), PathBuf::from("/"))

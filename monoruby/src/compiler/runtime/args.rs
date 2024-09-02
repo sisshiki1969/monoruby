@@ -140,9 +140,8 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
         let bh = BlockHandler::from_caller(block_fid);
         Some(bh)
     } else {
-        block_arg.map(|block_arg| unsafe {
-            BlockHandler::new(caller_lfp.register(block_arg.0 as usize).unwrap())
-        })
+        block_arg
+            .map(|block_arg| BlockHandler::new(caller_lfp.register(block_arg.0 as usize).unwrap()))
     };
     callee_lfp.set_block(bh);
 }
@@ -182,19 +181,19 @@ fn positional(
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
-    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+    let dst = callee_lfp.register_ptr(1) as *mut Value;
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = IndexMap::default();
         for (k, id) in caller.kw_args.iter() {
-            let v = unsafe { caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap() };
+            let v = caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap();
             h.insert(HashKey(Value::symbol(*k)), v);
         }
         for v in caller
             .hash_splat_pos
             .iter()
-            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+            .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
         {
             for (k, v) in v.expect_hash()?.iter() {
                 h.insert(HashKey(k), v);
@@ -319,7 +318,7 @@ fn positional_simple(
     mut callee_lfp: Lfp,
 ) -> Result<()> {
     let max_pos = callee.max_positional_args();
-    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+    let dst = callee_lfp.register_ptr(1) as *mut Value;
 
     let (arg_num, rest) = if pos_num <= max_pos {
         memcpy(src, dst, pos_num);
@@ -371,7 +370,7 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
 
-    let dst = unsafe { callee_lfp.register_ptr(1) as *mut Value };
+    let dst = callee_lfp.register_ptr(1) as *mut Value;
 
     let mut arg_num = 0;
     let mut rest = vec![];
@@ -494,7 +493,7 @@ fn hash_splat_and_kw_rest(
 
     for h in hash_splat_pos
         .iter()
-        .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+        .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
     {
         let mut used = 0;
         for (id, param_name) in callee.kw_names().iter().enumerate() {
@@ -535,7 +534,7 @@ fn hash_splat_and_kw_rest(
         }
         for h in hash_splat_pos
             .iter()
-            .map(|pos| unsafe { caller_lfp.register(pos.0 as usize).unwrap() })
+            .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
         {
             let mut h = h.as_hashmap_inner().clone();
             for name in callee.kw_names().iter() {

@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 #[repr(transparent)]
 pub struct ComplexInner(num::complex::Complex<Real>);
 

@@ -543,12 +543,10 @@ extern "C" fn handle_invoker_arguments(
 /// deconstruct array for block
 fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
     let req_num = info.req_num();
-    unsafe {
-        let v = callee_lfp.register(1).unwrap();
-        if let Some(src) = v.try_array_ty() {
-            let ptr = callee_lfp.register_ptr(1);
-            return block_expand_array(src, ptr as _, req_num);
-        }
+    let v = callee_lfp.register(1).unwrap();
+    if let Some(src) = v.try_array_ty() {
+        let ptr = callee_lfp.register_ptr(1);
+        return block_expand_array(src, ptr as _, req_num);
     }
     arg_num
 }

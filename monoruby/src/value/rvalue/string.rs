@@ -188,7 +188,7 @@ impl std::hash::Hash for StringInner {
 }
 
 impl StringInner {
-    unsafe fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
+    fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
         StringInner { content, ty }
     }
 
@@ -211,23 +211,23 @@ impl StringInner {
     }
 
     pub fn from_str(s: &str) -> Self {
-        unsafe { StringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8) }
+        StringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
     }
 
     pub fn from_string(s: String) -> Self {
-        unsafe { StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8) }
+        StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
-        unsafe { StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8) }
+        StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8)
     }
 
     pub fn bytes_from_vec(vec: Vec<u8>) -> Self {
-        unsafe { StringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8) }
+        StringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8)
     }
 
     pub fn from_encoding(slice: &[u8], encoding: Encoding) -> Self {
-        unsafe { StringInner::from(SmallVec::from_slice(slice), encoding) }
+        StringInner::from(SmallVec::from_slice(slice), encoding)
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
@@ -236,7 +236,7 @@ impl StringInner {
         } else {
             Encoding::Ascii8
         };
-        unsafe { StringInner::from(SmallVec::from_vec(vec), enc) }
+        StringInner::from(SmallVec::from_vec(vec), enc)
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -355,7 +355,7 @@ impl StringInner {
     pub fn repeat(&self, len: usize) -> StringInner {
         let ty = self.ty;
         let vec = self.content.repeat(len);
-        unsafe { StringInner::from(SmallVec::from_vec(vec), ty) }
+        StringInner::from(SmallVec::from_vec(vec), ty)
     }
 
     pub fn string_cmp(&self, other: &Self) -> Ordering {

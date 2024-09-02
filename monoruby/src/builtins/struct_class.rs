@@ -32,7 +32,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             globals.store.classes[class_id].set_name(&format!("Struct::{s}"));
             1
         } else {
-            return Err(MonorubyErr::identifier_must_be_constant(&s));
+            return Err(MonorubyErr::identifier_must_be_constant(s));
         }
     } else {
         0

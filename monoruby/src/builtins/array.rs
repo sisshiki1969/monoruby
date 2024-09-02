@@ -968,8 +968,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        let res = Executor::compare_values(vm, globals, lhs, rhs);
-        res
+        Executor::compare_values(vm, globals, lhs, rhs)
     };
     let mut ary = lfp.self_val().dup().as_array();
     let gc_enabled = Globals::gc_enable(false);
@@ -1158,7 +1157,7 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let iter = ary.iter().cloned();
     if let Some(bh) = lfp.block() {
         let mut res = vm.invoke_block_map1(globals, bh, iter, size_hint)?;
-        RValue::swap_kind(&mut lfp.self_val().rvalue_mut(), &mut res.rvalue_mut());
+        RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
         Ok(lfp.self_val())
     } else {
         let id = IdentId::get_id("map!");
@@ -1638,8 +1637,8 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     let arg0 = lfp.arg(0);
-    let mut f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
-    if let Some(last) = ary.retain(|v| f(v))? {
+    let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
+    if let Some(last) = ary.retain(f)? {
         Ok(last)
     } else if let Some(bh) = lfp.block() {
         vm.invoke_block_once(globals, bh, &[])

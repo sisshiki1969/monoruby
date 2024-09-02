@@ -790,10 +790,10 @@ fn str_next(self_: &str) -> String {
     }
     for c in chars.rev() {
         if carry_flag {
-            if '0' <= c && c <= '8'
-                || 'a' <= c && c <= 'y'
-                || 'A' <= c && c <= 'Y'
-                || '０' <= c && c <= '８'
+            if ('0'..='8').contains(&c)
+                || ('0'..='8').contains(&c)
+                || ('A'..='Y').contains(&c)
+                || ('０'..='８').contains(&c)
             {
                 carry_flag = false;
                 buf.push(succ_char(c));
@@ -1342,7 +1342,7 @@ fn sub_main(
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
                 let given = self_val.expect_str()?;
-                RegexpInner::replace_one_block(vm, globals, lfp.arg(0), &given, bh)
+                RegexpInner::replace_one_block(vm, globals, lfp.arg(0), given, bh)
             }
         }
     }
@@ -1478,7 +1478,7 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     let given = self_.expect_str()?;
     let re = lfp.arg(0).expect_regexp_or_string()?;
 
-    RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)
+    RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)
 }
 
 ///
@@ -2025,7 +2025,7 @@ fn center(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn next(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str()?;
-    let res = Value::string(str_next(&recv));
+    let res = Value::string(str_next(recv));
     Ok(res)
 }
 

@@ -25,7 +25,7 @@ impl Guarded {
 
     pub(super) fn union(&self, other: &Self) -> Self {
         if self == other {
-            self.clone()
+            *self
         } else {
             Guarded::Value
         }

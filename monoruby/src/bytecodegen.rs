@@ -1510,7 +1510,7 @@ impl BcIndex {
         Self(i as u32)
     }
 
-    pub(crate) fn to_usize(&self) -> usize {
+    pub(crate) fn to_usize(self) -> usize {
         self.0 as usize
     }
 }

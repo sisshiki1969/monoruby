@@ -164,7 +164,10 @@ impl JitContext {
             eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             if cont {
                 assert!(self.continuation_bridge.is_none());
-                self.continuation_bridge = Some((Some((bb, target_ctx.clone(), pc)), label));
+                self.continuation_bridge = Some((
+                    Some(ContinuationInfo::new(bb, target_ctx.clone(), pc)),
+                    label,
+                ));
             } else {
                 let mut ir = AsmIr::new();
                 ir.remove_unused(&mut bb, unused);

@@ -151,7 +151,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
 
         let iter = (start..end).map(Value::fixnum);
-        vm.invoke_block_map1(globals, bh, iter, (end - start).abs() as usize)
+        vm.invoke_block_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
@@ -182,7 +182,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         }
 
         let iter = (start..end).map(Value::fixnum);
-        vm.invoke_block_flat_map1(globals, bh, iter, (end - start).abs() as usize)
+        vm.invoke_block_flat_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }

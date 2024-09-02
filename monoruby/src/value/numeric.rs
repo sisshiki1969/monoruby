@@ -4,7 +4,7 @@ use ruruby_parse::NReal;
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Hash)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct Real(Value);
 
@@ -17,6 +17,16 @@ impl std::cmp::PartialEq for Real {
 impl std::cmp::PartialOrd for Real {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         RealKind::from(*self).partial_cmp(&RealKind::from(*other))
+    }
+}
+
+impl std::hash::Hash for Real {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match RealKind::from(*self) {
+            RealKind::Integer(i) => i.hash(state),
+            RealKind::BigInt(b) => b.hash(state),
+            RealKind::Float(f) => f.to_bits().hash(state),
+        }
     }
 }
 

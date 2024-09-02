@@ -26,6 +26,14 @@ pub mod trace_ir;
 // Just-in-time compiler module.
 //
 
+struct ContinuationInfo(BBContext, MergeContext, BcPc);
+
+impl ContinuationInfo {
+    fn new(bb: BBContext, ctx: MergeContext, pc: BcPc) -> Self {
+        Self(bb, ctx, pc)
+    }
+}
+
 ///
 /// Context for JIT compilation.
 ///
@@ -103,7 +111,7 @@ struct JitContext {
     ///
     /// Information for continuation bridge.
     ///
-    continuation_bridge: Option<(Option<(BBContext, MergeContext, BcPc)>, AsmLabel)>,
+    continuation_bridge: Option<(Option<ContinuationInfo>, AsmLabel)>,
     ///
     /// Information for opt_case table.
     ///
@@ -336,7 +344,7 @@ impl JitContext {
     fn gen_continuation(&mut self) {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
             self.ir.inst.push(AsmInst::Label(entry));
-            if let Some((from, to, pc)) = data {
+            if let Some(ContinuationInfo(from, to, pc)) = data {
                 self.ir.write_back_for_target(from, &to, pc);
             }
         }

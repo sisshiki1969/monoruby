@@ -30,6 +30,8 @@ const BC_OFFSET_CACHED_CLASS: usize = 24;
 const BC_OFFSET_CACHED_VERSION: usize = 28;
 const BC_OFFSET_CACHED_FUNCID: usize = 8;
 
+type InlineProcedure = dyn FnOnce(&mut Codegen, &SideExitLabels);
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmDeopt(usize);
 
@@ -1122,7 +1124,7 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline {
-        proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
+        proc: Box<InlineProcedure>,
     },
     Yield {
         callid: CallSiteId,

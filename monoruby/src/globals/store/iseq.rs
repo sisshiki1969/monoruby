@@ -1,6 +1,30 @@
 use super::*;
 use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
 
+#[derive(Clone, Debug)]
+struct ExceptionMapEntry {
+    range: std::ops::Range<BcPc>, // range of capturing exception
+    rescue_pc: Option<BcPc>,      // rescue destination pc
+    ensure_pc: Option<BcPc>,      // ensure destination pc
+    error_slot: Option<SlotId>,   // a slot where an error object is assigned
+}
+
+impl ExceptionMapEntry {
+    fn new(
+        range: std::ops::Range<BcPc>,
+        rescue_pc: Option<BcPc>,
+        ensure_pc: Option<BcPc>,
+        error_slot: Option<SlotId>,
+    ) -> Self {
+        ExceptionMapEntry {
+            range,
+            rescue_pc,
+            ensure_pc,
+            error_slot,
+        }
+    }
+}
+
 ///
 /// Information of instruction sequences.
 ///
@@ -37,12 +61,7 @@ pub struct ISeqInfo {
     ///
     /// Exception handling map.
     ///
-    exception_map: Vec<(
-        std::ops::Range<BcPc>, // range of capturing exception
-        Option<BcPc>,          // rescue destination pc
-        Option<BcPc>,          // ensure destination pc
-        Option<SlotId>,        // a slot where an error object is assigned
-    )>,
+    exception_map: Vec<ExceptionMapEntry>,
     ///
     /// Information of parameters.
     ///
@@ -322,9 +341,9 @@ impl ISeqInfo {
     ) -> Option<(Option<BcPc>, Option<BcPc>, Option<SlotId>)> {
         self.exception_map
             .iter()
-            .filter_map(|(range, rescue, ensure, slot)| {
-                if range.contains(&pc) {
-                    Some((*rescue, *ensure, *slot))
+            .filter_map(|entry| {
+                if entry.range.contains(&pc) {
+                    Some((entry.rescue_pc, entry.ensure_pc, entry.error_slot))
                 } else {
                     None
                 }
@@ -339,7 +358,8 @@ impl ISeqInfo {
         ensure: Option<BcPc>,
         err_reg: Option<SlotId>,
     ) {
-        self.exception_map.push((range, rescue, ensure, err_reg));
+        self.exception_map
+            .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
 
     ///
@@ -360,12 +380,12 @@ impl ISeqInfo {
     )> {
         self.exception_map
             .iter()
-            .map(|(range, rescue, ensure, err_reg)| {
-                let start = self.get_pc_index(Some(range.start));
-                let end = self.get_pc_index(Some(range.end));
-                let rescue = rescue.map(|pc| self.get_pc_index(Some(pc)));
-                let ensure = ensure.map(|pc| self.get_pc_index(Some(pc)));
-                (start..end, rescue, ensure, *err_reg)
+            .map(|entry| {
+                let start = self.get_pc_index(Some(entry.range.start));
+                let end = self.get_pc_index(Some(entry.range.end));
+                let rescue = entry.rescue_pc.map(|pc| self.get_pc_index(Some(pc)));
+                let ensure = entry.ensure_pc.map(|pc| self.get_pc_index(Some(pc)));
+                (start..end, rescue, ensure, entry.error_slot)
             })
             .collect::<Vec<_>>()
     }

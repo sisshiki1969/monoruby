@@ -154,19 +154,17 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
 
 impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        unsafe {
-            let meta = self.meta();
-            for r in 0..meta.reg_num() as usize {
-                if let Some(v) = self.register(r) {
-                    v.mark(alloc);
-                }
+        let meta = self.meta();
+        for r in 0..meta.reg_num() as usize {
+            if let Some(v) = self.register(r) {
+                v.mark(alloc);
             }
-            if let Some(v) = self.block() {
-                v.0.mark(alloc)
-            };
-            if let Some(outer) = self.outer() {
-                outer.lfp().mark(alloc);
-            }
+        }
+        if let Some(v) = self.block() {
+            v.0.mark(alloc)
+        };
+        if let Some(outer) = self.outer() {
+            outer.lfp().mark(alloc);
         }
     }
 }
@@ -196,8 +194,10 @@ impl Lfp {
     ///
     /// Set outer.
     ///
-    pub unsafe fn set_outer(&mut self, outer: Option<Dfp>) {
-        *(self.outer_address().0.as_ptr()) = outer;
+    pub fn set_outer(&mut self, outer: Option<Dfp>) {
+        unsafe {
+            *(self.outer_address().0.as_ptr()) = outer;
+        }
     }
 
     fn sub(self, count: i64) -> *mut u8 {
@@ -374,21 +374,21 @@ impl Lfp {
         unsafe { *(self.sub(LFP_BLOCK as _) as *mut _) = bh }
     }
 
-    pub unsafe fn register_ptr(&self, index: usize) -> *mut Option<Value> {
+    pub fn register_ptr(&self, index: usize) -> *mut Option<Value> {
         self.sub(LFP_SELF as i64 + 8 * index as i64) as _
     }
 
     ///
     /// Get a value of a register slot *index*.
     ///
-    pub unsafe fn register(&self, index: usize) -> Option<Value> {
-        std::ptr::read(self.register_ptr(index))
+    pub fn register(&self, index: usize) -> Option<Value> {
+        unsafe { std::ptr::read(self.register_ptr(index)) }
     }
 
     pub fn locals(&self, len: usize) -> Vec<Value> {
         let mut v = vec![];
         for i in 1..1 + len {
-            if let Some(val) = unsafe { self.register(i) } {
+            if let Some(val) = self.register(i) {
                 v.push(val);
             }
         }
