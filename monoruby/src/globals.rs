@@ -294,7 +294,7 @@ impl Globals {
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(res) => {
-                let res = bytecodegen::compile_eval(
+                let res = bytecodegen::bytecode_compile_eval(
                     self,
                     res,
                     mother,
@@ -317,9 +317,8 @@ impl Globals {
         binding: Binding,
     ) -> Result<()> {
         let outer_fid = binding.outer_lfp().meta().func_id();
-        let mother = match binding.outer_lfp().outermost_lfp_depth() {
-            (lfp, outer) => (lfp.meta().func_id(), outer),
-        };
+        let (lfp, outer) = binding.outer_lfp().outermost_lfp_depth();
+        let mother = (lfp.meta().func_id(), outer);
         let mut ex_scope = IndexMap::default();
         for (name, idx) in &self[outer_fid].as_ruby_func().locals {
             ex_scope.insert(*name, *idx);
@@ -344,7 +343,7 @@ impl Globals {
             Some(&external_context),
         ) {
             Ok(res) => {
-                let res = bytecodegen::compile_eval(
+                let res = bytecodegen::bytecode_compile_eval(
                     self,
                     res,
                     mother,
@@ -460,9 +459,7 @@ impl Globals {
     }
 
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
-        self.load_path
-            .as_array()
-            .extend(iter.map(|s| Value::string(s)));
+        self.load_path.as_array().extend(iter.map(Value::string));
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {
@@ -486,12 +483,8 @@ impl Globals {
                 format!("block in {}", self.func_description(mother))
             } else {
                 match info.owner_class() {
-                    Some(owner) => format!(
-                        "{}#{}",
-                        format!("{:?}", owner.get_name_id(self)),
-                        func.name()
-                    ),
-                    None => format!("{}", func.name()),
+                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), func.name()),
+                    None => func.name().to_string(),
                 }
             }
         } else {
@@ -501,8 +494,8 @@ impl Globals {
                 String::new()
             };
             match info.owner_class() {
-                Some(owner) => format!("{}#{name}", format!("{:?}", owner.get_name_id(self))),
-                None => format!("{name}"),
+                Some(owner) => format!("{:?}#{name}", owner.get_name_id(self)),
+                None => name.to_string(),
             }
         }
     }

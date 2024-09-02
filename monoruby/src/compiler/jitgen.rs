@@ -139,6 +139,7 @@ struct BackedgeInfo {
     unused: Vec<SlotId>,
 }
 
+/*
 ///
 /// Information of incoming branches to an each basic block.
 ///
@@ -158,6 +159,7 @@ impl std::ops::Index<BcIndex> for Incoming {
         &self.0[index.0 as usize]
     }
 }
+*/
 
 #[derive(Clone, Copy, Debug)]
 struct AsmLabel(usize);
@@ -1032,7 +1034,7 @@ pub(crate) type UsingXmm = bitvec::prelude::BitArr!(for 14, in u16);
 ///
 /// Mode of linkage between stack slot and xmm registers.
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) enum LinkMode {
     ///
     /// Linked to an xmm register and we can read and write.
@@ -1047,6 +1049,7 @@ pub(crate) enum LinkMode {
     ///
     /// No linkage with xmm regiter.
     ///
+    #[default]
     Stack,
     ///
     /// Alias of *SlotId*.
@@ -1060,12 +1063,6 @@ pub(crate) enum LinkMode {
     /// On R15 register.
     ///
     R15,
-}
-
-impl std::default::Default for LinkMode {
-    fn default() -> Self {
-        LinkMode::Stack
-    }
 }
 
 #[derive(Debug, Clone)]

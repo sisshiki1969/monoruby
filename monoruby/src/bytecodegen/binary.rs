@@ -71,7 +71,7 @@ impl BytecodeGen {
         let old = self.temp;
         let lhs = self.push_expr(lhs)?.into();
         self.emit(
-            BcIr::Cmp(CmpKind::TEq, Some(lhs), BinopMode::RR(lhs, rhs), true),
+            BytecodecIr::Cmp(CmpKind::TEq, Some(lhs), BinopMode::RR(lhs, rhs), true),
             loc,
         );
         self.temp = old;
@@ -135,7 +135,7 @@ macro_rules! gen_ri_ops {
                   UseMode2::Store(dst) => Some(dst),
                   UseMode2::NotUse => None,
               };
-              self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
+              self.emit(BytecodecIr::BinOp(BinOpK::$inst, dst, mode), loc);
               if use_mode == UseMode2::Ret {
                   self.emit_ret(None)?;
               }
@@ -230,7 +230,7 @@ impl BytecodeGen {
             UseMode2::Store(dst) => Some(dst),
             UseMode2::Push | UseMode2::Ret | UseMode2::NotUse => Some(self.push().into()),
         };
-        self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
+        self.emit(BytecodecIr::Cmp(kind, dst, mode, optimizable), loc);
         match use_mode {
             UseMode2::NotUse => {
                 self.pop();

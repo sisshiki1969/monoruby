@@ -65,6 +65,12 @@ impl std::ops::DerefMut for ArrayInner {
     }
 }
 
+impl std::iter::FromIterator<Value> for ArrayInner {
+    fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
+        ArrayInner(SmallVec::from_iter(iter))
+    }
+}
+
 impl ArrayInner {
     pub fn new() -> Self {
         ArrayInner(smallvec!())
@@ -82,9 +88,9 @@ impl ArrayInner {
         ArrayInner(SmallVec::from_vec(v))
     }
 
-    pub fn from_iter(iter: impl Iterator<Item = Value>) -> Self {
+    /*pub fn from_iter(iter: impl Iterator<Item = Value>) -> Self {
         ArrayInner(SmallVec::from_iter(iter))
-    }
+    }*/
 
     pub fn clear(&mut self) {
         self.0.clear();

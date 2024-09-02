@@ -1,4 +1,3 @@
-use dirs;
 use std::process::Command;
 use std::{fs, io};
 

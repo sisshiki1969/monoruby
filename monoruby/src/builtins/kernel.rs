@@ -272,7 +272,7 @@ fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp) -> Result<Valu
 fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
-    for v in lfp.arg(0).as_array().iter().cloned() {
+    for v in lfp.arg(0).as_array().iter() {
         buf += &v.inspect(globals);
         buf += "\n";
     }
@@ -519,7 +519,7 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
-    let (program, mut args) = prepare_command_arg(&arg0.as_str());
+    let (program, mut args) = prepare_command_arg(arg0.as_str());
     if let Some(arg1) = lfp.try_arg(1) {
         for v in arg1.as_array().iter() {
             args.push(v.expect_string()?);
@@ -540,7 +540,7 @@ fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let (program, args) = prepare_command_arg(&arg0.as_str());
+    let (program, args) = prepare_command_arg(arg0.as_str());
     match std::process::Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
@@ -637,13 +637,12 @@ fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 eprintln!("{}", m.to_s(globals));
             }
         }
+    } else if let Some(s) = message.is_str() {
+        eprintln!("{}", s);
     } else {
-        if let Some(s) = message.is_str() {
-            eprintln!("{}", s);
-        } else {
-            eprintln!("{}", message.to_s(globals));
-        }
+        eprintln!("{}", message.to_s(globals));
     }
+
     Ok(Value::nil())
 }
 

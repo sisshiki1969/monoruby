@@ -1,4 +1,3 @@
-use globset;
 use std::path::PathBuf;
 
 use super::*;
@@ -109,7 +108,7 @@ fn glob(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     traverse_dir(path, glob, &mut matches)?;
     matches.sort();
     Ok(Value::array_from_iter(
-        matches.into_iter().map(|s| Value::string(s)),
+        matches.into_iter().map(Value::string),
     ))
 }
 

@@ -254,7 +254,7 @@ impl ISeqInfo {
                 map.insert(*id);
             }
         });
-        map.into_iter().map(|id| Value::symbol(id)).collect()
+        map.into_iter().map(Value::symbol).collect()
     }
 
     ///

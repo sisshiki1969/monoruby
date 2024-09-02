@@ -55,17 +55,17 @@ impl ClassInfoTable {
     }
 }
 
-pub(crate) struct Store {
+pub struct Store {
     /// function info.
-    pub(crate) functions: function::Funcs,
+    pub functions: function::Funcs,
+    /// class table.
+    pub classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
-    /// class table.
-    pub classes: ClassInfoTable,
     /// inline method info.
     inline_method: Vec<(Box<InlineGen>, InlineAnalysis, String)>,
 }
@@ -178,12 +178,8 @@ impl Store {
         self.functions.function_len()
     }
 
-    pub(crate) fn get_compile_info(&mut self) -> bytecodegen::CompileInfo {
-        self.functions.get_compile_info()
-    }
-
     pub(crate) fn add_main(&mut self, result: ParseResult) -> Result<FuncId> {
-        self.add_method(
+        self.functions.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],
@@ -194,16 +190,6 @@ impl Store {
             Loc::default(),
             result.source_info,
         )
-    }
-
-    pub fn add_method(
-        &mut self,
-        name: Option<IdentId>,
-        info: BlockInfo,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        self.functions.add_method(name, info, loc, sourceinfo)
     }
 
     pub fn add_classdef(

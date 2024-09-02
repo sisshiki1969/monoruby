@@ -740,7 +740,7 @@ impl Value {
     pub fn coerce_f64_to_int(f: f64) -> Result<Value> {
         if f.is_nan() || f.is_infinite() {
             Err(MonorubyErr::float_out_of_range_of_integer(f))
-        } else if (std::i64::MIN as f64) < f && f < (std::i64::MAX as f64) {
+        } else if (i64::MIN as f64) < f && f < (i64::MAX as f64) {
             Ok(Value::integer(f as i64))
         } else if let Some(b) = num::BigInt::from_f64(f) {
             Ok(Value::bigint(b))
@@ -906,7 +906,7 @@ impl Value {
         if let Some(sym) = self.try_symbol() {
             Ok(sym)
         } else if let Some(s) = self.is_str() {
-            Ok(IdentId::get_id(&s))
+            Ok(IdentId::get_id(s))
         } else {
             Err(MonorubyErr::is_not_symbol_nor_string(*self))
         }

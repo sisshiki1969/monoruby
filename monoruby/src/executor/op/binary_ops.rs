@@ -273,7 +273,7 @@ pub(crate) extern "C" fn div_values(
         }
         (RV::Complex(lhs), RV::Fixnum(rhs)) => {
             let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.clone().div(rhs))
+            Value::complex_from((*lhs).div(rhs))
         }
         (RV::Complex(lhs), RV::BigInt(rhs)) => {
             let rhs = num::complex::Complex::from(Real::from(rhs.clone()));

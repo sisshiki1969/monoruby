@@ -174,7 +174,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             }
             let iter = (0..size).map(|i| Value::integer(i as i64));
             let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
-            RValue::swap_kind(&mut lfp.self_val().rvalue_mut(), &mut res.rvalue_mut());
+            RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
         } else {
             let val = if lfp.try_arg(1).is_none() {
                 Value::nil()
@@ -282,7 +282,7 @@ fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Err(MonorubyErr::no_implicit_conversion(lfp.arg(0), ARRAY_CLASS));
         }
     };
-    lhs.extend_from_slice(&*rhs);
+    lhs.extend_from_slice(&rhs);
     Ok(lhs.into())
 }
 
@@ -333,7 +333,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
     } else if let Some(sep) = lfp.arg(0).is_str() {
-        let res = array_join(globals, lhs, &sep);
+        let res = array_join(globals, lhs, sep);
         Ok(Value::string(res))
     } else {
         Err(MonorubyErr::no_implicit_conversion(
@@ -572,7 +572,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
             return Err(MonorubyErr::index_too_small(i, 0));
         }
         let val = lfp.arg(2);
-        return ary.set_index2(i as usize, l as usize, val);
+        ary.set_index2(i as usize, l as usize, val)
     }
 }
 
@@ -891,12 +891,10 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
             let res = vm
                 .invoke_block(globals, &data, &[lhs, rhs])?
                 .expect_integer()?;
-            Ok(if res == 0 {
-                std::cmp::Ordering::Equal
-            } else if res < 0 {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
+            Ok(match res {
+                0 => std::cmp::Ordering::Equal,
+                res if res < 0 => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Greater,
             })
         };
         executor::op::sort_by(&mut ary, f)?;
@@ -946,8 +944,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
         let lhs = vm.invoke_block(globals, &data, &[lhs])?;
         let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-        let res = Executor::compare_values(vm, globals, lhs, rhs);
-        res
+        Executor::compare_values(vm, globals, lhs, rhs)
     };
     let mut ary = lfp.self_val().as_array();
     let gc_enabled = Globals::gc_enable(false);
@@ -1644,12 +1641,10 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
     if let Some(last) = ary.retain(|v| f(v))? {
         Ok(last)
+    } else if let Some(bh) = lfp.block() {
+        vm.invoke_block_once(globals, bh, &[])
     } else {
-        if let Some(bh) = lfp.block() {
-            vm.invoke_block_once(globals, bh, &[])
-        } else {
-            Ok(Value::nil())
-        }
+        Ok(Value::nil())
     }
 }
 

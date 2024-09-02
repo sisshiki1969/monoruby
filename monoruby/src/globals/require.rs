@@ -1,7 +1,6 @@
 use std::os::unix::ffi::OsStrExt;
 
 use super::*;
-use dirs;
 
 impl Globals {
     ///
@@ -16,10 +15,8 @@ impl Globals {
             if let Some(file) = self.search_lib(file_name) {
                 return self.load_file(file);
             }
-        } else {
-            if file_name.exists() {
-                return self.load_file(file_name.into());
-            }
+        } else if file_name.exists() {
+            return self.load_file(file_name.into());
         }
         Err(MonorubyErr::cant_load(None, file_name))
     }

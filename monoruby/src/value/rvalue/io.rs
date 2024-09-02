@@ -102,8 +102,8 @@ impl IoInner {
                     Ok(buf)
                 }
             }
-            Self::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
-            Self::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
+            Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
+            Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
                 let file = &mut Rc::get_mut(file).unwrap().reader;
                 if let Some(length) = length {
@@ -131,8 +131,8 @@ impl IoInner {
                     .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
                 Ok(Some(buf))
             }
-            Self::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
-            Self::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
+            Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
+            Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
                 let file = &mut Rc::get_mut(file).unwrap().reader;
                 let mut buf = String::new();

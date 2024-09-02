@@ -189,7 +189,7 @@ impl Executor {
         path: &std::path::Path,
     ) -> Result<Value> {
         let fid = match ruruby_parse::Parser::parse_program(code, path) {
-            Ok(res) => bytecodegen::compile_script(globals, res),
+            Ok(res) => bytecodegen::bytecode_compile_script(globals, res),
             Err(err) => Err(MonorubyErr::parse(err)),
         }?;
         self.eval_toplevel(globals, fid)
@@ -210,7 +210,7 @@ impl Executor {
             globals,
             func_id,
             main_object,
-            (&[]).as_ptr(),
+            ([]).as_ptr(),
             0,
             None,
         );
@@ -236,7 +236,7 @@ impl Executor {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
-        if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
+        if let Some((file_body, path)) = globals.load_lib(file_name, is_relative)? {
             #[cfg(feature = "require")]
             {
                 eprintln!("require: {:?}", &path);
@@ -865,7 +865,7 @@ impl Executor {
         } else if let Some(proc) = bh.try_proc() {
             Ok(proc.clone())
         } else {
-            self.to_proc(globals, bh.get())
+            self.val_to_proc(globals, bh.get())
         }
     }
 
@@ -874,14 +874,11 @@ impl Executor {
             .expect_string()
     }
 
-    fn to_proc(&mut self, globals: &mut Globals, val: Value) -> Result<ProcInner> {
-        match self.invoke_method_inner(globals, IdentId::TO_PROC, val, &[], None) {
-            Ok(proc) => {
-                if let Some(proc) = proc.is_proc() {
-                    return Ok(proc.clone());
-                }
+    fn val_to_proc(&mut self, globals: &mut Globals, val: Value) -> Result<ProcInner> {
+        if let Ok(proc) = self.invoke_method_inner(globals, IdentId::TO_PROC, val, &[], None) {
+            if let Some(proc) = proc.is_proc() {
+                return Ok(proc.clone());
             }
-            _ => {}
         };
         Err(MonorubyErr::typeerr(
             "",
@@ -1750,7 +1747,7 @@ impl std::iter::Step for SlotId {
     }
 
     fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.0 as usize + count <= std::u16::MAX as usize {
+        if start.0 as usize + count <= u16::MAX as usize {
             Some(Self(start.0 + count as u16))
         } else {
             None

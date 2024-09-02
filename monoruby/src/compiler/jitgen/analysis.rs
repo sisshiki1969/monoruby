@@ -25,10 +25,10 @@ impl JitContext {
     /// this module analyze the following:
     ///
     /// 1) Will the slots of incomming branch be used? or not-used?
-    /// (or not touched)
+    ///     (or not touched)
     ///
     /// 2) Type information of a backedge branch of this loop.
-    /// (Float? not Float? or a Value which is coerced into Float?)
+    ///     (Float? not Float? or a Value which is coerced into Float?)
     ///
     pub(super) fn analyse(
         &mut self,

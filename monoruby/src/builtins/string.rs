@@ -743,7 +743,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
             // self[nth] = val
             1
         };
-        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len as usize) {
+        let end = if let Some((i, _)) = lhs.char_indices().nth(start + len) {
             i
         } else {
             lhs.len()
@@ -769,7 +769,7 @@ fn succ_char(ch: char) -> char {
 }
 
 fn str_next(self_: &str) -> String {
-    if self_.len() == 0 {
+    if self_.is_empty() {
         return "".to_string();
     }
     let chars = self_.chars();
@@ -865,8 +865,8 @@ fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
     let string = self_.expect_str()?;
     let arg0 = lfp.arg(0);
     let arg = arg0.expect_str()?;
-    if string.starts_with(arg) {
-        lfp.self_val().replace_str(&string[arg.len()..]);
+    if let Some(stripped) = string.strip_prefix(arg) {
+        lfp.self_val().replace_str(stripped);
         Ok(lfp.self_val())
     } else {
         Ok(Value::nil())
@@ -943,9 +943,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                     .collect(),
             }
         } else if lim < 0 {
-            string.split(&*sep).map(Value::string_from_str).collect()
+            string.split(sep).map(Value::string_from_str).collect()
         } else if lim == 0 {
-            let mut vec: Vec<&str> = string.split(&*sep).collect();
+            let mut vec: Vec<&str> = string.split(sep).collect();
             while let Some(s) = vec.last() {
                 if s.is_empty() {
                     vec.pop().unwrap();
@@ -956,7 +956,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             vec.into_iter().map(Value::string_from_str).collect()
         } else {
             string
-                .splitn(lim as usize, &*sep)
+                .splitn(lim as usize, sep)
                 .map(Value::string_from_str)
                 .collect()
         };
@@ -971,7 +971,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => Ok(Value::array_from_vec(v)),
         }
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let all_cap = re.captures_iter(&string);
+        let all_cap = re.captures_iter(string);
         let mut cursor = 0usize;
         let mut res = vec![];
         let mut count = 0;
@@ -1164,7 +1164,7 @@ fn chomp(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 
     let self_ = lfp.self_val();
     let self_s = self_.expect_str()?;
-    let res = chomp_sub(&self_s, &rs);
+    let res = chomp_sub(self_s, rs);
     Ok(Value::string_from_str(res))
 }
 
@@ -1188,7 +1188,7 @@ fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 
     let self_ = lfp.self_val();
     let self_s = self_.expect_str()?;
-    let res = chomp_sub(&self_s, &rs);
+    let res = chomp_sub(self_s, rs);
     if res.len() == self_s.len() {
         Ok(Value::nil())
     } else {
@@ -1336,7 +1336,7 @@ fn sub_main(
         }
         let given = self_val.expect_str()?;
         let replace = arg1.expect_str()?;
-        RegexpInner::replace_one(vm, lfp.arg(0), &given, &replace)
+        RegexpInner::replace_one(vm, lfp.arg(0), given, replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
@@ -1391,13 +1391,13 @@ fn gsub_main(
         }
         let given = self_val.expect_str()?;
         let replace = arg1.expect_str()?;
-        RegexpInner::replace_all(vm, lfp.arg(0), &given, &replace)
+        RegexpInner::replace_all(vm, lfp.arg(0), given, replace)
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
                 let given = self_val.expect_str()?;
-                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), &given, bh)
+                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), given, bh)
             }
         }
     }
@@ -1415,10 +1415,10 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.expect_str()?;
     let vec = if let Some(s) = lfp.arg(0).is_str() {
-        let re = RegexpInner::from_escaped(&s)?;
-        re.find_all(vm, &given)?
+        let re = RegexpInner::from_escaped(s)?;
+        re.find_all(vm, given)?
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        re.find_all(vm, &given)?
+        re.find_all(vm, given)?
     } else {
         return Err(MonorubyErr::argumenterr(
             "1st arg must be RegExp or String.",
@@ -1501,7 +1501,7 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     let given = self_.expect_str()?;
     let re = lfp.arg(0).expect_regexp_or_string()?;
 
-    let res = RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)?;
+    let res = RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)?;
     Ok(Value::bool(!res.is_nil()))
 }
 
@@ -1607,7 +1607,7 @@ fn ljust(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         return Ok(Value::string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Ok(Value::string(format!("{}{}", lhs, gen_pad(&padding, tail))))
+    Ok(Value::string(format!("{}{}", lhs, gen_pad(padding, tail))))
 }
 
 ///
@@ -1635,7 +1635,7 @@ fn rjust(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         return Ok(Value::string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Ok(Value::string(format!("{}{}", gen_pad(&padding, tail), lhs)))
+    Ok(Value::string(format!("{}{}", gen_pad(padding, tail), lhs)))
 }
 
 ///
@@ -1853,7 +1853,7 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 #[monoruby_builtin]
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    let sym = Value::symbol_from_str(&self_val.as_str());
+    let sym = Value::symbol_from_str(self_val.as_str());
     Ok(sym)
 }
 
@@ -1898,7 +1898,7 @@ fn tr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let rec = self_.expect_str()?;
     let from = arg0.expect_str()?;
     let to = arg1.expect_str()?;
-    let res = rec.replace(from, &to);
+    let res = rec.replace(from, to);
     Ok(Value::string(res))
 }
 
@@ -1995,7 +1995,7 @@ fn center(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     } else {
         " "
     };
-    if padding.len() == 0 {
+    if padding.is_empty() {
         return Err(MonorubyErr::argumenterr("Zero width padding."));
     };
     let lhs = lfp.self_val();
@@ -2006,12 +2006,12 @@ fn center(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
     let head = (width as usize - str_len) / 2;
     let tail = width as usize - str_len - head;
-    return Ok(Value::string(format!(
+    Ok(Value::string(format!(
         "{}{}{}",
-        gen_pad(&padding, head),
+        gen_pad(padding, head),
         lhs.as_str(),
-        gen_pad(&padding, tail)
-    )));
+        gen_pad(padding, tail)
+    )))
 }
 
 ///
@@ -2074,7 +2074,7 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack(&self_.as_bytes(), lfp.arg(0).expect_str()?)
+    rvalue::unpack(self_.as_bytes(), lfp.arg(0).expect_str()?)
 }
 
 ///
@@ -2086,7 +2086,7 @@ fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack1(&self_.as_bytes(), lfp.arg(0).expect_str()?)
+    rvalue::unpack1(self_.as_bytes(), lfp.arg(0).expect_str()?)
 }
 
 ///
@@ -2113,10 +2113,10 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let enc = if let Some(s) = arg0.is_str() {
-        Encoding::from_str(s)?
+        Encoding::try_from_str(s)?
     } else if arg0.class() == encoding_class(globals) {
         let s = globals.get_ivar(arg0, IdentId::_ENCODING).unwrap();
-        Encoding::from_str(s.as_str())?
+        Encoding::try_from_str(s.as_str())?
     } else {
         return Err(MonorubyErr::argumenterr("1st arg must be String."));
     };

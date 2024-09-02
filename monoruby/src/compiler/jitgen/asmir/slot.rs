@@ -1,18 +1,13 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Guarded {
+    #[default]
     Value,
     Fixnum,
     Float,
     ArrayTy,
     Class(ClassId),
-}
-
-impl std::default::Default for Guarded {
-    fn default() -> Self {
-        Guarded::Value
-    }
 }
 
 impl Guarded {

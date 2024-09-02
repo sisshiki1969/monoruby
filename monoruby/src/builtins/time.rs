@@ -329,7 +329,7 @@ impl std::fmt::Display for TimeInner {
 impl TimeInner {
     fn utc(&mut self) {
         *self = match self {
-            TimeInner::Local(t) => TimeInner::Utc(t.clone().into()),
+            TimeInner::Local(t) => TimeInner::Utc((*t).into()),
             TimeInner::Utc(_) => return,
         }
     }
@@ -338,7 +338,7 @@ impl TimeInner {
         *self = match self {
             TimeInner::Local(_) => return,
             TimeInner::Utc(t) => {
-                let local: DateTime<Local> = t.clone().into();
+                let local: DateTime<Local> = (*t).into();
                 TimeInner::Local(local.into())
             }
         }

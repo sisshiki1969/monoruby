@@ -168,7 +168,7 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 } else if path.is_empty() && s.is_empty() {
                     "/"
                 } else {
-                    &s
+                    s
                 });
             }
         }
@@ -347,7 +347,7 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
                 return Err(MonorubyErr::argumenterr(format!(
                     "{}:{}",
                     arg1.as_str(),
-                    err.to_string()
+                    err
                 )))
             }
         }
@@ -365,7 +365,7 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         Err(err) => Err(MonorubyErr::argumenterr(format!(
             "{}:{}",
             pathname.to_string_lossy(),
-            err.to_string()
+            err
         ))),
     }
 }

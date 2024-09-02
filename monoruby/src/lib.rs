@@ -21,7 +21,7 @@ mod id_table;
 mod tests;
 mod value;
 
-pub use bytecodegen::compile_script;
+pub use bytecodegen::bytecode_compile_script;
 pub use executor::Executor;
 pub use globals::OBJECT_CLASS;
 pub use globals::{Globals, MonorubyErr};

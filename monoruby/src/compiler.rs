@@ -585,7 +585,7 @@ impl Codegen {
 
     fn test_heap_frame(&mut self) {
         monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000 as u8 as i8);
+            testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
         }
     }
 

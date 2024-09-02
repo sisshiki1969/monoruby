@@ -13,7 +13,7 @@ pub enum Encoding {
 }
 
 impl Encoding {
-    pub fn from_str(s: &str) -> Result<Self> {
+    pub fn try_from_str(s: &str) -> Result<Self> {
         match s.to_uppercase().as_str() {
             "ASCII-8BIT" => Ok(Encoding::Ascii8),
             "UTF-8" => Ok(Encoding::Utf8),
@@ -54,7 +54,7 @@ impl StringInner {
                 Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
                 Err(err) => Err(MonorubyErr::runtimeerr(format!(
                     "invalid byte sequence: {} {}",
-                    err.to_string(),
+                    err,
                     String::from_utf8_lossy(&self.content)
                 ))),
             },
@@ -277,12 +277,16 @@ impl StringInner {
 
     pub fn byte_to_char_index(&self, byte_pos: usize) -> Result<usize> {
         for (i, (pos, _)) in self.check_utf8()?.char_indices().enumerate() {
-            if pos == byte_pos {
-                return Ok(i);
-            } else if pos > byte_pos {
-                return Err(MonorubyErr::runtimeerr(format!(
-                    "invalid byte position: {byte_pos}"
-                )));
+            match pos {
+                pos if pos == byte_pos => {
+                    return Ok(i);
+                }
+                pos if pos > byte_pos => {
+                    return Err(MonorubyErr::runtimeerr(format!(
+                        "invalid byte position: {byte_pos}"
+                    )));
+                }
+                _ => {}
             }
         }
         Err(MonorubyErr::runtimeerr(format!(
@@ -388,6 +392,6 @@ impl StringInner {
             Encoding::Ascii8 => self.as_bytes()[0] as u32,
             Encoding::Utf8 => self.check_utf8()?.chars().next().unwrap() as u32,
         };
-        Ok(ord as u32)
+        Ok(ord)
     }
 }

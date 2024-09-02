@@ -836,12 +836,9 @@ impl Globals {
         self.store.functions.invalidate_jit_code();
         let vm_entry = self.codegen.vm_entry;
         for func in self.store.functions.functions() {
-            match func.kind {
-                FuncKind::ISeq(_) => {
-                    let entry = func.entry_label();
-                    self.codegen.jit.apply_jmp_patch(entry, vm_entry);
-                }
-                _ => {}
+            if let FuncKind::ISeq(_) = func.kind {
+                let entry = func.entry_label();
+                self.codegen.jit.apply_jmp_patch(entry, vm_entry);
             }
         }
     }

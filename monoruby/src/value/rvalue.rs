@@ -323,7 +323,7 @@ impl std::fmt::Debug for RValue {
                 self.id(),
                 meta.class,
                 unsafe {
-                    match meta.ty as u16 {
+                    match meta.ty {
                         0 => "<INVALID>".to_string(),
                         1 => format!("CLASS({:?})", self.kind.class),
                         2 => format!("MODULE({:?})", self.kind.class),
@@ -507,7 +507,7 @@ impl RValue {
                 (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
                 (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
                 (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
-                (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(&other.as_complex()),
+                (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(other.as_complex()),
                 (ObjKind::STRING, ObjKind::STRING) => self.as_bytes() == other.as_bytes(),
                 (ObjKind::ARRAY, ObjKind::ARRAY) => {
                     let lhs = self.as_array();
@@ -643,7 +643,12 @@ impl alloc::GCBox for RValue {
 
     fn next(&self) -> Option<std::ptr::NonNull<RValue>> {
         let next = unsafe { self.header.next };
-        assert!(unsafe { std::mem::transmute::<_, u64>(next) } & 0b1 != 1);
+        assert!(
+            unsafe {
+                std::mem::transmute::<Option<std::ptr::NonNull<value::rvalue::RValue>>, u64>(next)
+            } & 0b1
+                != 1
+        );
         next
     }
 
@@ -1354,7 +1359,7 @@ impl RValue {
     }
 
     pub(crate) fn as_time_mut(&mut self) -> &mut TimeInner {
-        unsafe { &mut *self.kind.time }
+        unsafe { &mut self.kind.time }
     }
 
     pub(crate) fn as_method(&self) -> &MethodInner {

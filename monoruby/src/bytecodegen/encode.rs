@@ -121,12 +121,12 @@ impl BytecodeGen {
         &self,
         store: &mut Store,
         incoming: &mut IncomingBranches,
-        inst: BcIr,
+        inst: BytecodecIr,
         idx: usize,
         loc: Loc,
     ) -> Result<Bc> {
         let bc = match inst {
-            BcIr::Br(dst) => {
+            BytecodecIr::Br(dst) => {
                 // 3
                 let dst = self[dst].to_usize();
                 incoming.push(idx, dst);
@@ -134,7 +134,7 @@ impl BytecodeGen {
                 // terminal inst.
                 Bc::from(enc_l(3, op1 as u32))
             }
-            BcIr::CondBr(reg, dst, optimizable, kind) => {
+            BytecodecIr::CondBr(reg, dst, optimizable, kind) => {
                 // 4, 5, 12, 13
                 let dst = self[dst].to_usize();
                 incoming.push(idx, dst);
@@ -149,7 +149,7 @@ impl BytecodeGen {
                 );
                 Bc::from(op)
             }
-            BcIr::NilBr(reg, dst) => {
+            BytecodecIr::NilBr(reg, dst) => {
                 // 37
                 let dst = self[dst].to_usize();
                 incoming.push(idx, dst);
@@ -159,7 +159,7 @@ impl BytecodeGen {
                 let op = enc_wl(37, op1.0, op2 as u32);
                 Bc::from(op)
             }
-            BcIr::CheckLocal(local, dst) => {
+            BytecodecIr::CheckLocal(local, dst) => {
                 // 20
                 let op1 = self.slot_id(&local);
                 let dst = self[dst].to_usize();
@@ -168,7 +168,7 @@ impl BytecodeGen {
                 let op2 = dst as isize - idx as isize - 1;
                 Bc::from(enc_wl(20, op1.0, op2 as u32))
             }
-            BcIr::OptCase {
+            BytecodecIr::OptCase {
                 reg,
                 min,
                 max,
@@ -194,40 +194,40 @@ impl BytecodeGen {
                 // terminal inst.
                 Bc::from(enc_wl(36, op1.0, id.get()))
             }
-            BcIr::Ret(reg) => {
+            BytecodecIr::Ret(reg) => {
                 // 80
                 let op1 = self.slot_id(&reg);
                 // terminal inst.
                 Bc::from(enc_w(80, op1.0))
             }
-            BcIr::MethodRet(reg) => {
+            BytecodecIr::MethodRet(reg) => {
                 // 81
                 let op1 = self.slot_id(&reg);
                 // terminal inst.
                 Bc::from(enc_w(81, op1.0))
             }
-            BcIr::Break(reg) => {
+            BytecodecIr::Break(reg) => {
                 // 82
                 let op1 = self.slot_id(&reg);
                 // terminal inst.
                 Bc::from(enc_w(82, op1.0))
             }
-            BcIr::Raise(reg) => {
+            BytecodecIr::Raise(reg) => {
                 // 83
                 let op1 = self.slot_id(&reg);
                 // terminal inst.
                 Bc::from(enc_w(83, op1.0))
             }
-            BcIr::LoopStart => {
+            BytecodecIr::LoopStart => {
                 // 14
                 Bc::from(enc_l(14, 0))
             }
-            BcIr::LoopEnd => {
+            BytecodecIr::LoopEnd => {
                 // 15
                 incoming.push(idx, idx + 1);
                 Bc::from(enc_l(15, 0))
             }
-            BcIr::SingletonMethodDef {
+            BytecodecIr::SingletonMethodDef {
                 obj,
                 name,
                 box func,
@@ -237,38 +237,38 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(name), func_id)
             }
-            BcIr::MethodDef { name, box func } => {
+            BytecodecIr::MethodDef { name, box func } => {
                 // 2
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_l(2, 0), Some(name), func_id)
             }
-            BcIr::Lambda { dst, box func } => {
+            BytecodecIr::Lambda { dst, box func } => {
                 // 38
                 let op1 = self.slot_id(&dst);
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from(enc_wl(38, op1.0, func_id.get()))
             }
-            BcIr::Integer(dst, num) => {
+            BytecodecIr::Integer(dst, num) => {
                 // 6
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(6, op1.0, num as u32))
             }
-            BcIr::Literal(reg, val) => {
+            BytecodecIr::Literal(reg, val) => {
                 // 7
                 let op1 = self.slot_id(&reg);
                 Bc::from_with_value(enc_wl(7, op1.0, 0), val)
             }
-            BcIr::Nil(reg) => {
+            BytecodecIr::Nil(reg) => {
                 // 8
                 let op1 = self.slot_id(&reg);
                 Bc::from(enc_w(8, op1.0))
             }
-            BcIr::Symbol(reg, name) => {
+            BytecodecIr::Symbol(reg, name) => {
                 // 9
                 let op1 = self.slot_id(&reg);
                 Bc::from(enc_wl(9, op1.0, name.get()))
             }
-            BcIr::LoadConst {
+            BytecodecIr::LoadConst {
                 dst,
                 base,
                 toplevel,
@@ -281,7 +281,7 @@ impl BytecodeGen {
                 let op2 = store.add_constsite(base, name, prefix, toplevel);
                 Bc::from(enc_wl(10, op1.0, op2.0))
             }
-            BcIr::StoreConst {
+            BytecodecIr::StoreConst {
                 src,
                 toplevel,
                 base: parent,
@@ -294,17 +294,17 @@ impl BytecodeGen {
                 let op2 = store.add_constsite(base, name, prefix, toplevel);
                 Bc::from(enc_wl(11, op1.0, op2.0))
             }
-            BcIr::LoadIvar(reg, name) => {
+            BytecodecIr::LoadIvar(reg, name) => {
                 // 16
                 let op1 = self.slot_id(&reg);
                 Bc::from(enc_wl(16, op1.0, name.get()))
             }
-            BcIr::StoreIvar(reg, name) => {
+            BytecodecIr::StoreIvar(reg, name) => {
                 // 17
                 let op1 = self.slot_id(&reg);
                 Bc::from(enc_wl(17, op1.0, name.get()))
             }
-            BcIr::CheckConst {
+            BytecodecIr::CheckConst {
                 dst,
                 base,
                 toplevel,
@@ -317,7 +317,7 @@ impl BytecodeGen {
                 let op2 = store.add_constsite(base, name, prefix, toplevel);
                 Bc::from(enc_wl(18, op1.0, op2.0))
             }
-            BcIr::ClassDef {
+            BytecodecIr::ClassDef {
                 ret,
                 base,
                 superclass,
@@ -340,7 +340,7 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_www(70, op1.0, op2.0, op3.0), Some(name), func_id)
             }
-            BcIr::ModuleDef {
+            BytecodecIr::ModuleDef {
                 ret,
                 base,
                 name,
@@ -358,12 +358,12 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_www(71, op1.0, op2.0, 0), Some(name), func_id)
             }
-            BcIr::BlockArgProxy(dst, outer) => {
+            BytecodecIr::BlockArgProxy(dst, outer) => {
                 // 21
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(21, op1.0, outer as u32))
             }
-            BcIr::SingletonClassDef {
+            BytecodecIr::SingletonClassDef {
                 ret,
                 base,
                 box func,
@@ -377,69 +377,69 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bc::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
-            BcIr::BlockArg(dst, outer) => {
+            BytecodecIr::BlockArg(dst, outer) => {
                 // 23
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(23, op1.0, outer as u32))
             }
-            BcIr::CheckCvar { dst, name } => {
+            BytecodecIr::CheckCvar { dst, name } => {
                 // 24
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(24, op1.0, name.get()))
             }
-            BcIr::LoadGvar { dst, name } => {
+            BytecodecIr::LoadGvar { dst, name } => {
                 // 25
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(25, op1.0, name.get()))
             }
-            BcIr::StoreGvar { val, name } => {
+            BytecodecIr::StoreGvar { val, name } => {
                 // 26
                 let op1 = self.slot_id(&val);
                 Bc::from(enc_wl(26, op1.0, name.get()))
             }
-            BcIr::LoadCvar { dst, name } => {
+            BytecodecIr::LoadCvar { dst, name } => {
                 // 27
                 let op1 = self.slot_id(&dst);
                 Bc::from(enc_wl(27, op1.0, name.get()))
             }
-            BcIr::LoadSvar { ret, id } => {
+            BytecodecIr::LoadSvar { ret, id } => {
                 // 28
                 let op1 = self.slot_id(&ret);
                 Bc::from(enc_wl(28, op1.0, id))
             }
-            BcIr::StoreCvar { val, name } => {
+            BytecodecIr::StoreCvar { val, name } => {
                 // 29
                 let op1 = self.slot_id(&val);
                 Bc::from(enc_wl(29, op1.0, name.get()))
             }
-            BcIr::MethodCall(box callsite) => {
+            BytecodecIr::MethodCall(box callsite) => {
                 // 30, 31
                 let opcode = if callsite.is_simple() { 30 } else { 31 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BcIr::MethodCallBlock(box callsite) => {
+            BytecodecIr::MethodCallBlock(box callsite) => {
                 // 32, 33
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BcIr::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
-            BcIr::Yield(box callsite) => {
+            BytecodecIr::InlineCache(box callsite) => self.encode_cache(130, callsite)?,
+            BytecodecIr::Yield(box callsite) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
                 self.encode_call(store, opcode, callsite, loc)?
             }
-            BcIr::Array(ret, box callsite) => {
+            BytecodecIr::Array(ret, box callsite) => {
                 // 39
                 let op1 = self.slot_id(&ret);
                 let callid = self.new_callsite(store, callsite, loc)?;
                 Bc::from(enc_wl(39, op1.0, callid.get()))
             }
-            BcIr::DefinedYield { ret } => {
+            BytecodecIr::DefinedYield { ret } => {
                 // 64
                 let op1 = self.slot_id(&ret);
                 Bc::from(enc_www(64, op1.0, 0, 0))
             }
-            BcIr::DefinedConst {
+            BytecodecIr::DefinedConst {
                 ret,
                 toplevel,
                 prefix,
@@ -450,61 +450,61 @@ impl BytecodeGen {
                 let op2 = store.add_constsite(None, name, prefix, toplevel);
                 Bc::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
             }
-            BcIr::DefinedMethod { ret, recv, name } => {
+            BytecodecIr::DefinedMethod { ret, recv, name } => {
                 // 66
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&recv);
                 Bc::from_u32(enc_www(66, op1.0, op2.0, 0), name.get())
             }
-            BcIr::DefinedGvar { ret, name } => {
+            BytecodecIr::DefinedGvar { ret, name } => {
                 // 67
                 let op1 = self.slot_id(&ret);
                 Bc::from_u32(enc_www(67, op1.0, 0, 0), name.get())
             }
-            BcIr::DefinedIvar { ret, name } => {
+            BytecodecIr::DefinedIvar { ret, name } => {
                 // 68
                 let op1 = self.slot_id(&ret);
                 Bc::from_u32(enc_www(68, op1.0, 0, 0), name.get())
             }
-            BcIr::EnsureEnd => Bc::from(enc_w(85, 0)),
-            BcIr::ConcatRegexp(ret, arg, len) => {
+            BytecodecIr::EnsureEnd => Bc::from(enc_w(85, 0)),
+            BytecodecIr::ConcatRegexp(ret, arg, len) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bc::from(enc_www(86, op1.0, op2.0, len as u16))
             }
-            BcIr::Pos { ret, src } => {
+            BytecodecIr::Pos { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 Bc::from_with_class_and_version(enc_ww(126, op1.0, op2.0), None, -1i32 as u32)
             }
-            BcIr::BitNot { ret, src } => {
+            BytecodecIr::BitNot { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 Bc::from(enc_ww(127, op1.0, op2.0))
             }
-            BcIr::Not { ret, src } => {
+            BytecodecIr::Not { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 Bc::from(enc_ww(128, op1.0, op2.0))
             }
-            BcIr::Neg { ret, src } => {
+            BytecodecIr::Neg { ret, src } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&src);
                 Bc::from_with_class_and_version(enc_ww(129, op1.0, op2.0), None, -1i32 as u32)
             }
-            BcIr::Index(ret, base, idx) => {
+            BytecodecIr::Index(ret, base, idx) => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&base);
                 let op3 = self.slot_id(&idx);
                 Bc::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
             }
-            BcIr::StoreIndex(src, base, idx) => {
+            BytecodecIr::StoreIndex(src, base, idx) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&base);
                 let op3 = self.slot_id(&idx);
                 Bc::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
             }
-            BcIr::Cmp(kind, ret, mode, optimizable) => {
+            BytecodecIr::Cmp(kind, ret, mode, optimizable) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 match mode {
                     BinopMode::RR(lhs, rhs) => {
@@ -529,7 +529,7 @@ impl BytecodeGen {
                     _ => unreachable!(),
                 }
             }
-            BcIr::LoadDynVar {
+            BytecodecIr::LoadDynVar {
                 dst: ret,
                 src,
                 outer,
@@ -539,31 +539,31 @@ impl BytecodeGen {
                 let op3 = outer as u16;
                 Bc::from(enc_www(150, op1.0, op2.0, op3))
             }
-            BcIr::StoreDynVar { dst, outer, src } => {
+            BytecodecIr::StoreDynVar { dst, outer, src } => {
                 let op1 = self.slot_id(&dst);
                 let op2 = outer as u16;
                 let op3 = self.slot_id(&src);
                 Bc::from(enc_www(151, op1.0, op2, op3.0))
             }
-            BcIr::InitMethod(fn_info) => Bc::from_fn_info(enc_www_fn_info(170, &fn_info), &fn_info),
-            BcIr::ExpandArray(src, dst, len) => {
+            BytecodecIr::InitMethod(fn_info) => Bc::from_fn_info(enc_www_fn_info(170, &fn_info), &fn_info),
+            BytecodecIr::ExpandArray(src, dst, len) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&dst);
                 Bc::from(enc_www(171, op1.0, op2.0, len))
             }
-            BcIr::InitBlock(fn_info) => Bc::from_fn_info(enc_www_fn_info(172, &fn_info), &fn_info),
-            BcIr::AliasMethod { new, old } => Bc::from_with_ident2(enc_www(173, 0, 0, 0), new, old),
-            BcIr::Hash { ret, args, len } => {
+            BytecodecIr::InitBlock(fn_info) => Bc::from_fn_info(enc_www_fn_info(172, &fn_info), &fn_info),
+            BytecodecIr::AliasMethod { new, old } => Bc::from_with_ident2(enc_www(173, 0, 0, 0), new, old),
+            BytecodecIr::Hash { ret, args, len } => {
                 let op1 = self.slot_id(&ret);
                 let op2 = self.slot_id(&args);
                 Bc::from(enc_www(174, op1.0, op2.0, len))
             }
-            BcIr::Mov(dst, src) => {
+            BytecodecIr::Mov(dst, src) => {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);
                 Bc::from(enc_ww(176, op1.0, op2.0))
             }
-            BcIr::Range {
+            BytecodecIr::Range {
                 ret,
                 start,
                 end,
@@ -574,12 +574,12 @@ impl BytecodeGen {
                 let op3 = self.slot_id(&end);
                 Bc::from(enc_www(177 + u16::from(exclude_end), op1.0, op2.0, op3.0))
             }
-            BcIr::ConcatStr(ret, arg, len) => {
+            BytecodecIr::ConcatStr(ret, arg, len) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&BcReg::from(arg));
                 Bc::from(enc_www(179, op1.0, op2.0, len as u16))
             }
-            BcIr::BinOp(kind, ret, mode) => {
+            BytecodecIr::BinOp(kind, ret, mode) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 match mode {
                     BinopMode::IR(lhs, rhs) => {
@@ -694,7 +694,9 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
+            Functions::Method { name, info } => {
+                store.functions.add_method(name, info, loc, sourceinfo)
+            }
             Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,

@@ -6,14 +6,18 @@ fn check(x: u16, singletonuppers: &[(u8, u8)], singletonlowers: &[u8], normal: &
     let mut lowerstart = 0;
     for &(upper, lowercount) in singletonuppers {
         let lowerend = lowerstart + lowercount as usize;
-        if xupper == upper {
-            for &lower in &singletonlowers[lowerstart..lowerend] {
-                if lower == x as u8 {
-                    return false;
+        match xupper {
+            xupper if xupper == upper => {
+                for &lower in &singletonlowers[lowerstart..lowerend] {
+                    if lower == x as u8 {
+                        return false;
+                    }
                 }
             }
-        } else if xupper < upper {
-            break;
+            xupper if xupper < upper => {
+                break;
+            }
+            _ => {}
         }
         lowerstart = lowerend;
     }
@@ -51,31 +55,31 @@ pub(super) fn is_printable(x: char) -> bool {
     } else if x < 0x20000 {
         check(lower, SINGLETONS1U, SINGLETONS1L, NORMAL1)
     } else {
-        if 0x2a6e0 <= x && x < 0x2a700 {
+        if (0x2a6e0..0x2a700).contains(&x) {
             return false;
         }
-        if 0x2b73a <= x && x < 0x2b740 {
+        if (0x2b73a..0x2b740).contains(&x) {
             return false;
         }
-        if 0x2b81e <= x && x < 0x2b820 {
+        if (0x2b81e..0x2b820).contains(&x) {
             return false;
         }
-        if 0x2cea2 <= x && x < 0x2ceb0 {
+        if (0x2cea2..0x2ceb0).contains(&x) {
             return false;
         }
-        if 0x2ebe1 <= x && x < 0x2f800 {
+        if (0x2ebe1..0x2f800).contains(&x) {
             return false;
         }
-        if 0x2fa1e <= x && x < 0x30000 {
+        if (0x2fa1e..0x30000).contains(&x) {
             return false;
         }
-        if 0x3134b <= x && x < 0x31350 {
+        if (0x3134b..0x31350).contains(&x) {
             return false;
         }
-        if 0x323b0 <= x && x < 0xe0100 {
+        if (0x323b0..0xe0100).contains(&x) {
             return false;
         }
-        if 0xe01f0 <= x && x < 0x110000 {
+        if (0xe01f0..0x110000).contains(&x) {
             return false;
         }
         true

@@ -25,7 +25,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         .classes
         .new_unnamed_class(Some(self_val.as_class()));
     let class_id = new_struct.as_class_id();
-    let start_idx = if let Some(arg0) = args.get(0)
+    let start_idx = if let Some(arg0) = args.first()
         && let Some(s) = arg0.is_str()
     {
         if s.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -102,7 +102,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let mut inspect = format!("#<struct ");
+    let mut inspect = "#<struct ".to_string();
     let self_val = lfp.self_val();
     let class_id = self_val.class();
     let struct_class = globals.store.classes[class_id].get_module().as_val();

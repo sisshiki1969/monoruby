@@ -32,19 +32,19 @@ pub(super) enum BinopMode {
     IR(i16, BcReg),
 }
 
-pub(crate) struct Ir(Vec<(BcIr, Loc)>);
+pub(crate) struct Ir(Vec<(BytecodecIr, Loc)>);
 
 impl Ir {
-    pub(super) fn new(ir: Vec<(BcIr, Loc)>) -> Self {
+    pub(super) fn new(ir: Vec<(BytecodecIr, Loc)>) -> Self {
         Self(ir)
     }
 
     pub(crate) fn is_loop_start(&self, index: usize) -> bool {
-        matches!(self.0[index].0, BcIr::LoopStart)
+        matches!(self.0[index].0, BytecodecIr::LoopStart)
     }
 
     pub(crate) fn is_loop_end(&self, index: usize) -> bool {
-        matches!(self.0[index].0, BcIr::LoopEnd)
+        matches!(self.0[index].0, BytecodecIr::LoopEnd)
     }
 
     pub(crate) fn is_terminal(&self, index: usize) -> bool {
@@ -56,7 +56,7 @@ impl Ir {
 /// bytecode Ir.
 ///
 #[derive(Debug, Clone)]
-pub(super) enum BcIr {
+pub(super) enum BytecodecIr {
     Nil(BcReg),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
@@ -249,7 +249,7 @@ pub(super) enum BcIr {
     LoopEnd,
 }
 
-impl BcIr {
+impl BytecodecIr {
     pub fn is_terminal(&self) -> bool {
         match self {
             // Br or Ret or MethodRet or Break or Raise or OptCase

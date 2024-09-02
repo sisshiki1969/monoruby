@@ -343,20 +343,20 @@ impl Funcs {
         self.info.len()
     }
 
-    pub(super) fn get_compile_info(&mut self) -> CompileInfo {
+    pub fn get_compile_info(&mut self) -> CompileInfo {
         self.compile_info.remove(0)
     }
 
-    pub(super) fn add_method(
+    pub fn add_method(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
+        let (params_info, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
+        Ok(self.add_method_iseq(name, params_info, loc, sourceinfo))
     }
 
     pub(super) fn add_block(
@@ -369,14 +369,14 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
+        let (params_info, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         let info = FuncInfo::new_block_iseq(
             func_id,
             mother,
             outer,
-            args,
+            params_info,
             is_block_style,
             loc,
             sourceinfo,
@@ -462,12 +462,12 @@ impl Funcs {
     fn add_method_iseq(
         &mut self,
         name: Option<IdentId>,
-        args: ParamsInfo,
+        params_info: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, params_info, loc, sourceinfo);
         self.info.push(info);
         func_id
     }

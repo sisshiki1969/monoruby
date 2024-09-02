@@ -92,7 +92,7 @@ fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         None => None,
     };
     let buf = lfp.self_val().as_io_inner_mut().read(length)?;
-    if buf.len() == 0 && length.is_some() && length != Some(0) {
+    if buf.is_empty() && length.is_some() && length != Some(0) {
         return Ok(Value::nil());
     }
     Ok(Value::string_from_vec(buf))

@@ -157,7 +157,7 @@ impl RegexpInner {
         replace: &str,
     ) -> Result<(String, bool)> {
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(&s)?;
+            let re = Self::from_escaped(s)?;
             re.replace_once(vm, given, replace)
                 .map(|(s, c)| (s, c.is_some()))
         } else if let Some(re) = re_val.is_regex() {
@@ -203,7 +203,7 @@ impl RegexpInner {
         }
 
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(&s)?;
+            let re = Self::from_escaped(s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, bh)
@@ -222,7 +222,7 @@ impl RegexpInner {
         replace: &str,
     ) -> Result<(String, bool)> {
         if let Some(s) = regexp.is_str() {
-            let re = Self::from_escaped(&s)?;
+            let re = Self::from_escaped(s)?;
             re.replace_repeat(vm, given, replace)
         } else if let Some(re) = regexp.is_regex() {
             re.replace_repeat(vm, given, replace)
@@ -275,7 +275,7 @@ impl RegexpInner {
         }
 
         if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(&s)?;
+            let re = Self::from_escaped(s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, bh)
