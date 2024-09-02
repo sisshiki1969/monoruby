@@ -214,13 +214,27 @@ impl Codegen {
             div_by_zero: entry_panic,
             get_class,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
-            method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            binding_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            fiber_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            method_invoker: unsafe {
+                std::mem::transmute::<*mut u8, MethodInvoker>(entry_unimpl.as_ptr())
+            },
+            method_invoker2: unsafe {
+                std::mem::transmute::<*mut u8, MethodInvoker2>(entry_unimpl.as_ptr())
+            },
+            block_invoker: unsafe {
+                std::mem::transmute::<*mut u8, BlockInvoker>(entry_unimpl.as_ptr())
+            },
+            block_invoker_with_self: unsafe {
+                std::mem::transmute::<*mut u8, BlockInvoker>(entry_unimpl.as_ptr())
+            },
+            binding_invoker: unsafe {
+                std::mem::transmute::<*mut u8, BindingInvoker>(entry_unimpl.as_ptr())
+            },
+            fiber_invoker: unsafe {
+                std::mem::transmute::<*mut u8, FiberInvoker>(entry_unimpl.as_ptr())
+            },
+            fiber_invoker_with_self: unsafe {
+                std::mem::transmute::<*mut u8, FiberInvoker>(entry_unimpl.as_ptr())
+            },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             #[cfg(feature = "jit-log")]
