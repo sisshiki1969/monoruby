@@ -1081,7 +1081,7 @@ impl Globals {
         &mut self,
         func_id: FuncId,
         self_value: Value,
-        position: Option<BcPc>,
+        position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]

@@ -7,7 +7,7 @@ impl AsmIr {
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
             let deopt = self.new_deopt(bb, pc);
@@ -33,7 +33,7 @@ impl AsmIr {
         src: SlotId,
         base: SlotId,
         idx: SlotId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
             let deopt = self.new_deopt(bb, pc);

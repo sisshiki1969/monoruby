@@ -84,7 +84,7 @@ fn object_object_id(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    _pc: BcPc,
+    _pc: BytecodePtr,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = store[callid];
     ir.fetch_to_reg(bb, recv, GP::Rdi);

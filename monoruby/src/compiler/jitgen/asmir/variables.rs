@@ -30,7 +30,7 @@ impl AsmIr {
         bb: &mut BBContext,
         name: IdentId,
         src: SlotId,
-        pc: BcPc,
+        pc: BytecodePtr,
         cached_class: ClassId,
         cached_ivarid: IvarId,
     ) {

@@ -87,8 +87,8 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BcPc) {
-    move |ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc| {
+) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) {
+    move |ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr| {
         let callsite = &store[callid];
         let CallSiteInfo {
             recv,

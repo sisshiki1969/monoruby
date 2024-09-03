@@ -797,7 +797,7 @@ pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
 
 #[repr(C)]
 pub(super) struct ErrorReturn {
-    dest: Option<BcPc>,
+    dest: Option<BytecodePtr>,
     value: Option<Value>,
 }
 
@@ -816,7 +816,7 @@ impl ErrorReturn {
         }
     }
 
-    fn goto(dest: BcPc) -> Self {
+    fn goto(dest: BytecodePtr) -> Self {
         Self {
             dest: Some(dest),
             value: None,
@@ -828,7 +828,7 @@ pub(super) extern "C" fn handle_error(
     vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
-    pc: BcPc,
+    pc: BytecodePtr,
 ) -> ErrorReturn {
     let func_info = &globals[meta.func_id()];
     match &func_info.kind {

@@ -424,7 +424,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
     ary.into()
 }
 
-fn array_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn array_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let CallSiteInfo {
         recv, dst, args, ..
     } = store[callid];

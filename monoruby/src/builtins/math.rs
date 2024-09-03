@@ -95,7 +95,7 @@ fn cos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::float(f.cos()))
 }
 
-fn math_sqrt(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn math_sqrt(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let callsite = &store[callid];
     let CallSiteInfo {
         recv,
@@ -118,7 +118,7 @@ fn math_sqrt(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSite
     }
 }
 
-fn math_cos(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn math_cos(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let callsite = &store[callid];
     let CallSiteInfo {
         recv,
@@ -149,7 +149,7 @@ fn math_cos(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteI
     }
 }
 
-fn math_sin(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn math_sin(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let callsite = &store[callid];
     let CallSiteInfo {
         recv,

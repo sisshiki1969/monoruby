@@ -79,7 +79,7 @@ impl BytecodeGen {
                 if outer == 0 {
                     self.emit_mov(dst, src);
                 } else {
-                    self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 }
                 splat_pos.push(len);
                 len += 1;
@@ -92,7 +92,7 @@ impl BytecodeGen {
             } else {
                 let dst = self.push().into();
                 let src = BcLocal(rest_pos).into();
-                self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 dst
             };
             (pos_start, 1, vec![0])
@@ -135,7 +135,7 @@ impl BytecodeGen {
             for i in 0..pos_len {
                 let dst = self.push().into();
                 let src = BcLocal(i as _).into();
-                self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
             }
             args
         };
@@ -162,7 +162,7 @@ impl BytecodeGen {
                 if outer != 0 {
                     let dst = self.push().into();
                     let src = BcLocal((pos_len + i) as u16).into();
-                    self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 }
             }
             if let Some(kw_rest) = mother_args.kw_rest {
@@ -195,7 +195,7 @@ impl BytecodeGen {
     fn load_dynvar(&mut self, slot_id: SlotId, outer: usize, loc: Loc) -> BcReg {
         let dst = self.push().into();
         let src = BcLocal(slot_id.0 - 1).into();
-        self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+        self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
         dst
     }
 
@@ -258,7 +258,7 @@ impl BytecodeGen {
                 if let Some(local) = self.refer_local(&proc_local) {
                     self.emit_mov(dst, local.into());
                 } else {
-                    self.emit(BytecodecIr::BlockArgProxy(dst, 0), loc);
+                    self.emit(BytecodeInst::BlockArgProxy(dst, 0), loc);
                 }
             }
             NodeKind::LocalVar(outer, proc_local) => {
@@ -266,10 +266,10 @@ impl BytecodeGen {
                 let dst = self.push().into();
                 if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
                     let src = src.into();
-                    self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
-                    self.emit(BytecodecIr::BlockArgProxy(dst, outer), loc);
+                    self.emit(BytecodeInst::BlockArgProxy(dst, outer), loc);
                 }
             }
             _ => {

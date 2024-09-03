@@ -16,7 +16,7 @@ impl AsmIr {
     pub(in crate::compiler::jitgen) fn gen_binop_integer(
         &mut self,
         bb: &mut BBContext,
-        pc: BcPc,
+        pc: BytecodePtr,
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
@@ -74,7 +74,7 @@ impl AsmIr {
     pub(in crate::compiler::jitgen) fn fetch_fixnum_binary(
         &mut self,
         bb: &mut BBContext,
-        pc: BcPc,
+        pc: BytecodePtr,
         mode: &OpMode,
     ) {
         let deopt = self.new_deopt(bb, pc);
@@ -92,7 +92,7 @@ impl AsmIr {
         }
     }
 
-    fn fetch_fixnum_mode(&mut self, bb: &mut BBContext, mode: &OpMode, pc: BcPc) {
+    fn fetch_fixnum_mode(&mut self, bb: &mut BBContext, mode: &OpMode, pc: BytecodePtr) {
         let deopt = self.new_deopt(bb, pc);
         match mode {
             OpMode::RR(lhs, rhs) => {

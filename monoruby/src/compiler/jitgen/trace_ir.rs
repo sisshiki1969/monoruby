@@ -235,7 +235,7 @@ pub(crate) enum OpMode {
 }
 
 impl OpMode {
-    pub(crate) fn is_float_op(&self, pc: &Bc) -> bool {
+    pub(crate) fn is_float_op(&self, pc: &Bytecode) -> bool {
         match self {
             Self::RR(..) => pc.is_float_binop(),
             Self::RI(..) => pc.is_float1(),
@@ -243,7 +243,7 @@ impl OpMode {
         }
     }
 
-    pub(crate) fn is_integer_op(&self, pc: &Bc) -> bool {
+    pub(crate) fn is_integer_op(&self, pc: &Bytecode) -> bool {
         match self {
             Self::RR(..) => pc.is_integer_binop(),
             Self::RI(..) => pc.is_integer1(),

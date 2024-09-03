@@ -181,17 +181,17 @@ impl BytecodeGen {
                 if let Some(local2) = self.refer_local(&ident) {
                     self.emit_mov(dst, local2.into());
                 } else {
-                    self.emit(BytecodecIr::BlockArg(dst, 0), loc);
+                    self.emit(BytecodeInst::BlockArg(dst, 0), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let name = IdentId::get_id_from_string(ident);
                 if let Some(src) = self.refer_dynamic_local(outer, name) {
                     let src = src.into();
-                    self.emit(BytecodecIr::LoadDynVar { dst, src, outer }, loc);
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(name), self.block_param);
-                    self.emit(BytecodecIr::BlockArg(dst, outer), loc);
+                    self.emit(BytecodeInst::BlockArg(dst, outer), loc);
                 }
             }
             NodeKind::Const {
@@ -421,7 +421,7 @@ impl BytecodeGen {
                     return Ok(());
                 } else {
                     let ret = self.push().into();
-                    self.emit(BytecodecIr::BlockArg(ret, 0), loc);
+                    self.emit(BytecodeInst::BlockArg(ret, 0), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
@@ -430,7 +430,7 @@ impl BytecodeGen {
                 if let Some(src) = self.refer_dynamic_local(outer, lvar) {
                     let src = src.into();
                     self.emit(
-                        BytecodecIr::LoadDynVar {
+                        BytecodeInst::LoadDynVar {
                             dst: ret,
                             src,
                             outer,
@@ -439,7 +439,7 @@ impl BytecodeGen {
                     );
                 } else {
                     assert_eq!(Some(lvar), self.outer_block_param_name(outer));
-                    self.emit(BytecodecIr::BlockArg(ret, outer), loc);
+                    self.emit(BytecodeInst::BlockArg(ret, outer), loc);
                 }
             }
 
@@ -563,7 +563,7 @@ impl BytecodeGen {
                 } else {
                     self.gen_expr(val, UseMode2::NotUse)?;
                 }
-                self.emit(BytecodecIr::Br(break_dest), loc);
+                self.emit(BytecodeInst::Br(break_dest), loc);
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
@@ -582,7 +582,7 @@ impl BytecodeGen {
                     }
                 };
                 self.gen_expr(val, UseMode2::NotUse)?;
-                self.emit(BytecodecIr::Br(next_dest), loc);
+                self.emit(BytecodeInst::Br(next_dest), loc);
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
@@ -596,14 +596,14 @@ impl BytecodeGen {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            self.emit(BytecodecIr::Br(self.redo_label), loc);
+                            self.emit(BytecodeInst::Br(self.redo_label), loc);
                             return Ok(());
                         } else {
                             return Err(self.escape_from_eval("redo", loc));
                         }
                     }
                 };
-                self.emit(BytecodecIr::Br(*redo_dest), loc);
+                self.emit(BytecodeInst::Br(*redo_dest), loc);
                 return Ok(());
             }
             NodeKind::Return(box val) => {
@@ -665,7 +665,7 @@ impl BytecodeGen {
                 } else {
                     None
                 };
-                self.emit(BytecodecIr::ConcatStr(ret, arg, len), Loc::default());
+                self.emit(BytecodeInst::ConcatStr(ret, arg, len), Loc::default());
                 if use_mode.is_ret() {
                     self.emit_ret(None)?;
                 }
@@ -678,7 +678,7 @@ impl BytecodeGen {
                         let new = IdentId::get_id_from_string(new);
                         let old = IdentId::get_id_from_string(old);
                         self.temp = temp;
-                        self.emit(BytecodecIr::AliasMethod { new, old }, loc);
+                        self.emit(BytecodeInst::AliasMethod { new, old }, loc);
                     }
                     _ => unimplemented!(),
                 };
@@ -803,7 +803,7 @@ impl BytecodeGen {
                 self.push();
             }
             self.emit(
-                BytecodecIr::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16),
+                BytecodeInst::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16),
                 Loc::default(),
             );
             // lhs0, lhs1, .. = rhs
@@ -880,7 +880,7 @@ impl BytecodeGen {
             None => self.push().into(),
             Some(local) => local,
         };
-        self.emit(BytecodecIr::Index(ret, base, index), loc);
+        self.emit(BytecodeInst::Index(ret, base, index), loc);
         Ok(())
     }
 }
@@ -934,7 +934,7 @@ impl BytecodeGen {
             self.push_expr(expr)?;
         }
         self.temp -= len as u16;
-        self.emit(BytecodecIr::ConcatRegexp(Some(ret), arg, len), loc);
+        self.emit(BytecodeInst::ConcatRegexp(Some(ret), arg, len), loc);
         Ok(())
     }
 
@@ -951,7 +951,7 @@ impl BytecodeGen {
         let end = self.gen_expr_reg(end)?;
         self.temp = old;
         self.emit(
-            BytecodecIr::Range {
+            BytecodeInst::Range {
                 ret,
                 start,
                 end,
@@ -965,7 +965,7 @@ impl BytecodeGen {
     fn gen_lambda(&mut self, dst: BcReg, info: BlockInfo, loc: Loc) -> Result<()> {
         let info = self.handle_lambda(info);
         self.emit(
-            BytecodecIr::Lambda {
+            BytecodeInst::Lambda {
                 dst,
                 func: Box::new(info),
             },
@@ -1004,7 +1004,7 @@ impl BytecodeGen {
     ) -> Result<()> {
         let func = self.add_method(Some(name), block);
         self.emit(
-            BytecodecIr::MethodDef {
+            BytecodeInst::MethodDef {
                 name,
                 func: Box::new(func),
             },
@@ -1024,7 +1024,7 @@ impl BytecodeGen {
         let func = self.add_method(Some(name), block);
         let obj = self.pop().into();
         self.emit(
-            BytecodecIr::SingletonMethodDef {
+            BytecodeInst::SingletonMethodDef {
                 obj,
                 name,
                 func: Box::new(func),
@@ -1077,14 +1077,14 @@ impl BytecodeGen {
         //let base = None;
         self.emit(
             if is_module {
-                BytecodecIr::ModuleDef {
+                BytecodeInst::ModuleDef {
                     ret,
                     base,
                     name,
                     func: Box::new(func),
                 }
             } else {
-                BytecodecIr::ClassDef {
+                BytecodeInst::ClassDef {
                     ret,
                     base,
                     superclass,
@@ -1117,7 +1117,7 @@ impl BytecodeGen {
             UseMode2::Store(r) => Some(r),
         };
         self.emit(
-            BytecodecIr::SingletonClassDef {
+            BytecodeInst::SingletonClassDef {
                 ret,
                 base,
                 func: Box::new(func),
@@ -1145,11 +1145,11 @@ impl BytecodeGen {
 
     fn gen_method_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodecIr::MethodRet(local.into()), Loc::default());
+            self.emit(BytecodeInst::MethodRet(local.into()), Loc::default());
         } else {
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.pop().into();
-            self.emit(BytecodecIr::MethodRet(ret), Loc::default());
+            self.emit(BytecodeInst::MethodRet(ret), Loc::default());
         }
         if use_mode == UseMode2::Push {
             self.push();
@@ -1159,11 +1159,11 @@ impl BytecodeGen {
 
     fn gen_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodecIr::Break(local.into()), Loc::default());
+            self.emit(BytecodeInst::Break(local.into()), Loc::default());
         } else {
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.pop().into();
-            self.emit(BytecodecIr::Break(ret), Loc::default());
+            self.emit(BytecodeInst::Break(ret), Loc::default());
         }
         if use_mode == UseMode2::Push {
             self.push();

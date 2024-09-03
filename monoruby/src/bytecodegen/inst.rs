@@ -32,19 +32,19 @@ pub(super) enum BinopMode {
     IR(i16, BcReg),
 }
 
-pub(crate) struct Ir(Vec<(BytecodecIr, Loc)>);
+pub(crate) struct BytecodeIr(Vec<(BytecodeInst, Loc)>);
 
-impl Ir {
-    pub(super) fn new(ir: Vec<(BytecodecIr, Loc)>) -> Self {
+impl BytecodeIr {
+    pub(super) fn new(ir: Vec<(BytecodeInst, Loc)>) -> Self {
         Self(ir)
     }
 
     pub(crate) fn is_loop_start(&self, index: usize) -> bool {
-        matches!(self.0[index].0, BytecodecIr::LoopStart)
+        matches!(self.0[index].0, BytecodeInst::LoopStart)
     }
 
     pub(crate) fn is_loop_end(&self, index: usize) -> bool {
-        matches!(self.0[index].0, BytecodecIr::LoopEnd)
+        matches!(self.0[index].0, BytecodeInst::LoopEnd)
     }
 
     pub(crate) fn is_terminal(&self, index: usize) -> bool {
@@ -56,7 +56,7 @@ impl Ir {
 /// bytecode Ir.
 ///
 #[derive(Debug, Clone)]
-pub(super) enum BytecodecIr {
+pub(super) enum BytecodeInst {
     Nil(BcReg),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
@@ -249,7 +249,7 @@ pub(super) enum BytecodecIr {
     LoopEnd,
 }
 
-impl BytecodecIr {
+impl BytecodeInst {
     pub fn is_terminal(&self) -> bool {
         match self {
             // Br or Ret or MethodRet or Break or Raise or OptCase
@@ -311,53 +311,6 @@ impl FnInitInfo {
 
     pub(super) fn has_rest_param(&self) -> bool {
         (self.info & 0b1) != 0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(transparent)]
-pub(crate) struct Bc2(pub u64);
-
-impl Bc2 {
-    pub(crate) fn from(op: u64) -> Self {
-        Self(op)
-    }
-
-    pub(crate) fn class_and_version(class_id: Option<ClassId>, version: u32) -> Self {
-        let id: u32 = if let Some(class) = class_id {
-            class.into()
-        } else {
-            0
-        };
-        Self(((version as u64) << 32) + (id as u64))
-    }
-
-    pub(crate) fn class2(class_id1: Option<ClassId>, class_id2: Option<ClassId>) -> Self {
-        let id1: u32 = if let Some(class) = class_id1 {
-            class.into()
-        } else {
-            0
-        };
-        let id2: u32 = if let Some(class) = class_id2 {
-            class.into()
-        } else {
-            0
-        };
-        Self(((id2 as u64) << 32) + (id1 as u64))
-    }
-
-    pub(crate) fn ident2(id1: IdentId, id2: IdentId) -> Self {
-        Self(((id2.get() as u64) << 32) + (id1.get() as u64))
-    }
-
-    pub(crate) fn get_value(&self) -> Value {
-        Value::from(self.0)
-    }
-
-    pub(crate) fn get_ident2(&self) -> (IdentId, IdentId) {
-        let id1 = IdentId::from(self.0 as u32);
-        let id2 = IdentId::from((self.0 >> 32) as u32);
-        (id1, id2)
     }
 }
 

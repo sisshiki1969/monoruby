@@ -81,7 +81,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-fn object_nil(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, _pc: BcPc) {
+fn object_nil(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, _pc: BytecodePtr) {
     //bb.link_stack(dst);
     ir.inline(|gen, _| {
         monoasm! { &mut gen.jit,

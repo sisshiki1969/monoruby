@@ -59,7 +59,7 @@ fn fiber_yield_inline(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BcPc,
+    pc: BytecodePtr,
 ) {
     let callsite = &store[callid];
     let CallSiteInfo {

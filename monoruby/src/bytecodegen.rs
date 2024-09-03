@@ -77,7 +77,7 @@ fn bytecode_compile_func(
     } in for_param_info
     {
         gen.emit(
-            BytecodecIr::StoreDynVar {
+            BytecodeInst::StoreDynVar {
                 dst: (dst_reg).into(),
                 outer: dst_outer,
                 src: BcLocal(src_reg as u16).into(),
@@ -113,11 +113,11 @@ fn bytecode_compile_func(
     let mut v = Visitor { redo_flag: false };
     v.visit(&ast);
     if v.redo_flag {
-        gen.emit(BytecodecIr::LoopStart, loc);
+        gen.emit(BytecodeInst::LoopStart, loc);
     }
     gen.gen_expr(ast, UseMode2::Ret)?;
     if v.redo_flag {
-        gen.emit(BytecodecIr::LoopEnd, loc);
+        gen.emit(BytecodeInst::LoopEnd, loc);
     }
     gen.replace_init(info);
     gen.into_bytecode(store, loc)?;
@@ -499,7 +499,7 @@ struct BytecodeGen {
     /// ID of the mother method.
     mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
-    ir: Vec<(BytecodecIr, Loc)>,
+    ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
     sp: Vec<BcTemp>,
     /// destination labels.
@@ -830,7 +830,7 @@ impl BytecodeGen {
         self.labels[label.0] = Some(pos);
     }
 
-    fn emit(&mut self, op: BytecodecIr, loc: Loc) {
+    fn emit(&mut self, op: BytecodeInst, loc: Loc) {
         self.ir.push((op, loc));
         self.sp.push(BcTemp(self.temp));
     }
@@ -844,25 +844,25 @@ impl BytecodeGen {
             Some(ret) => ret,
             None => self.pop().into(),
         };
-        self.emit(BytecodecIr::Ret(ret), Loc::default());
+        self.emit(BytecodeInst::Ret(ret), Loc::default());
         Ok(())
     }
 
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
-            self.emit(BytecodecIr::Mov(dst, src), Loc::default());
+            self.emit(BytecodeInst::Mov(dst, src), Loc::default());
         }
     }
 
     fn emit_br(&mut self, jmp_pos: Label) {
         self.add_merge(jmp_pos);
-        self.emit(BytecodecIr::Br(jmp_pos), Loc::default());
+        self.emit(BytecodeInst::Br(jmp_pos), Loc::default());
     }
 
     fn emit_condbr(&mut self, cond: BcReg, jmp_pos: Label, jmp_if_true: bool, optimizable: bool) {
         self.add_merge(jmp_pos);
         self.emit(
-            BytecodecIr::CondBr(
+            BytecodeInst::CondBr(
                 cond,
                 jmp_pos,
                 optimizable,
@@ -878,26 +878,26 @@ impl BytecodeGen {
 
     fn emit_nilbr(&mut self, cond: BcReg, jmp_pos: Label) {
         self.add_merge(jmp_pos);
-        self.emit(BytecodecIr::NilBr(cond, jmp_pos), Loc::default());
+        self.emit(BytecodeInst::NilBr(cond, jmp_pos), Loc::default());
     }
 
     fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
         self.add_merge(else_pos);
-        self.emit(BytecodecIr::CheckLocal(local, else_pos), Loc::default());
+        self.emit(BytecodeInst::CheckLocal(local, else_pos), Loc::default());
     }
 
     fn emit_nil(&mut self, dst: BcReg) {
-        self.emit(BytecodecIr::Nil(dst), Loc::default());
+        self.emit(BytecodeInst::Nil(dst), Loc::default());
     }
 
     fn emit_literal(&mut self, dst: BcReg, v: Value) {
         self.literals.push(v);
-        self.emit(BytecodecIr::Literal(dst, v), Loc::default());
+        self.emit(BytecodeInst::Literal(dst, v), Loc::default());
     }
 
     fn emit_integer(&mut self, dst: BcReg, i: i64) {
         if let Ok(i) = i32::try_from(i) {
-            self.emit(BytecodecIr::Integer(dst, i), Loc::default());
+            self.emit(BytecodeInst::Integer(dst, i), Loc::default());
         } else {
             self.emit_literal(dst, Value::integer(i));
         }
@@ -916,7 +916,7 @@ impl BytecodeGen {
     }
 
     fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
-        self.emit(BytecodecIr::Symbol(dst, sym), Loc::default());
+        self.emit(BytecodeInst::Symbol(dst, sym), Loc::default());
     }
 
     fn emit_string(&mut self, dst: BcReg, s: String) {
@@ -939,12 +939,12 @@ impl BytecodeGen {
             BcReg::Self_,
             Some(dst),
         );
-        self.emit(BytecodecIr::Array(dst, Box::new(calsite)), loc);
+        self.emit(BytecodeInst::Array(dst, Box::new(calsite)), loc);
     }
 
     fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {
         self.emit(
-            BytecodecIr::Hash {
+            BytecodeInst::Hash {
                 ret,
                 args,
                 len: len as u16,
@@ -969,7 +969,7 @@ impl BytecodeGen {
             .collect();
         let dst = self.get_reg(dst);
         self.emit(
-            BytecodecIr::LoadConst {
+            BytecodeInst::LoadConst {
                 dst,
                 base,
                 toplevel,
@@ -996,7 +996,7 @@ impl BytecodeGen {
             .collect();
         let dst = self.get_reg(dst);
         self.emit(
-            BytecodecIr::CheckConst {
+            BytecodeInst::CheckConst {
                 dst,
                 base,
                 toplevel,
@@ -1009,36 +1009,36 @@ impl BytecodeGen {
 
     fn emit_load_ivar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let reg = self.get_reg(dst);
-        self.emit(BytecodecIr::LoadIvar(reg, name), loc);
+        self.emit(BytecodeInst::LoadIvar(reg, name), loc);
     }
 
     fn emit_load_gvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
-        self.emit(BytecodecIr::LoadGvar { dst: ret, name }, loc);
+        self.emit(BytecodeInst::LoadGvar { dst: ret, name }, loc);
     }
 
     fn emit_load_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
-        self.emit(BytecodecIr::LoadCvar { dst: ret, name }, loc);
+        self.emit(BytecodeInst::LoadCvar { dst: ret, name }, loc);
     }
 
     fn emit_check_cvar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let ret = self.get_reg(dst);
-        self.emit(BytecodecIr::CheckCvar { dst: ret, name }, loc);
+        self.emit(BytecodeInst::CheckCvar { dst: ret, name }, loc);
     }
 
     fn emit_load_svar(&mut self, dst: Option<BcReg>, id: u32, loc: Loc) {
         let ret = self.get_reg(dst);
-        self.emit(BytecodecIr::LoadSvar { ret, id }, loc);
+        self.emit(BytecodeInst::LoadSvar { ret, id }, loc);
     }
 
     fn emit_pos(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
             let rhs = rhs.into();
-            self.emit(BytecodecIr::Pos { ret, src: rhs }, loc);
+            self.emit(BytecodeInst::Pos { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodecIr::Pos { ret, src: ret }, loc);
+            self.emit(BytecodeInst::Pos { ret, src: ret }, loc);
         }
         Ok(())
     }
@@ -1046,10 +1046,10 @@ impl BytecodeGen {
     fn emit_neg(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
             let rhs = rhs.into();
-            self.emit(BytecodecIr::Neg { ret, src: rhs }, loc);
+            self.emit(BytecodeInst::Neg { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodecIr::Neg { ret, src: ret }, loc);
+            self.emit(BytecodeInst::Neg { ret, src: ret }, loc);
         }
         Ok(())
     }
@@ -1057,10 +1057,10 @@ impl BytecodeGen {
     fn emit_not(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
             let rhs = rhs.into();
-            self.emit(BytecodecIr::Not { ret, src: rhs }, loc);
+            self.emit(BytecodeInst::Not { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodecIr::Not { ret, src: ret }, loc);
+            self.emit(BytecodeInst::Not { ret, src: ret }, loc);
         }
         Ok(())
     }
@@ -1068,10 +1068,10 @@ impl BytecodeGen {
     fn emit_bitnot(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
             let rhs = rhs.into();
-            self.emit(BytecodecIr::BitNot { ret, src: rhs }, loc);
+            self.emit(BytecodeInst::BitNot { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
-            self.emit(BytecodecIr::BitNot { ret, src: ret }, loc);
+            self.emit(BytecodeInst::BitNot { ret, src: ret }, loc);
         }
         Ok(())
     }
@@ -1259,7 +1259,7 @@ impl BytecodeGen {
             } => {
                 self.set_temp(old_temp);
                 self.emit(
-                    BytecodecIr::StoreConst {
+                    BytecodeInst::StoreConst {
                         src,
                         toplevel,
                         base: parent,
@@ -1271,23 +1271,23 @@ impl BytecodeGen {
             }
             LvalueKind::InstanceVar(name) => {
                 self.set_temp(old_temp);
-                self.emit(BytecodecIr::StoreIvar(src, name), loc);
+                self.emit(BytecodeInst::StoreIvar(src, name), loc);
             }
             LvalueKind::ClassVar(name) => {
                 self.set_temp(old_temp);
-                self.emit(BytecodecIr::StoreCvar { val: src, name }, loc);
+                self.emit(BytecodeInst::StoreCvar { val: src, name }, loc);
             }
             LvalueKind::GlobalVar(name) => {
                 self.set_temp(old_temp);
-                self.emit(BytecodecIr::StoreGvar { val: src, name }, loc);
+                self.emit(BytecodeInst::StoreGvar { val: src, name }, loc);
             }
             LvalueKind::DynamicVar { outer, dst } => {
                 self.set_temp(old_temp);
-                self.emit(BytecodecIr::StoreDynVar { dst, outer, src }, loc);
+                self.emit(BytecodeInst::StoreDynVar { dst, outer, src }, loc);
             }
             LvalueKind::Index { base, index } => {
                 self.set_temp(old_temp);
-                self.emit(BytecodecIr::StoreIndex(src, base, index), loc);
+                self.emit(BytecodeInst::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Index2 { base, index1 } => {
                 let callsite =
@@ -1373,9 +1373,9 @@ impl BytecodeGen {
     fn gen_dummy_init(&mut self, is_block: bool) {
         self.emit(
             if is_block {
-                BytecodecIr::InitBlock(FnInitInfo::default())
+                BytecodeInst::InitBlock(FnInitInfo::default())
             } else {
-                BytecodecIr::InitMethod(FnInitInfo::default())
+                BytecodeInst::InitMethod(FnInitInfo::default())
             },
             Loc::default(),
         );
@@ -1383,7 +1383,7 @@ impl BytecodeGen {
 
     fn gen_expand_array(&mut self, src: usize, dst: usize, len: usize) {
         self.emit(
-            BytecodecIr::ExpandArray(
+            BytecodeInst::ExpandArray(
                 BcLocal(src as u16).into(),
                 BcLocal(dst as u16).into(),
                 len as u16,
@@ -1396,9 +1396,9 @@ impl BytecodeGen {
         let fninfo = FnInitInfo::new(self.total_reg_num(), info);
         self.ir[0] = (
             if info.is_block_style() {
-                BytecodecIr::InitBlock(fninfo)
+                BytecodeInst::InitBlock(fninfo)
             } else {
-                BytecodecIr::InitMethod(fninfo)
+                BytecodeInst::InitMethod(fninfo)
             },
             Loc::default(),
         );

@@ -6,18 +6,18 @@ impl BytecodeGen {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
         if callsite.block_fid.is_some() {
             self.emit(
-                BytecodecIr::MethodCallBlock(Box::new(callsite.clone())),
+                BytecodeInst::MethodCallBlock(Box::new(callsite.clone())),
                 loc,
             )
         } else {
-            self.emit(BytecodecIr::MethodCall(Box::new(callsite.clone())), loc);
+            self.emit(BytecodeInst::MethodCall(Box::new(callsite.clone())), loc);
         };
-        self.emit(BytecodecIr::InlineCache(Box::new(callsite)), loc);
+        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
     }
 
     pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
-        self.emit(BytecodecIr::Yield(Box::new(callsite.clone())), loc);
-        self.emit(BytecodecIr::InlineCache(Box::new(callsite)), loc);
+        self.emit(BytecodeInst::Yield(Box::new(callsite.clone())), loc);
+        self.emit(BytecodeInst::InlineCache(Box::new(callsite)), loc);
     }
 
     pub(super) fn emit_binary_op(

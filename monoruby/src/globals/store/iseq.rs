@@ -3,17 +3,17 @@ use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
 
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {
-    range: std::ops::Range<BcPc>, // range of capturing exception
-    rescue_pc: Option<BcPc>,      // rescue destination pc
-    ensure_pc: Option<BcPc>,      // ensure destination pc
+    range: std::ops::Range<BytecodePtr>, // range of capturing exception
+    rescue_pc: Option<BytecodePtr>,      // rescue destination pc
+    ensure_pc: Option<BytecodePtr>,      // ensure destination pc
     error_slot: Option<SlotId>,   // a slot where an error object is assigned
 }
 
 impl ExceptionMapEntry {
     fn new(
-        range: std::ops::Range<BcPc>,
-        rescue_pc: Option<BcPc>,
-        ensure_pc: Option<BcPc>,
+        range: std::ops::Range<BytecodePtr>,
+        rescue_pc: Option<BytecodePtr>,
+        ensure_pc: Option<BytecodePtr>,
         error_slot: Option<SlotId>,
     ) -> Self {
         ExceptionMapEntry {
@@ -45,7 +45,7 @@ pub struct ISeqInfo {
     ///
     /// Bytecode.
     ///
-    bytecode: Option<Pin<Box<[Bc]>>>,
+    bytecode: Option<Pin<Box<[Bytecode]>>>,
     ///
     /// Location of the function in a source code.
     ///
@@ -191,7 +191,7 @@ impl ISeqInfo {
     ///
     /// Set bytecode to the *ISeqInfo*.
     ///
-    pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
+    pub(crate) fn set_bytecode(&mut self, bc: Vec<Bytecode>) {
         self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
@@ -289,28 +289,28 @@ impl ISeqInfo {
     ///
     /// Get a reference of bytecode.
     ///
-    pub(crate) fn bytecode(&self) -> &[Bc] {
+    pub(crate) fn bytecode(&self) -> &[Bytecode] {
         self.bytecode.as_ref().unwrap()
     }
 
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub(crate) fn get_pc(&self, idx: BcIndex) -> BcPc {
-        BcPc::from(&self.bytecode()[idx.0 as usize])
+    pub(crate) fn get_pc(&self, idx: BcIndex) -> BytecodePtr {
+        BytecodePtr::from_bc(&self.bytecode()[idx.0 as usize])
     }
 
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub(crate) fn get_top_pc(&self) -> BcPc {
-        BcPc::from(&self.bytecode()[0])
+    pub(crate) fn get_top_pc(&self) -> BytecodePtr {
+        BytecodePtr::from_bc(&self.bytecode()[0])
     }
 
     ///
     /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
     ///
-    pub(crate) fn get_pc_index(&self, pc: Option<BcPc>) -> BcIndex {
+    pub(crate) fn get_pc_index(&self, pc: Option<BytecodePtr>) -> BcIndex {
         let i = if let Some(pos) = pc {
             pos - self.get_top_pc()
         } else {
@@ -337,8 +337,8 @@ impl ISeqInfo {
     ///
     pub(crate) fn get_exception_dest(
         &self,
-        pc: BcPc,
-    ) -> Option<(Option<BcPc>, Option<BcPc>, Option<SlotId>)> {
+        pc: BytecodePtr,
+    ) -> Option<(Option<BytecodePtr>, Option<BytecodePtr>, Option<SlotId>)> {
         self.exception_map
             .iter()
             .filter_map(|entry| {
@@ -353,9 +353,9 @@ impl ISeqInfo {
 
     pub(crate) fn exception_push(
         &mut self,
-        range: std::ops::Range<BcPc>,
-        rescue: Option<BcPc>,
-        ensure: Option<BcPc>,
+        range: std::ops::Range<BytecodePtr>,
+        rescue: Option<BytecodePtr>,
+        ensure: Option<BytecodePtr>,
         err_reg: Option<SlotId>,
     ) {
         self.exception_map

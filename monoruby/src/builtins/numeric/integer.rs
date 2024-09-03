@@ -247,7 +247,7 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::float(f))
 }
 
-fn integer_tof(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn integer_tof(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let CallSiteInfo { recv, dst, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     if !recv.is_self() {
@@ -402,7 +402,7 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let CallSiteInfo {
         recv, dst, args, ..
     } = store[callid];
@@ -428,7 +428,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-fn integer_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BcPc) {
+fn integer_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
     let CallSiteInfo {
         recv, dst, args, ..
     } = store[callid];

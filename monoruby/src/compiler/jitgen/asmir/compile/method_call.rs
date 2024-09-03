@@ -55,7 +55,7 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         self_class: ClassId,
-        pc: BcPc,
+        pc: BytecodePtr,
         using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
@@ -83,7 +83,7 @@ impl Codegen {
             );
         }
         monoasm! { &mut self.jit,
-            movq r13, (pc.u64());
+            movq r13, (pc.as_ptr());
             // check inline cache
             cmpl [r13 + (BC_OFFSET_CACHED_FUNCID)], 0;
             jeq  slow_path;
@@ -303,7 +303,7 @@ impl Codegen {
                 None => {
                     // set pc.
                     monoasm! { &mut self.jit,
-                        movq r13, (pc.unwrap().u64());
+                        movq r13, (pc.unwrap().as_ptr());
                     }
                     self.call_codeptr(codeptr);
                 }
@@ -374,7 +374,6 @@ impl Codegen {
         deopt_lazy: AsmEvict,
         deopt: DestLabel,
     ) {
-        let callsite = &store[callid];
         self.xmm_save(using_xmm);
         self.get_proc_data();
         self.handle_error(error);
@@ -405,7 +404,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        let return_addr = self.generic_call(callid, callsite.args, error);
+        let return_addr = self.generic_call(callid, store[callid].args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
         self.set_deopt_with_return_addr(return_addr, deopt_lazy, deopt);

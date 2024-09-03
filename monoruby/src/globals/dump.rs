@@ -101,7 +101,7 @@ impl Globals {
                     },
                 )
                 .for_each(|bc_pos| {
-                    let pc = BcPc::from(&func.bytecode()[bc_pos.to_usize()]);
+                    let pc = BytecodePtr::from(&func.bytecode()[bc_pos.to_usize()]);
                     eprintln!(
                         "{bc_pos} {}",
                         match self.format(pc, bc_pos.to_usize()) {
@@ -129,7 +129,7 @@ impl Globals {
             let mut v: Vec<_> = self.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, index), count) in v.into_iter().take(20) {
-                let bc = BcPc::from(&self.store[*func_id].as_ruby_func().bytecode()[*index]);
+                let bc = BytecodePtr::from(&self.store[*func_id].as_ruby_func().bytecode()[*index]);
                 let fmt = if let Some(fmt) = self.format(bc, *index) {
                     fmt
                 } else {
@@ -198,7 +198,7 @@ impl Globals {
     }
 
     #[cfg(feature = "dump-bc")]
-    pub(super) fn format(&self, pc: BcPc, i: usize) -> Option<String> {
+    pub(super) fn format(&self, pc: BytecodePtr, i: usize) -> Option<String> {
         use crate::jitgen::trace_ir::*;
 
         fn optstr(opt: bool) -> &'static str {
@@ -685,7 +685,7 @@ impl Globals {
 pub(crate) extern "C" fn log_deoptimize(
     vm: &mut Executor,
     globals: &mut Globals,
-    pc: BcPc,
+    pc: BytecodePtr,
     #[cfg(feature = "deopt")] v: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;

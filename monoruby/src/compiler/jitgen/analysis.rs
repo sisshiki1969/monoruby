@@ -184,17 +184,17 @@ impl JitContext {
         let mut info = SlotInfo::new(func.total_reg_num());
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
-            let pc = BcPc::from(pc);
+            let pc = BytecodePtr::from_bc(pc);
             match pc.trace_ir(store) {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
+                TraceIr::LoopStart(_) => {}
+                TraceIr::LoopEnd => {}
                 TraceIr::EnsureEnd => {
                     info.unlink_locals(func);
                 }
-                TraceIr::LoopStart(_) => {}
-                TraceIr::LoopEnd => {}
                 TraceIr::DefinedYield { dst }
                 | TraceIr::DefinedConst { dst, .. }
                 | TraceIr::DefinedGvar { dst, .. }
@@ -206,8 +206,8 @@ impl JitContext {
                     info.def(dst);
                 }
                 TraceIr::DefinedMethod { dst, recv, .. } => {
-                    info.def(dst);
                     info.r#use(recv);
+                    info.def(dst);
                 }
                 TraceIr::Literal(dst, val) => {
                     if val.class() == FLOAT_CLASS {
@@ -226,16 +226,16 @@ impl JitContext {
                     info.def(dst);
                 }
                 TraceIr::Index { dst, base, idx } => {
-                    info.def(dst);
                     info.r#use(base);
                     info.r#use(idx);
+                    info.def(dst);
                 }
                 TraceIr::Range {
                     dst, start, end, ..
                 } => {
-                    info.def(dst);
                     info.r#use(start);
                     info.r#use(end);
+                    info.def(dst);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     info.r#use(src);

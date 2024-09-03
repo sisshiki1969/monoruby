@@ -10,7 +10,7 @@ impl JitContext {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         if let Some(base) = base {
             self.ir.write_back_slots(bb, &[base]);
@@ -39,7 +39,7 @@ impl JitContext {
         dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         self.ir.write_back_slots(bb, &[base]);
         self.ir.unlink(bb, dst);

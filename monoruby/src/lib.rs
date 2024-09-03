@@ -12,6 +12,7 @@
 
 mod alloc;
 mod builtins;
+mod bytecode;
 mod bytecodegen;
 mod compiler;
 mod executor;
@@ -21,6 +22,7 @@ mod id_table;
 mod tests;
 mod value;
 
+pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
 pub use executor::Executor;
 pub use globals::OBJECT_CLASS;

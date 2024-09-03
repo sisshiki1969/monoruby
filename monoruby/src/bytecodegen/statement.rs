@@ -41,7 +41,7 @@ impl BytecodeGen {
                 let iter = self.push();
                 let end = self.push_expr(end)?.into();
                 self.emit(
-                    BytecodecIr::Range {
+                    BytecodeInst::Range {
                         ret: iter.into(),
                         start: counter.into(),
                         end,
@@ -54,10 +54,10 @@ impl BytecodeGen {
                 self.push_expr(end)?.into()
             };
             self.apply_label(loop_start);
-            self.emit(BytecodecIr::LoopStart, loc);
+            self.emit(BytecodeInst::LoopStart, loc);
             let dst = self.push().into();
             self.emit(
-                BytecodecIr::Cmp(
+                BytecodeInst::Cmp(
                     if exclude_end {
                         CmpKind::Ge
                     } else {
@@ -76,7 +76,7 @@ impl BytecodeGen {
             self.apply_label(next_dest);
 
             self.emit(
-                BytecodecIr::BinOp(
+                BytecodeInst::BinOp(
                     BinOpK::Add,
                     Some(counter.into()),
                     BinopMode::RI(counter.into(), 1),
@@ -90,7 +90,7 @@ impl BytecodeGen {
 
             self.loop_pop();
             self.apply_label(break_dest);
-            self.emit(BytecodecIr::LoopEnd, loc);
+            self.emit(BytecodeInst::LoopEnd, loc);
         } else {
             let use_mode = if use_value {
                 UseMode2::Push
@@ -119,7 +119,7 @@ impl BytecodeGen {
         self.loop_push(loop_exit, loop_start, loop_start, ret);
         let loc = body.loc;
         self.apply_label(loop_start);
-        self.emit(BytecodecIr::LoopStart, loc);
+        self.emit(BytecodeInst::LoopStart, loc);
         self.gen_opt_condbr(!cond_op, cond, succ_pos)?;
         self.gen_expr(body, UseMode2::NotUse)?;
         self.emit_br(loop_start);
@@ -127,7 +127,7 @@ impl BytecodeGen {
 
         self.loop_pop();
         self.apply_label(loop_exit);
-        self.emit(BytecodecIr::LoopEnd, loc);
+        self.emit(BytecodeInst::LoopEnd, loc);
 
         Ok(())
     }
@@ -150,7 +150,7 @@ impl BytecodeGen {
         self.loop_push(break_dest, next_dest, loop_start, ret);
         let loc = body.loc;
         self.apply_label(loop_start);
-        self.emit(BytecodecIr::LoopStart, loc);
+        self.emit(BytecodeInst::LoopStart, loc);
         self.gen_expr(body, UseMode2::NotUse)?;
         self.apply_label(next_dest);
         self.gen_opt_condbr(cond_op, cond, loop_start)?;
@@ -160,7 +160,7 @@ impl BytecodeGen {
         }
         self.loop_pop();
         self.apply_label(break_dest);
-        self.emit(BytecodecIr::LoopEnd, loc);
+        self.emit(BytecodeInst::LoopEnd, loc);
 
         Ok(())
     }
@@ -223,7 +223,7 @@ impl BytecodeGen {
                     bodies.push((then_pos, body));
                 }
                 self.emit(
-                    BytecodecIr::OptCase {
+                    BytecodeInst::OptCase {
                         reg,
                         min,
                         max,
@@ -379,7 +379,7 @@ impl BytecodeGen {
             if let Some(box ensure) = &ensure {
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
             }
-            self.emit(BytecodecIr::Raise(err_reg), Loc::default());
+            self.emit(BytecodeInst::Raise(err_reg), Loc::default());
 
             self.exception_table.push(ExceptionEntry {
                 range,
@@ -404,7 +404,7 @@ impl BytecodeGen {
                 let rescue_pos = self.new_label();
                 self.apply_label(rescue_pos);
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
-                self.emit(BytecodecIr::Raise(err_reg), Loc::default());
+                self.emit(BytecodeInst::Raise(err_reg), Loc::default());
                 self.pop();
 
                 self.exception_table.push(ExceptionEntry {
@@ -430,7 +430,7 @@ impl BytecodeGen {
         self.ensure.pop().unwrap();
         if let Some(box ensure) = ensure {
             self.gen_expr(ensure, UseMode2::NotUse)?;
-            self.emit(BytecodecIr::EnsureEnd, Loc::default());
+            self.emit(BytecodeInst::EnsureEnd, Loc::default());
             if use_mode.is_ret() {
                 self.emit_ret(None)?;
             }

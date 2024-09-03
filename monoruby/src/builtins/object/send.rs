@@ -22,7 +22,7 @@ pub(crate) fn object_send(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BcPc,
+    pc: BytecodePtr,
 ) {
     object_send_inner(ir, store, bb, callid, pc, true)
 }
@@ -32,7 +32,7 @@ pub(crate) fn object_send_splat(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BcPc,
+    pc: BytecodePtr,
 ) {
     object_send_inner(ir, store, bb, callid, pc, false)
 }
@@ -42,7 +42,7 @@ fn object_send_inner(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BcPc,
+    pc: BytecodePtr,
     no_splat: bool,
 ) {
     let callsite = &store[callid];

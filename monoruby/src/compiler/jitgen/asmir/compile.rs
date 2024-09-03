@@ -212,7 +212,7 @@ impl Codegen {
             }
             AsmInst::MethodRet(pc) => {
                 monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).u64());
+                    movq r13, ((pc + 1).as_ptr());
                 };
                 self.method_return();
             }
@@ -478,7 +478,7 @@ impl Codegen {
                 //self.handle_error(labels[error]);
             }
 
-            AsmInst::NewArray(callid, using_xmm) => {
+            AsmInst::NewArray { callid, using_xmm } => {
                 self.new_array(callid, using_xmm);
             }
             AsmInst::NewLambda(func_id, using_xmm) => {
@@ -711,7 +711,7 @@ impl Codegen {
     ///
     fn guard_class_version(
         &mut self,
-        pc: BcPc,
+        pc: BytecodePtr,
         using_xmm: UsingXmm,
         deopt: DestLabel,
         error: DestLabel,

@@ -26,10 +26,10 @@ pub mod trace_ir;
 // Just-in-time compiler module.
 //
 
-struct ContinuationInfo(BBContext, MergeContext, BcPc);
+struct ContinuationInfo(BBContext, MergeContext, BytecodePtr);
 
 impl ContinuationInfo {
-    fn new(bb: BBContext, ctx: MergeContext, pc: BcPc) -> Self {
+    fn new(bb: BBContext, ctx: MergeContext, pc: BytecodePtr) -> Self {
         Self(bb, ctx, pc)
     }
 }
@@ -308,7 +308,7 @@ impl JitContext {
         &mut self,
         store: &Store,
         func: &ISeqInfo,
-        position: Option<BcPc>,
+        position: Option<BytecodePtr>,
         bb_begin: BcIndex,
         bb_end: BcIndex,
     ) {
@@ -355,7 +355,7 @@ impl JitContext {
         store: &Store,
         func: &ISeqInfo,
         bb: &mut BBContext,
-        position: Option<BcPc>,
+        position: Option<BytecodePtr>,
         bb_begin: BcIndex,
         bb_end: BcIndex,
     ) -> bool {
@@ -733,8 +733,10 @@ impl JitContext {
                 object_send_splat(&mut self.ir, store, bb, callid, pc);
             }
             TraceIr::Yield { callid } => {
-                self.ir.write_back_callargs(bb, &store[callid]);
-                self.ir.unlink(bb, store[callid].dst);
+                let callinfo = &store[callid];
+                let dst = callinfo.dst;
+                self.ir.write_back_callargs(bb, &callinfo);
+                self.ir.unlink(bb, dst);
                 self.ir.writeback_acc(bb);
                 let using_xmm = bb.get_using_xmm();
                 let error = self.ir.new_error(bb, pc);
@@ -745,7 +747,7 @@ impl JitContext {
                     error,
                     evict,
                 });
-                self.ir.rax2acc(bb, store[callid].dst);
+                self.ir.rax2acc(bb, dst);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -1110,7 +1112,7 @@ impl Codegen {
         store: &Store,
         func_id: FuncId,
         self_value: Value,
-        position: Option<BcPc>,
+        position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
         #[cfg(feature = "jit-log")]
@@ -1301,7 +1303,7 @@ impl Codegen {
         );
     }
 
-    fn recompile_and_deopt(&mut self, position: Option<BcPc>, deopt: DestLabel) {
+    fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: DestLabel) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
         let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
@@ -1324,7 +1326,7 @@ impl Codegen {
         );
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
-                movq rdx, (pc.u64());
+                movq rdx, (pc.as_ptr());
                 movq rax, (exec_jit_partial_compile);
                 call rax;
             );
@@ -1345,7 +1347,7 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn gen_handle_error(&mut self, pc: BcPc, wb: WriteBack, entry: DestLabel) {
+    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
         let raise = self.entry_raise;
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
@@ -1353,7 +1355,7 @@ impl Codegen {
         );
         self.gen_write_back(&wb);
         monoasm!( &mut self.jit,
-            movq r13, ((pc + 1).u64());
+            movq r13, ((pc + 1).as_ptr());
             jmp  raise;
         );
         self.jit.select_page(0);
@@ -1433,7 +1435,7 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    pub(crate) fn gen_deopt(&mut self, pc: BcPc, bb: &BBContext) -> DestLabel {
+    pub(crate) fn gen_deopt(&mut self, pc: BytecodePtr, bb: &BBContext) -> DestLabel {
         let entry = self.jit.label();
         let wb = bb.get_write_back();
         self.gen_deopt_with_label(pc, &wb, entry);
@@ -1446,14 +1448,14 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_deopt_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+    fn gen_deopt_with_label(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) {
         self.side_exit_with_label(pc, wb, entry, false)
     }
 
     ///
     /// Get *DestLabel* for fallback to interpreter by immediate eviction.
     ///
-    fn gen_evict_with_label(&mut self, pc: BcPc, wb: &WriteBack, entry: DestLabel) {
+    fn gen_evict_with_label(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) {
         self.side_exit_with_label(pc, wb, entry, true)
     }
 
@@ -1465,7 +1467,7 @@ impl Codegen {
     ///
     fn side_exit_with_label(
         &mut self,
-        pc: BcPc,
+        pc: BytecodePtr,
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
@@ -1475,7 +1477,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         self.gen_write_back(wb);
         monoasm!( &mut self.jit,
-            movq r13, (pc.u64());
+            movq r13, (pc.as_ptr());
         );
 
         #[cfg(any(feature = "deopt", feature = "profile"))]

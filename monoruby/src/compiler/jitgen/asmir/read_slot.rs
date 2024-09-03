@@ -227,7 +227,7 @@ impl AsmIr {
         bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        pc: BcPc,
+        pc: BytecodePtr,
         deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {

@@ -7,7 +7,7 @@ impl AsmIr {
         bb: &mut BBContext,
         fid: FuncId,
         callid: CallSiteId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) -> Option<()> {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
@@ -56,7 +56,7 @@ impl AsmIr {
         bb: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo { args, len, dst, .. } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.

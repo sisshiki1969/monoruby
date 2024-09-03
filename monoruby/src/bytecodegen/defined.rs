@@ -28,7 +28,7 @@ impl BytecodeGen {
                             self.apply_label(body_start);
                             let recv = self.gen_temp_expr(b)?;
                             self.apply_label(body_end);
-                            self.emit(BytecodecIr::DefinedMethod { ret, recv, name }, node.loc);
+                            self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
                             self.exception_table.push(ExceptionEntry {
                                 range: body_start..body_end,
                                 rescue: Some(nil_label),
@@ -83,7 +83,7 @@ impl BytecodeGen {
                         },
                         _ => unimplemented!(),
                     };
-                    self.emit(BytecodecIr::DefinedMethod { ret, recv, name }, node.loc);
+                    self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
                     self.exception_table.push(ExceptionEntry {
                         range: body_start..body_end,
                         rescue: Some(nil_label),
@@ -98,7 +98,7 @@ impl BytecodeGen {
             NodeKind::Ident(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit(
-                    BytecodecIr::DefinedMethod {
+                    BytecodeInst::DefinedMethod {
                         ret,
                         recv: BcReg::Self_,
                         name,
@@ -111,7 +111,7 @@ impl BytecodeGen {
             } => {
                 let name = IdentId::get_id_from_string(method);
                 self.emit(
-                    BytecodecIr::DefinedMethod {
+                    BytecodeInst::DefinedMethod {
                         ret,
                         recv: BcReg::Self_,
                         name,
@@ -135,7 +135,7 @@ impl BytecodeGen {
                     self.apply_label(body_start);
                     let recv = self.gen_temp_expr(r)?;
                     self.apply_label(body_end);
-                    self.emit(BytecodecIr::DefinedMethod { ret, recv, name }, node.loc);
+                    self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
                     self.exception_table.push(ExceptionEntry {
                         range: body_start..body_end,
                         rescue: Some(nil_label),
@@ -160,7 +160,7 @@ impl BytecodeGen {
                     let recv = self.gen_temp_expr(b)?;
                     self.apply_label(body_end);
                     self.emit(
-                        BytecodecIr::DefinedMethod {
+                        BytecodeInst::DefinedMethod {
                             ret,
                             recv,
                             name: IdentId::_INDEX,
@@ -181,7 +181,7 @@ impl BytecodeGen {
                 }
             }
             NodeKind::Yield(_) => {
-                self.emit(BytecodecIr::DefinedYield { ret }, node.loc);
+                self.emit(BytecodeInst::DefinedYield { ret }, node.loc);
             }
             NodeKind::Const {
                 toplevel,
@@ -195,7 +195,7 @@ impl BytecodeGen {
                     .map(IdentId::get_id_from_string)
                     .collect();
                 self.emit(
-                    BytecodecIr::DefinedConst {
+                    BytecodeInst::DefinedConst {
                         ret,
                         toplevel,
                         prefix,
@@ -207,11 +207,11 @@ impl BytecodeGen {
             NodeKind::LocalVar(..) => {}
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_id_from_string(name);
-                self.emit(BytecodecIr::DefinedIvar { ret, name }, node.loc);
+                self.emit(BytecodeInst::DefinedIvar { ret, name }, node.loc);
             }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id_from_string(name);
-                self.emit(BytecodecIr::DefinedGvar { ret, name }, node.loc);
+                self.emit(BytecodeInst::DefinedGvar { ret, name }, node.loc);
             }
             NodeKind::SpecialVar(..) => {}
             NodeKind::ClassVar(..) | NodeKind::Super(_) | NodeKind::Lambda(_) => {

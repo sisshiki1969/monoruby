@@ -44,7 +44,7 @@ pub(crate) struct FuncData {
     /// metadata of this function.
     meta: Meta,
     /// the address of program counter
-    pc: Option<BcPc>,
+    pc: Option<BytecodePtr>,
     ofs: u16,
     min: u16,
     max: u16,
@@ -52,11 +52,11 @@ pub(crate) struct FuncData {
 }
 
 impl FuncData {
-    pub fn pc(&self) -> Option<BcPc> {
+    pub fn pc(&self) -> Option<BytecodePtr> {
         self.pc
     }
 
-    pub(super) fn set_pc(&mut self, pc: BcPc) {
+    pub(super) fn set_pc(&mut self, pc: BytecodePtr) {
         self.pc = Some(pc);
     }
 
@@ -274,7 +274,7 @@ mod test {
         assert_eq!(true, meta.is_class_def());
         assert_eq!(8, std::mem::size_of::<i64>());
         assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());
-        assert_eq!(8, std::mem::size_of::<BcPc>());
+        assert_eq!(8, std::mem::size_of::<BytecodePtr>());
         assert_eq!(8, std::mem::size_of::<Meta>());
     }
 }
@@ -849,7 +849,7 @@ impl FuncInfo {
     ///
     /// Get program counter (BcPc) of this function.
     ///
-    pub(crate) fn pc(&self) -> BcPc {
+    pub(crate) fn pc(&self) -> BytecodePtr {
         self.data.pc().unwrap()
     }
 
@@ -924,7 +924,7 @@ impl FuncInfo {
     ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
-    pub(super) fn set_pc_regnum(&mut self, pc: BcPc, reg_num: u16) {
+    pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtr, reg_num: u16) {
         self.data.set_pc(pc);
         self.data.set_reg_num(reg_num);
     }
@@ -953,7 +953,7 @@ impl FuncInfo {
         &self.data
     }
 
-    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BcPc>) {
+    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BytecodePtr>) {
         let meta = self.data.meta();
         let codeptr = self.data.codeptr().unwrap();
         let pc = self.data.pc();
@@ -1013,7 +1013,7 @@ impl FuncInfo {
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
-            let pc = BcPc::from(pc);
+            let pc = BytecodePtr::from(pc);
             if let Some(fmt) = globals.format(pc, i) {
                 eprint!(
                     "{}:{:05} [{:02}] ",

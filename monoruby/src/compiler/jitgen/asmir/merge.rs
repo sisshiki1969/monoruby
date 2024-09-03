@@ -147,7 +147,7 @@ impl JitContext {
         target_bb: &MergeContext,
         entries: Vec<BranchEntry>,
         cur_label: DestLabel,
-        pc: BcPc,
+        pc: BytecodePtr,
         _bb_pos: BcIndex,
         unused: &[SlotId],
     ) {
@@ -191,7 +191,7 @@ impl AsmIr {
         &mut self,
         mut bb: BBContext,
         target: &MergeContext,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         #[cfg(feature = "jit-debug")]
         {

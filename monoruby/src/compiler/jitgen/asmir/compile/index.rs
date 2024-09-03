@@ -9,14 +9,14 @@ impl Codegen {
     /// ### out
     /// - rax: result Option<Value>
     ///
-    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BcPc) {
+    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BytecodePtr) {
         self.xmm_save(using);
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             movq rdx, [r14 - (conv(base))]; // base: Value
             movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, (pc.u64() + 8);
+            movq r8, (pc.as_ptr() as usize + 8);
             movq rax, (runtime::get_index);
             call rax;
         }
@@ -81,7 +81,7 @@ impl Codegen {
         base: SlotId,
         idx: SlotId,
         src: SlotId,
-        pc: BcPc,
+        pc: BytecodePtr,
     ) {
         self.xmm_save(using);
         monoasm! { &mut self.jit,
@@ -90,7 +90,7 @@ impl Codegen {
             movq r8, [r14 - (conv(src))];  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq r9, (pc.u64() + 8);
+            movq r9, (pc.as_ptr() as usize + 8);
             movq rax, (runtime::set_index);
             call rax;
         };

@@ -72,7 +72,7 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
-    pub(crate) fn new(incoming: Vec<Vec<BcIndex>>, ir: &Ir) -> Self {
+    pub(crate) fn new(incoming: Vec<Vec<BcIndex>>, ir: &BytecodeIr) -> Self {
         // generate bb_head.
         let bb_head: bitvec::vec::BitVec<_> = incoming
             .iter()
