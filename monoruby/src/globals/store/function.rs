@@ -1013,7 +1013,7 @@ impl FuncInfo {
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
-            let pc = BytecodePtr::from(pc);
+            let pc = BytecodePtr::from_bc(pc);
             if let Some(fmt) = globals.format(pc, i) {
                 eprint!(
                     "{}:{:05} [{:02}] ",

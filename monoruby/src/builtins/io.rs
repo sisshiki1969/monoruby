@@ -153,7 +153,7 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn test() {
+    fn io_test() {
         run_test_no_result_check(
             r#"
             $stdout << "a"
@@ -162,13 +162,9 @@ mod test {
             File.open("/dev/null", "w+") << 5
             $stdin.sync
             $stdin.sync = true
-        "#,
-        );
-        run_test(
-            r#"
             [$stdin.isatty, $stdout.isatty, $stderr.isatty]
         "#,
-        )
+        );
     }
 
     #[test]
