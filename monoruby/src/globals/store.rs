@@ -55,6 +55,12 @@ impl ClassInfoTable {
     }
 }
 
+pub struct InlineFuncInfo {
+    pub inline_gen: Box<InlineGen>,
+    pub inline_analysis: InlineAnalysis,
+    pub name: String,
+}
+
 pub struct Store {
     /// function info.
     pub functions: function::Funcs,
@@ -67,7 +73,7 @@ pub struct Store {
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
     /// inline method info.
-    inline_method: Vec<(Box<InlineGen>, InlineAnalysis, String)>,
+    inline_method: Vec<InlineFuncInfo>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -129,6 +135,9 @@ impl alloc::GC<RValue> for Store {
             if let Some(v) = info.cache.1 {
                 v.mark(alloc)
             }
+            if let Some(v) = info.cache.2 {
+                v.mark(alloc)
+            }
         });
         self.classes.table.iter().for_each(|info| info.mark(alloc));
     }
@@ -155,14 +164,15 @@ impl Store {
         name: String,
     ) -> InlineMethodId {
         let id = self.inline_method.len();
-        self.inline_method.push((inline_gen, inline_analysis, name));
+        self.inline_method.push(InlineFuncInfo {
+            inline_gen,
+            inline_analysis,
+            name,
+        });
         InlineMethodId::new(id)
     }
 
-    pub(crate) fn get_inline_info(
-        &self,
-        id: InlineMethodId,
-    ) -> &(Box<InlineGen>, InlineAnalysis, String) {
+    pub(crate) fn get_inline_info(&self, id: InlineMethodId) -> &InlineFuncInfo {
         let id: usize = id.into();
         &self.inline_method[id]
     }

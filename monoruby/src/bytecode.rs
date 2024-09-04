@@ -72,12 +72,12 @@ impl Bytecode {
         }
     }
 
-    pub fn value(&self) -> Option<Value> {
+    /*pub fn value(&self) -> Option<Value> {
         match self.op2.0 {
             0 => None,
             v => Some(Value::from(v)),
         }
-    }
+    }*/
 
     #[cfg(feature = "dump-bc")]
     pub fn into_jit_addr(self) -> u64 {
@@ -495,11 +495,18 @@ impl BytecodePtr {
                 83 => TraceIr::Raise(SlotId::new(op1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1), SlotId::new(op2), op3),
-                126 => TraceIr::UnOp {
-                    kind: UnOpK::Pos,
-                    dst: SlotId::new(op1),
-                    src: SlotId::new(op2),
-                },
+                126 => {
+                    let kind = UnOpK::Pos;
+                    let dst = SlotId::new(op1);
+                    let src = SlotId::new(op2);
+                    if self.is_integer1() {
+                        TraceIr::IUnOp { kind, dst, src }
+                    } else if self.is_float1() {
+                        TraceIr::FUnOp { kind, dst, src }
+                    } else {
+                        TraceIr::UnOp { kind, dst, src }
+                    }
+                }
                 127 => TraceIr::BitNot {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
@@ -508,11 +515,18 @@ impl BytecodePtr {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
                 },
-                129 => TraceIr::UnOp {
-                    kind: UnOpK::Neg,
-                    dst: SlotId::new(op1),
-                    src: SlotId::new(op2),
-                },
+                129 => {
+                    let kind = UnOpK::Neg;
+                    let dst = SlotId::new(op1);
+                    let src = SlotId::new(op2);
+                    if self.is_integer1() {
+                        TraceIr::IUnOp { kind, dst, src }
+                    } else if self.is_float1() {
+                        TraceIr::FUnOp { kind, dst, src }
+                    } else {
+                        TraceIr::UnOp { kind, dst, src }
+                    }
+                }
                 130 => TraceIr::InlineCache,
                 132 => TraceIr::Index {
                     dst: SlotId::new(op1),
@@ -570,7 +584,10 @@ impl BytecodePtr {
                     info: self.u16(2) as usize,
                     stack_offset: op3 as usize,
                 }),
-                171 => TraceIr::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
+                171 => TraceIr::ExpandArray {
+                    src: SlotId::new(op1),
+                    dst: (SlotId::new(op2), op3),
+                },
                 173 => {
                     let (new, old) = self.op2.get_ident2();
                     TraceIr::AliasMethod { new, old }

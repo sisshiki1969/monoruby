@@ -577,21 +577,25 @@ impl JitContext {
                 self.ir.inst.push(AsmInst::Not);
                 self.ir.rax2acc(bb, dst);
             }
+            TraceIr::FUnOp { kind, dst, src } => {
+                let deopt = self.ir.new_deopt(bb, pc);
+                let fsrc = self.ir.fetch_float_assume_float(bb, src, deopt);
+                let dst = self.ir.xmm_write(bb, dst);
+                self.ir.xmm_move(fsrc, dst);
+                self.ir.inst.push(AsmInst::XmmUnOp { kind, dst });
+            }
+            TraceIr::IUnOp { kind, dst, src } => {
+                self.ir.fetch_to_reg(bb, src, GP::Rdi);
+                self.ir.generic_unop(bb, pc, kind.generic_func());
+                self.ir.rax2acc(bb, dst);
+            }
             TraceIr::UnOp { kind, dst, src } => {
                 if pc.classid1().is_none() {
                     return CompileResult::Recompile;
                 }
-                if pc.is_float1() {
-                    let deopt = self.ir.new_deopt(bb, pc);
-                    let fsrc = self.ir.fetch_float_assume_float(bb, src, deopt);
-                    let dst = self.ir.xmm_write(bb, dst);
-                    self.ir.xmm_move(fsrc, dst);
-                    self.ir.inst.push(AsmInst::XmmUnOp { kind, dst });
-                } else {
-                    self.ir.fetch_to_reg(bb, src, GP::Rdi);
-                    self.ir.generic_unop(bb, pc, kind.generic_func());
-                    self.ir.rax2acc(bb, dst);
-                }
+                self.ir.fetch_to_reg(bb, src, GP::Rdi);
+                self.ir.generic_unop(bb, pc, kind.generic_func());
+                self.ir.rax2acc(bb, dst);
             }
             TraceIr::IBinOp { kind, dst, mode } => {
                 self.ir.gen_binop_integer(bb, pc, kind, dst, mode);
@@ -686,7 +690,10 @@ impl JitContext {
                 self.ir.handle_error(error);
                 self.ir.rax2acc(bb, dst);
             }
-            TraceIr::ExpandArray(src, dst, len) => {
+            TraceIr::ExpandArray {
+                src,
+                dst: (dst, len),
+            } => {
                 self.ir.fetch_to_reg(bb, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
                     self.ir.unlink(bb, SlotId(reg));
@@ -714,7 +721,7 @@ impl JitContext {
                 let (deopt, error) = self.ir.new_deopt_error(bb, pc);
                 let using_xmm = bb.get_using_xmm();
                 self.ir.guard_version(pc, using_xmm, deopt, error);
-                store.get_inline_info(inline_id).0(&mut self.ir, store, bb, callid, pc);
+                (store.get_inline_info(inline_id).inline_gen)(&mut self.ir, store, bb, callid, pc);
             }
             TraceIr::InlineObjectSend { callid, .. } => {
                 let recv = store[callid].recv;

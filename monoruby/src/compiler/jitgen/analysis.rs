@@ -185,7 +185,9 @@ impl JitContext {
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
             let pc = BytecodePtr::from_bc(pc);
-            match pc.trace_ir(store) {
+            let ir = pc.trace_ir(store);
+            let exit_type = ir.get_exit_type();
+            match ir {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
@@ -260,8 +262,8 @@ impl JitContext {
                     info.r#use(base);
                     info.def(dst);
                 }
-                TraceIr::LoadConst(dst, _const_id) => {
-                    let is_float = if let Some(value) = pc.value() {
+                TraceIr::LoadConst(dst, const_id) => {
+                    let is_float = if let Some(value) = store[const_id].cache.2 {
                         value.is_float()
                     } else {
                         false
@@ -289,10 +291,13 @@ impl JitContext {
                     info.r#use(src);
                     info.def(dst);
                 }
-                TraceIr::UnOp { kind: _, dst, src } => {
-                    let is_float = pc.is_float1();
-                    info.use_as(src, is_float, pc.is_float1());
-                    info.def_as(dst, is_float);
+                TraceIr::FUnOp { kind: _, dst, src } => {
+                    info.use_as(src, true, true);
+                    info.def_as(dst, true);
+                }
+                TraceIr::IUnOp { kind: _, dst, src } | TraceIr::UnOp { kind: _, dst, src } => {
+                    info.use_as(src, false, false);
+                    info.def_as(dst, false);
                 }
                 TraceIr::Not { dst, src } => {
                     info.r#use(src);
@@ -377,9 +382,12 @@ impl JitContext {
                     info.use_range(args, len);
                     info.def(dst);
                 }
-                TraceIr::ExpandArray(src, dst, len) => {
-                    info.use_range(dst, len);
+                TraceIr::ExpandArray {
+                    src,
+                    dst: (dst, len),
+                } => {
                     info.r#use(src);
+                    info.def_range(dst, len);
                 }
                 TraceIr::Yield { callid } => {
                     let CallSiteInfo { args, len, dst, .. } = store[callid];
@@ -405,7 +413,7 @@ impl JitContext {
                 TraceIr::InlineCall { inline_id, callid }
                 | TraceIr::InlineObjectSend { inline_id, callid }
                 | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
-                    store.get_inline_info(inline_id).1(&mut info, &store[callid]);
+                    (store.get_inline_info(inline_id).inline_analysis)(&mut info, &store[callid]);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::Ret(src)
@@ -413,27 +421,23 @@ impl JitContext {
                 | TraceIr::Break(src)
                 | TraceIr::Raise(src) => {
                     info.r#use(src);
-                    return (ExitType::Return, info);
                 }
-                TraceIr::Br(_) => {
-                    return (ExitType::Continue, info);
-                }
+                TraceIr::Br(_) => {}
                 TraceIr::CondBr(cond_, _, _, _) => {
                     info.r#use(cond_);
-                    return (ExitType::Continue, info);
                 }
                 TraceIr::NilBr(cond_, _) => {
                     info.r#use(cond_);
-                    return (ExitType::Continue, info);
                 }
                 TraceIr::CheckLocal(src, _) => {
                     info.r#use(src);
-                    return (ExitType::Continue, info);
                 }
                 TraceIr::OptCase { cond, .. } => {
                     info.r#use(cond);
-                    return (ExitType::Continue, info);
                 }
+            }
+            if let Some(exit_type) = exit_type {
+                return (exit_type, info);
             }
         }
         (ExitType::Continue, info)
@@ -537,6 +541,12 @@ impl SlotInfo {
     fn use_range(&mut self, args: SlotId, len: u16) {
         for arg in args..(args + len) {
             self.r#use(arg);
+        }
+    }
+
+    fn def_range(&mut self, args: SlotId, len: u16) {
+        for arg in args..(args + len) {
+            self.def(arg);
         }
     }
 
@@ -764,7 +774,7 @@ impl IsUsed {
 }
 
 #[derive(Debug)]
-pub(super) enum ExitType {
+pub(crate) enum ExitType {
     Continue,
     Return,
 }

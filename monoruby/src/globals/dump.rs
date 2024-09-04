@@ -368,7 +368,9 @@ impl Globals {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
                 format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
             }
-            TraceIr::UnOp { kind, dst, src } => {
+            TraceIr::UnOp { kind, dst, src }
+            | TraceIr::IUnOp { kind, dst, src }
+            | TraceIr::FUnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
             }
@@ -548,7 +550,7 @@ impl Globals {
                     ..
                 } = self.store[callid];
                 let class = pc.cached_class1().unwrap();
-                let name = &self.store.get_inline_info(inline_id).2;
+                let name = &self.store.get_inline_info(inline_id).name;
                 let op1 = if pos_num == 0 {
                     format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
                 } else {
@@ -636,7 +638,10 @@ impl Globals {
             TraceIr::ConcatRegexp(ret, args, len) => {
                 format!("{} = concat_regexp({:?}; {})", ret_str(ret), args, len)
             }
-            TraceIr::ExpandArray(src, dst, len) => {
+            TraceIr::ExpandArray {
+                src,
+                dst: (dst, len),
+            } => {
                 format!("{:?}; {} = expand({:?})", dst, len, src)
             }
             TraceIr::AliasMethod { new, old } => {
