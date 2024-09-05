@@ -144,10 +144,6 @@ fn pow_ff(lhs: f64, rhs: f64) -> Value {
     Value::float(lhs.powf(rhs))
 }
 
-pub(crate) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.powf(rhs)
-}
-
 // TODO: support rhs < 0.
 pub(crate) extern "C" fn pow_values(
     vm: &mut Executor,

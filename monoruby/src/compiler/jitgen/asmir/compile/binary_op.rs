@@ -346,6 +346,19 @@ impl Codegen {
                     movq xmm(ret), xmm0;
                 );
             }
+            BinOpK::Rem => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(lhs);
+                    movq xmm1, xmm(rhs);
+                    movq rax, (rem_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm(ret), xmm0;
+                );
+            }
             _ => unimplemented!(),
         }
     }
@@ -399,6 +412,20 @@ impl Codegen {
                     movq xmm0, xmm(lhs);
                     movq xmm1, [rip + rhs_label];
                     movq rax, (pow_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm(ret), xmm0;
+                );
+            }
+            BinOpK::Rem => {
+                let lhs = l.enc();
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(lhs);
+                    movq xmm1, [rip + rhs_label];
+                    movq rax, (rem_ff_f as u64);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
@@ -494,9 +521,30 @@ impl Codegen {
                     movq xmm(ret), xmm0;
                 );
             }
+            BinOpK::Rem => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm0, [rip + lhs];
+                    movq xmm1, xmm(rhs);
+                    movq rax, (rem_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq xmm(ret), xmm0;
+                );
+            }
             _ => unimplemented!(),
         }
     }
+}
+
+extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.powf(rhs)
+}
+
+extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.rem_euclid(rhs)
 }
 
 macro_rules! cmp_main {

@@ -29,7 +29,7 @@ gc-debug = []
 gc-stress = []
 profile = ["dump-bc"]
 perf = []
-test = ["emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "gc-debug", "profile", "perf", "gc-stress"]
+test = ["emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "gc-debug", "profile", "perf"]
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }

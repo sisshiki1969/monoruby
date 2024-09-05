@@ -287,7 +287,7 @@ impl Globals {
                 format!(
                     "{:36} [{}]",
                     op1,
-                    match pc.value() {
+                    match self.store[id].cache.2 {
                         None => "<INVALID>".to_string(),
                         Some(val) => self.inspect2(val),
                     }
@@ -495,19 +495,21 @@ impl Globals {
                     recv,
                     args,
                     pos_num,
-                    dst: ret,
+                    kw_pos,
+                    kw_args,
+                    dst,
                     block_fid,
                     block_arg,
                     ..
-                } = *callsite;
+                } = callsite;
                 let has_splat = callsite.has_splat();
                 // TODO: we must handle hash aplat arguments correctly.
-                let kw_len = callsite.kw_args.len();
+                let kw_len = kw_args.len();
                 let op1 = format!(
                     "{} = {:?}.{name}({}{}{}){}",
-                    ret_str(ret),
+                    ret_str(*dst),
                     recv,
-                    if pos_num == 0 {
+                    if *pos_num == 0 {
                         "".to_string()
                     } else {
                         format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
@@ -515,7 +517,7 @@ impl Globals {
                     if kw_len == 0 {
                         "".to_string()
                     } else {
-                        format!(" kw:{:?};{}", args + pos_num as u16, kw_len)
+                        format!(" kw:{:?};{}", kw_pos, kw_len)
                     },
                     if let Some(block_arg) = block_arg {
                         format!(" &{:?}", block_arg)
@@ -566,15 +568,12 @@ impl Globals {
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {
-                    args,
-                    pos_num,
-                    dst: ret,
-                    ..
+                    args, pos_num, dst, ..
                 } = self.store[callid];
                 if pos_num == 0 {
-                    format!("{} = yield", ret_str(ret))
+                    format!("{} = yield", ret_str(dst))
                 } else {
-                    format!("{} = yield({:?}; {})", ret_str(ret), args, pos_num)
+                    format!("{} = yield({:?}; {})", ret_str(dst), args, pos_num)
                 }
             }
             TraceIr::InlineCache => return None,
