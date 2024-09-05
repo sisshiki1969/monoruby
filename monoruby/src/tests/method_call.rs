@@ -347,7 +347,7 @@ mod test {
     }
 
     #[test]
-    fn delegate() {
+    fn delegate1() {
         run_test_with_prelude(
             r#"
         $res = []
@@ -369,7 +369,10 @@ mod test {
         end
         "##,
         );
+    }
 
+    #[test]
+    fn delegate2() {
         run_test_with_prelude(
             r##"
         $res = []

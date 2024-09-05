@@ -369,14 +369,17 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let mut h = lfp.self_val().dup().expect_hash()?;
+    let h = lfp.self_val().dup();
     let p = vm.get_block_data(globals, bh)?;
+    vm.temp_push(h);
+    let mut res = Hashmap::new(h);
     for (k, v) in lfp.self_val().expect_hash()?.iter() {
         if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
-            h.remove(k);
+            res.remove(k);
         }
     }
-    Ok(h.into())
+    let h = vm.temp_pop();
+    Ok(h)
 }
 
 ///

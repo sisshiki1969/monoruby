@@ -148,13 +148,6 @@ impl BytecodeGen {
             } else {
                 self.sp().into()
             };
-            let mut hash_splat_pos = if let Some(kw_rest) = mother_args.kw_rest
-                && outer == 0
-            {
-                vec![BcLocal(kw_rest.0 - 1).into()]
-            } else {
-                vec![]
-            };
 
             let mut kw_args = IndexMap::default();
             for (i, name) in kw_list.iter().enumerate() {
@@ -165,13 +158,16 @@ impl BytecodeGen {
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 }
             }
-            if let Some(kw_rest) = mother_args.kw_rest {
+
+            let hash_splat_pos = if let Some(kw_rest) = mother_args.kw_rest {
                 let kw_rest = if outer == 0 {
                     BcLocal(kw_rest.0 - 1).into()
                 } else {
                     self.load_dynvar(kw_rest, outer, loc)
                 };
-                hash_splat_pos.push(kw_rest);
+                vec![kw_rest]
+            } else {
+                vec![]
             };
             Some(KeywordArgs {
                 kw_start,

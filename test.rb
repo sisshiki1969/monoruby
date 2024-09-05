@@ -1,9 +1,6 @@
-flag = false
-100.times do |x|
-  puts x
-  if x % 7 == 6 && !flag
-    flag = true
-    redo
-  end
-  flag = false
+def f(*x)
+  puts "#{x}"
+end
+20.times do
+  f(a:1, **{b:2,c:3})
 end

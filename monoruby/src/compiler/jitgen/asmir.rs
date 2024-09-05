@@ -444,8 +444,18 @@ impl AsmIr {
     }
 
     fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo { args, len, .. } = callsite;
-        self.write_back_range(bb, *args, *len as u16);
+        let CallSiteInfo {
+            args,
+            pos_num,
+            kw_pos,
+            block_arg,
+            ..
+        } = callsite;
+        self.write_back_range(bb, *args, *pos_num as u16);
+        self.write_back_range(bb, *kw_pos, callsite.kw_len() as u16);
+        if let Some(block_arg) = block_arg {
+            self.write_back_slot(bb, *block_arg);
+        }
     }
 }
 
@@ -505,6 +515,7 @@ impl AsmIr {
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
         let ex_positional = callee.no_keyword() && caller.kw_may_exists();
         if !caller.has_splat()
+            && !caller.has_hash_splat()
             && !ex_positional
             && !single_arg_expand
             && !callee.is_rest()

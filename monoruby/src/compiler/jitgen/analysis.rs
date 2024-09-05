@@ -390,21 +390,15 @@ impl JitContext {
                     info.def_range(dst, len);
                 }
                 TraceIr::Yield { callid } => {
-                    let CallSiteInfo { args, len, dst, .. } = store[callid];
-                    info.use_range(args, len as u16);
+                    let CallSiteInfo { dst, .. } = store[callid];
+                    info.use_args(&store[callid]);
                     info.def(dst);
                 }
                 TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
                     let has_block = store[callid].block_fid.is_some();
-                    let CallSiteInfo {
-                        recv,
-                        args,
-                        len,
-                        dst,
-                        ..
-                    } = store[callid];
+                    let CallSiteInfo { recv, dst, .. } = store[callid];
                     info.r#use(recv);
-                    info.use_range(args, len as u16);
+                    info.use_args(&store[callid]);
                     if has_block {
                         info.unlink_locals(func);
                     }
@@ -541,6 +535,21 @@ impl SlotInfo {
     fn use_range(&mut self, args: SlotId, len: u16) {
         for arg in args..(args + len) {
             self.r#use(arg);
+        }
+    }
+
+    fn use_args(&mut self, callsite: &CallSiteInfo) {
+        let CallSiteInfo {
+            args,
+            pos_num,
+            block_arg,
+            kw_pos,
+            ..
+        } = callsite;
+        self.use_range(*args, *pos_num as u16);
+        self.use_range(*kw_pos, callsite.kw_len() as u16);
+        if let Some(block_arg) = block_arg {
+            self.r#use(*block_arg);
         }
     }
 

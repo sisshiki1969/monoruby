@@ -464,6 +464,14 @@ impl CallSiteInfo {
     pub fn has_splat(&self) -> bool {
         !self.splat_pos.is_empty()
     }
+
+    pub fn has_hash_splat(&self) -> bool {
+        !self.hash_splat_pos.is_empty()
+    }
+
+    pub fn kw_len(&self) -> usize {
+        self.kw_args.len() + self.hash_splat_pos.len()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
