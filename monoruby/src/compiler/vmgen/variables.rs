@@ -6,16 +6,24 @@ extern "C" fn vm_get_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
-    let (cached_version, cached_base_class, cache_val) = &globals.store[site_id].cache;
+    let ConstCache {
+        cached_version,
+        cached_base_class,
+        cached_value,
+    } = &globals.store[site_id].cache;
     let base_class = globals.store[site_id]
         .base
         .map(|base| unsafe { vm.get_slot(base) }.unwrap());
     if *cached_version == const_version && *cached_base_class == base_class {
-        return *cache_val;
+        return *cached_value;
     };
     match vm.find_constant(globals, site_id) {
         Ok((val, base_class)) => {
-            globals.store[site_id].cache = (const_version, base_class, Some(val));
+            globals.store[site_id].cache = ConstCache {
+                cached_version: const_version,
+                cached_base_class: base_class,
+                cached_value: Some(val),
+            };
             Some(val)
         }
         Err(err) => {
@@ -31,16 +39,24 @@ extern "C" fn vm_check_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Value {
-    let (cached_version, cached_base_class, cache_val) = &globals.store[site_id].cache;
+    let ConstCache {
+        cached_version,
+        cached_base_class,
+        cached_value,
+    } = &globals.store[site_id].cache;
     let base_class = globals.store[site_id]
         .base
         .map(|base| unsafe { vm.get_slot(base) }.unwrap());
     if *cached_version == const_version && *cached_base_class == base_class {
-        return cache_val.unwrap_or_default();
+        return cached_value.unwrap_or_default();
     };
     match vm.find_constant(globals, site_id) {
         Ok((val, base_class)) => {
-            globals.store[site_id].cache = (const_version, base_class, Some(val));
+            globals.store[site_id].cache = ConstCache {
+                cached_version: const_version,
+                cached_base_class: base_class,
+                cached_value: Some(val),
+            };
             val
         }
         Err(_) => Value::nil(),

@@ -287,7 +287,7 @@ impl Globals {
                 format!(
                     "{:36} [{}]",
                     op1,
-                    match self.store[id].cache.2 {
+                    match self.store[id].cache.cached_value {
                         None => "<INVALID>".to_string(),
                         Some(val) => self.inspect2(val),
                     }

@@ -228,21 +228,17 @@ impl JitContext {
                     info.def(dst);
                 }
                 TraceIr::Index { dst, base, idx } => {
-                    info.r#use(base);
-                    info.r#use(idx);
+                    info.use_slots(&[base, idx]);
                     info.def(dst);
                 }
                 TraceIr::Range {
                     dst, start, end, ..
                 } => {
-                    info.r#use(start);
-                    info.r#use(end);
+                    info.use_slots(&[start, end]);
                     info.def(dst);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    info.r#use(src);
-                    info.r#use(base);
-                    info.r#use(idx);
+                    info.use_slots(&[src, base, idx]);
                 }
                 TraceIr::ClassDef {
                     dst,
@@ -263,7 +259,7 @@ impl JitContext {
                     info.def(dst);
                 }
                 TraceIr::LoadConst(dst, const_id) => {
-                    let is_float = if let Some(value) = store[const_id].cache.2 {
+                    let is_float = if let Some(value) = store[const_id].cache.cached_value {
                         value.is_float()
                     } else {
                         false
@@ -330,8 +326,7 @@ impl JitContext {
                     mode: OpMode::RR(lhs, rhs),
                     ..
                 } => {
-                    info.r#use(lhs);
-                    info.r#use(rhs);
+                    info.use_slots(&[lhs, rhs]);
                     info.def(dst);
                 }
                 TraceIr::IBinOp {
@@ -521,14 +516,26 @@ impl SlotInfo {
     }
 
     ///
-    /// Use `slot` as a Value.
+    /// Use `slot` as a non-Float Value.
     ///
     /// ### Arguments
-    /// - `slot` - the slot to be used.
+    /// - `slot` - the slot to be used
     ///
     fn r#use(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
             self.use_as(slot, false, false);
+        }
+    }
+
+    ///
+    /// Use `slots` as a non-Float Value.
+    ///
+    /// ### Arguments
+    /// - `slots` - the slots to be used
+    ///
+    fn use_slots(&mut self, slots: &[SlotId]) {
+        for slot in slots {
+            self.r#use(*slot);
         }
     }
 

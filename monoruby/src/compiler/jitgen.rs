@@ -468,10 +468,15 @@ impl JitContext {
             TraceIr::LoadConst(dst, id) => {
                 self.ir.unlink(bb, dst);
 
-                if let (cached_version, cached_baseclass, Some(cached_val)) = store[id].cache {
+                if let ConstCache {
+                    cached_version,
+                    cached_base_class,
+                    cached_value: Some(cached_val),
+                } = store[id].cache
+                {
                     let base_slot = store[id].base;
                     if let Some(slot) = base_slot {
-                        if let Some(base_class) = cached_baseclass {
+                        if let Some(base_class) = cached_base_class {
                             self.ir.fetch_to_reg(bb, slot, GP::Rax);
                             let deopt = self.ir.new_deopt(bb, pc);
                             self.ir

@@ -131,14 +131,7 @@ impl std::ops::Index<OptCaseId> for Store {
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
-        self.constsite_info.iter().for_each(|info| {
-            if let Some(v) = info.cache.1 {
-                v.mark(alloc)
-            }
-            if let Some(v) = info.cache.2 {
-                v.mark(alloc)
-            }
-        });
+        self.constsite_info.iter().for_each(|info| info.mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));
     }
 }
@@ -349,7 +342,7 @@ impl Store {
             base,
             prefix,
             toplevel,
-            cache: (usize::MAX, None, None),
+            cache: ConstCache::default(),
         };
         let id = self.constsite_info.len();
         self.constsite_info.push(info);
@@ -383,6 +376,34 @@ impl Store {
 }
 
 #[derive(Debug, Clone)]
+pub struct ConstCache {
+    pub cached_version: usize,
+    pub cached_base_class: Option<Value>,
+    pub cached_value: Option<Value>,
+}
+
+impl std::default::Default for ConstCache {
+    fn default() -> Self {
+        Self {
+            cached_version: usize::MAX,
+            cached_base_class: None,
+            cached_value: None,
+        }
+    }
+}
+
+impl alloc::GC<RValue> for ConstCache {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(v) = &self.cached_base_class {
+            v.mark(alloc)
+        }
+        if let Some(v) = &self.cached_value {
+            v.mark(alloc)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
@@ -393,7 +414,13 @@ pub struct ConstSiteInfo {
     /// Is toplevel?. (e.g. ::Foo)
     pub toplevel: bool,
     /// Inline constant cache.
-    pub cache: (usize, Option<Value>, Option<Value>), //(version, base_class, value)
+    pub cache: ConstCache, //(version, base_class, value)
+}
+
+impl alloc::GC<RValue> for ConstSiteInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.cache.mark(alloc);
+    }
 }
 
 impl ConstSiteInfo {
