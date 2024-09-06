@@ -920,7 +920,10 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    sort_inner(vm, globals, lfp, ary)
+    let gc_enabled = Globals::gc_enable(false);
+    let res = sort_inner(vm, globals, lfp, ary);
+    Globals::gc_enable(gc_enabled);
+    res
 }
 
 ///
@@ -933,7 +936,10 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ary = lfp.self_val().dup().as_array();
-    sort_inner(vm, globals, lfp, ary)
+    let gc_enabled = Globals::gc_enable(false);
+    let res = sort_inner(vm, globals, lfp, ary);
+    Globals::gc_enable(gc_enabled);
+    res
 }
 
 ///
@@ -1077,16 +1083,35 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/group_by.html]
 #[monoruby_builtin]
 fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        let mut map = IndexMap::default();
+    fn inner(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        data: &ProcInner,
+        ary: Array,
+        map: &mut IndexMap<HashKey, Value>,
+    ) -> Result<()> {
         for elem in ary.iter() {
             let key = vm.invoke_block(globals, &data, &[*elem])?;
             map.entry(HashKey(key))
                 .and_modify(|v: &mut Value| v.as_array().push(*elem))
                 .or_insert(Value::array1(*elem));
         }
+        Ok(())
+    }
+    let ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut map = IndexMap::default();
+        let gc_enabled = Globals::gc_enable(false);
+        let res = inner(vm, globals, &data, ary, &mut map);
+        Globals::gc_enable(gc_enabled);
+        res?;
+        /*for elem in ary.iter() {
+            let key = vm.invoke_block(globals, &data, &[*elem]);
+            map.entry(HashKey(key?))
+                .and_modify(|v: &mut Value| v.as_array().push(*elem))
+                .or_insert(Value::array1(*elem));
+        }*/
         Ok(Value::hash(map))
     } else {
         vm.generate_enumerator(IdentId::get_id("group_by"), lfp.self_val(), vec![])

@@ -72,13 +72,13 @@ impl Bytecode {
         }
     }
 
-    #[cfg(feature = "dump-bc")]
+    /*#[cfg(feature = "dump-bc")]
     pub fn value(&self) -> Option<Value> {
         match self.op2.0 {
             0 => None,
             v => Some(Value::from(v)),
         }
-    }
+    }*/
 
     #[cfg(feature = "dump-bc")]
     pub fn into_jit_addr(self) -> u64 {
