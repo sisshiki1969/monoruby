@@ -199,9 +199,6 @@ impl JitContext {
         }
         let bb_scan = func.bb_info.init_bb_scan(func, store);
 
-        #[cfg(feature = "emit-asm")]
-        let start_codepos = codegen.jit.get_current();
-
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
@@ -226,7 +223,7 @@ impl JitContext {
             class_version: codegen.class_version(),
             bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
-            start_codepos,
+            start_codepos: codegen.jit.get_current(),
         }
     }
 
