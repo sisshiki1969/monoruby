@@ -508,10 +508,10 @@ impl AsmIr {
         callee: &FuncInfo,
         pc: BytecodePtr,
     ) {
-        let args = dbg!(caller).args;
+        let args = caller.args;
         let pos_num = caller.pos_num;
         let kw_pos = caller.kw_pos;
-        let kw_num = dbg!(caller.kw_len());
+        let kw_num = caller.kw_len();
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
         let ex_positional = callee.no_keyword() && caller.kw_may_exists();
         if !caller.has_splat()

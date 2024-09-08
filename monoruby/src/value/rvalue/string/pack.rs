@@ -79,7 +79,7 @@ impl<'a> ByteIter<'a> {
     }
 
     fn next(&mut self) -> Option<u8> {
-        if dbg!(self.i) < self.slice.len() {
+        if self.i < self.slice.len() {
             let b = self.slice[self.i];
             self.i += 1;
             Some(b)
@@ -89,7 +89,7 @@ impl<'a> ByteIter<'a> {
     }
 
     fn back(&mut self) -> Option<()> {
-        if dbg!(self.i) > 0 {
+        if self.i > 0 {
             self.i -= 1;
             Some(())
         } else {

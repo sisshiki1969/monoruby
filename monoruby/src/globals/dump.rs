@@ -502,7 +502,7 @@ impl Globals {
                     block_arg,
                     ..
                 } = callsite;
-                let has_splat = dbg!(callsite).has_splat();
+                let has_splat = callsite.has_splat();
                 // TODO: we must handle hash aplat arguments correctly.
                 let kw_len = kw_args.len();
                 let op1 = format!(
