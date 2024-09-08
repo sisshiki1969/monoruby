@@ -103,7 +103,7 @@ struct JitContext {
     ///
     /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, AsmLabel, DestLabel)>,
+    bridges: Vec<(AsmIr, AsmLabel, BcIndex)>,
     ///
     /// Information for continuation bridge.
     ///
@@ -138,7 +138,7 @@ impl std::ops::Index<AsmLabel> for JitContext {
 
 #[derive(Debug)]
 struct BackedgeInfo {
-    target_label: DestLabel,
+    target_idx: BcIndex,
     target_ctx: MergeContext,
     unused: Vec<SlotId>,
 }
@@ -280,7 +280,7 @@ impl JitContext {
         func: &ISeqInfo,
         bb: &mut BBContext,
         bb_pos: BcIndex,
-        target_label: DestLabel,
+        target_idx: BcIndex,
         unused: Vec<SlotId>,
     ) {
         bb.sp = func.get_sp(bb_pos);
@@ -289,7 +289,7 @@ impl JitContext {
         self.backedge_map.insert(
             bb_pos,
             BackedgeInfo {
-                target_label,
+                target_idx,
                 target_ctx: MergeContext::new(bb),
                 unused,
             },

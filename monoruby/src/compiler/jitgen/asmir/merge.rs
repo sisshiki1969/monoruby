@@ -5,7 +5,7 @@ impl JitContext {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
             let BackedgeInfo {
-                target_label,
+                target_idx,
                 mut target_ctx,
                 unused,
             } = self.backedge_map.remove(&bb_pos).unwrap();
@@ -23,7 +23,7 @@ impl JitContext {
                 let mut ir = AsmIr::new();
                 ir.remove_unused(&mut bb, &unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
-                self.bridges.push((ir, label, target_label));
+                self.bridges.push((ir, label, target_idx));
             }
         }
     }
@@ -84,8 +84,6 @@ impl JitContext {
 
         let (use_set, unused) = self.analyse(func, bb_pos);
 
-        let cur_label = self.inst_labels[&bb_pos];
-
         #[cfg(feature = "jit-debug")]
         {
             eprintln!("  use set:  {:?}", use_set);
@@ -115,16 +113,9 @@ impl JitContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bb.sp, bb.slot_state);
 
-        self.write_back_branches(
-            &MergeContext::new(&bb),
-            entries,
-            cur_label,
-            pc + 1,
-            bb_pos,
-            &unused,
-        );
+        self.write_back_branches(&MergeContext::new(&bb), entries, bb_pos, pc + 1, &unused);
 
-        self.new_backedge(func, &mut bb, bb_pos, cur_label, unused);
+        self.new_backedge(func, &mut bb, bb_pos, bb_pos, unused);
 
         Some(bb)
     }
@@ -141,9 +132,8 @@ impl JitContext {
         }
 
         let target_ctx = BBContext::union(&entries);
-        let cur_label = self.inst_labels[&bb_pos];
 
-        self.write_back_branches(&target_ctx, entries, cur_label, pc, bb_pos, &[]);
+        self.write_back_branches(&target_ctx, entries, bb_pos, pc, &[]);
 
         Some(target_ctx.get())
     }
@@ -152,9 +142,8 @@ impl JitContext {
         &mut self,
         target_bb: &MergeContext,
         entries: Vec<BranchEntry>,
-        cur_label: DestLabel,
+        bb_pos: BcIndex,
         pc: BytecodePtr,
-        _bb_pos: BcIndex,
         unused: &[SlotId],
     ) {
         let mut target_ctx = target_bb.clone();
@@ -167,7 +156,7 @@ impl JitContext {
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
+            eprintln!("  ***write_back {_src_idx}->{bb_pos}");
             if cont {
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((
@@ -178,7 +167,7 @@ impl JitContext {
                 let mut ir = AsmIr::new();
                 ir.remove_unused(&mut bb, unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
-                self.bridges.push((ir, label, cur_label));
+                self.bridges.push((ir, label, bb_pos));
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  ***write_back end");

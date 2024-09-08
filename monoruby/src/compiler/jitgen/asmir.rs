@@ -1513,7 +1513,7 @@ impl Codegen {
     }
 
     ///
-    /// Generate machine code for *ctx.ir*.
+    /// Generate machine code for *ir*.
     ///
     fn gen_asm(
         &mut self,
@@ -1521,7 +1521,7 @@ impl Codegen {
         store: &Store,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
-        exit: Option<DestLabel>,
+        exit: Option<BcIndex>,
     ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
@@ -1564,9 +1564,10 @@ impl Codegen {
         }
 
         if let Some(exit) = exit {
-            monoasm!( &mut self.jit,
+            let exit = *ctx.inst_labels.get(&exit).unwrap();
+            monoasm! { &mut self.jit,
                 jmp exit;
-            );
+            }
             self.jit.select_page(0);
         }
 
