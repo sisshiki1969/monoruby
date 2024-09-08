@@ -5,7 +5,6 @@ impl JitContext {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
             let BackedgeInfo {
-                target_idx,
                 mut target_ctx,
                 unused,
             } = self.backedge_map.remove(&bb_pos).unwrap();
@@ -23,7 +22,7 @@ impl JitContext {
                 let mut ir = AsmIr::new();
                 ir.remove_unused(&mut bb, &unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
-                self.bridges.push((ir, label, target_idx));
+                self.bridges.push((ir, label, bb_pos));
             }
         }
     }
@@ -115,7 +114,7 @@ impl JitContext {
 
         self.write_back_branches(&MergeContext::new(&bb), entries, bb_pos, pc + 1, &unused);
 
-        self.new_backedge(func, &mut bb, bb_pos, bb_pos, unused);
+        self.new_backedge(func, &mut bb, bb_pos, unused);
 
         Some(bb)
     }

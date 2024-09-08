@@ -138,7 +138,6 @@ impl std::ops::Index<AsmLabel> for JitContext {
 
 #[derive(Debug)]
 struct BackedgeInfo {
-    target_idx: BcIndex,
     target_ctx: MergeContext,
     unused: Vec<SlotId>,
 }
@@ -280,7 +279,6 @@ impl JitContext {
         func: &ISeqInfo,
         bb: &mut BBContext,
         bb_pos: BcIndex,
-        target_idx: BcIndex,
         unused: Vec<SlotId>,
     ) {
         bb.sp = func.get_sp(bb_pos);
@@ -289,7 +287,6 @@ impl JitContext {
         self.backedge_map.insert(
             bb_pos,
             BackedgeInfo {
-                target_idx,
                 target_ctx: MergeContext::new(bb),
                 unused,
             },
