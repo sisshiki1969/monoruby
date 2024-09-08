@@ -40,16 +40,16 @@ impl JitContext {
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {:?}", bb_pos);
-            self.incoming_context_loop(ir, func, bb_pos)?
+            self.incoming_context_loop(ir, func, bb_pos)
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {:?}", bb_pos);
-            self.incoming_context_method(func, bb_pos)?
+            self.incoming_context_method(func, bb_pos)
         };
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        Some(res)
+        res
     }
 
     ///
