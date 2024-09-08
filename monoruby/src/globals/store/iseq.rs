@@ -1,5 +1,7 @@
 use super::*;
-use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
+use crate::{
+    bytecodegen::BcIndex, compiler::jitgen::BasicBlockId, compiler::jitgen::BasicBlockInfo,
+};
 
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {
@@ -294,21 +296,28 @@ impl ISeqInfo {
     }
 
     ///
-    /// Get pc(*BcPc*) for instruction index(*idx*).
+    /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
     pub(crate) fn get_pc(&self, idx: BcIndex) -> BytecodePtr {
         BytecodePtr::from_bc(&self.bytecode()[idx.0 as usize])
     }
 
     ///
-    /// Get pc(*BcPc*) for instruction index(*idx*).
+    /// Get pc(*BytecodePtr*) for the beginning of the basic block(*idx*).
+    ///
+    pub(crate) fn get_bb_pc(&self, idx: BasicBlockId) -> BytecodePtr {
+        self.get_pc(self.bb_info[idx].begin)
+    }
+
+    ///
+    /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
     pub(crate) fn get_top_pc(&self) -> BytecodePtr {
         BytecodePtr::from_bc(&self.bytecode()[0])
     }
 
     ///
-    /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
+    /// Get an instruction index(*usize*) corresponding to pc(*BytecodePtr*).
     ///
     pub(crate) fn get_pc_index(&self, pc: Option<BytecodePtr>) -> BcIndex {
         let i = if let Some(pos) = pc {

@@ -4,8 +4,7 @@ use ruruby_parse::CmpKind;
 
 use crate::bytecodegen::{BcIndex, UnOpK};
 
-pub(crate) use self::basic_block::BasicBlockInfo;
-use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
+pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
 use self::builtins::{object_send, object_send_splat};
 use self::slot::Guarded;
 
@@ -75,7 +74,7 @@ struct JitContext {
     ///
     /// Map for bytecode position and branches.
     ///
-    branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
+    branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
     /// Target `BBContext` for an each instruction.
     ///
@@ -171,7 +170,7 @@ struct AsmLabel(usize);
 struct OptCaseAsmInfo {
     id: OptCaseId,
     bb_pos: BcIndex,
-    label_map: HashMap<BcIndex, AsmLabel>,
+    label_map: HashMap<BasicBlockId, AsmLabel>,
 }
 
 impl JitContext {
@@ -232,13 +231,13 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         src_idx: BcIndex,
-        dest: BcIndex,
+        dest: BasicBlockId,
         mut bb: BBContext,
         label: AsmLabel,
     ) {
         bb.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{dest}", bb.sp);
+        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bb.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bb,
@@ -254,13 +253,13 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         src_idx: BcIndex,
-        dest: BcIndex,
+        dest: BasicBlockId,
         mut bb: BBContext,
         label: AsmLabel,
     ) {
         bb.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{dest}", bb.sp);
+        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bb.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bb,
@@ -338,7 +337,7 @@ impl JitContext {
         let next_idx = bb_end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.asm_label();
-            self.new_continue(func, bb_end, next_idx, bb, label);
+            self.new_continue(func, bb_end, next_bbid, bb, label);
             if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
                 self.gen_continuation(ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
@@ -638,6 +637,7 @@ impl JitContext {
                                 branch_dest,
                             });
                         }
+                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
                         self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
                     }
                     _ => unreachable!(),
@@ -844,6 +844,7 @@ impl JitContext {
                 let dest_idx = next_idx + disp;
                 let branch_dest = self.asm_label();
                 ir.inst.push(AsmInst::Br(branch_dest));
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
                 return CompileResult::Exit;
             }
@@ -852,6 +853,7 @@ impl JitContext {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, cond_, GP::Rax);
                 ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::NilBr(cond_, disp) => {
@@ -859,6 +861,7 @@ impl JitContext {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, cond_, GP::Rax);
                 ir.inst.push(AsmInst::NilBr(branch_dest));
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::CondBr(_, _, true, _) => {}
@@ -867,6 +870,7 @@ impl JitContext {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::OptCase { cond, optid } => {
@@ -877,10 +881,11 @@ impl JitContext {
                 for ofs in offsets {
                     let dest_idx = bb_pos + 1 + (*ofs as i32);
                     let branch_dest = self.asm_label();
+                    let dest_idx = func.bb_info.get_bb_id(dest_idx);
                     label_map.insert(dest_idx, branch_dest);
                     self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
                 }
-                let else_idx = bb_pos + 1 + (offsets[0] as i32);
+                let else_idx = func.bb_info.get_bb_id(bb_pos + 1 + (offsets[0] as i32));
                 let else_dest = label_map.get(&else_idx).cloned().unwrap();
 
                 let opt_case_info = OptCaseAsmInfo {
@@ -1128,9 +1133,10 @@ impl Codegen {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
+        let bb_begin = func.bb_info.get_bb_id(start_pos);
         let label = ctx.asm_label();
         ctx.branch_map.insert(
-            start_pos,
+            bb_begin,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
                 bb,
@@ -1139,7 +1145,6 @@ impl Codegen {
             }],
         );
 
-        let bb_begin = func.bb_info.get_bb_id(start_pos);
         let bb_end = match func.bb_info.get_loop(bb_begin) {
             Some((a, b)) => {
                 assert_eq!(a, bb_begin);
@@ -1153,7 +1158,7 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
-        self.gen_code(ir, store, &mut ctx);
+        self.gen_code(ir, store, func, &mut ctx);
 
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 

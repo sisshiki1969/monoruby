@@ -15,6 +15,7 @@ impl Codegen {
     pub(super) fn gen_asmir(
         &mut self,
         store: &Store,
+        func: &ISeqInfo,
         ctx: &JitContext,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -286,7 +287,7 @@ impl Codegen {
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
                 for ofs in store[*id].branch_table.iter() {
-                    let idx = *bb_pos + 1 + (*ofs as i32);
+                    let idx = func.bb_info.get_bb_id(*bb_pos + 1 + (*ofs as i32));
                     let dest_label = ctx[label_map.get(&idx).cloned().unwrap()];
                     self.jit.abs_address(dest_label);
                 }

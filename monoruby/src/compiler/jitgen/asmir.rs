@@ -1501,13 +1501,19 @@ pub enum SideExit {
 }
 
 impl Codegen {
-    pub(super) fn gen_code(&mut self, ir: AsmIr, store: &Store, ctx: &mut JitContext) {
+    pub(super) fn gen_code(
+        &mut self,
+        ir: AsmIr,
+        store: &Store,
+        func: &ISeqInfo,
+        ctx: &mut JitContext,
+    ) {
         // generate machine code for a main context
-        self.gen_asm(ir, store, ctx, None, None);
+        self.gen_asm(ir, store, func, ctx, None, None);
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            self.gen_asm(ir, store, ctx, Some(entry), Some(exit));
+            self.gen_asm(ir, store, func, ctx, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
     }
@@ -1519,6 +1525,7 @@ impl Codegen {
         &mut self,
         ir: AsmIr,
         store: &Store,
+        func: &ISeqInfo,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
         exit: Option<BasicBlockId>,
@@ -1560,7 +1567,7 @@ impl Codegen {
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
-            self.gen_asmir(store, ctx, &side_exits, inst);
+            self.gen_asmir(store, func, ctx, &side_exits, inst);
         }
 
         if let Some(exit) = exit {

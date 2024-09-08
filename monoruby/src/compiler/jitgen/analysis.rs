@@ -33,9 +33,8 @@ impl JitContext {
     pub(super) fn analyse(
         &mut self,
         func: &ISeqInfo,
-        bb_pos: BcIndex,
+        entry_bb: BasicBlockId,
     ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let entry_bb = func.bb_info.get_bb_id(bb_pos);
         let (begin, end) = func.bb_info.get_loop(entry_bb).unwrap();
 
         let backedge = self.loop_backedges.get(&begin).unwrap();
