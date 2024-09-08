@@ -310,12 +310,8 @@ impl JitContext {
             return;
         };
 
-        let BasciBlockInfoEntry {
-            begin: bb_begin,
-            end: bb_end,
-            ..
-        } = func.bb_info[bbid];
-        for bb_pos in bb_begin..=bb_end {
+        let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+        for bb_pos in begin..=end {
             ir.bc_index(bb_pos);
             bb.next_sp = func.get_sp(bb_pos);
 
@@ -334,10 +330,10 @@ impl JitContext {
             bb.sp = bb.next_sp;
         }
 
-        let next_idx = bb_end + 1;
+        let next_idx = end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.asm_label();
-            self.new_continue(func, bb_end, next_bbid, bb, label);
+            self.new_continue(func, end, next_bbid, bb, label);
             if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
                 self.gen_continuation(ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
@@ -1158,7 +1154,15 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
-        self.gen_code(ir, store, func, &mut ctx);
+
+        // generate machine code for a main context
+        self.gen_asm(ir, store, func, &mut ctx, None, None);
+
+        // generate machine code for bridges
+        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+            self.gen_asm(ir, store, func, &mut ctx, Some(entry), Some(exit));
+        }
+        assert!(ctx.continuation_bridge.is_none());
 
         let sourcemap = std::mem::take(&mut ctx.sourcemap);
 
