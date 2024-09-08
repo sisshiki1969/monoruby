@@ -1501,14 +1501,13 @@ pub enum SideExit {
 }
 
 impl Codegen {
-    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext) {
+    pub(super) fn gen_code(&mut self, ir: AsmIr, store: &Store, ctx: &mut JitContext) {
         // generate machine code for a main context
-        self.gen_asm(store, ctx, None, None);
+        self.gen_asm(ir, store, ctx, None, None);
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            ctx.ir = ir;
-            self.gen_asm(store, ctx, Some(entry), Some(exit));
+            self.gen_asm(ir, store, ctx, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
     }
@@ -1518,13 +1517,14 @@ impl Codegen {
     ///
     fn gen_asm(
         &mut self,
+        ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
         exit: Option<DestLabel>,
     ) {
         let mut side_exits = SideExitLabels::new();
-        for side_exit in std::mem::take(&mut ctx.ir.side_exit) {
+        for side_exit in ir.side_exit {
             let label = self.jit.label();
             side_exits.push(label);
             match side_exit {
@@ -1555,7 +1555,7 @@ impl Codegen {
         #[cfg(feature = "emit-asm")]
         let mut _sourcemap = vec![];
 
-        for inst in std::mem::take(&mut ctx.ir.inst) {
+        for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));

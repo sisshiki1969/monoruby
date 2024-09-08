@@ -33,6 +33,7 @@ impl JitContext {
     ///
     pub(in crate::compiler::jitgen) fn incoming_context(
         &mut self,
+        ir: &mut AsmIr,
         func: &ISeqInfo,
         bb_pos: BcIndex,
     ) -> Option<BBContext> {
@@ -40,7 +41,7 @@ impl JitContext {
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {bb_pos}");
-            self.incoming_context_loop(func, bb_pos)?
+            self.incoming_context_loop(ir, func, bb_pos)?
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {bb_pos}");
@@ -72,7 +73,12 @@ impl JitContext {
     ///                            |
     /// ```
     ///
-    fn incoming_context_loop(&mut self, func: &ISeqInfo, bb_pos: BcIndex) -> Option<BBContext> {
+    fn incoming_context_loop(
+        &mut self,
+        ir: &mut AsmIr,
+        func: &ISeqInfo,
+        bb_pos: BcIndex,
+    ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bb_pos)?;
         let pc = func.get_pc(bb_pos);
 
@@ -94,14 +100,14 @@ impl JitContext {
                 LinkMode::Stack => {}
                 LinkMode::Literal(v) => {
                     if v.is_float() {
-                        self.ir.store_new_xmm(&mut bb, slot);
+                        ir.store_new_xmm(&mut bb, slot);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    self.ir.store_xmm(&mut bb, slot, r);
+                    ir.store_xmm(&mut bb, slot, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    self.ir.store_both(&mut bb, slot, r, Guarded::Value);
+                    ir.store_both(&mut bb, slot, r, Guarded::Value);
                 }
                 LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
             };
