@@ -6,7 +6,7 @@ struct ExceptionMapEntry {
     range: std::ops::Range<BytecodePtr>, // range of capturing exception
     rescue_pc: Option<BytecodePtr>,      // rescue destination pc
     ensure_pc: Option<BytecodePtr>,      // ensure destination pc
-    error_slot: Option<SlotId>,   // a slot where an error object is assigned
+    error_slot: Option<SlotId>,          // a slot where an error object is assigned
 }
 
 impl ExceptionMapEntry {
@@ -360,13 +360,6 @@ impl ISeqInfo {
     ) {
         self.exception_map
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
-    }
-
-    ///
-    /// Get bytecode length.
-    ///
-    pub(crate) fn bytecode_len(&self) -> usize {
-        self.bytecode().len()
     }
 
     #[cfg(feature = "emit-bc")]

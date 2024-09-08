@@ -1,3 +1,5 @@
+use std::iter::Step;
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
@@ -10,9 +12,30 @@ impl std::ops::Add<usize> for BasicBlockId {
     }
 }
 
+impl std::ops::Sub<usize> for BasicBlockId {
+    type Output = Self;
+    fn sub(self, rhs: usize) -> Self {
+        Self(self.0 - rhs)
+    }
+}
+
 impl std::ops::AddAssign<usize> for BasicBlockId {
     fn add_assign(&mut self, rhs: usize) {
         *self = Self(self.0 + rhs)
+    }
+}
+
+impl Step for BasicBlockId {
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        Some(end.0 - start.0)
+    }
+
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start + count)
+    }
+
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start - count)
     }
 }
 
@@ -138,8 +161,12 @@ impl BasicBlockInfo {
         bb_scan
     }
 
-    pub(crate) fn is_bb_head(&self, i: BcIndex) -> bool {
-        self.bb_head[i.0 as usize]
+    pub(crate) fn is_bb_head(&self, i: BcIndex) -> Option<BasicBlockId> {
+        if *self.bb_head.get(i.0 as usize)? {
+            Some(self.get_bb_id(i))
+        } else {
+            None
+        }
     }
 
     pub(super) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {

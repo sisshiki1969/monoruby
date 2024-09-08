@@ -1521,7 +1521,7 @@ impl Codegen {
         store: &Store,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
-        exit: Option<BcIndex>,
+        exit: Option<BasicBlockId>,
     ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {

@@ -41,7 +41,7 @@ struct JitContext {
     ///
     /// Destination labels for each TraceIr.
     ///
-    inst_labels: HashMap<BcIndex, DestLabel>,
+    inst_labels: HashMap<BasicBlockId, DestLabel>,
     ///
     /// Destination labels for AsmLabels.
     ///
@@ -79,11 +79,11 @@ struct JitContext {
     ///
     /// Target `BBContext` for an each instruction.
     ///
-    target_ctx: HashMap<BcIndex, BBContext>,
+    target_ctx: HashMap<BasicBlockId, BBContext>,
     ///
     /// Map for backward branches.
     ///
-    backedge_map: HashMap<BcIndex, BackedgeInfo>,
+    backedge_map: HashMap<BasicBlockId, BackedgeInfo>,
     ///
     /// Number of slots.
     ///
@@ -103,7 +103,7 @@ struct JitContext {
     ///
     /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, AsmLabel, BcIndex)>,
+    bridges: Vec<(AsmIr, AsmLabel, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
@@ -186,11 +186,9 @@ impl JitContext {
         self_value: Value,
     ) -> Self {
         let mut inst_labels = HashMap::default();
-        for i in 0..func.bytecode_len() {
-            let idx = BcIndex::from(i);
-            if func.bb_info.is_bb_head(idx) {
-                inst_labels.insert(idx, codegen.jit.label());
-            }
+        for i in 0..func.bb_info.len() {
+            let idx = BasicBlockId(i);
+            inst_labels.insert(idx, codegen.jit.label());
         }
         let bb_scan = func.bb_info.init_bb_scan(func, store);
 
@@ -278,12 +276,12 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         bb: &mut BBContext,
-        bb_pos: BcIndex,
+        bb_pos: BasicBlockId,
         unused: Vec<SlotId>,
     ) {
-        bb.sp = func.get_sp(bb_pos);
+        bb.sp = func.get_sp(func.bb_info[bb_pos].begin);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:[{:?}] {bb_pos}", bb.sp);
+        eprintln!("   new_backedge:[{:?}] {:?}", bb.sp, bb_pos);
         self.backedge_map.insert(
             bb_pos,
             BackedgeInfo {
@@ -299,14 +297,12 @@ impl JitContext {
         store: &Store,
         func: &ISeqInfo,
         position: Option<BytecodePtr>,
-        bb_begin: BcIndex,
-        bb_end: BcIndex,
+        bbid: BasicBlockId,
     ) {
-        ir.inst
-            .push(AsmInst::DestLabel(self.inst_labels[&bb_begin]));
-        let mut bb = if let Some(bb) = self.target_ctx.remove(&bb_begin) {
+        ir.inst.push(AsmInst::DestLabel(self.inst_labels[&bbid]));
+        let mut bb = if let Some(bb) = self.target_ctx.remove(&bbid) {
             bb
-        } else if let Some(bb) = self.incoming_context(ir, func, bb_begin) {
+        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
             self.gen_continuation(ir);
             bb
         } else {
@@ -315,6 +311,11 @@ impl JitContext {
             return;
         };
 
+        let BasciBlockInfoEntry {
+            begin: bb_begin,
+            end: bb_end,
+            ..
+        } = func.bb_info[bbid];
         for bb_pos in bb_begin..=bb_end {
             ir.bc_index(bb_pos);
             bb.next_sp = func.get_sp(bb_pos);
@@ -335,12 +336,12 @@ impl JitContext {
         }
 
         let next_idx = bb_end + 1;
-        if func.bb_info.is_bb_head(next_idx) {
+        if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.asm_label();
             self.new_continue(func, bb_end, next_idx, bb, label);
-            if let Some(target_ctx) = self.incoming_context(ir, func, next_idx) {
+            if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
                 self.gen_continuation(ir);
-                assert!(self.target_ctx.insert(next_idx, target_ctx).is_none());
+                assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }
         }
     }
@@ -1147,9 +1148,10 @@ impl Codegen {
             None => BasicBlockId(func.bb_info.len() - 1),
         };
 
-        for BasciBlockInfoEntry { begin, end, .. } in &func.bb_info[bb_begin..=bb_end] {
-            ctx.compile_bb(&mut ir, store, func, position, *begin, *end);
+        for bbid in bb_begin..=bb_end {
+            ctx.compile_bb(&mut ir, store, func, position, bbid);
         }
+
         ctx.backedge_branches(func);
         self.gen_code(ir, store, &mut ctx);
 

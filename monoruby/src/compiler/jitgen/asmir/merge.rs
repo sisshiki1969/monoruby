@@ -7,7 +7,10 @@ impl JitContext {
             let BackedgeInfo {
                 mut target_ctx,
                 unused,
-            } = self.backedge_map.remove(&bb_pos).unwrap();
+            } = self
+                .backedge_map
+                .remove(&func.bb_info.get_bb_id(bb_pos))
+                .unwrap();
             let pc = func.get_pc(bb_pos);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
@@ -22,7 +25,8 @@ impl JitContext {
                 let mut ir = AsmIr::new();
                 ir.remove_unused(&mut bb, &unused);
                 ir.write_back_for_target(bb, &target_ctx, pc);
-                self.bridges.push((ir, label, bb_pos));
+                self.bridges
+                    .push((ir, label, func.bb_info.get_bb_id(bb_pos)));
             }
         }
     }
@@ -34,16 +38,16 @@ impl JitContext {
         &mut self,
         ir: &mut AsmIr,
         func: &ISeqInfo,
-        bb_pos: BcIndex,
+        bb_pos: BasicBlockId,
     ) -> Option<BBContext> {
-        let is_loop = func.get_pc(bb_pos).is_loop_start();
+        let is_loop = func.get_pc(func.bb_info[bb_pos].begin).is_loop_start();
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb(loop): {bb_pos}");
+            eprintln!("\n===gen_merge bb(loop): {:?}", bb_pos);
             self.incoming_context_loop(ir, func, bb_pos)?
         } else {
             #[cfg(feature = "jit-debug")]
-            eprintln!("\n===gen_merge bb: {bb_pos}");
+            eprintln!("\n===gen_merge bb: {:?}", bb_pos);
             self.incoming_context_method(func, bb_pos)?
         };
 
@@ -76,12 +80,13 @@ impl JitContext {
         &mut self,
         ir: &mut AsmIr,
         func: &ISeqInfo,
-        bb_pos: BcIndex,
+        bb_pos: BasicBlockId,
     ) -> Option<BBContext> {
-        let entries = self.branch_map.remove(&bb_pos)?;
-        let pc = func.get_pc(bb_pos);
+        let i = func.bb_info[bb_pos].begin;
+        let entries = self.branch_map.remove(&i)?;
+        let pc = func.get_pc(i);
 
-        let (use_set, unused) = self.analyse(func, bb_pos);
+        let (use_set, unused) = self.analyse(func, i);
 
         #[cfg(feature = "jit-debug")]
         {
@@ -119,9 +124,14 @@ impl JitContext {
         Some(bb)
     }
 
-    fn incoming_context_method(&mut self, func: &ISeqInfo, bb_pos: BcIndex) -> Option<BBContext> {
-        let mut entries = self.branch_map.remove(&bb_pos)?;
-        let pc = func.get_pc(bb_pos);
+    fn incoming_context_method(
+        &mut self,
+        func: &ISeqInfo,
+        bb_pos: BasicBlockId,
+    ) -> Option<BBContext> {
+        let i = func.bb_info[bb_pos].begin;
+        let mut entries = self.branch_map.remove(&i)?;
+        let pc = func.get_pc(i);
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
@@ -141,7 +151,7 @@ impl JitContext {
         &mut self,
         target_bb: &MergeContext,
         entries: Vec<BranchEntry>,
-        bb_pos: BcIndex,
+        bb_pos: BasicBlockId,
         pc: BytecodePtr,
         unused: &[SlotId],
     ) {
@@ -155,7 +165,7 @@ impl JitContext {
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  ***write_back {_src_idx}->{bb_pos}");
+            eprintln!("  ***write_back {_src_idx}->{:?}", bb_pos);
             if cont {
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((

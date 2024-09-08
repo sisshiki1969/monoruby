@@ -1017,7 +1017,11 @@ impl FuncInfo {
             if let Some(fmt) = globals.format(pc, i) {
                 eprint!(
                     "{}:{:05} [{:02}] ",
-                    if info.bb_info.is_bb_head(bytecodegen::BcIndex::from(i)) {
+                    if info
+                        .bb_info
+                        .is_bb_head(bytecodegen::BcIndex::from(i))
+                        .is_some()
+                    {
                         "+"
                     } else {
                         " "
