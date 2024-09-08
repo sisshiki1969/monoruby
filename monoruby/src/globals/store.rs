@@ -58,6 +58,7 @@ impl ClassInfoTable {
 pub struct InlineFuncInfo {
     pub inline_gen: Box<InlineGen>,
     pub inline_analysis: InlineAnalysis,
+    #[cfg(feature = "dump-bc")]
     pub name: String,
 }
 
@@ -154,13 +155,14 @@ impl Store {
         &mut self,
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
-        name: String,
+        _name: String,
     ) -> InlineMethodId {
         let id = self.inline_method.len();
         self.inline_method.push(InlineFuncInfo {
             inline_gen,
             inline_analysis,
-            name,
+            #[cfg(feature = "dump-bc")]
+            name: _name,
         });
         InlineMethodId::new(id)
     }

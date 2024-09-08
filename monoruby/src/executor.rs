@@ -1288,6 +1288,7 @@ impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
 }
 
 impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
+    #[cfg(feature = "gc-debug")]
     fn startup_flag(&self) -> bool {
         true
     }
