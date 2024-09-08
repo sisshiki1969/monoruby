@@ -58,12 +58,14 @@ impl AsmIr {
         fid: FuncId,
         pc: BytecodePtr,
     ) -> Option<Option<AsmEvict>> {
-        let CallSiteInfo { args, len, dst, .. } = store[callid];
+        let CallSiteInfo {
+            args, pos_num, dst, ..
+        } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let recv_class = pc.cached_class1().unwrap();
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
-                assert_eq!(0, len);
+                assert_eq!(0, pos_num);
                 assert!(!store[callid].kw_may_exists());
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
@@ -77,7 +79,7 @@ impl AsmIr {
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
-                assert_eq!(1, len);
+                assert_eq!(1, pos_num);
                 assert!(!store[callid].kw_may_exists());
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());

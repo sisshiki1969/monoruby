@@ -286,8 +286,6 @@ struct CallSite {
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
-    /// Number of arguments.
-    len: usize,
     /// *BcReg* of the receiver.
     recv: BcReg,
     /// *BcReg* of the return value. If None, the return value is discarded.
@@ -307,8 +305,6 @@ impl CallSite {
         dst: Option<BcReg>,
     ) -> Self {
         let name = name.into();
-        let kw_len = kw.as_ref().map_or(0, |kw| kw.len());
-        let len = pos_num + kw_len + block_arg.is_some() as usize;
         CallSite {
             name,
             pos_num,
@@ -317,7 +313,6 @@ impl CallSite {
             block_fid,
             block_arg,
             args,
-            len,
             recv,
             dst,
         }
@@ -356,12 +351,6 @@ struct KeywordArgs {
     kw_args: IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
-}
-
-impl KeywordArgs {
-    fn len(&self) -> usize {
-        self.kw_args.len() + self.hash_splat_pos.len()
-    }
 }
 
 #[derive(Debug, Clone)]

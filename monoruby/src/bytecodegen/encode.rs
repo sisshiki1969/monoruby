@@ -655,7 +655,6 @@ impl BytecodeGen {
             block_fid,
             block_arg,
             args,
-            len,
             recv,
             dst,
         } = callsite;
@@ -695,7 +694,6 @@ impl BytecodeGen {
             block_fid,
             block_arg,
             args,
-            len,
             recv,
             dst,
         ))

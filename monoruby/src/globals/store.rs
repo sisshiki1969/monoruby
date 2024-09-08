@@ -299,20 +299,10 @@ impl Store {
         block_fid: Option<FuncId>,
         block_arg: Option<SlotId>,
         args: SlotId,
-        len: usize,
         recv: SlotId,
         dst: Option<SlotId>,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
-        if !kw_args.is_empty() || !hash_splat_pos.is_empty() {
-            //assert_eq!(kw_pos.0 as usize, args.0 as usize + pos_num);
-        }
-        /*if let Some(block_arg) = block_arg {
-            assert_eq!(
-                block_arg.0 as usize,
-                args.0 as usize + pos_num + kw_args.len() + hash_splat_pos.len()
-            );
-        }*/
         self.callsite_info.push(CallSiteInfo {
             name,
             pos_num,
@@ -323,7 +313,6 @@ impl Store {
             block_fid,
             block_arg,
             args,
-            len,
             recv,
             dst,
         });
@@ -471,8 +460,6 @@ pub struct CallSiteInfo {
     /// *FuncId* of passed block.
     pub block_fid: Option<FuncId>,
     pub block_arg: Option<SlotId>,
-    /// Number of arguments. pos_num + kw_args.len() + splat_pos.len() + if block_arg.is_some() { 1 } else { 0 }
-    pub len: usize,
     /// Postion of keyword arguments.
     pub kw_pos: SlotId,
     /// Names and positions of keyword arguments.

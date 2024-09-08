@@ -436,11 +436,9 @@ impl AsmIr {
     }
 
     pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo {
-            recv, args, len, ..
-        } = callsite;
+        let CallSiteInfo { recv, .. } = callsite;
         self.write_back_slot(bb, *recv);
-        self.write_back_range(bb, *args, *len as u16);
+        self.write_back_args(bb, callsite);
     }
 
     fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
@@ -510,8 +508,10 @@ impl AsmIr {
         callee: &FuncInfo,
         pc: BytecodePtr,
     ) {
-        let args = caller.args;
+        let args = dbg!(caller).args;
         let pos_num = caller.pos_num;
+        let kw_pos = caller.kw_pos;
+        let kw_num = dbg!(caller.kw_len());
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
         let ex_positional = callee.no_keyword() && caller.kw_may_exists();
         if !caller.has_splat()
@@ -523,8 +523,14 @@ impl AsmIr {
             && callee.req_num() <= pos_num
         {
             // write back keyword arguments.
-            for i in pos_num as u16..caller.len as u16 {
-                self.write_back_slot(bb, args + i);
+            for arg in kw_pos..kw_pos + kw_num {
+                //assert_eq!(kw_pos, args + pos_num);
+                //assert_eq!(kw_pos + kw_num, args + caller.len);
+                self.write_back_slot(bb, arg);
+            }
+            // write back block argument.
+            if let Some(block_arg) = caller.block_arg {
+                self.write_back_slot(bb, block_arg);
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
             {

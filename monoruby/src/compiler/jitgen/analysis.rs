@@ -800,6 +800,7 @@ pub(crate) enum ExitType {
 ///
 pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
+    info.use_args(callsite);
     info.def(callsite.dst);
 }
 
@@ -808,7 +809,7 @@ pub(crate) fn v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 ///
 pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
-    info.r#use(callsite.args);
+    info.use_args(callsite);
     info.def(callsite.dst);
 }
 
@@ -816,16 +817,9 @@ pub(crate) fn v_v_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 /// <Value> = <Value>.method(<Value>, ...)
 ///
 pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
-    let CallSiteInfo {
-        recv,
-        args,
-        len,
-        dst,
-        ..
-    } = *callsite;
-    info.r#use(recv);
-    info.use_range(args, len as u16);
-    info.def(dst);
+    info.r#use(callsite.recv);
+    info.use_args(callsite);
+    info.def(callsite.dst);
 }
 
 ///
@@ -833,6 +827,7 @@ pub(crate) fn v_v_vv(info: &mut SlotInfo, callsite: &CallSiteInfo) {
 ///
 pub(crate) fn f_v(info: &mut SlotInfo, callsite: &CallSiteInfo) {
     info.r#use(callsite.recv);
+    info.use_args(callsite);
     if let Some(ret) = callsite.dst {
         info.def_as_float(ret);
     }

@@ -95,7 +95,13 @@ fn cos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::float(f.cos()))
 }
 
-fn math_sqrt(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
+fn math_sqrt(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) {
     let callsite = &store[callid];
     let CallSiteInfo {
         recv,
@@ -118,20 +124,23 @@ fn math_sqrt(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSite
     }
 }
 
-fn math_cos(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
+fn math_cos(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) {
     let callsite = &store[callid];
     let CallSiteInfo {
-        recv,
-        args,
-        dst: ret,
-        ..
+        recv, args, dst, ..
     } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
     if !recv.is_self() {
         ir.guard_class(bb, recv, GP::Rdi, pc.cached_class1().unwrap(), deopt);
     }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
-    if let Some(ret) = ret {
+    if let Some(ret) = dst {
         let fret = ir.xmm_write_enc(bb, ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
@@ -149,7 +158,13 @@ fn math_cos(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteI
     }
 }
 
-fn math_sin(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
+fn math_sin(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) {
     let callsite = &store[callid];
     let CallSiteInfo {
         recv,
