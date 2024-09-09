@@ -1495,6 +1495,90 @@ pub(super) enum AsmInst {
     DestLabel(DestLabel),
 }
 
+impl AsmInst {
+    pub(crate) fn dump(&self, store: &Store) -> String {
+        match self {
+            Self::AccToStack(slot) => format!("{:?} = R15", slot),
+            Self::RegToAcc(gpr) => format!("R15 = {:?}", gpr),
+            Self::RegToStack(gpr, slot) => format!("{:?} = {:?}", slot, gpr),
+            Self::StackToReg(slot, gpr) => format!("{:?} = {:?}", gpr, slot),
+            Self::LitToReg(val, gpr) => format!("{:?} = {}", gpr, val.debug(store)),
+            Self::I32ToReg(i, gpr) => format!("{:?} = {i}", gpr),
+            Self::RegMove(src, dst) => format!("{:?} = {:?}", dst, src),
+            Self::RegAdd(gpr, i) => format!("{:?} += {i}", gpr),
+            Self::RegSub(gpr, i) => format!("{:?} -= {i}", gpr,),
+            Self::RegToRSPOffset(gpr, offset) => format!("RSP[{offset}] = {:?}", gpr),
+            Self::XmmMove(src, dst) => format!("{:?} = {:?}", dst, src),
+            Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
+            Self::XmmBinOp {
+                kind,
+                mode,
+                dst,
+                using_xmm,
+            } => format!("{:?} = {:?} {:?}  {:?}", dst, kind, mode, using_xmm),
+            Self::XmmUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
+
+            Self::F64ToXmm(f, dst) => format!("{:?} = {}", dst, f),
+            Self::I64ToBoth(i, slot, xmm) => format!("{:?}:{:?} = {i}", slot, xmm),
+            Self::XmmToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
+            Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
+            Self::DeepCopyLit(val, using_xmm) => format!("{}  {:?}", val.debug(store), using_xmm),
+            Self::NumToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Numeric to f64", fpr, gpr),
+            Self::IntToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Integer to f64", fpr, gpr),
+            Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
+            Self::GuardFloat(gpr, _deopt) => format!("Guard Float {:?}", gpr),
+            Self::GuardFixnum(gpr, _deopt) => format!("Guard Fixnum {:?}", gpr),
+            Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
+
+            Self::GuardClassVersion(_pc, using_xmm, _deopt, _error) => {
+                format!("Guard ClassVersion {:?}", using_xmm)
+            }
+            Self::GuardClass(gpr, class, _deopt) => format!("Guard {:?} {:?}", class, gpr),
+            Self::Ret => "ret".to_string(),
+            Self::Break => "break".to_string(),
+            Self::Raise => "raise".to_string(),
+            Self::MethodRet(_pc) => format!("method_return"),
+            Self::EnsureEnd => "ensure_end".to_string(),
+
+            Self::Br(label) => format!("br {:?}", label),
+            Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
+            Self::NilBr(label) => format!("nil_br {:?}", label),
+            Self::CheckLocal(label) => format!("check_local {:?}", label),
+            Self::GenericCondBr {
+                brkind,
+                branch_dest,
+            } => format!("condbr {:?} {:?}", brkind, branch_dest),
+            Self::OptCase {
+                max,
+                min,
+                opt_case_id,
+                else_dest,
+            } => format!(
+                "opt_case {:?}..{:?} {:?} {:?}",
+                min, max, opt_case_id, else_dest
+            ),
+            Self::Deopt(deopt) => format!("deopt {:?}", deopt),
+            Self::RecompileDeopt { position, deopt } => {
+                format!("recompile_deopt {:?} {:?}", position, deopt)
+            }
+            Self::WriteBack(wb) => format!("write_back {:?}", wb),
+            Self::HandleError(error) => format!("handle_error {:?}", error),
+            Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
+            Self::ExecGc(wb) => format!("exec_gc {:?}", wb),
+            Self::LoadGenericConstant {
+                cached_val,
+                cached_version,
+                deopt: _,
+            } => format!(
+                "load_generic_constant {} {}",
+                cached_val.debug(store),
+                cached_version
+            ),
+            _ => format!("{:?}", self),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum FMode {
     RR(Xmm, Xmm),
@@ -1521,7 +1605,10 @@ impl Codegen {
         entry: Option<AsmLabel>,
         exit: Option<BasicBlockId>,
     ) {
-        dbg!(&ir.inst);
+        #[cfg(feature = "emit-asm")]
+        for ir in &ir.inst {
+            eprintln!("    {}", ir.dump(store));
+        }
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();

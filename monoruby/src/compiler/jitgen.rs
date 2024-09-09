@@ -1220,7 +1220,8 @@ impl Codegen {
 
         // generate machine code for a main context
         for (bbid, ir) in bbir.into_iter() {
-            dbg!(bbid);
+            #[cfg(feature = "emit-asm")]
+            eprintln!("{:?}", bbid);
             self.gen_asm(ir, store, func, &mut ctx, None, None);
         }
 
