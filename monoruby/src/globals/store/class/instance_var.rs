@@ -24,7 +24,7 @@ impl Globals {
     ///
     pub(crate) fn get_ivar(&self, val: Value, name: IdentId) -> Option<Value> {
         let rval = val.try_rvalue()?;
-        rval.get_ivar(self, name)
+        rval.get_ivar(&self.store, name)
     }
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {

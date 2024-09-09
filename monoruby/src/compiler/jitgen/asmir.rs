@@ -30,7 +30,15 @@ const BC_OFFSET_CACHED_CLASS: usize = 24;
 const BC_OFFSET_CACHED_VERSION: usize = 28;
 const BC_OFFSET_CACHED_FUNCID: usize = 8;
 
-type InlineProcedure = dyn FnOnce(&mut Codegen, &SideExitLabels);
+pub(super) struct InlineProcedure {
+    proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
+}
+
+impl std::fmt::Debug for InlineProcedure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InlineProcedure")
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmDeopt(usize);
@@ -887,7 +895,8 @@ impl AsmIr {
     }
 
     pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &SideExitLabels) + 'static) {
-        self.inst.push(AsmInst::Inline { proc: Box::new(f) });
+        self.inst
+            .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
@@ -983,6 +992,7 @@ impl AsmIr {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum AsmInst {
     /// move acc to stack
     AccToStack(SlotId),
@@ -1173,9 +1183,7 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
-    Inline {
-        proc: Box<InlineProcedure>,
-    },
+    Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
@@ -1513,6 +1521,7 @@ impl Codegen {
         entry: Option<AsmLabel>,
         exit: Option<BasicBlockId>,
     ) {
+        dbg!(&ir.inst);
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();

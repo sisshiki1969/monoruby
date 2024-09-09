@@ -688,7 +688,7 @@ impl Codegen {
                 self.cond_br(branch_dest, brkind);
             }
 
-            AsmInst::Inline { proc } => proc(self, labels),
+            AsmInst::Inline(proc) => (proc.proc)(self, labels),
         }
     }
 

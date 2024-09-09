@@ -463,6 +463,22 @@ impl Value {
 // display
 
 impl Value {
+    pub fn debug(&self, store: &Store) -> String {
+        let s = match self.unpack() {
+            RV::None => "Undef".to_string(),
+            RV::Nil => "".to_string(),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Fixnum(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Complex(_) => self.as_complex().debug(store),
+            RV::Symbol(id) => id.to_string(),
+            RV::String(s) => s.to_str().unwrap().to_string(),
+            RV::Object(rvalue) => rvalue.debug(store),
+        };
+        s
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         let s = match self.unpack() {
             RV::None => "Undef".to_string(),
@@ -471,7 +487,7 @@ impl Value {
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Complex(_) => self.as_complex().to_s(globals),
+            RV::Complex(_) => self.as_complex().debug(&globals.store),
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => s.to_str().unwrap().to_string(),
             RV::Object(rvalue) => rvalue.to_s(globals),

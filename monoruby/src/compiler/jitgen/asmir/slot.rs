@@ -356,7 +356,7 @@ impl SlotContext {
     }
 
     pub(in crate::compiler::jitgen) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
-        let mut b = UsingXmm::new([0; 1]);
+        let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
             if v.iter().any(|slot| slot < &sp) {
                 b.set(i, true);

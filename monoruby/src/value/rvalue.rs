@@ -383,6 +383,31 @@ impl RValue {
         std::mem::swap(&mut self.kind, &mut other.kind);
     }
 
+    pub(crate) fn debug(&self, store: &Store) -> String {
+        unsafe {
+            match self.ty() {
+                ObjKind::CLASS | ObjKind::MODULE => store.get_class_name(self.as_class_id()),
+                ObjKind::TIME => self.as_time().to_string(),
+                ObjKind::ARRAY => self.as_array().debug(store),
+                ObjKind::OBJECT => self.object_debug(store),
+                ObjKind::RANGE => self.range_debug(store),
+                ObjKind::PROC => self.proc_tos(),
+                ObjKind::HASH => self.as_hashmap().debug(store),
+                ObjKind::REGEXP => self.regexp_tos(),
+                ObjKind::IO => self.as_io().to_string(),
+                ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
+                ObjKind::METHOD => self.as_method().debug(store),
+                ObjKind::FIBER => self.fiber_debug(store),
+                ObjKind::ENUMERATOR => self.enumerator_debug(store),
+                ObjKind::GENERATOR => self.object_debug(store),
+                ObjKind::COMPLEX => self.as_complex().debug(store),
+                ObjKind::BINDING => self.object_debug(store),
+                ObjKind::UMETHOD => self.as_umethod().debug(store),
+                _ => format!("{:016x}", self.id()),
+            }
+        }
+    }
+
     pub(crate) fn to_s(&self, globals: &Globals) -> String {
         unsafe {
             match self.ty() {
@@ -397,10 +422,10 @@ impl RValue {
                 ObjKind::IO => self.as_io().to_string(),
                 ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
                 ObjKind::METHOD => self.as_method().to_s(globals),
-                ObjKind::FIBER => self.fiber_tos(globals),
+                ObjKind::FIBER => self.fiber_debug(&globals.store),
                 ObjKind::ENUMERATOR => self.enumerator_tos(globals),
                 ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::COMPLEX => self.as_complex().to_s(globals),
+                ObjKind::COMPLEX => self.as_complex().debug(&globals.store),
                 ObjKind::BINDING => self.object_tos(globals),
                 ObjKind::UMETHOD => self.as_umethod().to_s(globals),
                 _ => format!("{:016x}", self.id()),
@@ -432,20 +457,32 @@ impl RValue {
         }
     }
 
+    fn object_debug(&self, store: &Store) -> String {
+        if let Some(name) = self.get_ivar(store, IdentId::_NAME) {
+            name.debug(store)
+        } else {
+            format!(
+                "#<{}:0x{:016x}>",
+                store.get_class_name(self.real_class(store).id()),
+                self.id()
+            )
+        }
+    }
+
     fn object_tos(&self, globals: &Globals) -> String {
-        if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
+        if let Some(name) = self.get_ivar(&globals.store, IdentId::_NAME) {
             name.to_s(globals)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                globals.get_class_name(self.real_class(globals).id()),
+                globals.get_class_name(self.real_class(&globals.store).id()),
                 self.id()
             )
         }
     }
 
     fn object_inspect(&self, globals: &Globals) -> String {
-        if let Some(name) = self.get_ivar(globals, IdentId::_NAME) {
+        if let Some(name) = self.get_ivar(&globals.store, IdentId::_NAME) {
             name.to_s(globals)
         } else {
             let mut s = String::new();
@@ -460,7 +497,7 @@ impl RValue {
         }
     }
 
-    fn fiber_tos(&self, globals: &Globals) -> String {
+    fn fiber_debug(&self, store: &Store) -> String {
         let fiber = unsafe { self.as_fiber() };
         let state = match fiber.state() {
             FiberState::Created => "created",
@@ -471,8 +508,13 @@ impl RValue {
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
             self.id(),
-            globals[func_id].as_ruby_func().get_location(),
+            store[func_id].as_ruby_func().get_location(),
         )
+    }
+
+    fn enumerator_debug(&self, store: &Store) -> String {
+        let e = unsafe { self.as_enumerator() };
+        format!("#<Enumerator: {} {}>", e.obj.debug(store), e.method)
     }
 
     fn enumerator_tos(&self, globals: &Globals) -> String {
@@ -486,6 +528,16 @@ impl RValue {
 
     fn regexp_tos(&self) -> String {
         format!("/{}/", self.as_regex().as_str())
+    }
+
+    fn range_debug(&self, store: &Store) -> String {
+        let range = self.as_range();
+        format!(
+            "{}{}{}",
+            range.start.debug(store),
+            if range.exclude_end() { "..." } else { ".." },
+            range.end.debug(store),
+        )
     }
 
     fn range_tos(&self, globals: &Globals) -> String {
@@ -681,17 +733,17 @@ impl RValue {
     ///
     /// Get class object of *self.
     ///
-    pub(crate) fn get_class_obj(&self, globals: &Globals) -> Module {
-        globals.store.classes[self.class()].get_module()
+    pub(crate) fn get_class_obj(&self, store: &Store) -> Module {
+        store.classes[self.class()].get_module()
     }
 
-    pub(crate) fn real_class(&self, globals: &Globals) -> Module {
-        self.get_class_obj(globals).get_real_class()
+    pub(crate) fn real_class(&self, store: &Store) -> Module {
+        self.get_class_obj(store).get_real_class()
     }
 
-    pub(crate) fn get_ivar(&self, globals: &Globals, name: IdentId) -> Option<Value> {
+    pub(crate) fn get_ivar(&self, store: &Store, name: IdentId) -> Option<Value> {
         let class_id = self.class();
-        let id = globals.store.classes[class_id].get_ivarid(name)?;
+        let id = store.classes[class_id].get_ivarid(name)?;
         self.get_var(id)
     }
 

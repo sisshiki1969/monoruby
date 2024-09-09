@@ -292,22 +292,22 @@ impl JitContext {
 
     fn compile_bb(
         &mut self,
-        ir: &mut AsmIr,
         store: &Store,
         func: &ISeqInfo,
         position: Option<BytecodePtr>,
         bbid: BasicBlockId,
-    ) {
+    ) -> AsmIr {
+        let mut ir = AsmIr::new();
         ir.inst.push(AsmInst::DestLabel(self.inst_labels[&bbid]));
         let mut bb = if let Some(bb) = self.target_ctx.remove(&bbid) {
             bb
-        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
-            self.gen_continuation(ir);
+        } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
+            self.gen_continuation(&mut ir);
             bb
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("=== no entry");
-            return;
+            return ir;
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
@@ -315,13 +315,13 @@ impl JitContext {
             ir.bc_index(bb_pos);
             bb.next_sp = func.get_sp(bb_pos);
 
-            match self.compile_inst(ir, &mut bb, store, func, bb_pos) {
+            match self.compile_inst(&mut ir, &mut bb, store, func, bb_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Exit => return,
+                CompileResult::Exit => return ir,
                 CompileResult::Recompile => {
                     let pc = func.get_pc(bb_pos);
                     ir.recompile_and_deopt(&mut bb, pc, position);
-                    return;
+                    return ir;
                 }
                 CompileResult::Break => break,
             }
@@ -334,11 +334,12 @@ impl JitContext {
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.asm_label();
             self.new_continue(func, end, next_bbid, bb, label);
-            if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
-                self.gen_continuation(ir);
+            if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
+                self.gen_continuation(&mut ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }
         }
+        ir
     }
 
     fn gen_continuation(&mut self, ir: &mut AsmIr) {
@@ -935,6 +936,31 @@ pub(crate) struct WriteBack {
     r15: Option<SlotId>,
 }
 
+impl std::fmt::Debug for WriteBack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        for (xmm, slots) in &self.xmm {
+            s.push_str(&format!(" {:?}->", xmm));
+            for slot in slots {
+                s.push_str(&format!("{:?}", slot));
+            }
+        }
+        for (val, slot) in &self.literal {
+            s.push_str(&format!(" {:?}->{:?}", val, slot));
+        }
+        for (slot, slots) in &self.alias {
+            s.push_str(&format!(" {:?}->", slot));
+            for slot in slots {
+                s.push_str(&format!("{:?}", slot));
+            }
+        }
+        if let Some(slot) = self.r15 {
+            s.push_str(&format!(" R15->{:?}", slot));
+        }
+        write!(f, "WriteBack({})", s)
+    }
+}
+
 impl WriteBack {
     fn new(
         xmm: Vec<(Xmm, Vec<SlotId>)>,
@@ -1019,7 +1045,43 @@ impl BBContext {
     }
 }
 
-pub(crate) type UsingXmm = bitvec::prelude::BitArr!(for 14, in u16);
+#[derive(Clone, Copy)]
+pub(crate) struct UsingXmm {
+    inner: bitvec::prelude::BitArr!(for 14, in u16),
+}
+
+impl std::fmt::Debug for UsingXmm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        for i in 0..14 {
+            if self.inner[i] {
+                s.push_str(&format!("%{i}"));
+            }
+        }
+        write!(f, "UsingXmm({})", s)
+    }
+}
+
+impl std::ops::Deref for UsingXmm {
+    type Target = bitvec::prelude::BitArr!(for 14, in u16);
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl std::ops::DerefMut for UsingXmm {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl UsingXmm {
+    fn new() -> Self {
+        Self {
+            inner: bitvec::prelude::BitArray::new([0; 1]),
+        }
+    }
+}
 
 ///
 /// Mode of linkage between stack slot and xmm registers.
@@ -1104,7 +1166,6 @@ impl Codegen {
         let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
-        let mut ir = AsmIr::new();
         for (loop_start, loop_end) in func.bb_info.loops() {
             let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
             ctx.loop_backedges.insert(*loop_start, backedge);
@@ -1149,14 +1210,19 @@ impl Codegen {
             None => BasicBlockId(func.bb_info.len() - 1),
         };
 
+        let mut bbir = vec![];
         for bbid in bb_begin..=bb_end {
-            ctx.compile_bb(&mut ir, store, func, position, bbid);
+            let ir = ctx.compile_bb(store, func, position, bbid);
+            bbir.push((bbid, ir));
         }
 
         ctx.backedge_branches(func);
 
         // generate machine code for a main context
-        self.gen_asm(ir, store, func, &mut ctx, None, None);
+        for (bbid, ir) in bbir.into_iter() {
+            dbg!(bbid);
+            self.gen_asm(ir, store, func, &mut ctx, None, None);
+        }
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
