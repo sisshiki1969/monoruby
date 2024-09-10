@@ -232,16 +232,16 @@ impl JitContext {
         func: &ISeqInfo,
         src_idx: BcIndex,
         dest: BasicBlockId,
-        mut bb: BBContext,
-        label: AsmLabel,
+        mut bbctx: BBContext,
+        branch_dest: AsmLabel,
     ) {
-        bb.sp = func.get_sp(src_idx);
+        bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bb.sp, dest);
+        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
-            bb,
-            label,
+            bbctx,
+            branch_dest,
             cont: false,
         });
     }
@@ -254,16 +254,16 @@ impl JitContext {
         func: &ISeqInfo,
         src_idx: BcIndex,
         dest: BasicBlockId,
-        mut bb: BBContext,
-        label: AsmLabel,
+        mut bbctx: BBContext,
+        branch_dest: AsmLabel,
     ) {
-        bb.sp = func.get_sp(src_idx);
+        bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bb.sp, dest);
+        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
-            bb,
-            label,
+            bbctx,
+            branch_dest,
             cont: true,
         })
     }
@@ -340,15 +340,6 @@ impl JitContext {
             }
         }
         ir
-    }
-
-    fn gen_continuation(&mut self, ir: &mut AsmIr) {
-        if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
-            ir.inst.push(AsmInst::Label(entry));
-            if let Some(ContinuationInfo(from, to, pc)) = data {
-                ir.write_back_for_target(from, &to, pc);
-            }
-        }
     }
 
     fn compile_inst(
@@ -911,9 +902,9 @@ struct BranchEntry {
     /// source instruction index of the branch.
     src_idx: BcIndex,
     /// context of the source basic block.
-    bb: BBContext,
+    bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
-    label: AsmLabel,
+    branch_dest: AsmLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
@@ -1015,17 +1006,17 @@ impl BBContext {
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {
-        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bb);
+        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bbctx);
         for BranchEntry {
             src_idx: _src_idx,
-            bb,
-            label: _,
+            bbctx,
+            branch_dest: _,
             ..
         } in entries.iter()
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bb.sp, bb.slot_state);
-            merge_ctx.union(bb);
+            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
+            merge_ctx.union(bbctx);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  union_entries: {:?}", &merge_ctx);
@@ -1172,12 +1163,12 @@ impl Codegen {
             ctx.loop_info.insert(*loop_start, (*loop_end, exit));
         }
 
-        let bb = BBContext::new(&ctx);
+        let bbctx = BBContext::new(&ctx);
 
         if let Some(pc) = position {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let side_exit = self.gen_deopt(pc + 1, &bb);
+            let side_exit = self.gen_deopt(pc + 1, &bbctx);
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LFP_SELF)];
             );
@@ -1191,13 +1182,13 @@ impl Codegen {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
         let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let label = ctx.asm_label();
+        let branch_dest = ctx.asm_label();
         ctx.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bb,
-                label,
+                bbctx,
+                branch_dest,
                 cont: true,
             }],
         );
