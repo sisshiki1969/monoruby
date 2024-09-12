@@ -2,8 +2,14 @@ use std::iter::Step;
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
 pub(crate) struct BasicBlockId(pub usize);
+
+impl std::fmt::Debug for BasicBlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BB{}", self.0)
+    }
+}
 
 impl std::ops::Add<usize> for BasicBlockId {
     type Output = Self;
@@ -104,19 +110,19 @@ impl BasicBlockInfo {
             .collect();
 
         // generate bb_map.
-        let mut bb_id = BasicBlockId(1);
+        let mut bb_id = -1i32;
         let mut bb_map = vec![];
         for b in bb_head.iter() {
             if *b {
                 bb_id += 1;
             }
-            bb_map.push(bb_id);
+            bb_map.push(BasicBlockId(bb_id as usize));
         }
         bb_id += 1;
 
         // generate bb_info.
         let mut bb_info = BasicBlockInfo {
-            info: vec![BasciBlockInfoEntry::default(); bb_id.0],
+            info: vec![BasciBlockInfoEntry::default(); bb_id as usize],
             bb_head,
             bb_map,
             loops: Default::default(),
@@ -182,6 +188,19 @@ impl BasicBlockInfo {
 
     pub(super) fn loops(&self) -> &[(BasicBlockId, BasicBlockId)] {
         &self.loops
+    }
+}
+
+impl BasicBlockInfo {
+    pub(crate) fn dump(&self) -> String {
+        let mut s = String::new();
+        for (i, entry) in self.info.iter().enumerate() {
+            for succ in &entry.succ {
+                s += &format!("{:?} -> {:?} ", BasicBlockId(i), succ);
+            }
+        }
+        s += "\n";
+        s
     }
 }
 
