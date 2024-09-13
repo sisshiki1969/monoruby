@@ -192,7 +192,7 @@ impl BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
-    pub(crate) fn dump(&self) -> String {
+    pub(crate) fn dump_edges(&self) -> String {
         let mut s = String::new();
         for (i, entry) in self.info.iter().enumerate() {
             for succ in &entry.succ {

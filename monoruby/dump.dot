@@ -1,0 +1,51 @@
+digraph graph_name {
+  graph [
+    charset = "UTF-8";
+    label = "sample graph",
+    bgcolor = "#343434",
+    fontcolor = white,
+    rankdir = TB,
+    margin = 0.2,
+    splines = spline,
+    nodesep = 0.8,
+    ranksep = 1.1
+  ];
+
+  node [
+    colorscheme = "rdylgn11"
+    shape = box,
+    style = "solid,filled",
+    fontsize = 16,
+    fontcolor = 6,
+    fontname = "Migu 1M",
+    color = 7,
+    fillcolor = 11,
+  ];
+
+  edge [
+    style = solid,
+    fontsize = 14,
+    fontcolor = white,
+    fontname = "Migu 1M",
+    color = white,
+    labelfloat = true,
+    labeldistance = 2.5,
+    labelangle = 70
+  ];
+  BB0 [
+    shape=plain
+    label=<<table border="0" cellspacing="0" cellpadding="4">
+      <tr> <td> BB0 </td> </tr>
+
+          <tr> <td align="left">init_method reg:2 arg:1 req:1 opt:0 rest:false stack_offset:5</td> </tr>
+    
+          <tr> <td align="left">%2 = %0.Array(%1;1)                  [Gem::Specification]</td> </tr>
+    
+          <tr> <td align="left">@rdoc_options: Gem::Specification[IvarId(39)] = %2</td> </tr>
+    
+          <tr> <td align="left">ret %2</td> </tr>
+    
+	</table>>
+  ];
+  
+}

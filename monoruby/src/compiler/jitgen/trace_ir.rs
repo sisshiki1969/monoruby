@@ -441,7 +441,7 @@ impl TraceIr {
 }
 
 impl TraceIr {
-    #[cfg(feature = "dump-bc")]
+    //#[cfg(feature = "dump-bc")]
     pub(crate) fn format(&self, store: &Store, i: usize) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt {

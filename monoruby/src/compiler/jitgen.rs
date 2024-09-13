@@ -777,9 +777,7 @@ impl JitContext {
                 }
             }
             TraceIr::InlineCall {
-                inline_id,
-                callid,
-                recv_class,
+                inline_id, callid, ..
             } => {
                 let recv = store[callid].recv;
                 ir.fetch_to_reg(bb, recv, GP::Rdi);
@@ -1305,6 +1303,73 @@ impl Codegen {
             }
             None => BasicBlockId(func.bb_info.len() - 1),
         };
+
+        let mut s = r###"digraph graph_name {
+  graph [
+    charset = "UTF-8";
+    label = "sample graph",
+    bgcolor = "#343434",
+    fontcolor = white,
+    rankdir = TB,
+    margin = 0.2,
+    splines = spline,
+    nodesep = 0.8,
+    ranksep = 1.1
+  ];
+
+  node [
+    colorscheme = "rdylgn11"
+    shape = box,
+    style = "solid,filled",
+    fontsize = 16,
+    fontcolor = 6,
+    fontname = "Consolas",
+    color = 7,
+    fillcolor = 11,
+  ];
+
+  edge [
+    style = solid,
+    fontsize = 14,
+    fontcolor = white,
+    fontname = "Migu 1M",
+    color = white,
+    labelfloat = true,
+    labeldistance = 2.5,
+    labelangle = 70
+  ];
+"###
+        .to_string();
+        for bbid in bb_begin..=bb_end {
+            s += &format!(
+                r###"  {:?} [
+    shape=plain
+    label=<<table border="0" cellspacing="0" cellpadding="4">
+      <tr> <td> {:?} </td> </tr>
+"###,
+                bbid, bbid
+            );
+            let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+            for bc in begin..=end {
+                let pc = func.get_pc(bc);
+                if let Some(inst) = pc.trace_ir(store).format(store, bc.to_usize()) {
+                    let html = html_escape::encode_text(&inst);
+                    s += &format!(
+                        r###"
+          <tr> <td align="left">{}</td> </tr>
+    "###,
+                        html
+                    );
+                }
+            }
+            s += &r###"
+	</table>>
+  ];
+  "###;
+        }
+        s += &func.bb_info.dump_edges();
+        s += "}\n";
+        std::fs::write("dump.dot", s).unwrap();
 
         let mut bbir = vec![];
         for bbid in bb_begin..=bb_end {

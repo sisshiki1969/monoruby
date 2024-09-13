@@ -58,7 +58,7 @@ impl ClassInfoTable {
 pub struct InlineFuncInfo {
     pub inline_gen: Box<InlineGen>,
     pub inline_analysis: InlineAnalysis,
-    #[cfg(feature = "dump-bc")]
+    //#[cfg(feature = "dump-bc")]
     pub name: String,
 }
 
@@ -161,7 +161,7 @@ impl Store {
         self.inline_method.push(InlineFuncInfo {
             inline_gen,
             inline_analysis,
-            #[cfg(feature = "dump-bc")]
+            //#[cfg(feature = "dump-bc")]
             name: _name,
         });
         InlineMethodId::new(id)
@@ -442,7 +442,7 @@ impl alloc::GC<RValue> for ConstSiteInfo {
 }
 
 impl ConstSiteInfo {
-    #[cfg(feature = "dump-bc")]
+    //#[cfg(feature = "dump-bc")]
     pub fn format(&self) -> String {
         let ConstSiteInfo {
             name,

@@ -114,8 +114,6 @@ impl BytecodeGen {
 
         let bbinfo = BasicBlockInfo::new(incoming.branches, &BytecodeIr::new(ir));
 
-        eprintln!("{:?}:{}", self.id, bbinfo.dump());
-
         Ok((ops, sourcemap, bbinfo))
     }
 
