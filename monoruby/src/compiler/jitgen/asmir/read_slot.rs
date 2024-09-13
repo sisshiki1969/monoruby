@@ -212,12 +212,12 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         rhs: SlotId,
-        class: Option<ClassId>,
+        class: ClassId,
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            Some(INTEGER_CLASS) => self.fetch_float_assume_integer(bb, rhs, deopt),
-            Some(FLOAT_CLASS) => self.fetch_float_assume_float(bb, rhs, deopt),
+            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -227,8 +227,8 @@ impl AsmIr {
         bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        lhs_class: Option<ClassId>,
-        rhs_class: Option<ClassId>,
+        lhs_class: ClassId,
+        rhs_class: ClassId,
         deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {

@@ -966,8 +966,8 @@ impl AsmIr {
         &mut self,
         mode: &OpMode,
         bb: &mut BBContext,
-        lhs_class: Option<ClassId>,
-        rhs_class: Option<ClassId>,
+        lhs_class: ClassId,
+        rhs_class: ClassId,
         deopt: AsmDeopt,
     ) -> FMode {
         match mode {

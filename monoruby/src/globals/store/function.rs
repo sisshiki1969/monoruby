@@ -1014,7 +1014,8 @@ impl FuncInfo {
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BytecodePtr::from_bc(pc);
-            if let Some(fmt) = globals.format(pc, i) {
+            let trace_ir = pc.trace_ir(&globals.store);
+            if let Some(fmt) = trace_ir.format(&globals.store, i) {
                 eprint!(
                     "{}:{:05} [{:02}] ",
                     if info

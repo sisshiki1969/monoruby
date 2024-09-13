@@ -190,7 +190,7 @@ impl JitContext {
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
-                TraceIr::LoopStart(_) => {}
+                TraceIr::LoopStart { .. } => {}
                 TraceIr::LoopEnd => {}
                 TraceIr::EnsureEnd => {
                     info.unlink_locals(func);
@@ -311,14 +311,14 @@ impl JitContext {
                 } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as_float(lhs, lhs_class == Some(FLOAT_CLASS));
-                            info.use_as_float(rhs, rhs_class == Some(FLOAT_CLASS));
+                            info.use_as_float(lhs, lhs_class == FLOAT_CLASS);
+                            info.use_as_float(rhs, rhs_class == FLOAT_CLASS);
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as_float(lhs, lhs_class == Some(FLOAT_CLASS));
+                            info.use_as_float(lhs, lhs_class == FLOAT_CLASS);
                         }
                         OpMode::IR(_, rhs) => {
-                            info.use_as_float(rhs, rhs_class == Some(FLOAT_CLASS));
+                            info.use_as_float(rhs, rhs_class == FLOAT_CLASS);
                         }
                     }
                     if let Some(ret) = dst {
@@ -367,6 +367,13 @@ impl JitContext {
                     lhs_class,
                     rhs_class,
                     ..
+                }
+                | TraceIr::CmpBr {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
                 } => {
                     let is_float = false;
                     match mode {
@@ -387,21 +394,28 @@ impl JitContext {
                     lhs_class,
                     rhs_class,
                     ..
+                }
+                | TraceIr::FCmpBr {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
                 } => {
                     let is_float = true;
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as(lhs, is_float, lhs_class == Some(FLOAT_CLASS));
-                            info.use_as(rhs, is_float, rhs_class == Some(FLOAT_CLASS));
+                            info.use_as(lhs, is_float, lhs_class == FLOAT_CLASS);
+                            info.use_as(rhs, is_float, rhs_class == FLOAT_CLASS);
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as(lhs, is_float, lhs_class == Some(FLOAT_CLASS));
+                            info.use_as(lhs, is_float, lhs_class == FLOAT_CLASS);
                         }
                         _ => unreachable!(),
                     }
                     info.def(dst);
                 }
-                TraceIr::ICmp { dst, mode, .. } => {
+                TraceIr::ICmp { dst, mode, .. } | TraceIr::ICmpBr { dst, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             info.use_as(lhs, false, false);

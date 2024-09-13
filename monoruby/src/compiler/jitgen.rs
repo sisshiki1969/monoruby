@@ -354,7 +354,7 @@ impl JitContext {
         let trace_ir = pc.trace_ir(store);
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
-            TraceIr::LoopStart(_) => {
+            TraceIr::LoopStart { .. } => {
                 self.loop_count += 1;
             }
             TraceIr::LoopEnd => {
@@ -639,7 +639,6 @@ impl JitContext {
                 mode,
                 lhs_class,
                 rhs_class,
-                optimizable: false,
             } => {
                 if kind != CmpKind::Cmp {
                     let deopt = ir.new_deopt(bb, pc);
@@ -653,12 +652,7 @@ impl JitContext {
                 }
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::ICmp {
-                kind,
-                dst,
-                mode,
-                optimizable: false,
-            } => {
+            TraceIr::ICmp { kind, dst, mode } => {
                 ir.fetch_fixnum_binary(bb, pc, &mode);
                 ir.inst.push(AsmInst::IntegerCmp { kind, mode });
                 ir.rax2acc(bb, dst);
@@ -669,7 +663,6 @@ impl JitContext {
                 mode,
                 lhs_class,
                 rhs_class,
-                optimizable: false,
             } => {
                 if lhs_class.is_none() || rhs_class.is_none() {
                     return CompileResult::Recompile;
@@ -678,76 +671,64 @@ impl JitContext {
                 ir.generic_cmp(bb, pc, kind);
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::FCmp {
+            TraceIr::FCmpBr {
                 kind,
                 dst,
                 mode,
                 lhs_class,
                 rhs_class,
-                optimizable: true,
+                disp,
+                brkind,
             } => {
                 let index = bb_pos + 1;
-                match (pc + 1).trace_ir(store) {
-                    TraceIr::CondBr(_, disp, true, brkind) => {
-                        let dest_idx = index + disp + 1;
-                        let branch_dest = self.asm_label();
-                        let deopt = ir.new_deopt(bb, pc);
-                        let mode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
-                        ir.unlink(bb, dst);
-                        ir.clear(bb);
-                        ir.float_cmp_br(mode, kind, brkind, branch_dest);
-                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                        self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
-                    }
-                    _ => unreachable!(),
-                }
+                let dest_idx = index + disp + 1;
+                let branch_dest = self.asm_label();
+                let deopt = ir.new_deopt(bb, pc);
+                let mode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
+                ir.unlink(bb, dst);
+                ir.clear(bb);
+                ir.float_cmp_br(mode, kind, brkind, branch_dest);
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
-            TraceIr::ICmp {
+            TraceIr::ICmpBr {
                 kind,
                 dst,
                 mode,
-                optimizable: true,
+                disp,
+                brkind,
             } => {
                 let index = bb_pos + 1;
-                match (pc + 1).trace_ir(store) {
-                    TraceIr::CondBr(_, disp, true, brkind) => {
-                        let dest_idx = index + disp + 1;
-                        let branch_dest = self.asm_label();
-                        ir.fetch_fixnum_binary(bb, pc, &mode);
-                        ir.unlink(bb, dst);
-                        ir.clear(bb);
-                        ir.integer_cmp_br(mode, kind, brkind, branch_dest);
-                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                        self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
-                    }
-                    _ => unreachable!(),
-                }
+                let dest_idx = index + disp + 1;
+                let branch_dest = self.asm_label();
+                ir.fetch_fixnum_binary(bb, pc, &mode);
+                ir.unlink(bb, dst);
+                ir.clear(bb);
+                ir.integer_cmp_br(mode, kind, brkind, branch_dest);
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
-            TraceIr::Cmp {
+            TraceIr::CmpBr {
                 kind,
                 dst,
                 mode,
-                optimizable: true,
+                disp,
+                brkind,
                 ..
             } => {
                 let index = bb_pos + 1;
-                match (pc + 1).trace_ir(store) {
-                    TraceIr::CondBr(_, disp, true, brkind) => {
-                        let dest_idx = index + disp + 1;
-                        let branch_dest = self.asm_label();
-                        ir.fetch_binary(bb, mode);
-                        ir.unlink(bb, dst);
-                        ir.clear(bb);
-                        ir.generic_cmp(bb, pc, kind);
-                        ir.inst.push(AsmInst::GenericCondBr {
-                            brkind,
-                            branch_dest,
-                        });
-                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                        self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
-                    }
-                    _ => unreachable!(),
-                }
+                let dest_idx = index + disp + 1;
+                let branch_dest = self.asm_label();
+                ir.fetch_binary(bb, mode);
+                ir.unlink(bb, dst);
+                ir.clear(bb);
+                ir.generic_cmp(bb, pc, kind);
+                ir.inst.push(AsmInst::GenericCondBr {
+                    brkind,
+                    branch_dest,
+                });
+                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::Mov(dst, src) => {
                 ir.copy_slot(bb, src, dst);

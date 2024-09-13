@@ -72,17 +72,8 @@ impl Bytecode {
         }
     }
 
-    /*#[cfg(feature = "dump-bc")]
-    pub fn value(&self) -> Option<Value> {
-        match self.op2.0 {
-            0 => None,
-            v => Some(Value::from(v)),
-        }
-    }*/
-
-    #[cfg(feature = "dump-bc")]
-    pub fn into_jit_addr(self) -> u64 {
-        self.op2.0
+    pub fn into_jit_addr(self) -> *const u8 {
+        self.op2.0 as _
     }
 
     pub fn from(op1: u64) -> Self {
@@ -369,7 +360,10 @@ impl BytecodePtr {
                     true,
                     BrKind::from(opcode - 12),
                 ),
-                14 => TraceIr::LoopStart(op2),
+                14 => TraceIr::LoopStart {
+                    counter: op2,
+                    jit_addr: self.into_jit_addr(),
+                },
                 15 => TraceIr::LoopEnd,
                 16 => {
                     let class = self.cached_class0();
@@ -604,23 +598,16 @@ impl BytecodePtr {
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
                     let lhs_class = self.classid1();
                     let rhs_class = self.classid2();
-                    let optimizable = false;
                     if self.is_float_binop() {
                         TraceIr::FCmp {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
-                            optimizable,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
                         }
                     } else if self.is_integer_binop() {
-                        TraceIr::ICmp {
-                            kind,
-                            dst,
-                            mode,
-                            optimizable,
-                        }
+                        TraceIr::ICmp { kind, dst, mode }
                     } else {
                         TraceIr::Cmp {
                             kind,
@@ -628,7 +615,6 @@ impl BytecodePtr {
                             mode,
                             lhs_class,
                             rhs_class,
-                            optimizable,
                         }
                     }
                 }
@@ -638,23 +624,16 @@ impl BytecodePtr {
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     let lhs_class = self.classid1();
                     let rhs_class = Some(INTEGER_CLASS);
-                    let optimizable = false;
                     if self.is_float1() {
                         TraceIr::FCmp {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
-                            optimizable,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
                         }
                     } else if self.is_integer1() {
-                        TraceIr::ICmp {
-                            kind,
-                            dst,
-                            mode,
-                            optimizable,
-                        }
+                        TraceIr::ICmp { kind, dst, mode }
                     } else {
                         TraceIr::Cmp {
                             kind,
@@ -662,7 +641,6 @@ impl BytecodePtr {
                             mode,
                             lhs_class,
                             rhs_class,
-                            optimizable,
                         }
                     }
                 }
@@ -686,31 +664,37 @@ impl BytecodePtr {
                     let mode = OpMode::RR(SlotId(op2), SlotId(op3));
                     let lhs_class = self.classid1();
                     let rhs_class = self.classid2();
-                    let optimizable = true;
+                    let (disp, brkind) = match (*self + 1).trace_ir(store) {
+                        TraceIr::CondBr(_, disp, true, brkind) => (disp, brkind),
+                        _ => unreachable!(),
+                    };
                     if self.is_float_binop() {
-                        TraceIr::FCmp {
+                        TraceIr::FCmpBr {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
-                            optimizable,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                            disp,
+                            brkind,
                         }
                     } else if self.is_integer_binop() {
-                        TraceIr::ICmp {
+                        TraceIr::ICmpBr {
                             kind,
                             dst,
                             mode,
-                            optimizable,
+                            disp,
+                            brkind,
                         }
                     } else {
-                        TraceIr::Cmp {
+                        TraceIr::CmpBr {
                             kind,
                             dst,
                             mode,
                             lhs_class,
                             rhs_class,
-                            optimizable,
+                            disp,
+                            brkind,
                         }
                     }
                 }
@@ -720,31 +704,37 @@ impl BytecodePtr {
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     let lhs_class = self.classid1();
                     let rhs_class = Some(INTEGER_CLASS);
-                    let optimizable = true;
+                    let (disp, brkind) = match (*self + 1).trace_ir(store) {
+                        TraceIr::CondBr(_, disp, true, brkind) => (disp, brkind),
+                        _ => unreachable!(),
+                    };
                     if self.is_float1() {
-                        TraceIr::FCmp {
+                        TraceIr::FCmpBr {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
-                            optimizable,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                            disp,
+                            brkind,
                         }
                     } else if self.is_integer1() {
-                        TraceIr::ICmp {
+                        TraceIr::ICmpBr {
                             kind,
                             dst,
                             mode,
-                            optimizable,
+                            disp,
+                            brkind,
                         }
                     } else {
-                        TraceIr::Cmp {
+                        TraceIr::CmpBr {
                             kind,
                             dst,
                             mode,
                             lhs_class,
                             rhs_class,
-                            optimizable,
+                            disp,
+                            brkind,
                         }
                     }
                 }
@@ -794,8 +784,8 @@ impl BytecodePtr {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
                         }
                     } else {
                         TraceIr::BinOp {
@@ -820,8 +810,8 @@ impl BytecodePtr {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
                         }
                     } else {
                         TraceIr::BinOp {
@@ -846,8 +836,8 @@ impl BytecodePtr {
                             kind,
                             dst,
                             mode,
-                            lhs_class,
-                            rhs_class,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
                         }
                     } else {
                         TraceIr::BinOp {
