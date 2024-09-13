@@ -190,7 +190,7 @@ impl JitContext {
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
-                TraceIr::LoopStart(_) => {}
+                TraceIr::LoopStart { .. } => {}
                 TraceIr::LoopEnd => {}
                 TraceIr::EnsureEnd => {
                     info.unlink_locals(func);
@@ -225,7 +225,8 @@ impl JitContext {
                     info.use_range(args, len * 2);
                     info.def(dst);
                 }
-                TraceIr::Index { dst, base, idx } => {
+                TraceIr::ArrayIndex { dst, base, idx, .. }
+                | TraceIr::Index { dst, base, idx, .. } => {
                     info.use_slots(&[base, idx]);
                     info.def(dst);
                 }
@@ -235,7 +236,8 @@ impl JitContext {
                     info.use_slots(&[start, end]);
                     info.def(dst);
                 }
-                TraceIr::IndexAssign { src, base, idx } => {
+                TraceIr::ArrayIndexAssign { src, base, idx, .. }
+                | TraceIr::IndexAssign { src, base, idx, .. } => {
                     info.use_slots(&[src, base, idx]);
                 }
                 TraceIr::ClassDef {
@@ -281,7 +283,7 @@ impl JitContext {
                 | TraceIr::StoreGvar { src, .. } => {
                     info.r#use(src);
                 }
-                TraceIr::BitNot { dst, src } => {
+                TraceIr::BitNot { dst, src, .. } => {
                     info.r#use(src);
                     info.def(dst);
                 }
@@ -289,25 +291,34 @@ impl JitContext {
                     info.use_as(src, true, true);
                     info.def_as(dst, true);
                 }
-                TraceIr::IUnOp { kind: _, dst, src } | TraceIr::UnOp { kind: _, dst, src } => {
+                TraceIr::IUnOp { kind: _, dst, src }
+                | TraceIr::UnOp {
+                    kind: _, dst, src, ..
+                } => {
                     info.use_as(src, false, false);
                     info.def_as(dst, false);
                 }
-                TraceIr::Not { dst, src } => {
+                TraceIr::Not { dst, src, .. } => {
                     info.r#use(src);
                     info.def(dst);
                 }
-                TraceIr::FBinOp { dst, mode, .. } => {
+                TraceIr::FBinOp {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
+                } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as_float(lhs, pc.is_float1());
-                            info.use_as_float(rhs, pc.is_float2());
+                            info.use_as_float(lhs, lhs_class == FLOAT_CLASS);
+                            info.use_as_float(rhs, rhs_class == FLOAT_CLASS);
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as_float(lhs, pc.is_float1());
+                            info.use_as_float(lhs, lhs_class == FLOAT_CLASS);
                         }
                         OpMode::IR(_, rhs) => {
-                            info.use_as_float(rhs, pc.is_float2());
+                            info.use_as_float(rhs, rhs_class == FLOAT_CLASS);
                         }
                     }
                     if let Some(ret) = dst {
@@ -350,15 +361,68 @@ impl JitContext {
                     info.r#use(reg);
                     info.def(dst);
                 }
-                TraceIr::Cmp(_, dst, mode, _) => {
-                    let is_float = mode.is_float_op(&pc);
+                TraceIr::Cmp {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
+                }
+                | TraceIr::CmpBr {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
+                } => {
+                    let is_float = false;
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            info.use_as(lhs, is_float, pc.is_float1());
-                            info.use_as(rhs, is_float, pc.is_float2());
+                            info.use_as(lhs, is_float, lhs_class == Some(FLOAT_CLASS));
+                            info.use_as(rhs, is_float, rhs_class == Some(FLOAT_CLASS));
                         }
                         OpMode::RI(lhs, _) => {
-                            info.use_as(lhs, is_float, pc.is_float1());
+                            info.use_as(lhs, is_float, lhs_class == Some(FLOAT_CLASS));
+                        }
+                        _ => unreachable!(),
+                    }
+                    info.def(dst);
+                }
+                TraceIr::FCmp {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
+                }
+                | TraceIr::FCmpBr {
+                    dst,
+                    mode,
+                    lhs_class,
+                    rhs_class,
+                    ..
+                } => {
+                    let is_float = true;
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            info.use_as(lhs, is_float, lhs_class == FLOAT_CLASS);
+                            info.use_as(rhs, is_float, rhs_class == FLOAT_CLASS);
+                        }
+                        OpMode::RI(lhs, _) => {
+                            info.use_as(lhs, is_float, lhs_class == FLOAT_CLASS);
+                        }
+                        _ => unreachable!(),
+                    }
+                    info.def(dst);
+                }
+                TraceIr::ICmp { dst, mode, .. } | TraceIr::ICmpBr { dst, mode, .. } => {
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            info.use_as(lhs, false, false);
+                            info.use_as(rhs, false, false);
+                        }
+                        OpMode::RI(lhs, _) => {
+                            info.use_as(lhs, false, false);
                         }
                         _ => unreachable!(),
                     }
@@ -397,9 +461,15 @@ impl JitContext {
                     }
                     info.def(dst);
                 }
-                TraceIr::InlineCall { inline_id, callid }
-                | TraceIr::InlineObjectSend { inline_id, callid }
-                | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
+                TraceIr::InlineCall {
+                    inline_id, callid, ..
+                }
+                | TraceIr::InlineObjectSend {
+                    inline_id, callid, ..
+                }
+                | TraceIr::InlineObjectSendSplat {
+                    inline_id, callid, ..
+                } => {
                     (store.get_inline_info(inline_id).inline_analysis)(&mut info, &store[callid]);
                 }
                 TraceIr::InlineCache => {}

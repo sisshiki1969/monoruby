@@ -212,12 +212,12 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         rhs: SlotId,
-        class: Option<ClassId>,
+        class: ClassId,
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            Some(INTEGER_CLASS) => self.fetch_float_assume_integer(bb, rhs, deopt),
-            Some(FLOAT_CLASS) => self.fetch_float_assume_float(bb, rhs, deopt),
+            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -227,16 +227,17 @@ impl AsmIr {
         bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        pc: BytecodePtr,
+        lhs_class: ClassId,
+        rhs_class: ClassId,
         deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.fetch_float_assume(bb, lhs, pc.classid1(), deopt),
-                self.fetch_float_assume(bb, rhs, pc.classid2(), deopt),
+                self.fetch_float_assume(bb, lhs, lhs_class, deopt),
+                self.fetch_float_assume(bb, rhs, rhs_class, deopt),
             )
         } else {
-            let lhs = self.fetch_float_assume(bb, lhs, pc.classid1(), deopt);
+            let lhs = self.fetch_float_assume(bb, lhs, lhs_class, deopt);
             (lhs, lhs)
         }
     }
