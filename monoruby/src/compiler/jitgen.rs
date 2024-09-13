@@ -782,18 +782,24 @@ impl JitContext {
                 //ir.write_back_slots(bb, &[new, old]);
                 ir.alias_method(bb, pc, new, old);
             }
-            TraceIr::MethodCall { callid } | TraceIr::MethodCallBlock { callid } => {
-                if let Some(fid) = pc.cached_fid()
-                //&& self.class_version == (pc + 1).cached_version()
-                {
-                    if ir.gen_call(store, bb, fid, callid, pc).is_none() {
+            TraceIr::MethodCall { callid, recv_class }
+            | TraceIr::MethodCallBlock { callid, recv_class } => {
+                if let Some(fid) = pc.cached_fid() {
+                    if ir
+                        .gen_call(store, bb, fid, recv_class.unwrap(), callid, pc)
+                        .is_none()
+                    {
                         return CompileResult::Recompile;
                     }
                 } else {
                     return CompileResult::Recompile;
                 }
             }
-            TraceIr::InlineCall { inline_id, callid } => {
+            TraceIr::InlineCall {
+                inline_id,
+                callid,
+                recv_class,
+            } => {
                 let recv = store[callid].recv;
                 ir.fetch_to_reg(bb, recv, GP::Rdi);
                 let (deopt, error) = ir.new_deopt_error(bb, pc);

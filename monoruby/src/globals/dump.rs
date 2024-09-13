@@ -568,9 +568,13 @@ impl Globals {
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
+            TraceIr::MethodCall {
+                callid, recv_class, ..
+            }
+            | TraceIr::MethodCallBlock {
+                callid, recv_class, ..
+            } => {
                 let callsite = &self.store[callid];
-                let class = pc.cached_class1();
                 let name = if let Some(name) = callsite.name {
                     name.to_string()
                 } else {
@@ -615,20 +619,24 @@ impl Globals {
                         "".to_string()
                     },
                 );
-                format!(
-                    "{:36} [{}]",
-                    op1,
-                    match class {
-                        Some(class) => self.store.get_class_name(class),
-                        None => "-".to_string(),
-                    }
-                )
+                format!("{:36} [{}]", op1, self.store.get_class_name(recv_class),)
             }
             TraceIr::InlineCall {
-                inline_id, callid, ..
+                inline_id,
+                callid,
+                recv_class,
+                ..
             }
-            | TraceIr::InlineObjectSend { inline_id, callid }
-            | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
+            | TraceIr::InlineObjectSend {
+                inline_id,
+                callid,
+                recv_class,
+            }
+            | TraceIr::InlineObjectSendSplat {
+                inline_id,
+                callid,
+                recv_class,
+            } => {
                 let CallSiteInfo {
                     recv,
                     args,
@@ -636,7 +644,6 @@ impl Globals {
                     dst: ret,
                     ..
                 } = self.store[callid];
-                let class = pc.cached_class1().unwrap();
                 let name = &self.store.get_inline_info(inline_id).name;
                 let op1 = if pos_num == 0 {
                     format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
@@ -649,7 +656,7 @@ impl Globals {
                         pos_num,
                     )
                 };
-                format!("{:36} [{}]", op1, self.store.get_class_name(class))
+                format!("{:36} [{}]", op1, self.store.get_class_name(recv_class))
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {

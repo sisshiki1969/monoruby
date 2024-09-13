@@ -415,6 +415,7 @@ impl BytecodePtr {
                 },
                 30..=31 => {
                     let cached_fid = self.cached_fid();
+                    let recv_class = self.cached_class1();
                     let is_simple = opcode == 30;
                     let callid: CallSiteId = op2.into();
 
@@ -427,17 +428,35 @@ impl BytecodePtr {
                                 && store[callid].pos_num == 1
                                 && !store[callid].kw_may_exists()
                             {
-                                return TraceIr::InlineObjectSendSplat { inline_id, callid };
+                                return TraceIr::InlineObjectSendSplat {
+                                    inline_id,
+                                    callid,
+                                    recv_class,
+                                };
                             } else if is_simple {
-                                return TraceIr::InlineObjectSend { inline_id, callid };
+                                return TraceIr::InlineObjectSend {
+                                    inline_id,
+                                    callid,
+                                    recv_class,
+                                };
                             }
                         } else if is_simple {
-                            return TraceIr::InlineCall { inline_id, callid };
+                            return TraceIr::InlineCall {
+                                inline_id,
+                                callid,
+                                recv_class,
+                            };
                         }
                     }
-                    TraceIr::MethodCall { callid }
+                    TraceIr::MethodCall { callid, recv_class }
                 }
-                32..=33 => TraceIr::MethodCallBlock { callid: op2.into() },
+                32..=33 => {
+                    let recv_class = self.cached_class1();
+                    TraceIr::MethodCallBlock {
+                        callid: op2.into(),
+                        recv_class,
+                    }
+                }
                 34..=35 => TraceIr::Yield { callid: op2.into() },
                 36 => TraceIr::OptCase {
                     cond: SlotId::new(op1),

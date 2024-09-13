@@ -199,23 +199,28 @@ pub(crate) enum TraceIr {
     /// func call(%ret, name)
     MethodCall {
         callid: CallSiteId,
+        recv_class: Option<ClassId>,
     },
     MethodCallBlock {
         callid: CallSiteId,
+        recv_class: Option<ClassId>,
     },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
+        recv_class: Option<ClassId>,
     },
     /// Object#send and is_simple
     InlineObjectSend {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
+        recv_class: Option<ClassId>,
     },
     /// Object#send and if splat_pos.len() == 1 && pos_num == 1 && !kw_may_exists()
     InlineObjectSendSplat {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
+        recv_class: Option<ClassId>,
     },
     InlineCache,
     Yield {
