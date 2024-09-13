@@ -227,16 +227,17 @@ impl AsmIr {
         bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        pc: BytecodePtr,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
         deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.fetch_float_assume(bb, lhs, pc.classid1(), deopt),
-                self.fetch_float_assume(bb, rhs, pc.classid2(), deopt),
+                self.fetch_float_assume(bb, lhs, lhs_class, deopt),
+                self.fetch_float_assume(bb, rhs, rhs_class, deopt),
             )
         } else {
-            let lhs = self.fetch_float_assume(bb, lhs, pc.classid1(), deopt);
+            let lhs = self.fetch_float_assume(bb, lhs, lhs_class, deopt);
             (lhs, lhs)
         }
     }

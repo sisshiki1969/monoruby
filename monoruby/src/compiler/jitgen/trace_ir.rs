@@ -1,6 +1,13 @@
 use super::*;
 use crate::bytecodegen::{inst::*, BinOpK, UnOpK};
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OpMode {
+    RR(SlotId, SlotId),
+    RI(SlotId, i16),
+    IR(i16, SlotId),
+}
+
 ///
 /// IR for JIT compiler.
 ///
@@ -43,8 +50,20 @@ pub(crate) enum TraceIr {
         end: SlotId,
         exclude_end: bool,
     },
+    ArrayIndex {
+        dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+    },
     Index {
         dst: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        base_class: Option<ClassId>,
+        idx_class: Option<ClassId>,
+    },
+    ArrayIndexAssign {
+        src: SlotId,
         base: SlotId,
         idx: SlotId,
     },
@@ -52,6 +71,8 @@ pub(crate) enum TraceIr {
         src: SlotId,
         base: SlotId,
         idx: SlotId,
+        base_class: Option<ClassId>,
+        idx_class: Option<ClassId>,
     },
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, ConstSiteId),
@@ -89,11 +110,13 @@ pub(crate) enum TraceIr {
     BitNot {
         dst: SlotId,
         src: SlotId,
+        src_class: Option<ClassId>,
     },
     UnOp {
         kind: UnOpK,
         dst: SlotId,
         src: SlotId,
+        src_class: Option<ClassId>,
     },
     IUnOp {
         kind: UnOpK,
@@ -108,11 +131,14 @@ pub(crate) enum TraceIr {
     Not {
         dst: SlotId,
         src: SlotId,
+        src_class: Option<ClassId>,
     },
     BinOp {
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
     },
     IBinOp {
         kind: BinOpK,
@@ -123,9 +149,31 @@ pub(crate) enum TraceIr {
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
     },
-    /// cmp(cmpkind, %ret, opmode, optimizable)
-    Cmp(ruruby_parse::CmpKind, Option<SlotId>, OpMode, bool),
+    Cmp {
+        kind: ruruby_parse::CmpKind,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
+        optimizable: bool,
+    },
+    ICmp {
+        kind: ruruby_parse::CmpKind,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        optimizable: bool,
+    },
+    FCmp {
+        kind: ruruby_parse::CmpKind,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
+        optimizable: bool,
+    },
     /// return(%src)
     Ret(SlotId),
     /// method_return(%src)
@@ -357,29 +405,4 @@ impl TraceIr {
             _ => DefKind::None,
         }
     }*/
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum OpMode {
-    RR(SlotId, SlotId),
-    RI(SlotId, i16),
-    IR(i16, SlotId),
-}
-
-impl OpMode {
-    pub(crate) fn is_float_op(&self, pc: &Bytecode) -> bool {
-        match self {
-            Self::RR(..) => pc.is_float_binop(),
-            Self::RI(..) => pc.is_float1(),
-            Self::IR(..) => pc.is_float2(),
-        }
-    }
-
-    pub(crate) fn is_integer_op(&self, pc: &Bytecode) -> bool {
-        match self {
-            Self::RR(..) => pc.is_integer_binop(),
-            Self::RI(..) => pc.is_integer1(),
-            Self::IR(..) => pc.is_integer2(),
-        }
-    }
 }

@@ -412,17 +412,51 @@ impl JitContext {
                 ir.new_range(bb, pc, start, end, exclude_end);
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::Index { dst, base, idx } => {
-                if pc.classid1().is_none() || pc.classid2().is_none() {
-                    return CompileResult::Recompile;
-                }
-                ir.index(bb, dst, base, idx, pc);
+            TraceIr::ArrayIndex { dst, base, idx } => {
+                ir.index(
+                    bb,
+                    dst,
+                    base,
+                    idx,
+                    Some(ARRAY_CLASS),
+                    Some(INTEGER_CLASS),
+                    pc,
+                );
             }
-            TraceIr::IndexAssign { src, base, idx } => {
-                if pc.classid1().is_none() || pc.classid2().is_none() {
+            TraceIr::Index {
+                dst,
+                base,
+                idx,
+                base_class,
+                idx_class,
+            } => {
+                if base_class.is_none() || idx_class.is_none() {
                     return CompileResult::Recompile;
                 }
-                ir.index_assign(bb, src, base, idx, pc);
+                ir.index(bb, dst, base, idx, base_class, idx_class, pc);
+            }
+            TraceIr::ArrayIndexAssign { src, base, idx } => {
+                ir.index_assign(
+                    bb,
+                    src,
+                    base,
+                    idx,
+                    Some(ARRAY_CLASS),
+                    Some(INTEGER_CLASS),
+                    pc,
+                );
+            }
+            TraceIr::IndexAssign {
+                src,
+                base,
+                idx,
+                base_class,
+                idx_class,
+            } => {
+                if base_class.is_none() || idx_class.is_none() {
+                    return CompileResult::Recompile;
+                }
+                ir.index_assign(bb, src, base, idx, base_class, idx_class, pc);
             }
             TraceIr::LoadConst(dst, id) => {
                 ir.unlink(bb, dst);
@@ -523,15 +557,19 @@ impl JitContext {
                 ir.fetch_to_reg(bb, src, GP::Rdi);
                 ir.inst.push(AsmInst::StoreDynVar { dst, src: GP::Rdi });
             }
-            TraceIr::BitNot { dst, src } => {
-                if pc.classid1().is_none() {
+            TraceIr::BitNot {
+                dst,
+                src,
+                src_class,
+            } => {
+                if src_class.is_none() {
                     return CompileResult::Recompile;
                 }
                 ir.fetch_to_reg(bb, src, GP::Rdi);
                 ir.generic_unop(bb, pc, bitnot_value);
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::Not { dst, src } => {
+            TraceIr::Not { dst, src, .. } => {
                 ir.fetch_to_reg(bb, src, GP::Rdi);
                 ir.inst.push(AsmInst::Not);
                 ir.rax2acc(bb, dst);
@@ -548,20 +586,33 @@ impl JitContext {
                 ir.generic_unop(bb, pc, kind.generic_func());
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::UnOp { kind, dst, src } => {
-                if pc.classid1().is_none() {
+            TraceIr::UnOp {
+                kind,
+                dst,
+                src,
+                src_class,
+            } => {
+                if src_class.is_none() {
                     return CompileResult::Recompile;
                 }
                 ir.fetch_to_reg(bb, src, GP::Rdi);
                 ir.generic_unop(bb, pc, kind.generic_func());
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::IBinOp { kind, dst, mode } => {
+            TraceIr::IBinOp {
+                kind, dst, mode, ..
+            } => {
                 ir.gen_binop_integer(bb, pc, kind, dst, mode);
             }
-            TraceIr::FBinOp { kind, dst, mode } => {
+            TraceIr::FBinOp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+            } => {
                 let deopt = ir.new_deopt(bb, pc);
-                let fmode = ir.fmode(&mode, bb, pc, deopt);
+                let fmode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
                 if let Some(ret) = dst {
                     let dst = ir.xmm_write(bb, ret);
                     let using_xmm = bb.get_using_xmm();
@@ -569,62 +620,129 @@ impl JitContext {
                 }
             }
             TraceIr::BinOp {
-                kind, dst, mode, ..
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
             } => {
-                if pc.classid1().is_none() || pc.classid2().is_none() {
+                if lhs_class.is_none() || rhs_class.is_none() {
                     return CompileResult::Recompile;
                 }
                 ir.fetch_binary(bb, mode);
                 ir.generic_binop(bb, pc, kind);
                 ir.rax2acc(bb, dst);
             }
-            TraceIr::Cmp(kind, ret, mode, false) => {
-                if pc.classid1().is_none() || pc.classid2().is_none() {
-                    return CompileResult::Recompile;
-                }
-                if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
+            TraceIr::FCmp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+                optimizable: false,
+            } => {
+                if kind != CmpKind::Cmp {
                     let deopt = ir.new_deopt(bb, pc);
-                    let mode = ir.fmode(&mode, bb, pc, deopt);
-                    ir.unlink(bb, ret);
+                    let mode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
+                    ir.unlink(bb, dst);
                     ir.clear(bb);
                     ir.inst.push(AsmInst::FloatCmp { kind, mode });
-                } else if mode.is_integer_op(&pc) {
-                    ir.fetch_fixnum_binary(bb, pc, &mode);
-                    ir.inst.push(AsmInst::IntegerCmp { kind, mode });
                 } else {
                     ir.fetch_binary(bb, mode);
                     ir.generic_cmp(bb, pc, kind);
                 }
-                ir.rax2acc(bb, ret);
+                ir.rax2acc(bb, dst);
             }
-
-            TraceIr::Cmp(kind, ret, mode, true) => {
+            TraceIr::ICmp {
+                kind,
+                dst,
+                mode,
+                optimizable: false,
+            } => {
+                ir.fetch_fixnum_binary(bb, pc, &mode);
+                ir.inst.push(AsmInst::IntegerCmp { kind, mode });
+                ir.rax2acc(bb, dst);
+            }
+            TraceIr::Cmp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+                optimizable: false,
+            } => {
+                if lhs_class.is_none() || rhs_class.is_none() {
+                    return CompileResult::Recompile;
+                }
+                ir.fetch_binary(bb, mode);
+                ir.generic_cmp(bb, pc, kind);
+                ir.rax2acc(bb, dst);
+            }
+            TraceIr::FCmp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+                optimizable: true,
+            } => {
                 let index = bb_pos + 1;
                 match (pc + 1).trace_ir(store) {
                     TraceIr::CondBr(_, disp, true, brkind) => {
                         let dest_idx = index + disp + 1;
                         let branch_dest = self.asm_label();
-                        if mode.is_float_op(&pc) {
-                            let deopt = ir.new_deopt(bb, pc);
-                            let mode = ir.fmode(&mode, bb, pc, deopt);
-                            ir.unlink(bb, ret);
-                            ir.clear(bb);
-                            ir.float_cmp_br(mode, kind, brkind, branch_dest);
-                        } else if mode.is_integer_op(&pc) {
-                            ir.fetch_fixnum_binary(bb, pc, &mode);
-                            ir.unlink(bb, ret);
-                            ir.clear(bb);
-                            ir.integer_cmp_br(mode, kind, brkind, branch_dest);
-                        } else {
-                            ir.fetch_binary(bb, mode);
-                            ir.unlink(bb, ret);
-                            ir.clear(bb);
-                            ir.generic_cmp(bb, pc, kind);
-                            ir.inst.push(AsmInst::GenericCondBr {
-                                brkind,
-                                branch_dest,
-                            });
-                        }
+                        let deopt = ir.new_deopt(bb, pc);
+                        let mode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
+                        ir.unlink(bb, dst);
+                        ir.clear(bb);
+                        ir.float_cmp_br(mode, kind, brkind, branch_dest);
+                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                        self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            TraceIr::ICmp {
+                kind,
+                dst,
+                mode,
+                optimizable: true,
+            } => {
+                let index = bb_pos + 1;
+                match (pc + 1).trace_ir(store) {
+                    TraceIr::CondBr(_, disp, true, brkind) => {
+                        let dest_idx = index + disp + 1;
+                        let branch_dest = self.asm_label();
+                        ir.fetch_fixnum_binary(bb, pc, &mode);
+                        ir.unlink(bb, dst);
+                        ir.clear(bb);
+                        ir.integer_cmp_br(mode, kind, brkind, branch_dest);
+                        let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                        self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            TraceIr::Cmp {
+                kind,
+                dst,
+                mode,
+                optimizable: true,
+                ..
+            } => {
+                let index = bb_pos + 1;
+                match (pc + 1).trace_ir(store) {
+                    TraceIr::CondBr(_, disp, true, brkind) => {
+                        let dest_idx = index + disp + 1;
+                        let branch_dest = self.asm_label();
+                        ir.fetch_binary(bb, mode);
+                        ir.unlink(bb, dst);
+                        ir.clear(bb);
+                        ir.generic_cmp(bb, pc, kind);
+                        ir.inst.push(AsmInst::GenericCondBr {
+                            brkind,
+                            branch_dest,
+                        });
                         let dest_idx = func.bb_info.get_bb_id(dest_idx);
                         self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
                     }

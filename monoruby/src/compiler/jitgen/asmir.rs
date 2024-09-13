@@ -966,12 +966,13 @@ impl AsmIr {
         &mut self,
         mode: &OpMode,
         bb: &mut BBContext,
-        pc: BytecodePtr,
+        lhs_class: Option<ClassId>,
+        rhs_class: Option<ClassId>,
         deopt: AsmDeopt,
     ) -> FMode {
         match mode {
             OpMode::RR(l, r) => {
-                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, pc, deopt);
+                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, lhs_class, rhs_class, deopt);
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {

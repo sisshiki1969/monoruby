@@ -217,6 +217,53 @@ impl Globals {
             }
         }
 
+        fn fmt(
+            globals: &Globals,
+            s: String,
+            lhs_class: Option<ClassId>,
+            rhs_class: Option<ClassId>,
+        ) -> String {
+            format!(
+                "{:36} [{}][{}]",
+                s,
+                globals.store.get_class_name(lhs_class),
+                globals.store.get_class_name(rhs_class)
+            )
+        }
+
+        fn cmp_fmt(
+            globals: &Globals,
+            kind: ruruby_parse::CmpKind,
+            dst: Option<SlotId>,
+            mode: OpMode,
+            lhs_class: Option<ClassId>,
+            rhs_class: Option<ClassId>,
+            optimizable: bool,
+        ) -> String {
+            let s = match mode {
+                OpMode::RR(lhs, rhs) => {
+                    format!(
+                        "{}{} = {:?} {:?} {:?}",
+                        optstr(optimizable),
+                        ret_str(dst),
+                        lhs,
+                        kind,
+                        rhs,
+                    )
+                }
+                OpMode::RI(lhs, rhs) => format!(
+                    "{}{} = {:?} {:?} {}: i16",
+                    optstr(optimizable),
+                    ret_str(dst),
+                    lhs,
+                    kind,
+                    rhs,
+                ),
+                _ => unreachable!(),
+            };
+            fmt(globals, s, lhs_class, rhs_class)
+        }
+
         let s = match pc.trace_ir(&self.store) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
@@ -257,7 +304,7 @@ impl Globals {
                 end
             ),
             TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, self.inspect2(val))
+                format!("{:?} = literal[{}]", reg, val.debug(&self.store))
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
@@ -269,17 +316,33 @@ impl Globals {
             TraceIr::Hash { dst, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
             }
-            TraceIr::Index { dst, base, idx } => {
+            TraceIr::ArrayIndex { dst, base, idx } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.get_class_name(pc.classid1()),
-                    self.get_class_name(pc.classid2())
-                )
+                format!("{:36} [ARRAY][INTEGER]", op1,)
             }
-            TraceIr::IndexAssign { src, base, idx } => {
-                format!("{:?}:.[{:?}:] = {:?}", base, idx, src,)
+            TraceIr::Index {
+                dst,
+                base,
+                idx,
+                base_class,
+                idx_class,
+            } => {
+                let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
+                fmt(self, op1, base_class, idx_class)
+            }
+            TraceIr::ArrayIndexAssign { src, base, idx } => {
+                let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
+                format!("{:36} [ARRAY][INTEGER]", op1,)
+            }
+            TraceIr::IndexAssign {
+                src,
+                base,
+                idx,
+                base_class,
+                idx_class,
+            } => {
+                let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
+                fmt(self, op1, base_class, idx_class)
             }
             TraceIr::LoadConst(reg, id) => {
                 let op = self.store[id].format();
@@ -289,7 +352,7 @@ impl Globals {
                     op1,
                     match self.store[id].cache.cached_value {
                         None => "<INVALID>".to_string(),
-                        Some(val) => self.inspect2(val),
+                        Some(val) => val.debug(&self.store),
                     }
                 )
             }
@@ -314,7 +377,7 @@ impl Globals {
                     "{:?} = {id}: {}",
                     reg,
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", self.get_class_name(id), ivar_id)
+                        format!("{}[{:?}]", self.store.get_class_name(id), ivar_id)
                     } else {
                         format!("-")
                     }
@@ -324,7 +387,7 @@ impl Globals {
                 format!(
                     "{id}: {} = {:?}",
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", self.get_class_name(id), ivar_id)
+                        format!("{}[{:?}]", self.store.get_class_name(id), ivar_id)
                     } else {
                         format!("-")
                     },
@@ -364,117 +427,139 @@ impl Globals {
                 )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
-            TraceIr::BitNot { dst, src } => {
+            TraceIr::BitNot {
+                dst,
+                src,
+                src_class,
+            } => {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
-                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
+                format!("{:36} [{}]", op1, self.store.get_class_name(src_class),)
             }
-            TraceIr::UnOp { kind, dst, src }
-            | TraceIr::IUnOp { kind, dst, src }
-            | TraceIr::FUnOp { kind, dst, src } => {
+            TraceIr::UnOp {
+                kind,
+                dst,
+                src,
+                src_class,
+            } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
+                format!("{:36} [{}]", op1, self.store.get_class_name(src_class),)
             }
-            TraceIr::Not { dst, src } => {
+            TraceIr::IUnOp { kind, dst, src } => {
+                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
+                format!("{:36} [{}]", op1, self.store.get_class_name(INTEGER_CLASS),)
+            }
+            TraceIr::FUnOp { kind, dst, src } => {
+                let op1 = format!("{:?} = {}{:?}", dst, kind, src);
+                format!("{:36} [{}]", op1, self.store.get_class_name(FLOAT_CLASS),)
+            }
+            TraceIr::Not {
+                dst,
+                src,
+                src_class,
+            } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
-                format!("{:36} [{}]", op1, self.get_class_name(pc.classid1()),)
+                format!("{:36} [{}]", op1, self.store.get_class_name(src_class),)
             }
             TraceIr::BinOp {
                 kind,
                 dst,
                 mode: OpMode::RR(lhs, rhs),
+                lhs_class,
+                rhs_class,
             }
-            | TraceIr::IBinOp {
+            | TraceIr::FBinOp {
                 kind,
                 dst,
                 mode: OpMode::RR(lhs, rhs),
+                lhs_class,
+                rhs_class,
+            } => {
+                let op1 = format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs);
+                fmt(self, op1, lhs_class, rhs_class)
             }
-            | TraceIr::FBinOp {
+            TraceIr::IBinOp {
                 kind,
                 dst,
                 mode: OpMode::RR(lhs, rhs),
             } => {
                 let op1 = format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs);
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.get_class_name(pc.classid1()),
-                    self.get_class_name(pc.classid2())
-                )
+                fmt(self, op1, Some(INTEGER_CLASS), Some(INTEGER_CLASS))
             }
             TraceIr::BinOp {
                 kind,
                 dst,
                 mode: OpMode::RI(lhs, rhs),
+                lhs_class,
+                rhs_class,
             }
-            | TraceIr::IBinOp {
+            | TraceIr::FBinOp {
                 kind,
                 dst,
                 mode: OpMode::RI(lhs, rhs),
+                lhs_class,
+                rhs_class,
+            } => {
+                let op1 = format!("{} = {:?} {} {}: i16", ret_str(dst), lhs, kind, rhs,);
+                fmt(self, op1, lhs_class, rhs_class)
             }
-            | TraceIr::FBinOp {
+            TraceIr::IBinOp {
                 kind,
                 dst,
                 mode: OpMode::RI(lhs, rhs),
             } => {
                 let op1 = format!("{} = {:?} {} {}: i16", ret_str(dst), lhs, kind, rhs,);
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.get_class_name(pc.classid1()),
-                    self.get_class_name(pc.classid2())
-                )
+                fmt(self, op1, Some(INTEGER_CLASS), Some(INTEGER_CLASS))
             }
             TraceIr::BinOp {
                 kind,
                 dst,
                 mode: OpMode::IR(lhs, rhs),
-            }
-            | TraceIr::IBinOp {
-                kind,
-                dst,
-                mode: OpMode::IR(lhs, rhs),
+                lhs_class,
+                rhs_class,
             }
             | TraceIr::FBinOp {
                 kind,
                 dst,
                 mode: OpMode::IR(lhs, rhs),
+                lhs_class,
+                rhs_class,
             } => {
                 let op1 = format!("{} = {}: i16 {} {:?}", ret_str(dst), lhs, kind, rhs,);
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.get_class_name(pc.classid1()),
-                    self.get_class_name(pc.classid2())
-                )
+                fmt(self, op1, lhs_class, rhs_class)
             }
-            TraceIr::Cmp(kind, dst, mode, opt) => {
-                let op1 = match mode {
-                    OpMode::RR(lhs, rhs) => {
-                        format!(
-                            "{}{} = {:?} {:?} {:?}",
-                            optstr(opt),
-                            ret_str(dst),
-                            lhs,
-                            kind,
-                            rhs,
-                        )
-                    }
-                    OpMode::RI(lhs, rhs) => format!(
-                        "{}{} = {:?} {:?} {}: i16",
-                        optstr(opt),
-                        ret_str(dst),
-                        lhs,
-                        kind,
-                        rhs,
-                    ),
-                    _ => unreachable!(),
-                };
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.get_class_name(pc.classid1()),
-                    self.get_class_name(pc.classid2())
-                )
+            TraceIr::IBinOp {
+                kind,
+                dst,
+                mode: OpMode::IR(lhs, rhs),
+            } => {
+                let op1 = format!("{} = {}: i16 {} {:?}", ret_str(dst), lhs, kind, rhs,);
+                fmt(self, op1, Some(INTEGER_CLASS), Some(INTEGER_CLASS))
+            }
+            TraceIr::Cmp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+                optimizable,
+            }
+            | TraceIr::FCmp {
+                kind,
+                dst,
+                mode,
+                lhs_class,
+                rhs_class,
+                optimizable,
+            } => cmp_fmt(self, kind, dst, mode, lhs_class, rhs_class, optimizable),
+            TraceIr::ICmp {
+                kind,
+                dst,
+                mode,
+                optimizable,
+            } => {
+                let lhs_class = Some(INTEGER_CLASS);
+                let rhs_class = Some(INTEGER_CLASS);
+                cmp_fmt(self, kind, dst, mode, lhs_class, rhs_class, optimizable)
             }
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
@@ -534,7 +619,7 @@ impl Globals {
                     "{:36} [{}]",
                     op1,
                     match class {
-                        Some(class) => self.get_class_name(class),
+                        Some(class) => self.store.get_class_name(class),
                         None => "-".to_string(),
                     }
                 )
@@ -564,7 +649,7 @@ impl Globals {
                         pos_num,
                     )
                 };
-                format!("{:36} [{}]", op1, self.get_class_name(class))
+                format!("{:36} [{}]", op1, self.store.get_class_name(class))
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {

@@ -505,16 +505,23 @@ impl BytecodePtr {
                     } else if self.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
                     } else {
-                        TraceIr::UnOp { kind, dst, src }
+                        TraceIr::UnOp {
+                            kind,
+                            dst,
+                            src,
+                            src_class: self.classid1(),
+                        }
                     }
                 }
                 127 => TraceIr::BitNot {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
+                    src_class: self.classid1(),
                 },
                 128 => TraceIr::Not {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
+                    src_class: self.classid1(),
                 },
                 129 => {
                     let kind = UnOpK::Neg;
@@ -525,32 +532,121 @@ impl BytecodePtr {
                     } else if self.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
                     } else {
-                        TraceIr::UnOp { kind, dst, src }
+                        TraceIr::UnOp {
+                            kind,
+                            dst,
+                            src,
+                            src_class: self.classid1(),
+                        }
                     }
                 }
                 130 => TraceIr::InlineCache,
-                132 => TraceIr::Index {
-                    dst: SlotId::new(op1),
-                    base: SlotId::new(op2),
-                    idx: SlotId::new(op3),
-                },
-                133 => TraceIr::IndexAssign {
-                    src: SlotId::new(op1),
-                    base: SlotId::new(op2),
-                    idx: SlotId::new(op3),
-                },
-                134..=141 => TraceIr::Cmp(
-                    CmpKind::from(opcode - 134),
-                    SlotId::from(op1),
-                    OpMode::RR(SlotId::new(op2), SlotId::new(op3)),
-                    false,
-                ),
-                142..=149 => TraceIr::Cmp(
-                    CmpKind::from(opcode - 142),
-                    SlotId::from(op1),
-                    OpMode::RI(SlotId::new(op2), op3 as i16),
-                    false,
-                ),
+                132 => {
+                    let base_class = self.classid1();
+                    let idx_class = self.classid2();
+                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+                        TraceIr::ArrayIndex {
+                            dst: SlotId::new(op1),
+                            base: SlotId::new(op2),
+                            idx: SlotId::new(op3),
+                        }
+                    } else {
+                        TraceIr::Index {
+                            dst: SlotId::new(op1),
+                            base: SlotId::new(op2),
+                            idx: SlotId::new(op3),
+                            base_class,
+                            idx_class,
+                        }
+                    }
+                }
+                133 => {
+                    let base_class = self.classid1();
+                    let idx_class = self.classid2();
+                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+                        TraceIr::ArrayIndexAssign {
+                            src: SlotId::new(op1),
+                            base: SlotId::new(op2),
+                            idx: SlotId::new(op3),
+                        }
+                    } else {
+                        TraceIr::IndexAssign {
+                            src: SlotId::new(op1),
+                            base: SlotId::new(op2),
+                            idx: SlotId::new(op3),
+                            base_class,
+                            idx_class,
+                        }
+                    }
+                }
+                134..=141 => {
+                    let kind = CmpKind::from(opcode - 134);
+                    let dst = SlotId::from(op1);
+                    let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
+                    let lhs_class = self.classid1();
+                    let rhs_class = self.classid2();
+                    let optimizable = false;
+                    if self.is_float_binop() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    } else if self.is_integer_binop() {
+                        TraceIr::ICmp {
+                            kind,
+                            dst,
+                            mode,
+                            optimizable,
+                        }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    }
+                }
+                142..=149 => {
+                    let kind = CmpKind::from(opcode - 142);
+                    let dst = SlotId::from(op1);
+                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    let lhs_class = self.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
+                    let optimizable = false;
+                    if self.is_float1() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    } else if self.is_integer1() {
+                        TraceIr::ICmp {
+                            kind,
+                            dst,
+                            mode,
+                            optimizable,
+                        }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    }
+                }
                 150 => TraceIr::LoadDynVar(
                     SlotId::new(op1),
                     DynVar {
@@ -565,18 +661,74 @@ impl BytecodePtr {
                     },
                     SlotId::new(op3),
                 ),
-                154..=161 => TraceIr::Cmp(
-                    CmpKind::from(opcode - 154),
-                    SlotId::from(op1),
-                    OpMode::RR(SlotId(op2), SlotId(op3)),
-                    true,
-                ),
-                162..=169 => TraceIr::Cmp(
-                    CmpKind::from(opcode - 162),
-                    SlotId::from(op1),
-                    OpMode::RI(SlotId::new(op2), op3 as i16),
-                    true,
-                ),
+                154..=161 => {
+                    let kind = CmpKind::from(opcode - 154);
+                    let dst = SlotId::from(op1);
+                    let mode = OpMode::RR(SlotId(op2), SlotId(op3));
+                    let lhs_class = self.classid1();
+                    let rhs_class = self.classid2();
+                    let optimizable = true;
+                    if self.is_float_binop() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    } else if self.is_integer_binop() {
+                        TraceIr::ICmp {
+                            kind,
+                            dst,
+                            mode,
+                            optimizable,
+                        }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    }
+                }
+                162..=169 => {
+                    let kind = CmpKind::from(opcode - 162);
+                    let dst = SlotId::from(op1);
+                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    let lhs_class = self.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
+                    let optimizable = true;
+                    if self.is_float1() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    } else if self.is_integer1() {
+                        TraceIr::ICmp {
+                            kind,
+                            dst,
+                            mode,
+                            optimizable,
+                        }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            optimizable,
+                        }
+                    }
+                }
                 170 | 172 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
                     arg_num: self.u16(3) as usize,
@@ -614,36 +766,78 @@ impl BytecodePtr {
                     let kind = BinOpK::from(opcode - 180);
                     let dst = SlotId::from(op1);
                     let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
+                    let lhs_class = Some(INTEGER_CLASS);
+                    let rhs_class = self.classid2();
                     if self.is_integer2() {
                         TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float2() {
-                        TraceIr::FBinOp { kind, dst, mode }
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     } else {
-                        TraceIr::BinOp { kind, dst, mode }
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     }
                 }
                 190..=199 => {
                     let kind = BinOpK::from(opcode - 190);
                     let dst = SlotId::from(op1);
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    let lhs_class = self.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
                     if self.is_integer1() {
                         TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float1() {
-                        TraceIr::FBinOp { kind, dst, mode }
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     } else {
-                        TraceIr::BinOp { kind, dst, mode }
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     }
                 }
                 200..=209 => {
                     let kind = BinOpK::from(opcode - 200);
                     let dst = SlotId::from(op1);
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
+                    let lhs_class = self.classid1();
+                    let rhs_class = self.classid2();
                     if self.is_integer_binop() {
                         TraceIr::IBinOp { kind, dst, mode }
                     } else if self.is_float_binop() {
-                        TraceIr::FBinOp { kind, dst, mode }
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     } else {
-                        TraceIr::BinOp { kind, dst, mode }
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
                     }
                 }
                 _ => unreachable!("{:016x}", op),
