@@ -1304,73 +1304,6 @@ impl Codegen {
             None => BasicBlockId(func.bb_info.len() - 1),
         };
 
-        let mut s = r###"digraph graph_name {
-  graph [
-    charset = "UTF-8";
-    label = "sample graph",
-    bgcolor = "#343434",
-    fontcolor = white,
-    rankdir = TB,
-    margin = 0.2,
-    splines = spline,
-    nodesep = 0.8,
-    ranksep = 1.1
-  ];
-
-  node [
-    colorscheme = "rdylgn11"
-    shape = box,
-    style = "solid,filled",
-    fontsize = 16,
-    fontcolor = 6,
-    fontname = "Consolas",
-    color = 7,
-    fillcolor = 11,
-  ];
-
-  edge [
-    style = solid,
-    fontsize = 14,
-    fontcolor = white,
-    fontname = "Migu 1M",
-    color = white,
-    labelfloat = true,
-    labeldistance = 2.5,
-    labelangle = 70
-  ];
-"###
-        .to_string();
-        for bbid in bb_begin..=bb_end {
-            s += &format!(
-                r###"  {:?} [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> {:?} </td> </tr>
-"###,
-                bbid, bbid
-            );
-            let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
-            for bc in begin..=end {
-                let pc = func.get_pc(bc);
-                if let Some(inst) = pc.trace_ir(store).format(store, bc.to_usize()) {
-                    let html = html_escape::encode_text(&inst);
-                    s += &format!(
-                        r###"
-          <tr> <td align="left">{}</td> </tr>
-    "###,
-                        html
-                    );
-                }
-            }
-            s += &r###"
-	</table>>
-  ];
-  "###;
-        }
-        s += &func.bb_info.dump_edges();
-        s += "}\n";
-        std::fs::write("dump.dot", s).unwrap();
-
         let mut bbir = vec![];
         for bbid in bb_begin..=bb_end {
             let ir = ctx.compile_bb(store, func, position, bbid);
@@ -1378,6 +1311,8 @@ impl Codegen {
         }
 
         ctx.backedge_branches(func);
+
+        Self::dump_cfg(func, store, bb_begin, bb_end);
 
         // generate machine code for a main context
         for (bbid, ir) in bbir.into_iter() {
@@ -1413,6 +1348,69 @@ impl Codegen {
         eprintln!("<== finished compile.");
 
         sourcemap
+    }
+
+    fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
+        let mut s = format!(
+            r###"digraph graph_name {{
+  graph [
+    charset = "UTF-8";
+    label = "{}",
+    bgcolor = "#343434",
+    fontcolor = white,
+    rankdir = TB,
+    margin = 0.2,
+    splines = spline,
+    nodesep = 0.8,
+    ranksep = 1.1
+  ];
+
+  node [
+    colorscheme = "accent8"
+    shape = box,
+    style = "solid,filled",
+    fontsize = 16,
+    fontcolor = 5,
+    fontname = "Consolas",
+    color = 5,
+    fillcolor = 4,
+  ];
+
+  edge [
+    style = solid,
+    fontsize = 14,
+    fontcolor = white,
+    fontname = "Migu 1M",
+    color = white,
+    labelfloat = true,
+    labeldistance = 2.5,
+    labelangle = 70
+  ];"###,
+            func.name()
+        );
+        s += "\n";
+        for bbid in bb_begin..=bb_end {
+            s += &format!(
+                "  {:?} [\n    shape=record\n    label=\"{{<in>{:?}",
+                bbid, bbid
+            );
+            let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+            for bc in begin..=end {
+                let pc = func.get_pc(bc);
+                if let Some(inst) = pc.trace_ir(store).format(store, bc.to_usize()) {
+                    s += "|";
+                    let html = html_escape::encode_text(&inst).replace('|', "\\|");
+                    if bc == end {
+                        s += "<out>";
+                    }
+                    s += &format!("{} {}\\l", bc, html);
+                }
+            }
+            s += "}\"\n  ];\n";
+        }
+        s += &func.bb_info.dump_edges(bb_begin, bb_end);
+        s += "}\n";
+        std::fs::write("dump.dot", s).unwrap();
     }
 }
 

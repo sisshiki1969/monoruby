@@ -587,7 +587,7 @@ impl TraceIr {
             }
             TraceIr::ArrayIndex { dst, base, idx } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                format!("{:36} [ARRAY][INTEGER]", op1,)
+                fmt(store, op1, Some(ARRAY_CLASS), Some(INTEGER_CLASS))
             }
             TraceIr::Index {
                 dst,
@@ -601,7 +601,7 @@ impl TraceIr {
             }
             TraceIr::ArrayIndexAssign { src, base, idx } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
-                format!("{:36} [ARRAY][INTEGER]", op1,)
+                fmt(store, op1, Some(ARRAY_CLASS), Some(INTEGER_CLASS))
             }
             TraceIr::IndexAssign {
                 src,

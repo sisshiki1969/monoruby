@@ -1,7 +1,7 @@
 digraph graph_name {
   graph [
     charset = "UTF-8";
-    label = "sample graph",
+    label = "/main",
     bgcolor = "#343434",
     fontcolor = white,
     rankdir = TB,
@@ -12,14 +12,14 @@ digraph graph_name {
   ];
 
   node [
-    colorscheme = "rdylgn11"
+    colorscheme = "accent8"
     shape = box,
     style = "solid,filled",
     fontsize = 16,
-    fontcolor = 6,
+    fontcolor = 5,
     fontname = "Consolas",
-    color = 7,
-    fillcolor = 11,
+    color = 5,
+    fillcolor = 4,
   ];
 
   edge [
@@ -33,298 +33,110 @@ digraph graph_name {
     labelangle = 70
   ];
   BB1 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB1 </td> </tr>
-
-          <tr> <td align="left">loop_start counter=5 jit-addr=0x0</td> </tr>
-    
-          <tr> <td align="left">_%17 = %5 &gt; %16                      [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">condbr _%17 =&gt;:00101</td> </tr>
-    
-	</table>>
+    shape=record
+    label="{<in>BB1|:00019 loop_start counter=5 jit-addr=0x0\l|:00020 _%17 = %5 &gt; %16                      [Integer][Integer]\l|<out>:00021 condbr _%17 =&gt;:00101\l}"
   ];
-    BB2 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB2 </td> </tr>
-
-          <tr> <td align="left">%6 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">%17 = %4</td> </tr>
-    
-	</table>>
+  BB2 [
+    shape=record
+    label="{<in>BB2|:00022 %6 = 0: i32\l|<out>:00023 %17 = %4\l}"
   ];
-    BB3 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB3 </td> </tr>
-
-          <tr> <td align="left">loop_start counter=5 jit-addr=0x7f5100029598</td> </tr>
-    
-          <tr> <td align="left">_%18 = %6 &gt; %17                      [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">condbr _%18 =&gt;:00098</td> </tr>
-    
-	</table>>
+  BB3 [
+    shape=record
+    label="{<in>BB3|:00024 loop_start counter=5 jit-addr=0x7f07c0029bc8\l|:00025 _%18 = %6 &gt; %17                      [Integer][Integer]\l|<out>:00026 condbr _%18 =&gt;:00098\l}"
   ];
-    BB4 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB4 </td> </tr>
-
-          <tr> <td align="left">%7 = literal[0.0]</td> </tr>
-    
-          <tr> <td align="left">%8 = literal[0.0]</td> </tr>
-    
-          <tr> <td align="left">%18 = literal[2.0]</td> </tr>
-    
-          <tr> <td align="left">%18 = %18 * %6                       [Float][Integer]</td> </tr>
-    
-          <tr> <td align="left">%18 = %18 / %1                       [Float][Integer]</td> </tr>
-    
-          <tr> <td align="left">%19 = literal[1.5]</td> </tr>
-    
-          <tr> <td align="left">%9 = %18 - %19                       [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%18 = literal[2.0]</td> </tr>
-    
-          <tr> <td align="left">%18 = %18 * %5                       [Float][Integer]</td> </tr>
-    
-          <tr> <td align="left">%18 = %18 / %1                       [Float][Integer]</td> </tr>
-    
-          <tr> <td align="left">%19 = literal[1.0]</td> </tr>
-    
-          <tr> <td align="left">%10 = %18 - %19                      [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%11 = literal[false]</td> </tr>
-    
-          <tr> <td align="left">%12 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">%18 = const[ITER]                    [49]</td> </tr>
-    
-	</table>>
+  BB4 [
+    shape=record
+    label="{<in>BB4|:00027 %7 = literal[0.0]\l|:00028 %8 = literal[0.0]\l|:00029 %18 = literal[2.0]\l|:00030 %18 = %18 * %6                       [Float][Integer]\l|:00031 %18 = %18 / %1                       [Float][Integer]\l|:00032 %19 = literal[1.5]\l|:00033 %9 = %18 - %19                       [Float][Float]\l|:00034 %18 = literal[2.0]\l|:00035 %18 = %18 * %5                       [Float][Integer]\l|:00036 %18 = %18 / %1                       [Float][Integer]\l|:00037 %19 = literal[1.0]\l|:00038 %10 = %18 - %19                      [Float][Float]\l|:00039 %11 = literal[false]\l|:00040 %12 = 0: i32\l|<out>:00041 %18 = const[ITER]                    [49]\l}"
   ];
-    BB5 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB5 </td> </tr>
-
-          <tr> <td align="left">loop_start counter=5 jit-addr=0x7f5100028f70</td> </tr>
-    
-          <tr> <td align="left">_%19 = %12 &gt; %18                     [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">condbr _%19 =&gt;:00066</td> </tr>
-    
-	</table>>
+  BB5 [
+    shape=record
+    label="{<in>BB5|:00042 loop_start counter=5 jit-addr=0x7f07c00295ac\l|:00043 _%19 = %12 &gt; %18                     [Integer][Integer]\l|<out>:00044 condbr _%19 =&gt;:00066\l}"
   ];
-    BB6 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB6 </td> </tr>
-
-          <tr> <td align="left">%19 = %7 * %7                        [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%20 = %8 * %8                        [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%19 = %19 - %20                      [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%13 = %19 + %9                       [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%19 = 2: i16 * %7                    [Integer][Float]</td> </tr>
-    
-          <tr> <td align="left">%19 = %19 * %8                       [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%14 = %19 + %10                      [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%19 = %13</td> </tr>
-    
-          <tr> <td align="left">%20 = %14</td> </tr>
-    
-          <tr> <td align="left">%7 = %19</td> </tr>
-    
-          <tr> <td align="left">%8 = %20</td> </tr>
-    
-          <tr> <td align="left">%19 = %7 * %7                        [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%20 = %8 * %8                        [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%19 = %19 + %20                      [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">%20 = const[LIMIT_SQUARED]           [4.0]</td> </tr>
-    
-          <tr> <td align="left">_%19 = %19 &gt; %20                     [Float][Float]</td> </tr>
-    
-          <tr> <td align="left">condnotbr _%19 =&gt;:00064</td> </tr>
-    
-	</table>>
+  BB6 [
+    shape=record
+    label="{<in>BB6|:00045 %19 = %7 * %7                        [Float][Float]\l|:00046 %20 = %8 * %8                        [Float][Float]\l|:00047 %19 = %19 - %20                      [Float][Float]\l|:00048 %13 = %19 + %9                       [Float][Float]\l|:00049 %19 = 2: i16 * %7                    [Integer][Float]\l|:00050 %19 = %19 * %8                       [Float][Float]\l|:00051 %14 = %19 + %10                      [Float][Float]\l|:00052 %19 = %13\l|:00053 %20 = %14\l|:00054 %7 = %19\l|:00055 %8 = %20\l|:00056 %19 = %7 * %7                        [Float][Float]\l|:00057 %20 = %8 * %8                        [Float][Float]\l|:00058 %19 = %19 + %20                      [Float][Float]\l|:00059 %20 = const[LIMIT_SQUARED]           [4.0]\l|:00060 _%19 = %19 &gt; %20                     [Float][Float]\l|<out>:00061 condnotbr _%19 =&gt;:00064\l}"
   ];
-    BB7 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB7 </td> </tr>
-
-          <tr> <td align="left">%11 = literal[true]</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00066</td> </tr>
-    
-	</table>>
+  BB7 [
+    shape=record
+    label="{<in>BB7|:00062 %11 = literal[true]\l|<out>:00063 br =&gt;:00066\l}"
   ];
-    BB8 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB8 </td> </tr>
-
-          <tr> <td align="left">%12 = %12 + 1: i16                   [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00042</td> </tr>
-    
-	</table>>
+  BB8 [
+    shape=record
+    label="{<in>BB8|:00064 %12 = %12 + 1: i16                   [Integer][Integer]\l|<out>:00065 br =&gt;:00042\l}"
   ];
-    BB9 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB9 </td> </tr>
-
-          <tr> <td align="left">loop_end</td> </tr>
-    
-	</table>>
+  BB9 [
+    shape=record
+    label="{<in>BB9|<out>:00066 loop_end\l}"
   ];
-    BB10 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB10 </td> </tr>
-
-          <tr> <td align="left">%18 = 1: i32</td> </tr>
-    
-          <tr> <td align="left">%18 = %2.inline Integer#&lt;&lt;(%18; 1)   [Integer]</td> </tr>
-    
-          <tr> <td align="left">condnotbr %11 =&gt;:00073</td> </tr>
-    
-	</table>>
+  BB10 [
+    shape=record
+    label="{<in>BB10|:00067 %18 = 1: i32\l|:00068 %18 = %2.inline Integer#&lt;&lt;(%18; 1)   [Integer]\l|<out>:00070 condnotbr %11 =&gt;:00073\l}"
   ];
-    BB11 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB11 </td> </tr>
-
-          <tr> <td align="left">%19 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00074</td> </tr>
-    
-	</table>>
+  BB11 [
+    shape=record
+    label="{<in>BB11|:00071 %19 = 0: i32\l|<out>:00072 br =&gt;:00074\l}"
   ];
-    BB12 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB12 </td> </tr>
-
-          <tr> <td align="left">%19 = 1: i32</td> </tr>
-    
-	</table>>
+  BB12 [
+    shape=record
+    label="{<in>BB12|<out>:00073 %19 = 1: i32\l}"
   ];
-    BB13 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB13 </td> </tr>
-
-          <tr> <td align="left">%2 = %18 | %19                       [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">%3 = %3 + 1: i16                     [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">_%18 = %3 == 8: i16                  [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">condnotbr _%18 =&gt;:00085</td> </tr>
-    
-	</table>>
+  BB13 [
+    shape=record
+    label="{<in>BB13|:00074 %2 = %18 \| %19                       [Integer][Integer]\l|:00075 %3 = %3 + 1: i16                     [Integer][Integer]\l|:00076 _%18 = %3 == 8: i16                  [Integer][Integer]\l|<out>:00077 condnotbr _%18 =&gt;:00085\l}"
   ];
-    BB14 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB14 </td> </tr>
-
-          <tr> <td align="left">%18 = %2.chr()                       [Integer]</td> </tr>
-    
-          <tr> <td align="left">_ = %0.print(%18;1)                  [#&lt;Class:main&gt;]</td> </tr>
-    
-          <tr> <td align="left">%2 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">%3 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00096</td> </tr>
-    
-	</table>>
+  BB14 [
+    shape=record
+    label="{<in>BB14|:00078 %18 = %2.chr()                       [Integer]\l|:00080 _ = %0.print(%18;1)                  [#&lt;Class:main&gt;]\l|:00082 %2 = 0: i32\l|:00083 %3 = 0: i32\l|<out>:00084 br =&gt;:00096\l}"
   ];
-    BB15 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB15 </td> </tr>
-
-          <tr> <td align="left">_%18 = %6 == %4                      [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">condnotbr _%18 =&gt;:00096</td> </tr>
-    
-	</table>>
+  BB15 [
+    shape=record
+    label="{<in>BB15|:00085 _%18 = %6 == %4                      [Integer][Integer]\l|<out>:00086 condnotbr _%18 =&gt;:00096\l}"
   ];
-    BB16 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB16 </td> </tr>
-
-          <tr> <td align="left">%18 = 8: i16 - %3                    [Integer][&lt;INVALID&gt;]</td> </tr>
-    
-          <tr> <td align="left">%2 = %2.&lt;&lt;(%18;1)                    [&lt;INVALID&gt;]</td> </tr>
-    
-          <tr> <td align="left">%18 = %2.chr()                       [&lt;INVALID&gt;]</td> </tr>
-    
-          <tr> <td align="left">_ = %0.print(%18;1)                  [&lt;INVALID&gt;]</td> </tr>
-    
-          <tr> <td align="left">%2 = 0: i32</td> </tr>
-    
-          <tr> <td align="left">%3 = 0: i32</td> </tr>
-    
-	</table>>
+  BB16 [
+    shape=record
+    label="{<in>BB16|:00087 %18 = 8: i16 - %3                    [Integer][&lt;INVALID&gt;]\l|:00088 %2 = %2.&lt;&lt;(%18;1)                    [&lt;INVALID&gt;]\l|:00090 %18 = %2.chr()                       [&lt;INVALID&gt;]\l|:00092 _ = %0.print(%18;1)                  [&lt;INVALID&gt;]\l|:00094 %2 = 0: i32\l|<out>:00095 %3 = 0: i32\l}"
   ];
-    BB17 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB17 </td> </tr>
-
-          <tr> <td align="left">%6 = %6 + 1: i16                     [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00024</td> </tr>
-    
-	</table>>
+  BB17 [
+    shape=record
+    label="{<in>BB17|:00096 %6 = %6 + 1: i16                     [Integer][Integer]\l|<out>:00097 br =&gt;:00024\l}"
   ];
-    BB18 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB18 </td> </tr>
-
-          <tr> <td align="left">loop_end</td> </tr>
-    
-	</table>>
+  BB18 [
+    shape=record
+    label="{<in>BB18|<out>:00098 loop_end\l}"
   ];
-    BB19 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB19 </td> </tr>
-
-          <tr> <td align="left">%5 = %5 + 1: i16                     [Integer][Integer]</td> </tr>
-    
-          <tr> <td align="left">br =&gt;:00019</td> </tr>
-    
-	</table>>
+  BB19 [
+    shape=record
+    label="{<in>BB19|:00099 %5 = %5 + 1: i16                     [Integer][Integer]\l|<out>:00100 br =&gt;:00019\l}"
   ];
-    BB20 [
-    shape=plain
-    label=<<table border="0" cellspacing="0" cellpadding="4">
-      <tr> <td> BB20 </td> </tr>
-
-          <tr> <td align="left">loop_end</td> </tr>
-    
-	</table>>
+  BB20 [
+    shape=record
+    label="{<in>BB20|<out>:00101 loop_end\l}"
   ];
-  BB0 -> BB1 BB1 -> BB2 BB1 -> BB20 BB2 -> BB3 BB3 -> BB4 BB3 -> BB18 BB4 -> BB5 BB5 -> BB6 BB5 -> BB9 BB6 -> BB7 BB6 -> BB8 BB7 -> BB9 BB8 -> BB5 BB9 -> BB10 BB10 -> BB11 BB10 -> BB12 BB11 -> BB13 BB12 -> BB13 BB13 -> BB14 BB13 -> BB15 BB14 -> BB17 BB15 -> BB16 BB15 -> BB17 BB16 -> BB17 BB17 -> BB3 BB18 -> BB19 BB19 -> BB1 BB20 -> BB21 
+  BB1:out -> BB2:in;
+  BB1:out -> BB20:in;
+  BB2:out -> BB3:in;
+  BB3:out -> BB4:in;
+  BB3:out -> BB18:in;
+  BB4:out -> BB5:in;
+  BB5:out -> BB6:in;
+  BB5:out -> BB9:in;
+  BB6:out -> BB7:in;
+  BB6:out -> BB8:in;
+  BB7:out -> BB9:in;
+  BB8:out -> BB5:in;
+  BB9:out -> BB10:in;
+  BB10:out -> BB11:in;
+  BB10:out -> BB12:in;
+  BB11:out -> BB13:in;
+  BB12:out -> BB13:in;
+  BB13:out -> BB14:in;
+  BB13:out -> BB15:in;
+  BB14:out -> BB17:in;
+  BB15:out -> BB16:in;
+  BB15:out -> BB17:in;
+  BB16:out -> BB17:in;
+  BB17:out -> BB3:in;
+  BB18:out -> BB19:in;
+  BB19:out -> BB1:in;
+  BB20:out -> BB21:in;
 }
