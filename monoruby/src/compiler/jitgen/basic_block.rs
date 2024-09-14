@@ -191,19 +191,6 @@ impl BasicBlockInfo {
     }
 }
 
-impl BasicBlockInfo {
-    pub(crate) fn dump_edges(&self, bb_begin: BasicBlockId, bb_end: BasicBlockId) -> String {
-        let mut s = String::new();
-        for bbid in bb_begin..=bb_end {
-            let entry = &self[bbid];
-            for succ in &entry.succ {
-                s += &format!("  {:?}:out -> {:?}:in;\n", bbid, succ);
-            }
-        }
-        s
-    }
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct BasciBlockInfoEntry {
     pub begin: BcIndex,

@@ -1356,8 +1356,11 @@ impl Codegen {
   graph [
     charset = "UTF-8";
     label = "{}",
+    labelloc = "t",
+    labeljust = "c",
     bgcolor = "#343434",
     fontcolor = white,
+    fontsize = 20,
     rankdir = TB,
     margin = 0.2,
     splines = spline,
@@ -1390,25 +1393,26 @@ impl Codegen {
         );
         s += "\n";
         for bbid in bb_begin..=bb_end {
-            s += &format!(
-                "  {:?} [\n    shape=record\n    label=\"{{<in>{:?}",
-                bbid, bbid
-            );
+            s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
             let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
             for bc in begin..=end {
                 let pc = func.get_pc(bc);
                 if let Some(inst) = pc.trace_ir(store).format(store, bc.to_usize()) {
                     s += "|";
                     let html = html_escape::encode_text(&inst).replace('|', "\\|");
-                    if bc == end {
-                        s += "<out>";
-                    }
                     s += &format!("{} {}\\l", bc, html);
                 }
             }
             s += "}\"\n  ];\n";
         }
-        s += &func.bb_info.dump_edges(bb_begin, bb_end);
+
+        for bbid in bb_begin..=bb_end {
+            let entry = &func.bb_info[bbid];
+            for succ in &entry.succ {
+                s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
+            }
+        }
+
         s += "}\n";
         std::fs::write("dump.dot", s).unwrap();
     }
