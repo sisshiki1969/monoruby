@@ -45,7 +45,7 @@ digraph graph_name {
   ];
   BB3 [
     shape=record
-    label="{BB3|:00024 loop_start counter=5 jit-addr=0x7f1320029598\l|:00025 _%18 = %6 &gt; %17                      [Integer][Integer]\l|:00026 condbr _%18 =&gt;:00098\l}"
+    label="{BB3|:00024 loop_start counter=5 jit-addr=0x7fd830029598\l|:00025 _%18 = %6 &gt; %17                      [Integer][Integer]\l|:00026 condbr _%18 =&gt;:00098\l}"
   ];
   BB4 [
     shape=record
@@ -53,7 +53,7 @@ digraph graph_name {
   ];
   BB5 [
     shape=record
-    label="{BB5|:00042 loop_start counter=5 jit-addr=0x7f1320028f70\l|:00043 _%19 = %12 &gt; %18                     [Integer][Integer]\l|:00044 condbr _%19 =&gt;:00066\l}"
+    label="{BB5|:00042 loop_start counter=5 jit-addr=0x7fd830028f70\l|:00043 _%19 = %12 &gt; %18                     [Integer][Integer]\l|:00044 condbr _%19 =&gt;:00066\l}"
   ];
   BB6 [
     shape=record
@@ -61,11 +61,11 @@ digraph graph_name {
   ];
   BB7 [
     shape=record
-    label="{BB7|:00062 %11 = literal[true]\l|:00063 br =&gt;:00066\l}"
+    label="{BB7|:00062 %11 = literal[true]\l|:00063 br =&gt;::00066\l}"
   ];
   BB8 [
     shape=record
-    label="{BB8|:00064 %12 = %12 + 1: i16                   [Integer][Integer]\l|:00065 br =&gt;:00042\l}"
+    label="{BB8|:00064 %12 = %12 + 1: i16                   [Integer][Integer]\l|:00065 br =&gt;::00042\l}"
   ];
   BB9 [
     shape=record
@@ -77,7 +77,7 @@ digraph graph_name {
   ];
   BB11 [
     shape=record
-    label="{BB11|:00071 %19 = 0: i32\l|:00072 br =&gt;:00074\l}"
+    label="{BB11|:00071 %19 = 0: i32\l|:00072 br =&gt;::00074\l}"
   ];
   BB12 [
     shape=record
@@ -89,7 +89,7 @@ digraph graph_name {
   ];
   BB14 [
     shape=record
-    label="{BB14|:00078 %18 = %2.chr()                       [Integer]\l|:00080 _ = %0.print(%18;1)                  [#&lt;Class:main&gt;]\l|:00082 %2 = 0: i32\l|:00083 %3 = 0: i32\l|:00084 br =&gt;:00096\l}"
+    label="{BB14|:00078 %18 = %2.chr()                       [Integer]\l|:00080 _ = %0.print(%18;1)                  [#&lt;Class:main&gt;]\l|:00082 %2 = 0: i32\l|:00083 %3 = 0: i32\l|:00084 br =&gt;::00096\l}"
   ];
   BB15 [
     shape=record
@@ -101,7 +101,7 @@ digraph graph_name {
   ];
   BB17 [
     shape=record
-    label="{BB17|:00096 %6 = %6 + 1: i16                     [Integer][Integer]\l|:00097 br =&gt;:00024\l}"
+    label="{BB17|:00096 %6 = %6 + 1: i16                     [Integer][Integer]\l|:00097 br =&gt;::00024\l}"
   ];
   BB18 [
     shape=record
@@ -109,7 +109,7 @@ digraph graph_name {
   ];
   BB19 [
     shape=record
-    label="{BB19|:00099 %5 = %5 + 1: i16                     [Integer][Integer]\l|:00100 br =&gt;:00019\l}"
+    label="{BB19|:00099 %5 = %5 + 1: i16                     [Integer][Integer]\l|:00100 br =&gt;::00019\l}"
   ];
   BB20 [
     shape=record
@@ -142,6 +142,4 @@ digraph graph_name {
   BB18 -> BB19 [headport = n, tailport = s];
   BB19 -> BB1 [headport = n, tailport = s];
   BB20 -> BB21 [headport = n, tailport = s];
-
-  {rank = max; BB21;}
 }

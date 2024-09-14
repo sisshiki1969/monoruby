@@ -6,7 +6,7 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
         );
-        match pc.trace_ir(store) {
+        match pc.trace_ir(store, BcIndex::from(0)) {
             TraceIr::InitMethod(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
                 self.init_func(&fn_info);

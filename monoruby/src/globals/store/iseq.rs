@@ -341,6 +341,11 @@ impl ISeqInfo {
         )
     }
 
+    pub(crate) fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> jitgen::trace_ir::TraceIr {
+        let pc = self.get_pc(bc_pos);
+        pc.trace_ir(store, bc_pos)
+    }
+
     ///
     /// Explore exception table for pc(*BcPc*) and return error handler's pc(*BcPc*) and the slot where an error object is to be stored.
     ///

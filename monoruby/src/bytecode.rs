@@ -330,7 +330,7 @@ impl BytecodePtr {
 }
 
 impl BytecodePtr {
-    pub fn trace_ir(&self, store: &Store) -> TraceIr {
+    pub fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> TraceIr {
         let op = self.op1;
         let opcode = self.opcode();
         if opcode & 0xc0 == 0 {
@@ -345,9 +345,19 @@ impl BytecodePtr {
                     name: IdentId::from((self.op2.0) as u32),
                     func_id: FuncId::new((self.op2.0 >> 32) as u32),
                 },
-                3 => TraceIr::Br(op2 as i32),
-                4 => TraceIr::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIf),
-                5 => TraceIr::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIfNot),
+                3 => TraceIr::Br(bc_pos + 1 + op2 as i32),
+                4 => TraceIr::CondBr(
+                    SlotId::new(op1),
+                    bc_pos + 1 + op2 as i32,
+                    false,
+                    BrKind::BrIf,
+                ),
+                5 => TraceIr::CondBr(
+                    SlotId::new(op1),
+                    bc_pos + 1 + op2 as i32,
+                    false,
+                    BrKind::BrIfNot,
+                ),
                 6 => TraceIr::Integer(SlotId::new(op1), op2 as i32),
                 7 => TraceIr::Literal(SlotId::new(op1), self.op2.get_value()),
                 8 => TraceIr::Nil(SlotId::new(op1)),
@@ -356,7 +366,7 @@ impl BytecodePtr {
                 11 => TraceIr::StoreConst(SlotId::new(op1), ConstSiteId(op2)),
                 12..=13 => TraceIr::CondBr(
                     SlotId::new(op1),
-                    op2 as i32,
+                    bc_pos + 1 + op2 as i32,
                     true,
                     BrKind::from(opcode - 12),
                 ),
@@ -375,7 +385,7 @@ impl BytecodePtr {
                     let ivar = self.cached_ivarid();
                     TraceIr::StoreIvar(SlotId::new(op1), IdentId::from(op2), class, ivar)
                 }
-                20 => TraceIr::CheckLocal(SlotId::new(op1), op2 as i32),
+                20 => TraceIr::CheckLocal(SlotId::new(op1), bc_pos + 1 + op2 as i32),
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => TraceIr::SingletonClassDef {
                     dst: SlotId::from(op1),
@@ -456,7 +466,7 @@ impl BytecodePtr {
                     cond: SlotId::new(op1),
                     optid: OptCaseId::from(op2),
                 },
-                37 => TraceIr::NilBr(SlotId::new(op1), op2 as i32),
+                37 => TraceIr::NilBr(SlotId::new(op1), bc_pos + 1 + op2 as i32),
                 38 => TraceIr::Lambda {
                     dst: SlotId::new(op1),
                     func_id: FuncId::new(op2),
@@ -664,8 +674,8 @@ impl BytecodePtr {
                     let mode = OpMode::RR(SlotId(op2), SlotId(op3));
                     let lhs_class = self.classid1();
                     let rhs_class = self.classid2();
-                    let (disp, brkind) = match (*self + 1).trace_ir(store) {
-                        TraceIr::CondBr(_, disp, true, brkind) => (disp, brkind),
+                    let (dest, brkind) = match (*self + 1).trace_ir(store, bc_pos + 1) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest, brkind),
                         _ => unreachable!(),
                     };
                     if self.is_float_binop() {
@@ -675,7 +685,7 @@ impl BytecodePtr {
                             mode,
                             lhs_class: lhs_class.unwrap(),
                             rhs_class: rhs_class.unwrap(),
-                            disp,
+                            dest,
                             brkind,
                         }
                     } else if self.is_integer_binop() {
@@ -683,7 +693,7 @@ impl BytecodePtr {
                             kind,
                             dst,
                             mode,
-                            disp,
+                            dest,
                             brkind,
                         }
                     } else {
@@ -693,7 +703,7 @@ impl BytecodePtr {
                             mode,
                             lhs_class,
                             rhs_class,
-                            disp,
+                            dest,
                             brkind,
                         }
                     }
@@ -704,8 +714,8 @@ impl BytecodePtr {
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     let lhs_class = self.classid1();
                     let rhs_class = Some(INTEGER_CLASS);
-                    let (disp, brkind) = match (*self + 1).trace_ir(store) {
-                        TraceIr::CondBr(_, disp, true, brkind) => (disp, brkind),
+                    let (dest, brkind) = match (*self + 1).trace_ir(store, bc_pos + 1) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest, brkind),
                         _ => unreachable!(),
                     };
                     if self.is_float1() {
@@ -715,7 +725,7 @@ impl BytecodePtr {
                             mode,
                             lhs_class: lhs_class.unwrap(),
                             rhs_class: rhs_class.unwrap(),
-                            disp,
+                            dest,
                             brkind,
                         }
                     } else if self.is_integer1() {
@@ -723,7 +733,7 @@ impl BytecodePtr {
                             kind,
                             dst,
                             mode,
-                            disp,
+                            dest,
                             brkind,
                         }
                     } else {
@@ -733,7 +743,7 @@ impl BytecodePtr {
                             mode,
                             lhs_class,
                             rhs_class,
-                            disp,
+                            dest,
                             brkind,
                         }
                     }

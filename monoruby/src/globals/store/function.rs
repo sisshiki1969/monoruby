@@ -1001,24 +1001,25 @@ impl FuncInfo {
 impl FuncInfo {
     #[cfg(feature = "emit-bc")]
     pub(crate) fn dump_bc(&self, globals: &Globals) {
-        let info = self.as_ruby_func();
+        use bytecodegen::BcIndex;
+
+        let func = self.as_ruby_func();
         eprintln!("------------------------------------");
-        let loc = info.loc;
-        let line = info.sourceinfo.get_line(&loc);
-        let file_name = info.sourceinfo.file_name();
+        let loc = func.loc;
+        let line = func.sourceinfo.get_line(&loc);
+        let file_name = func.sourceinfo.file_name();
         eprintln!(
             "<{}> {file_name}:{line}",
-            globals.func_description(info.id()),
+            globals.func_description(func.id()),
         );
         eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
-        eprintln!("{:?}", info.get_exception_map());
-        for (i, pc) in info.bytecode().iter().enumerate() {
-            let pc = BytecodePtr::from_bc(pc);
-            let trace_ir = pc.trace_ir(&globals.store);
-            if let Some(fmt) = trace_ir.format(&globals.store, i) {
+        eprintln!("{:?}", func.get_exception_map());
+        for i in 0..func.bytecode().len() {
+            let trace_ir = func.trace_ir(&globals.store, BcIndex::from(i));
+            if let Some(fmt) = trace_ir.format(&globals.store) {
                 eprint!(
                     "{}:{:05} [{:02}] ",
-                    if info
+                    if func
                         .bb_info
                         .is_bb_head(bytecodegen::BcIndex::from(i))
                         .is_some()
@@ -1028,7 +1029,7 @@ impl FuncInfo {
                         " "
                     },
                     i,
-                    info.sp[i].0
+                    func.sp[i].0
                 );
                 eprintln!("{}", fmt);
             };

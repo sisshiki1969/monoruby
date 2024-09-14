@@ -181,9 +181,8 @@ impl JitContext {
     ) -> (ExitType, SlotInfo) {
         let mut info = SlotInfo::new(func.total_reg_num());
         let BasciBlockInfoEntry { begin, end, .. } = entry;
-        for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
-            let pc = BytecodePtr::from_bc(pc);
-            let ir = pc.trace_ir(store);
+        for bb_pos in *begin..=*end {
+            let ir = func.trace_ir(store, bb_pos);
             let exit_type = ir.get_exit_type();
             match ir {
                 TraceIr::InitMethod { .. } => {}

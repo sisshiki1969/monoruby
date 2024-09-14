@@ -348,10 +348,10 @@ impl JitContext {
         bb: &mut BBContext,
         store: &Store,
         func: &ISeqInfo,
-        bb_pos: BcIndex,
+        bc_pos: BcIndex,
     ) -> CompileResult {
-        let pc = func.get_pc(bb_pos);
-        let trace_ir = pc.trace_ir(store);
+        let pc = func.get_pc(bc_pos);
+        let trace_ir = func.trace_ir(store, bc_pos);
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
@@ -677,47 +677,44 @@ impl JitContext {
                 mode,
                 lhs_class,
                 rhs_class,
-                disp,
+                dest,
                 brkind,
             } => {
-                let index = bb_pos + 1;
-                let dest_idx = index + disp + 1;
+                let index = bc_pos + 1;
                 let branch_dest = self.asm_label();
                 let deopt = ir.new_deopt(bb, pc);
                 let mode = ir.fmode(&mode, bb, lhs_class, rhs_class, deopt);
                 ir.unlink(bb, dst);
                 ir.clear(bb);
                 ir.float_cmp_br(mode, kind, brkind, branch_dest);
-                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                let dest_idx = func.bb_info.get_bb_id(dest);
                 self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::ICmpBr {
                 kind,
                 dst,
                 mode,
-                disp,
+                dest,
                 brkind,
             } => {
-                let index = bb_pos + 1;
-                let dest_idx = index + disp + 1;
+                let index = bc_pos + 1;
                 let branch_dest = self.asm_label();
                 ir.fetch_fixnum_binary(bb, pc, &mode);
                 ir.unlink(bb, dst);
                 ir.clear(bb);
                 ir.integer_cmp_br(mode, kind, brkind, branch_dest);
-                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                let dest_idx = func.bb_info.get_bb_id(dest);
                 self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::CmpBr {
                 kind,
                 dst,
                 mode,
-                disp,
+                dest,
                 brkind,
                 ..
             } => {
-                let index = bb_pos + 1;
-                let dest_idx = index + disp + 1;
+                let index = bc_pos + 1;
                 let branch_dest = self.asm_label();
                 ir.fetch_binary(bb, mode);
                 ir.unlink(bb, dst);
@@ -727,7 +724,7 @@ impl JitContext {
                     brkind,
                     branch_dest,
                 });
-                let dest_idx = func.bb_info.get_bb_id(dest_idx);
+                let dest_idx = func.bb_info.get_bb_id(dest);
                 self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::Mov(dst, src) => {
@@ -930,39 +927,34 @@ impl JitContext {
                 ir.write_back_locals(bb);
                 ir.inst.push(AsmInst::EnsureEnd);
             }
-            TraceIr::Br(disp) => {
-                let next_idx = bb_pos + 1;
-                let dest_idx = next_idx + disp;
+            TraceIr::Br(dest_idx) => {
                 let branch_dest = self.asm_label();
                 ir.inst.push(AsmInst::Br(branch_dest));
                 let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
                 return CompileResult::Exit;
             }
-            TraceIr::CondBr(cond_, disp, false, brkind) => {
-                let dest_idx = bb_pos + 1 + disp;
+            TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, cond_, GP::Rax);
                 ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                 let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
             }
-            TraceIr::NilBr(cond_, disp) => {
-                let dest_idx = bb_pos + 1 + disp;
+            TraceIr::NilBr(cond_, dest_idx) => {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, cond_, GP::Rax);
                 ir.inst.push(AsmInst::NilBr(branch_dest));
                 let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::CondBr(_, _, true, _) => {}
-            TraceIr::CheckLocal(local, disp) => {
-                let dest_idx = bb_pos + 1 + disp;
+            TraceIr::CheckLocal(local, dest_idx) => {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
                 let dest_idx = func.bb_info.get_bb_id(dest_idx);
-                self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::OptCase { cond, optid } => {
                 let OptCaseInfo {
@@ -970,18 +962,18 @@ impl JitContext {
                 } = &store[optid];
                 let mut label_map = HashMap::default();
                 for ofs in offsets {
-                    let dest_idx = bb_pos + 1 + (*ofs as i32);
+                    let dest_idx = bc_pos + 1 + (*ofs as i32);
                     let branch_dest = self.asm_label();
                     let dest_idx = func.bb_info.get_bb_id(dest_idx);
                     label_map.insert(dest_idx, branch_dest);
-                    self.new_branch(func, bb_pos, dest_idx, bb.clone(), branch_dest);
+                    self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
                 }
-                let else_idx = func.bb_info.get_bb_id(bb_pos + 1 + (offsets[0] as i32));
+                let else_idx = func.bb_info.get_bb_id(bc_pos + 1 + (offsets[0] as i32));
                 let else_dest = label_map.get(&else_idx).cloned().unwrap();
 
                 let opt_case_info = OptCaseAsmInfo {
                     id: optid,
-                    bb_pos,
+                    bb_pos: bc_pos,
                     label_map,
                 };
                 let opt_case_id = self.opt_case.len();
@@ -1396,8 +1388,7 @@ impl Codegen {
             s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
             let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
             for bc in begin..=end {
-                let pc = func.get_pc(bc);
-                if let Some(inst) = pc.trace_ir(store).format(store, bc.to_usize()) {
+                if let Some(inst) = func.trace_ir(store, bc).format(store) {
                     s += "|";
                     let html = html_escape::encode_text(&inst).replace('|', "\\|");
                     s += &format!("{} {}\\l", bc, html);
