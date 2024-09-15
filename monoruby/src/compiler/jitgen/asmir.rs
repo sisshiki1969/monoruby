@@ -1500,7 +1500,7 @@ pub(super) enum AsmInst {
     #[allow(dead_code)]
     BcIndex(BcIndex),
     Label(AsmLabel),
-    DestLabel(DestLabel),
+    BasicBlockLabel(DestLabel),
 }
 
 impl AsmInst {
@@ -1659,7 +1659,7 @@ impl Codegen {
         }
 
         if let Some(exit) = exit {
-            let exit = *ctx.inst_labels.get(&exit).unwrap();
+            let exit = *ctx.basic_block_labels.get(&exit).unwrap();
             monoasm! { &mut self.jit,
                 jmp exit;
             }

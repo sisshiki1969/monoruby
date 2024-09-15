@@ -25,7 +25,7 @@ impl Codegen {
             AsmInst::Label(label) => {
                 self.jit.bind_label(ctx[label]);
             }
-            AsmInst::DestLabel(label) => {
+            AsmInst::BasicBlockLabel(label) => {
                 self.jit.bind_label(label);
             }
             AsmInst::AccToStack(r) => {

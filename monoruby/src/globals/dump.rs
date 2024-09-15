@@ -121,26 +121,26 @@ impl Globals {
             eprintln!();
             eprintln!("deoptimization stats (top 20)");
             eprintln!(
-                "{:40} FuncId [{:05}]     {:7}",
+                "{:60} FuncId [{:05}]     {:7}",
                 "func name", "index", "count"
             );
-            eprintln!("-------------------------------------------------------------------------------------------------------------------");
+            eprintln!("--------------------------------------------------------------------------------------------------------------------------------------------");
             let mut v: Vec<_> = self.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((func_id, index), count) in v.into_iter().take(20) {
-                let bc_pos = bytecodegen::BcIndex::from(*index);
-                let pc = self.store[*func_id].as_ruby_func().get_pc(bc_pos);
-                let fmt = if let Some(fmt) = pc.trace_ir(&self.store, bc_pos).format(&self.store) {
+            for ((func_id, bc_pos), count) in v.into_iter().take(20) {
+                let func = self.store[*func_id].as_ruby_func();
+                let fmt = if let Some(fmt) = func.trace_ir(&self.store, *bc_pos).format(&self.store)
+                {
                     fmt
                 } else {
                     "<INVALID>".to_string()
                 };
                 let name = self.func_description(*func_id);
                 eprintln!(
-                    "{:40}  {:5} [{:05}]  {:10}   {fmt}",
+                    "{:60}  {:5} [{:05}]  {:10}   {fmt}",
                     name,
                     func_id.get(),
-                    index,
+                    bc_pos,
                     count
                 );
             }
@@ -207,8 +207,9 @@ pub(crate) extern "C" fn log_deoptimize(
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
-    let index = pc - globals[func_id].as_ruby_func().get_top_pc();
-    let trace_ir = pc.trace_ir(&globals.store, bytecodegen::BcIndex::from(index));
+    let func = globals[func_id].as_ruby_func();
+    let bc_pos = func.get_pc_index(Some(pc));
+    let trace_ir = func.trace_ir(&globals.store, bc_pos);
 
     if let TraceIr::LoopEnd = trace_ir {
         // normal exit from jit'ed loop
@@ -217,15 +218,15 @@ pub(crate) extern "C" fn log_deoptimize(
             let name = globals.func_description(func_id);
             let fmt = trace_ir.format(&globals.store).unwrap_or_default();
             eprint!("<-- exited from JIT code in <{}> {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt}", index);
+            eprintln!("    [{:05}] {fmt}", bc_pos);
         }
     } else {
         #[cfg(feature = "profile")]
         {
-            match globals.deopt_stats.get_mut(&(func_id, index)) {
+            match globals.deopt_stats.get_mut(&(func_id, bc_pos)) {
                 Some(c) => *c = *c + 1,
                 None => {
-                    globals.deopt_stats.insert((func_id, index), 1);
+                    globals.deopt_stats.insert((func_id, bc_pos), 1);
                 }
             }
         }
@@ -239,14 +240,14 @@ pub(crate) extern "C" fn log_deoptimize(
                 | TraceIr::LoadIvar(..)         // inline ivar cache miss
                 | TraceIr::StoreIvar(..) => {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", index);
+                    eprintln!("    [{:05}] {fmt}", bc_pos);
                 },
                 _ => if let Some(v) = v {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", index, globals.inspect2(v));
+                    eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, globals.inspect2(v));
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", index);
+                    eprintln!("    [{:05}] {fmt}", bc_pos);
                 },
             }
         }

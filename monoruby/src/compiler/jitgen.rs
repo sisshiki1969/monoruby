@@ -38,9 +38,9 @@ impl ContinuationInfo {
 ///
 struct JitContext {
     ///
-    /// Destination labels for each TraceIr.
+    /// Destination labels for each BasicBlock.
     ///
-    inst_labels: HashMap<BasicBlockId, DestLabel>,
+    basic_block_labels: HashMap<BasicBlockId, DestLabel>,
     ///
     /// Destination labels for AsmLabels.
     ///
@@ -184,17 +184,17 @@ impl JitContext {
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let mut inst_labels = HashMap::default();
+        let mut basic_block_labels = HashMap::default();
         for i in 0..func.bb_info.len() {
             let idx = BasicBlockId(i);
-            inst_labels.insert(idx, codegen.jit.label());
+            basic_block_labels.insert(idx, codegen.jit.label());
         }
         let bb_scan = func.bb_info.init_bb_scan(func, store);
 
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
-            inst_labels,
+            basic_block_labels,
             asm_labels: vec![],
             bb_scan,
             loop_backedges: HashMap::default(),
@@ -298,7 +298,8 @@ impl JitContext {
         bbid: BasicBlockId,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
-        ir.inst.push(AsmInst::DestLabel(self.inst_labels[&bbid]));
+        ir.inst
+            .push(AsmInst::BasicBlockLabel(self.basic_block_labels[&bbid]));
         let mut bb = if let Some(bb) = self.target_ctx.remove(&bbid) {
             bb
         } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
@@ -693,8 +694,7 @@ impl JitContext {
                 ir.unlink(bb, dst);
                 ir.clear(bb);
                 ir.float_cmp_br(mode, kind, brkind, branch_dest);
-                let dest_idx = func.bb_info.get_bb_id(dest);
-                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, index, dest, bb.clone(), branch_dest);
             }
             TraceIr::ICmpBr {
                 kind,
@@ -709,8 +709,7 @@ impl JitContext {
                 ir.unlink(bb, dst);
                 ir.clear(bb);
                 ir.integer_cmp_br(mode, kind, brkind, branch_dest);
-                let dest_idx = func.bb_info.get_bb_id(dest);
-                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, index, dest, bb.clone(), branch_dest);
             }
             TraceIr::CmpBr {
                 kind,
@@ -730,8 +729,7 @@ impl JitContext {
                     brkind,
                     branch_dest,
                 });
-                let dest_idx = func.bb_info.get_bb_id(dest);
-                self.new_branch(func, index, dest_idx, bb.clone(), branch_dest);
+                self.new_branch(func, index, dest, bb.clone(), branch_dest);
             }
             TraceIr::Mov(dst, src) => {
                 ir.copy_slot(bb, src, dst);
@@ -964,7 +962,6 @@ impl JitContext {
                     }
                 } else {
                     let branch_dest = self.asm_label();
-                    let dest_idx = func.bb_info.get_bb_id(dest_idx);
                     ir.fetch_to_reg(bb, cond_, GP::Rax);
                     ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                     self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
@@ -974,7 +971,6 @@ impl JitContext {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, cond_, GP::Rax);
                 ir.inst.push(AsmInst::NilBr(branch_dest));
-                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::CondBr(_, _, true, _) => {}
@@ -982,7 +978,6 @@ impl JitContext {
                 let branch_dest = self.asm_label();
                 ir.fetch_to_reg(bb, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
-                let dest_idx = func.bb_info.get_bb_id(dest_idx);
                 self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
             }
             TraceIr::OptCase { cond, optid } => {
@@ -1023,12 +1018,11 @@ impl JitContext {
         bb: &mut BBContext,
         func: &ISeqInfo,
         bc_pos: BcIndex,
-        dest_idx: BcIndex,
+        dest: BasicBlockId,
     ) {
         let branch_dest = self.asm_label();
         ir.inst.push(AsmInst::Br(branch_dest));
-        let dest_idx = func.bb_info.get_bb_id(dest_idx);
-        self.new_branch(func, bc_pos, dest_idx, bb.clone(), branch_dest);
+        self.new_branch(func, bc_pos, dest, bb.clone(), branch_dest);
     }
 
     fn gen_inline_call(
@@ -1338,7 +1332,7 @@ impl Codegen {
         } else {
             // for method JIT, class of *self* is already checked in an entry stub.
             let pc = func.get_top_pc();
-            self.prologue(store, pc);
+            self.prologue(func, store, pc);
         }
 
         #[cfg(feature = "jit-debug")]

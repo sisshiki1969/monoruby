@@ -343,7 +343,7 @@ impl ISeqInfo {
 
     pub(crate) fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> jitgen::trace_ir::TraceIr {
         let pc = self.get_pc(bc_pos);
-        pc.trace_ir(store, bc_pos)
+        pc.trace_ir(self, store, bc_pos)
     }
 
     ///

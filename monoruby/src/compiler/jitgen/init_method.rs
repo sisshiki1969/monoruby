@@ -1,12 +1,12 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn prologue(&mut self, store: &Store, pc: BytecodePtr) {
+    pub(super) fn prologue(&mut self, func: &ISeqInfo, store: &Store, pc: BytecodePtr) {
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
         );
-        match pc.trace_ir(store, BcIndex::from(0)) {
+        match pc.trace_ir(func, store, BcIndex::from(0)) {
             TraceIr::InitMethod(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
                 self.init_func(&fn_info);

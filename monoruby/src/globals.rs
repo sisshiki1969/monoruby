@@ -116,7 +116,7 @@ pub struct Globals {
     loaded_canonicalized_files: IndexSet<PathBuf>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
-    deopt_stats: HashMap<(FuncId, usize), usize>,
+    deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
     /// stats for inline method cache miss
     #[cfg(feature = "profile")]
     global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,

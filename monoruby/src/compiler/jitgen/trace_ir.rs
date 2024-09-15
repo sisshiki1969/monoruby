@@ -14,17 +14,17 @@ pub(crate) enum OpMode {
 #[derive(Debug, Clone)]
 pub(crate) enum TraceIr {
     /// branch(dest)
-    Br(BcIndex),
+    Br(BasicBlockId),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
-    CondBr(SlotId, BcIndex, bool, BrKind),
+    CondBr(SlotId, BasicBlockId, bool, BrKind),
     /// conditional branch(%reg, dest)  : branch when reg is nil.
-    NilBr(SlotId, BcIndex),
+    NilBr(SlotId, BasicBlockId),
     /// check local var(%reg, dest)  : branch when reg was None.
     OptCase {
         cond: SlotId,
         optid: OptCaseId,
     },
-    CheckLocal(SlotId, BcIndex),
+    CheckLocal(SlotId, BasicBlockId),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -178,14 +178,14 @@ pub(crate) enum TraceIr {
         mode: OpMode,
         lhs_class: Option<ClassId>,
         rhs_class: Option<ClassId>,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
     ICmpBr {
         kind: ruruby_parse::CmpKind,
         dst: Option<SlotId>,
         mode: OpMode,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
     FCmpBr {
@@ -194,7 +194,7 @@ pub(crate) enum TraceIr {
         mode: OpMode,
         lhs_class: ClassId,
         rhs_class: ClassId,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
 
@@ -544,16 +544,22 @@ impl TraceIr {
                 format!("init_method {info:?}")
             }
             TraceIr::CheckLocal(local, dest) => {
-                format!("check_local({:?}) =>{dest}", local)
+                format!("check_local({:?}) =>{:?}", local, dest)
             }
             TraceIr::Br(dest) => {
-                format!("br =>:{dest}")
+                format!("br => {:?}", dest)
             }
             TraceIr::CondBr(reg, dest, opt, kind) => {
-                format!("cond{}br {}{:?} =>{dest}", kind.to_s(), optstr(*opt), reg,)
+                format!(
+                    "cond{}br {}{:?} => {:?}",
+                    kind.to_s(),
+                    optstr(*opt),
+                    reg,
+                    dest
+                )
             }
             TraceIr::NilBr(reg, dest) => {
-                format!("nilbr {:?} =>{dest}", reg)
+                format!("nilbr {:?} => {:?}", reg, dest)
             }
             TraceIr::OptCase { cond: dst, optid } => {
                 format!("opt_case {:?}->({:?})", dst, store[*optid])
