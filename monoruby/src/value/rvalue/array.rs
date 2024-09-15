@@ -162,6 +162,21 @@ impl ArrayInner {
         Ok(removed)
     }
 
+    pub fn debug(&self, store: &Store) -> String {
+        match self.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", self[0].debug(store)),
+            _ => {
+                let mut s = format!("[{}", self[0].debug(store));
+                for val in self[1..].iter() {
+                    s += &format!(", {}", val.debug(store));
+                }
+                s += "]";
+                s
+            }
+        }
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "[]".to_string(),

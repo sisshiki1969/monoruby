@@ -1,12 +1,14 @@
 use super::*;
-use crate::{bytecodegen::BcIndex, compiler::jitgen::BasicBlockInfo};
+use crate::{
+    bytecodegen::BcIndex, compiler::jitgen::BasicBlockId, compiler::jitgen::BasicBlockInfo,
+};
 
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {
     range: std::ops::Range<BytecodePtr>, // range of capturing exception
     rescue_pc: Option<BytecodePtr>,      // rescue destination pc
     ensure_pc: Option<BytecodePtr>,      // ensure destination pc
-    error_slot: Option<SlotId>,   // a slot where an error object is assigned
+    error_slot: Option<SlotId>,          // a slot where an error object is assigned
 }
 
 impl ExceptionMapEntry {
@@ -294,21 +296,28 @@ impl ISeqInfo {
     }
 
     ///
-    /// Get pc(*BcPc*) for instruction index(*idx*).
+    /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
     pub(crate) fn get_pc(&self, idx: BcIndex) -> BytecodePtr {
         BytecodePtr::from_bc(&self.bytecode()[idx.0 as usize])
     }
 
     ///
-    /// Get pc(*BcPc*) for instruction index(*idx*).
+    /// Get pc(*BytecodePtr*) for the beginning of the basic block(*idx*).
+    ///
+    pub(crate) fn get_bb_pc(&self, idx: BasicBlockId) -> BytecodePtr {
+        self.get_pc(self.bb_info[idx].begin)
+    }
+
+    ///
+    /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
     pub(crate) fn get_top_pc(&self) -> BytecodePtr {
         BytecodePtr::from_bc(&self.bytecode()[0])
     }
 
     ///
-    /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
+    /// Get an instruction index(*usize*) corresponding to pc(*BytecodePtr*).
     ///
     pub(crate) fn get_pc_index(&self, pc: Option<BytecodePtr>) -> BcIndex {
         let i = if let Some(pos) = pc {
@@ -330,6 +339,11 @@ impl ISeqInfo {
             self.sourceinfo.short_file_name(),
             self.sourceinfo.get_line(&loc)
         )
+    }
+
+    pub(crate) fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> jitgen::trace_ir::TraceIr {
+        let pc = self.get_pc(bc_pos);
+        pc.trace_ir(store, bc_pos)
     }
 
     ///
@@ -360,13 +374,6 @@ impl ISeqInfo {
     ) {
         self.exception_map
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
-    }
-
-    ///
-    /// Get bytecode length.
-    ///
-    pub(crate) fn bytecode_len(&self) -> usize {
-        self.bytecode().len()
     }
 
     #[cfg(feature = "emit-bc")]

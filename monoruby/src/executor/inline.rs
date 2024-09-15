@@ -17,6 +17,10 @@ impl InlineMethodId {
     pub fn new(id: usize) -> Self {
         Self(id)
     }
+
+    pub fn get(self) -> usize {
+        self.0
+    }
 }
 
 #[derive(Debug, Default)]

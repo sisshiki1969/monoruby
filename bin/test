@@ -13,6 +13,9 @@ diff -s monoruby.log ruby.log
 monoruby benchmark/so_nbody.rb > monoruby.log
 ruby benchmark/so_nbody.rb > ruby.log
 diff -s monoruby.log ruby.log
+monoruby benchmark/bf.rb > monoruby.log
+ruby benchmark/bf.rb > ruby.log
+diff -s monoruby.log ruby.log
 
 echo "checking plb2.."
 monoruby benchmark/plb2/nqueen.rb > monoruby.log

@@ -25,6 +25,14 @@ impl MethodInner {
         self.func_id
     }
 
+    pub fn debug(&self, store: &Store) -> String {
+        format!(
+            "#<Method: {}#{}()>",
+            store.get_class_name(self.receiver.class()),
+            store[self.func_id()].name().unwrap()
+        )
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         format!(
             "#<Method: {}#{}()>",
@@ -48,6 +56,14 @@ impl UMethodInner {
 
     pub fn func_id(&self) -> FuncId {
         self.func_id
+    }
+
+    pub fn debug(&self, store: &Store) -> String {
+        format!(
+            "#<UnboundMethod: {}#{}()>",
+            store.get_class_name(self.owner),
+            store[self.func_id()].name().unwrap()
+        )
     }
 
     pub fn to_s(&self, globals: &Globals) -> String {

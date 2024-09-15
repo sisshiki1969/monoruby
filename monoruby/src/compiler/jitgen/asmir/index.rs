@@ -7,9 +7,11 @@ impl AsmIr {
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
+        base_class: Option<ClassId>,
+        idx_class: Option<ClassId>,
         pc: BytecodePtr,
     ) {
-        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
+        if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
             let deopt = self.new_deopt(bb, pc);
             self.fetch_guard_array(bb, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {
@@ -33,9 +35,11 @@ impl AsmIr {
         src: SlotId,
         base: SlotId,
         idx: SlotId,
+        base_class: Option<ClassId>,
+        idx_class: Option<ClassId>,
         pc: BytecodePtr,
     ) {
-        if pc.classid1() == Some(ARRAY_CLASS) && pc.is_integer2() {
+        if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
             let deopt = self.new_deopt(bb, pc);
             self.fetch_guard_array(bb, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {

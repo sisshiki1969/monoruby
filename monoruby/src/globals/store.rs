@@ -55,17 +55,19 @@ impl ClassInfoTable {
     }
 }
 
-pub struct InlineFuncInfo {
-    pub inline_gen: Box<InlineGen>,
-    pub inline_analysis: InlineAnalysis,
+pub(crate) struct InlineFuncInfo {
+    pub fid: FuncId,
+    pub(crate) inline_gen: Box<InlineGen>,
+    pub(crate) inline_analysis: InlineAnalysis,
+    #[cfg(feature = "dump-bc")]
     pub name: String,
 }
 
 pub struct Store {
     /// function info.
-    pub functions: function::Funcs,
+    pub(crate) functions: function::Funcs,
     /// class table.
-    pub classes: ClassInfoTable,
+    pub(crate) classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -128,6 +130,13 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
+impl std::ops::Index<InlineMethodId> for Store {
+    type Output = InlineFuncInfo;
+    fn index(&self, index: InlineMethodId) -> &Self::Output {
+        &self.inline_method[index.get()]
+    }
+}
+
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -152,22 +161,20 @@ impl Store {
 impl Store {
     pub(super) fn add_inline_info(
         &mut self,
+        fid: FuncId,
         inline_gen: Box<InlineGen>,
         inline_analysis: InlineAnalysis,
-        name: String,
+        _name: String,
     ) -> InlineMethodId {
         let id = self.inline_method.len();
         self.inline_method.push(InlineFuncInfo {
+            fid,
             inline_gen,
             inline_analysis,
-            name,
+            #[cfg(feature = "dump-bc")]
+            name: _name,
         });
         InlineMethodId::new(id)
-    }
-
-    pub(crate) fn get_inline_info(&self, id: InlineMethodId) -> &InlineFuncInfo {
-        let id: usize = id.into();
-        &self.inline_method[id]
     }
 }
 
@@ -205,7 +212,7 @@ impl Store {
         self.functions.add_classdef(name, info, loc, sourceinfo)
     }
 
-    pub fn add_block(
+    pub(crate) fn add_block(
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
@@ -226,7 +233,7 @@ impl Store {
         )
     }
 
-    pub fn add_eval(
+    pub(crate) fn add_eval(
         &mut self,
         mother: (FuncId, usize),
         result: ParseResult,
@@ -364,6 +371,33 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Get class name of *ClassId*.
+    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
+        if let Some(class) = class.into() {
+            let class_obj = self.classes[class].get_module();
+            match self.classes[class].get_name_id() {
+                Some(_) => {
+                    let v: Vec<_> = self
+                        .classes
+                        .get_parents(class)
+                        .into_iter()
+                        .rev()
+                        .map(|name| name.to_string())
+                        .collect();
+                    v.join("::")
+                }
+                None => match class_obj.is_singleton() {
+                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                    Some(base) => format!("#<Class:{}>", base.debug(self)),
+                },
+            }
+        } else {
+            "<INVALID>".to_string()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConstCache {
     pub cached_version: usize,
@@ -397,7 +431,7 @@ pub struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
     /// The slot of base object.
-    pub base: Option<SlotId>,
+    pub(crate) base: Option<SlotId>,
     /// Qualifier.
     pub prefix: Vec<IdentId>,
     /// Is toplevel?. (e.g. ::Foo)
@@ -413,7 +447,7 @@ impl alloc::GC<RValue> for ConstSiteInfo {
 }
 
 impl ConstSiteInfo {
-    #[cfg(feature = "dump-bc")]
+    //#[cfg(feature = "dump-bc")]
     pub fn format(&self) -> String {
         let ConstSiteInfo {
             name,
@@ -450,24 +484,24 @@ pub struct CallSiteInfo {
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Position of the receiver.
-    pub recv: SlotId,
+    pub(crate) recv: SlotId,
     /// Position of the first argument.
-    pub args: SlotId,
+    pub(crate) args: SlotId,
     /// Number of positional arguments.
     pub pos_num: usize,
     /// Positions of splat arguments.
     pub splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
     pub block_fid: Option<FuncId>,
-    pub block_arg: Option<SlotId>,
+    pub(crate) block_arg: Option<SlotId>,
     /// Postion of keyword arguments.
-    pub kw_pos: SlotId,
+    pub(crate) kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: IndexMap<IdentId, usize>,
     /// Position of hash splat arguments.
-    pub hash_splat_pos: Vec<SlotId>,
+    pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
-    pub dst: Option<SlotId>,
+    pub(crate) dst: Option<SlotId>,
 }
 
 impl CallSiteInfo {

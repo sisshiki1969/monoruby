@@ -429,15 +429,11 @@ fn array_shl(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BytecodePtr,
+    _pc: BytecodePtr,
 ) {
-    let CallSiteInfo {
-        recv, dst, args, ..
-    } = store[callid];
+    let CallSiteInfo { dst, args, .. } = store[callid];
     ir.fetch_to_reg(bb, args, GP::Rsi);
-    let deopt = ir.new_deopt(bb, pc);
     let using_xmm = bb.get_using_xmm();
-    ir.guard_class(bb, recv, GP::Rdi, ARRAY_CLASS, deopt);
     ir.inline(move |gen, _| {
         gen.xmm_save(using_xmm);
         monoasm!( &mut gen.jit,

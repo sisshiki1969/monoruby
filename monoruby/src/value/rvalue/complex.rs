@@ -76,12 +76,12 @@ impl ComplexInner {
         num::complex::Complex::new(self.0.re.to_f64(), self.0.im.to_f64())
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
+    pub fn debug(&self, store: &Store) -> String {
         format!(
             "{}{}{}i",
-            self.re.get().to_s(globals),
+            self.re.get().debug(store),
             if self.im.is_negative() { "" } else { "+" },
-            self.im.get().to_s(globals)
+            self.im.get().debug(store)
         )
     }
 

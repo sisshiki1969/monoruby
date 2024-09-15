@@ -25,12 +25,19 @@ mod variables;
 // +---+---+---+---++---+---+---+---+
 // ~~~
 
-const BC_OFFSET_CALLSITE_ID: usize = 0;
 const BC_OFFSET_CACHED_CLASS: usize = 24;
 const BC_OFFSET_CACHED_VERSION: usize = 28;
 const BC_OFFSET_CACHED_FUNCID: usize = 8;
 
-type InlineProcedure = dyn FnOnce(&mut Codegen, &SideExitLabels);
+pub(super) struct InlineProcedure {
+    proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
+}
+
+impl std::fmt::Debug for InlineProcedure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InlineProcedure")
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmDeopt(usize);
@@ -332,13 +339,21 @@ impl AsmIr {
     ///
     pub(super) fn guard_version(
         &mut self,
-        pc: BytecodePtr,
+        cached_fid: FuncId,
+        cached_version: u32,
+        callid: CallSiteId,
         using_xmm: UsingXmm,
         deopt: AsmDeopt,
         error: AsmError,
     ) {
-        self.inst
-            .push(AsmInst::GuardClassVersion(pc, using_xmm, deopt, error));
+        self.inst.push(AsmInst::GuardClassVersion(
+            cached_fid,
+            cached_version,
+            callid,
+            using_xmm,
+            deopt,
+            error,
+        ));
     }
 
     ///
@@ -887,7 +902,8 @@ impl AsmIr {
     }
 
     pub(crate) fn inline(&mut self, f: impl FnOnce(&mut Codegen, &SideExitLabels) + 'static) {
-        self.inst.push(AsmInst::Inline { proc: Box::new(f) });
+        self.inst
+            .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
@@ -957,12 +973,13 @@ impl AsmIr {
         &mut self,
         mode: &OpMode,
         bb: &mut BBContext,
-        pc: BytecodePtr,
+        lhs_class: ClassId,
+        rhs_class: ClassId,
         deopt: AsmDeopt,
     ) -> FMode {
         match mode {
             OpMode::RR(l, r) => {
-                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, pc, deopt);
+                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, lhs_class, rhs_class, deopt);
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
@@ -983,6 +1000,7 @@ impl AsmIr {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum AsmInst {
     /// move acc to stack
     AccToStack(SlotId),
@@ -1060,7 +1078,7 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - stack
     ///
-    GuardClassVersion(BytecodePtr, UsingXmm, AsmDeopt, AsmError),
+    GuardClassVersion(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
     ///
     /// Type guard.
     ///
@@ -1173,9 +1191,7 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
-    Inline {
-        proc: Box<InlineProcedure>,
-    },
+    Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
@@ -1487,6 +1503,91 @@ pub(super) enum AsmInst {
     DestLabel(DestLabel),
 }
 
+impl AsmInst {
+    #[cfg(feature = "emit-asm")]
+    pub(crate) fn dump(&self, store: &Store) -> String {
+        match self {
+            Self::AccToStack(slot) => format!("{:?} = R15", slot),
+            Self::RegToAcc(gpr) => format!("R15 = {:?}", gpr),
+            Self::RegToStack(gpr, slot) => format!("{:?} = {:?}", slot, gpr),
+            Self::StackToReg(slot, gpr) => format!("{:?} = {:?}", gpr, slot),
+            Self::LitToReg(val, gpr) => format!("{:?} = {}", gpr, val.debug(store)),
+            Self::I32ToReg(i, gpr) => format!("{:?} = {i}", gpr),
+            Self::RegMove(src, dst) => format!("{:?} = {:?}", dst, src),
+            Self::RegAdd(gpr, i) => format!("{:?} += {i}", gpr),
+            Self::RegSub(gpr, i) => format!("{:?} -= {i}", gpr,),
+            Self::RegToRSPOffset(gpr, offset) => format!("RSP[{offset}] = {:?}", gpr),
+            Self::XmmMove(src, dst) => format!("{:?} = {:?}", dst, src),
+            Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
+            Self::XmmBinOp {
+                kind,
+                mode,
+                dst,
+                using_xmm,
+            } => format!("{:?} = {:?} {:?}  {:?}", dst, kind, mode, using_xmm),
+            Self::XmmUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
+
+            Self::F64ToXmm(f, dst) => format!("{:?} = {}", dst, f),
+            Self::I64ToBoth(i, slot, xmm) => format!("{:?}:{:?} = {i}", slot, xmm),
+            Self::XmmToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
+            Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
+            Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
+            Self::NumToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Numeric to f64", fpr, gpr),
+            Self::IntToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Integer to f64", fpr, gpr),
+            Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
+            Self::GuardFloat(gpr, _deopt) => format!("Guard Float {:?}", gpr),
+            Self::GuardFixnum(gpr, _deopt) => format!("Guard Fixnum {:?}", gpr),
+            Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
+
+            Self::GuardClassVersion(fid, version, _callid, _using_xmm, _deopt, _error) => {
+                format!("GuardVersion fid={:?} version={version}", fid)
+            }
+            Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
+            Self::Ret => "ret".to_string(),
+            Self::Break => "break".to_string(),
+            Self::Raise => "raise".to_string(),
+            Self::MethodRet(_pc) => format!("method_return"),
+            Self::EnsureEnd => "ensure_end".to_string(),
+
+            Self::Br(label) => format!("br {:?}", label),
+            Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
+            Self::NilBr(label) => format!("nil_br {:?}", label),
+            Self::CheckLocal(label) => format!("check_local {:?}", label),
+            Self::GenericCondBr {
+                brkind,
+                branch_dest,
+            } => format!("condbr {:?} {:?}", brkind, branch_dest),
+            Self::OptCase {
+                max,
+                min,
+                opt_case_id,
+                else_dest,
+            } => format!(
+                "opt_case {:?}..{:?} {:?} {:?}",
+                min, max, opt_case_id, else_dest
+            ),
+            Self::Deopt(deopt) => format!("deopt {:?}", deopt),
+            Self::RecompileDeopt { position, deopt } => {
+                format!("recompile_deopt {:?} {:?}", position, deopt)
+            }
+            Self::WriteBack(wb) => format!("write_back {:?}", wb),
+            Self::HandleError(error) => format!("handle_error {:?}", error),
+            Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
+            Self::ExecGc(wb) => format!("exec_gc {:?}", wb),
+            Self::LoadGenericConstant {
+                cached_val,
+                cached_version,
+                deopt: _,
+            } => format!(
+                "load_generic_constant {} {}",
+                cached_val.debug(store),
+                cached_version
+            ),
+            _ => format!("{:?}", self),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum FMode {
     RR(Xmm, Xmm),
@@ -1501,30 +1602,24 @@ pub enum SideExit {
 }
 
 impl Codegen {
-    pub(super) fn gen_code(&mut self, store: &Store, ctx: &mut JitContext) {
-        // generate machine code for a main context
-        self.gen_asm(store, ctx, None, None);
-
-        // generate machine code for bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            ctx.ir = ir;
-            self.gen_asm(store, ctx, Some(entry), Some(exit));
-        }
-        assert!(ctx.continuation_bridge.is_none());
-    }
-
     ///
-    /// Generate machine code for *ctx.ir*.
+    /// Generate machine code for *ir*.
     ///
-    fn gen_asm(
+    pub(super) fn gen_asm(
         &mut self,
+        ir: AsmIr,
         store: &Store,
+        func: &ISeqInfo,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
-        exit: Option<DestLabel>,
+        exit: Option<BasicBlockId>,
     ) {
+        #[cfg(feature = "emit-asm")]
+        for ir in &ir.inst {
+            eprintln!("    {}", ir.dump(store));
+        }
         let mut side_exits = SideExitLabels::new();
-        for side_exit in std::mem::take(&mut ctx.ir.side_exit) {
+        for side_exit in ir.side_exit {
             let label = self.jit.label();
             side_exits.push(label);
             match side_exit {
@@ -1555,18 +1650,19 @@ impl Codegen {
         #[cfg(feature = "emit-asm")]
         let mut _sourcemap = vec![];
 
-        for inst in std::mem::take(&mut ctx.ir.inst) {
+        for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
-            self.gen_asmir(store, ctx, &side_exits, inst);
+            self.gen_asmir(store, func, ctx, &side_exits, inst);
         }
 
         if let Some(exit) = exit {
-            monoasm!( &mut self.jit,
+            let exit = *ctx.inst_labels.get(&exit).unwrap();
+            monoasm! { &mut self.jit,
                 jmp exit;
-            );
+            }
             self.jit.select_page(0);
         }
 

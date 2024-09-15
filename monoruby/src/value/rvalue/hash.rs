@@ -109,6 +109,39 @@ impl HashmapInner {
         }
     }
 
+    pub fn debug(&self, store: &Store) -> String {
+        match self.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in self.iter() {
+                    let k_inspect = if let Some(h) = k.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        k.debug(store)
+                    };
+                    let v_inspect = if let Some(h) = v.is_hash()
+                        && h.id() == self.id()
+                    {
+                        "{...}".to_string()
+                    } else {
+                        v.debug(store)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{}}}", result}
+            }
+        }
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         match self.len() {
             0 => "{}".to_string(),

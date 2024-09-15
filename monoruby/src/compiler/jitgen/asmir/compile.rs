@@ -15,6 +15,7 @@ impl Codegen {
     pub(super) fn gen_asmir(
         &mut self,
         store: &Store,
+        func: &ISeqInfo,
         ctx: &JitContext,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -154,10 +155,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
-            AsmInst::GuardClassVersion(pc, using_xmm, deopt, error) => {
+            AsmInst::GuardClassVersion(fid, cached_version, callid, using_xmm, deopt, error) => {
                 let deopt = labels[deopt];
                 let error = labels[error];
-                self.guard_class_version(pc, using_xmm, deopt, error);
+                self.guard_class_version(fid, cached_version, callid, using_xmm, deopt, error);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -286,7 +287,7 @@ impl Codegen {
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
                 for ofs in store[*id].branch_table.iter() {
-                    let idx = *bb_pos + 1 + (*ofs as i32);
+                    let idx = func.bb_info.get_bb_id(*bb_pos + 1 + (*ofs as i32));
                     let dest_label = ctx[label_map.get(&idx).cloned().unwrap()];
                     self.jit.abs_address(dest_label);
                 }
@@ -687,7 +688,7 @@ impl Codegen {
                 self.cond_br(branch_dest, brkind);
             }
 
-            AsmInst::Inline { proc } => proc(self, labels),
+            AsmInst::Inline(proc) => (proc.proc)(self, labels),
         }
     }
 
@@ -711,7 +712,9 @@ impl Codegen {
     ///
     fn guard_class_version(
         &mut self,
-        pc: BytecodePtr,
+        cached_fid: FuncId,
+        cached_version: u32,
+        callid: CallSiteId,
         using_xmm: UsingXmm,
         deopt: DestLabel,
         error: DestLabel,
@@ -721,12 +724,7 @@ impl Codegen {
         let unmatch = self.jit.label();
         let exit = self.jit.label();
         let fail = self.jit.label();
-        let cached_version = self.jit.data_i32((pc + 1).cached_version() as i32);
-        let cached_fid = if let Some(fid) = pc.cached_fid() {
-            fid.get()
-        } else {
-            0
-        };
+        let cached_version = self.jit.data_i32(cached_version as i32);
         monoasm! { &mut self.jit,
             movl rax, [rip + cached_version];
             cmpl [rip + global_version], rax;
@@ -740,11 +738,10 @@ impl Codegen {
         monoasm! { &mut self.jit,
             pushq rdi;
             pushq r13;
-            movq r13, (pc.as_ptr());
             movq rcx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
-            movl rdx, [r13 + (BC_OFFSET_CALLSITE_ID)];  // CallSiteId
+            movl rdx, (callid.get());  // CallSiteId
             movq rax, (runtime::find_method2);
             call rax;   // rax <- Option<FuncId>
             popq r13;
@@ -754,7 +751,7 @@ impl Codegen {
         self.xmm_restore(using_xmm);
         self.handle_error(error);
         monoasm! { &mut self.jit,
-            cmpl rax, (cached_fid);
+            cmpl rax, (cached_fid.get());
             jne  fail;
             movl rax, [rip + global_version];
             movl [rip + cached_version], rax;

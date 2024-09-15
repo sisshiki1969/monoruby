@@ -1,7 +1,15 @@
+use std::iter::Step;
+
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
 pub(crate) struct BasicBlockId(pub usize);
+
+impl std::fmt::Debug for BasicBlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BB{}", self.0)
+    }
+}
 
 impl std::ops::Add<usize> for BasicBlockId {
     type Output = Self;
@@ -10,9 +18,30 @@ impl std::ops::Add<usize> for BasicBlockId {
     }
 }
 
+impl std::ops::Sub<usize> for BasicBlockId {
+    type Output = Self;
+    fn sub(self, rhs: usize) -> Self {
+        Self(self.0 - rhs)
+    }
+}
+
 impl std::ops::AddAssign<usize> for BasicBlockId {
     fn add_assign(&mut self, rhs: usize) {
         *self = Self(self.0 + rhs)
+    }
+}
+
+impl Step for BasicBlockId {
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        Some(end.0 - start.0)
+    }
+
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start + count)
+    }
+
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start - count)
     }
 }
 
@@ -81,19 +110,19 @@ impl BasicBlockInfo {
             .collect();
 
         // generate bb_map.
-        let mut bb_id = BasicBlockId(1);
+        let mut bb_id = -1i32;
         let mut bb_map = vec![];
         for b in bb_head.iter() {
             if *b {
                 bb_id += 1;
             }
-            bb_map.push(bb_id);
+            bb_map.push(BasicBlockId(bb_id as usize));
         }
         bb_id += 1;
 
         // generate bb_info.
         let mut bb_info = BasicBlockInfo {
-            info: vec![BasciBlockInfoEntry::default(); bb_id.0],
+            info: vec![BasciBlockInfoEntry::default(); bb_id as usize],
             bb_head,
             bb_map,
             loops: Default::default(),
@@ -138,8 +167,12 @@ impl BasicBlockInfo {
         bb_scan
     }
 
-    pub(crate) fn is_bb_head(&self, i: BcIndex) -> bool {
-        self.bb_head[i.0 as usize]
+    pub(crate) fn is_bb_head(&self, i: BcIndex) -> Option<BasicBlockId> {
+        if *self.bb_head.get(i.0 as usize)? {
+            Some(self.get_bb_id(i))
+        } else {
+            None
+        }
     }
 
     pub(super) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {

@@ -103,19 +103,11 @@ fn math_sqrt(
     pc: BytecodePtr,
 ) {
     let callsite = &store[callid];
-    let CallSiteInfo {
-        recv,
-        args,
-        dst: ret,
-        ..
-    } = *callsite;
+    let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_self() {
-        ir.guard_class(bb, recv, GP::Rdi, pc.cached_class1().unwrap(), deopt);
-    }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
-    if let Some(ret) = ret {
-        let fret = ir.xmm_write_enc(bb, ret);
+    if let Some(dst) = dst {
+        let fret = ir.xmm_write_enc(bb, dst);
         ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
@@ -132,13 +124,8 @@ fn math_cos(
     pc: BytecodePtr,
 ) {
     let callsite = &store[callid];
-    let CallSiteInfo {
-        recv, args, dst, ..
-    } = *callsite;
+    let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_self() {
-        ir.guard_class(bb, recv, GP::Rdi, pc.cached_class1().unwrap(), deopt);
-    }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = dst {
         let fret = ir.xmm_write_enc(bb, ret);
@@ -166,16 +153,8 @@ fn math_sin(
     pc: BytecodePtr,
 ) {
     let callsite = &store[callid];
-    let CallSiteInfo {
-        recv,
-        args,
-        dst: ret,
-        ..
-    } = *callsite;
+    let CallSiteInfo { args, dst: ret, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_self() {
-        ir.guard_class(bb, recv, GP::Rdi, pc.cached_class1().unwrap(), deopt);
-    }
     let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = ir.xmm_write_enc(bb, ret);

@@ -41,6 +41,7 @@ pub trait GC<T: GCBox> {
 }
 
 pub trait GCRoot<T: GCBox>: GC<T> {
+    #[cfg(feature = "gc-debug")]
     fn startup_flag(&self) -> bool;
 }
 

@@ -381,14 +381,15 @@ impl Globals {
         inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {
-        let func_id = self.define_builtin_func(class_id, name, address, arg_num);
+        let fid = self.define_builtin_func(class_id, name, address, arg_num);
         let inline_id = self.store.add_inline_info(
+            fid,
             inline_gen,
             inline_analysis,
             format!("{}#{name}", self.get_class_name(class_id)),
         );
-        inline::InlineTable::add_inline(func_id, inline_id);
-        func_id
+        inline::InlineTable::add_inline(fid, inline_id);
+        fid
     }
 
     pub(crate) fn define_builtin_inline_func_with(
@@ -402,7 +403,7 @@ impl Globals {
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let func_id = self.new_builtin_fn(
+        let fid = self.new_builtin_fn(
             class_id,
             name,
             address,
@@ -413,12 +414,13 @@ impl Globals {
             &[],
         );
         let inline_id = self.store.add_inline_info(
+            fid,
             inline_gen,
             inline_analysis,
             format!("{}#{name}", self.get_class_name(class_id)),
         );
-        inline::InlineTable::add_inline(func_id, inline_id);
-        func_id
+        inline::InlineTable::add_inline(fid, inline_id);
+        fid
     }
 
     pub(crate) fn define_builtin_inline_funcs_with(
@@ -639,14 +641,15 @@ impl Globals {
         inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {
-        let func_id = self.define_builtin_module_func(class_id, name, address, arg_num);
+        let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
         let inline_id = self.store.add_inline_info(
+            fid,
             inline_gen,
             inline_analysis,
             format!("{}#{name}", self.get_class_name(class_id)),
         );
-        inline::InlineTable::add_inline(func_id, inline_id);
-        func_id
+        inline::InlineTable::add_inline(fid, inline_id);
+        fid
     }
 
     ///

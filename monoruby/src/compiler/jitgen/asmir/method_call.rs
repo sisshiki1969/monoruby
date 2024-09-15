@@ -6,11 +6,13 @@ impl AsmIr {
         store: &Store,
         bb: &mut BBContext,
         fid: FuncId,
+        recv_class: ClassId,
+        version: u32,
         callid: CallSiteId,
         pc: BytecodePtr,
     ) -> Option<()> {
         let CallSiteInfo { dst, recv, .. } = store[callid];
-        if recv.is_self() && bb.self_value.class() != pc.cached_class1().unwrap() {
+        if recv.is_self() && bb.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_locals(bb);
             self.write_back_callargs(bb, &store[callid]);
@@ -26,14 +28,13 @@ impl AsmIr {
             self.fetch_to_reg(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
-            self.guard_version(pc, using_xmm, deopt, error);
-            let cached_class = pc.cached_class1().unwrap();
+            self.guard_version(fid, version, callid, using_xmm, deopt, error);
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.
-            if !recv.is_self() && !bb.is_class(recv, cached_class) {
-                self.guard_class(bb, recv, GP::Rdi, cached_class, deopt);
+            if !recv.is_self() && !bb.is_class(recv, recv_class) {
+                self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
             }
-            let evict = self.gen_call_cached(store, bb, callid, fid, pc)?;
+            let evict = self.gen_call_cached(store, bb, callid, fid, recv_class, pc)?;
             self.rax2acc(bb, dst);
             if let Some(evict) = evict {
                 self.inst.push(AsmInst::ImmediateEvict { evict });
@@ -56,13 +57,13 @@ impl AsmIr {
         bb: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
+        recv_class: ClassId,
         pc: BytecodePtr,
     ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo {
             args, pos_num, dst, ..
         } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let recv_class = pc.cached_class1().unwrap();
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);

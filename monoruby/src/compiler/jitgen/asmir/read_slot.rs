@@ -21,7 +21,7 @@ impl AsmIr {
                 self.reg_move(GP::Rax, dst);
                 bb.set_both_float(slot, xmm);
             }
-            LinkMode::Literal(v) => {
+            LinkMode::ConcreteValue(v) => {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
@@ -39,7 +39,7 @@ impl AsmIr {
                 }
                 self.stack2reg(origin, dst);
             }
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 self.reg_move(GP::R15, dst);
             }
         }
@@ -47,7 +47,7 @@ impl AsmIr {
 
     pub(crate) fn fetch_to_rsp_offset(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
         match bb.slot(reg) {
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 self.reg2rsp_offset(GP::R15, offset);
             }
             _ => {
@@ -116,7 +116,7 @@ impl AsmIr {
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 // -> Both
                 let x = self.store_new_both(bb, reg, Guarded::Fixnum);
                 self.reg2stack(GP::R15, reg);
@@ -130,7 +130,7 @@ impl AsmIr {
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::Literal(v) => {
+            LinkMode::ConcreteValue(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
                     let x = self.store_new_xmm(bb, reg);
@@ -170,7 +170,7 @@ impl AsmIr {
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 // -> Both
                 let x = self.store_new_both(bb, slot, Guarded::Float);
                 self.reg2stack(GP::R15, slot);
@@ -184,7 +184,7 @@ impl AsmIr {
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
-            LinkMode::Literal(v) => {
+            LinkMode::ConcreteValue(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
                     let x = self.store_new_xmm(bb, slot);
@@ -212,12 +212,12 @@ impl AsmIr {
         &mut self,
         bb: &mut BBContext,
         rhs: SlotId,
-        class: Option<ClassId>,
+        class: ClassId,
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            Some(INTEGER_CLASS) => self.fetch_float_assume_integer(bb, rhs, deopt),
-            Some(FLOAT_CLASS) => self.fetch_float_assume_float(bb, rhs, deopt),
+            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -227,16 +227,17 @@ impl AsmIr {
         bb: &mut BBContext,
         lhs: SlotId,
         rhs: SlotId,
-        pc: BytecodePtr,
+        lhs_class: ClassId,
+        rhs_class: ClassId,
         deopt: AsmDeopt,
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.fetch_float_assume(bb, lhs, pc.classid1(), deopt),
-                self.fetch_float_assume(bb, rhs, pc.classid2(), deopt),
+                self.fetch_float_assume(bb, lhs, lhs_class, deopt),
+                self.fetch_float_assume(bb, rhs, rhs_class, deopt),
             )
         } else {
-            let lhs = self.fetch_float_assume(bb, lhs, pc.classid1(), deopt);
+            let lhs = self.fetch_float_assume(bb, lhs, lhs_class, deopt);
             (lhs, lhs)
         }
     }
