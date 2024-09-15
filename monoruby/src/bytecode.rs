@@ -53,7 +53,7 @@ impl Bytecode {
         ClassId::from((self.op2.0 >> 32) as u32)
     }
 
-    pub fn cached_version(&self) -> u32 {
+    fn cached_version(&self) -> u32 {
         let op = self.op2.0;
         (op >> 32) as u32
     }
@@ -297,9 +297,7 @@ impl BytecodePtr {
     fn opcode(&self) -> u8 {
         (self.op1 >> 48) as u8
     }
-}
 
-impl BytecodePtr {
     pub fn as_ptr(&self) -> *mut Bytecode {
         self.0.as_ptr()
     }
@@ -316,7 +314,7 @@ impl BytecodePtr {
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 
-    pub fn cached_fid(self) -> Option<FuncId> {
+    fn cached_fid(self) -> Option<FuncId> {
         (*self).fid()
     }
 
@@ -324,7 +322,7 @@ impl BytecodePtr {
         (*(self + 1)).classid1()
     }
 
-    pub fn cached_class0(self) -> Option<ClassId> {
+    fn cached_class0(self) -> Option<ClassId> {
         self.classid1()
     }
 }
@@ -420,6 +418,7 @@ impl BytecodePtr {
                 30..=31 => {
                     let cached_fid = self.cached_fid();
                     let recv_class = self.cached_class1();
+                    let cached_version = (*self + 1).cached_version();
                     let is_simple = opcode == 30;
                     let callid: CallSiteId = op2.into();
 
@@ -436,12 +435,14 @@ impl BytecodePtr {
                                     inline_id,
                                     callid,
                                     recv_class,
+                                    version: cached_version,
                                 };
                             } else if is_simple {
                                 return TraceIr::InlineObjectSend {
                                     inline_id,
                                     callid,
                                     recv_class,
+                                    version: cached_version,
                                 };
                             }
                         } else if is_simple {
@@ -449,16 +450,26 @@ impl BytecodePtr {
                                 inline_id,
                                 callid,
                                 recv_class,
+                                version: cached_version,
                             };
                         }
                     }
-                    TraceIr::MethodCall { callid, recv_class }
+                    TraceIr::MethodCall {
+                        callid,
+                        recv_class,
+                        fid: cached_fid,
+                        version: cached_version,
+                    }
                 }
                 32..=33 => {
+                    let cached_fid = self.cached_fid();
                     let recv_class = self.cached_class1();
+                    let cached_version = (*self + 1).cached_version();
                     TraceIr::MethodCallBlock {
                         callid: op2.into(),
                         recv_class,
+                        fid: cached_fid,
+                        version: cached_version,
                     }
                 }
                 34..=35 => TraceIr::Yield { callid: op2.into() },
@@ -544,7 +555,6 @@ impl BytecodePtr {
                 128 => TraceIr::Not {
                     dst: SlotId::new(op1),
                     src: SlotId::new(op2),
-                    src_class: self.classid1(),
                 },
                 129 => {
                     let kind = UnOpK::Neg;

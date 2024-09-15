@@ -1,6 +1,3 @@
-def f(*x)
-  puts "#{x}"
-end
 20.times do
-  f(a:1, **{b:2,c:3})
+  if !!!4 then puts "true" else puts "false" end
 end

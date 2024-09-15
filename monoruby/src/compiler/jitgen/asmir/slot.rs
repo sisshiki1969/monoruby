@@ -11,7 +11,7 @@ pub enum Guarded {
 }
 
 impl Guarded {
-    pub fn from_literal(v: Value) -> Self {
+    pub fn from_concrete_value(v: Value) -> Self {
         if v.is_fixnum() {
             Guarded::Fixnum
         } else if v.is_float() {
@@ -168,7 +168,7 @@ impl SlotContext {
     }
 
     pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
-        if let LinkMode::Literal(v) = self[slot].link {
+        if let LinkMode::ConcreteValue(v) = self[slot].link {
             let i = v.try_fixnum()?;
             u16::try_from(i).ok()
         } else {
@@ -177,7 +177,7 @@ impl SlotContext {
     }
 
     pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-        if let LinkMode::Literal(v) = self[slot].link {
+        if let LinkMode::ConcreteValue(v) = self[slot].link {
             let i = v.try_fixnum()?;
             u8::try_from(i).ok()
         } else {
@@ -185,40 +185,40 @@ impl SlotContext {
         }
     }
 
-    pub(super) fn is_array_ty(&self, slot: SlotId) -> bool {
+    pub fn is_array_ty(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::ArrayTy;
         match self[slot].link {
             LinkMode::Xmm(_) => assert!(!b),
-            LinkMode::Literal(v) => assert_eq!(v.is_array_ty(), b),
+            LinkMode::ConcreteValue(v) => assert_eq!(v.is_array_ty(), b),
             LinkMode::Alias(origin) => assert_eq!(self.is_array_ty(origin), b),
             _ => {}
         };
         b
     }
 
-    pub(super) fn is_fixnum(&self, slot: SlotId) -> bool {
+    pub fn is_fixnum(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Fixnum;
         match self[slot].link {
             LinkMode::Xmm(_) => assert!(!b),
-            LinkMode::Literal(v) => assert_eq!(v.is_fixnum(), b),
+            LinkMode::ConcreteValue(v) => assert_eq!(v.is_fixnum(), b),
             LinkMode::Alias(origin) => assert_eq!(self.is_fixnum(origin), b),
             _ => {}
         };
         b
     }
 
-    pub(super) fn is_float(&self, slot: SlotId) -> bool {
+    pub fn is_float(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Float;
         match self[slot].link {
             LinkMode::Xmm(_) => assert!(b),
-            LinkMode::Literal(v) => assert_eq!(v.is_float(), b),
+            LinkMode::ConcreteValue(v) => assert_eq!(v.is_float(), b),
             LinkMode::Alias(origin) => assert_eq!(self.is_float(origin), b),
             _ => {}
         };
         b
     }
 
-    pub(super) fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
+    pub fn is_class(&self, slot: SlotId, class: ClassId) -> bool {
         match class {
             INTEGER_CLASS => self.is_fixnum(slot),
             FLOAT_CLASS => self.is_float(slot),
@@ -226,12 +226,44 @@ impl SlotContext {
                 let b = self.guarded(slot) == Guarded::Class(class);
                 match self[slot].link {
                     LinkMode::Xmm(_) => assert!(!b),
-                    LinkMode::Literal(v) => assert_eq!(v.class() == class, b),
+                    LinkMode::ConcreteValue(v) => assert_eq!(v.class() == class, b),
                     LinkMode::Alias(origin) => assert_eq!(self.is_class(origin, class), b),
                     _ => {}
                 };
                 b
             }
+        }
+    }
+
+    pub fn is_truthy(&self, slot: SlotId) -> bool {
+        match self[slot].link {
+            LinkMode::Xmm(_) => true,
+            LinkMode::Both(_) => true,
+            LinkMode::ConcreteValue(v) => v.as_bool(),
+            LinkMode::Alias(origin) => self.is_truthy(origin),
+            _ => match self.guarded(slot) {
+                Guarded::Fixnum => true,
+                Guarded::Float => true,
+                Guarded::ArrayTy => true,
+                Guarded::Value => false,
+                Guarded::Class(_) => false,
+            },
+        }
+    }
+
+    pub fn is_falsy(&self, slot: SlotId) -> bool {
+        match self[slot].link {
+            LinkMode::Xmm(_) => false,
+            LinkMode::Both(_) => false,
+            LinkMode::ConcreteValue(v) => !v.as_bool(),
+            LinkMode::Alias(origin) => self.is_falsy(origin),
+            _ => match self.guarded(slot) {
+                Guarded::Fixnum => false,
+                Guarded::Float => false,
+                Guarded::ArrayTy => false,
+                Guarded::Value => false,
+                Guarded::Class(_) => false,
+            },
         }
     }
 
@@ -273,7 +305,10 @@ impl SlotContext {
                         *guarded = guarded_l.unwrap();
                     }
                 }
-                LinkMode::Stack | LinkMode::Literal(_) | LinkMode::R15 | LinkMode::Alias(_) => {}
+                LinkMode::Stack
+                | LinkMode::ConcreteValue(_)
+                | LinkMode::Accumulator
+                | LinkMode::Alias(_) => {}
             });
     }
 
@@ -305,7 +340,9 @@ impl SlotContext {
             .iter()
             .enumerate()
             .filter_map(|(idx, SlotState { link, .. })| match link {
-                LinkMode::Literal(v) if f(SlotId(idx as u16)) => Some((*v, SlotId(idx as u16))),
+                LinkMode::ConcreteValue(v) if f(SlotId(idx as u16)) => {
+                    Some((*v, SlotId(idx as u16)))
+                }
                 _ => None,
             })
             .collect()
@@ -410,11 +447,11 @@ impl AsmIr {
                 bb.set_both_float(slot, xmm);
                 self.xmm2stack(xmm, vec![slot]);
             }
-            LinkMode::Literal(v) => {
+            LinkMode::ConcreteValue(v) => {
                 // Literal -> Stack
                 self.lit2stack(bb, v, slot);
             }
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 // R15 -> Stack
                 self.acc2stack(slot);
                 self.unlink(bb, slot);
@@ -453,10 +490,10 @@ impl AsmIr {
                     bb[origin].alias.retain(|e| *e != slot);
                     bb.clear_link(slot);
                 }
-                LinkMode::Literal(_) => {
+                LinkMode::ConcreteValue(_) => {
                     bb.clear_link(slot);
                 }
-                LinkMode::R15 => {
+                LinkMode::Accumulator => {
                     bb.r15 = None;
                     bb.clear_link(slot);
                 }
@@ -552,20 +589,20 @@ impl AsmIr {
     }
 
     ///
-    /// Link the slot *reg* to a literal value *v*.
+    /// Link the slot *reg* to a concrete value *v*.
     ///
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn store_literal(
+    pub(in crate::compiler::jitgen) fn store_concrete_value(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
         v: Value,
     ) {
         self.unlink(bb, slot);
-        let guarded = Guarded::from_literal(v);
-        bb.set_slot(slot, LinkMode::Literal(v), guarded);
+        let guarded = Guarded::from_concrete_value(v);
+        bb.set_slot(slot, LinkMode::ConcreteValue(v), guarded);
     }
 
     ///
@@ -583,7 +620,7 @@ impl AsmIr {
         if let Some(slot) = slot.into() {
             assert!(bb.r15.is_none());
             self.unlink(bb, slot);
-            bb.set_slot(slot, LinkMode::R15, guarded);
+            bb.set_slot(slot, LinkMode::Accumulator, guarded);
             bb.r15 = Some(slot);
         }
     }
@@ -598,7 +635,7 @@ impl AsmIr {
     /// - rax
     ///
     fn lit2stack(&mut self, bb: &mut BBContext, v: Value, slot: SlotId) {
-        bb.set_slot(slot, LinkMode::Stack, Guarded::from_literal(v));
+        bb.set_slot(slot, LinkMode::Stack, Guarded::from_concrete_value(v));
         self.inst.push(AsmInst::LitToStack(v, slot));
     }
 
@@ -629,7 +666,7 @@ impl AsmIr {
         assert!(!bb
             .slots
             .iter()
-            .any(|SlotState { link, .. }| matches!(link, LinkMode::R15)));
+            .any(|SlotState { link, .. }| matches!(link, LinkMode::Accumulator)));
         res
     }
 
@@ -661,10 +698,10 @@ impl AsmIr {
             LinkMode::Alias(origin) => {
                 self.store_alias(bb, origin, dst);
             }
-            LinkMode::Literal(v) => {
-                self.store_literal(bb, dst, v);
+            LinkMode::ConcreteValue(v) => {
+                self.store_concrete_value(bb, dst, v);
             }
-            LinkMode::R15 => {
+            LinkMode::Accumulator => {
                 self.reg2stack(GP::R15, src);
                 self.unlink(bb, src);
                 self.store_r15(bb, dst, guarded)
@@ -692,8 +729,8 @@ impl AsmIr {
             | LinkMode::Both(_)
             | LinkMode::Stack
             | LinkMode::Alias(_)
-            | LinkMode::Literal(_)
-            | LinkMode::R15 => self.store_new_xmm(bb, slot),
+            | LinkMode::ConcreteValue(_)
+            | LinkMode::Accumulator => self.store_new_xmm(bb, slot),
         }
     }
 
@@ -719,21 +756,21 @@ impl MergeContext {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     ir.store_both(&mut self.0, i, l, guarded);
                 }
-                (LinkMode::Both(l), LinkMode::Literal(r)) if r.is_float() => {
+                (LinkMode::Both(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
                     ir.store_both(&mut self.0, i, l, Guarded::Float)
                 }
-                (LinkMode::Literal(l), LinkMode::Both(_)) if l.is_float() => {
+                (LinkMode::ConcreteValue(l), LinkMode::Both(_)) if l.is_float() => {
                     ir.store_new_both(&mut self.0, i, Guarded::Float);
                 }
                 (LinkMode::Xmm(l), LinkMode::Xmm(_)) => ir.store_xmm(&mut self.0, i, l),
-                (LinkMode::Xmm(l), LinkMode::Literal(r)) if r.is_float() => {
+                (LinkMode::Xmm(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
                     ir.store_xmm(&mut self.0, i, l)
                 }
-                (LinkMode::Literal(l), LinkMode::Xmm(_)) if l.is_float() => {
+                (LinkMode::ConcreteValue(l), LinkMode::Xmm(_)) if l.is_float() => {
                     ir.store_new_xmm(&mut self.0, i);
                 }
-                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {
-                    ir.store_literal(&mut self.0, i, l)
+                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {
+                    ir.store_concrete_value(&mut self.0, i, l)
                 }
                 _ => ir.unlink(&mut self.0, i),
             };

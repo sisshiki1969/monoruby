@@ -106,7 +106,7 @@ impl JitContext {
         for (slot, coerced) in use_set {
             match target.slot(slot) {
                 LinkMode::Stack => {}
-                LinkMode::Literal(v) => {
+                LinkMode::ConcreteValue(v) => {
                     if v.is_float() {
                         ir.store_new_xmm(&mut bbctx, slot);
                     }
@@ -117,7 +117,7 @@ impl JitContext {
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
                     ir.store_both(&mut bbctx, slot, r, Guarded::Value);
                 }
-                LinkMode::R15 | LinkMode::Alias(_) => unreachable!(),
+                LinkMode::Accumulator | LinkMode::Alias(_) => unreachable!(),
             };
         }
         #[cfg(feature = "jit-debug")]
@@ -284,8 +284,8 @@ impl AsmIr {
                     self.store_both(&mut bbctx, slot, r, guarded);
                     //conv_list.push((slot, r));
                 }
-                (LinkMode::Literal(l), LinkMode::Literal(r)) if l == r => {}
-                (LinkMode::Literal(l), LinkMode::Xmm(r)) => {
+                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
+                (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
                         self.store_xmm(&mut bbctx, slot, r);
                         self.f64toxmm(f, r);

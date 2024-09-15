@@ -131,7 +131,6 @@ pub(crate) enum TraceIr {
     Not {
         dst: SlotId,
         src: SlotId,
-        src_class: Option<ClassId>,
     },
     BinOp {
         kind: BinOpK,
@@ -225,27 +224,34 @@ pub(crate) enum TraceIr {
     MethodCall {
         callid: CallSiteId,
         recv_class: Option<ClassId>,
+        fid: Option<FuncId>,
+        version: u32,
     },
     MethodCallBlock {
         callid: CallSiteId,
         recv_class: Option<ClassId>,
+        fid: Option<FuncId>,
+        version: u32,
     },
     InlineCall {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
         recv_class: Option<ClassId>,
+        version: u32,
     },
     /// Object#send and is_simple
     InlineObjectSend {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
         recv_class: Option<ClassId>,
+        version: u32,
     },
     /// Object#send and if splat_pos.len() == 1 && pos_num == 1 && !kw_may_exists()
     InlineObjectSendSplat {
         inline_id: crate::executor::inline::InlineMethodId,
         callid: CallSiteId,
         recv_class: Option<ClassId>,
+        version: u32,
     },
     InlineCache,
     Yield {
@@ -715,13 +721,9 @@ impl TraceIr {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, store.get_class_name(FLOAT_CLASS),)
             }
-            TraceIr::Not {
-                dst,
-                src,
-                src_class,
-            } => {
+            TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
-                format!("{:36} [{}]", op1, store.get_class_name(*src_class),)
+                format!("{:36}", op1)
             }
 
             TraceIr::BinOp {
@@ -874,11 +876,13 @@ impl TraceIr {
                 inline_id,
                 callid,
                 recv_class,
+                ..
             }
             | TraceIr::InlineObjectSendSplat {
                 inline_id,
                 callid,
                 recv_class,
+                ..
             } => {
                 let CallSiteInfo {
                     recv,

@@ -7,6 +7,7 @@ impl AsmIr {
         bb: &mut BBContext,
         fid: FuncId,
         recv_class: ClassId,
+        version: u32,
         callid: CallSiteId,
         pc: BytecodePtr,
     ) -> Option<()> {
@@ -27,7 +28,7 @@ impl AsmIr {
             self.fetch_to_reg(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
-            self.guard_version(pc, using_xmm, deopt, error);
+            self.guard_version(fid, version, callid, using_xmm, deopt, error);
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.
             if !recv.is_self() && !bb.is_class(recv, recv_class) {

@@ -25,7 +25,6 @@ mod variables;
 // +---+---+---+---++---+---+---+---+
 // ~~~
 
-const BC_OFFSET_CALLSITE_ID: usize = 0;
 const BC_OFFSET_CACHED_CLASS: usize = 24;
 const BC_OFFSET_CACHED_VERSION: usize = 28;
 const BC_OFFSET_CACHED_FUNCID: usize = 8;
@@ -340,13 +339,21 @@ impl AsmIr {
     ///
     pub(super) fn guard_version(
         &mut self,
-        pc: BytecodePtr,
+        cached_fid: FuncId,
+        cached_version: u32,
+        callid: CallSiteId,
         using_xmm: UsingXmm,
         deopt: AsmDeopt,
         error: AsmError,
     ) {
-        self.inst
-            .push(AsmInst::GuardClassVersion(pc, using_xmm, deopt, error));
+        self.inst.push(AsmInst::GuardClassVersion(
+            cached_fid,
+            cached_version,
+            callid,
+            using_xmm,
+            deopt,
+            error,
+        ));
     }
 
     ///
@@ -1071,7 +1078,7 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - stack
     ///
-    GuardClassVersion(BytecodePtr, UsingXmm, AsmDeopt, AsmError),
+    GuardClassVersion(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
     ///
     /// Type guard.
     ///
@@ -1524,7 +1531,7 @@ impl AsmInst {
             Self::I64ToBoth(i, slot, xmm) => format!("{:?}:{:?} = {i}", slot, xmm),
             Self::XmmToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
-            Self::DeepCopyLit(val, using_xmm) => format!("{}  {:?}", val.debug(store), using_xmm),
+            Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::NumToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Numeric to f64", fpr, gpr),
             Self::IntToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Integer to f64", fpr, gpr),
             Self::FloatToXmm(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
@@ -1532,10 +1539,10 @@ impl AsmInst {
             Self::GuardFixnum(gpr, _deopt) => format!("Guard Fixnum {:?}", gpr),
             Self::GuardArrayTy(gpr, _deopt) => format!("Guard ArrayTy {:?}", gpr),
 
-            Self::GuardClassVersion(_pc, using_xmm, _deopt, _error) => {
-                format!("Guard ClassVersion {:?}", using_xmm)
+            Self::GuardClassVersion(fid, version, _callid, _using_xmm, _deopt, _error) => {
+                format!("GuardVersion fid={:?} version={version}", fid)
             }
-            Self::GuardClass(gpr, class, _deopt) => format!("Guard {:?} {:?}", class, gpr),
+            Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
             Self::Ret => "ret".to_string(),
             Self::Break => "break".to_string(),
             Self::Raise => "raise".to_string(),
