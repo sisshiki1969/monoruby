@@ -469,7 +469,7 @@ impl JitContext {
                 | TraceIr::InlineObjectSendSplat {
                     inline_id, callid, ..
                 } => {
-                    (store.get_inline_info(inline_id).inline_analysis)(&mut info, &store[callid]);
+                    (store[inline_id].inline_analysis)(&mut info, &store[callid]);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::Ret(src)

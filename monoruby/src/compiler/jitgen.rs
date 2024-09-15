@@ -796,8 +796,8 @@ impl JitContext {
                 version,
                 ..
             } => {
-                let f = &store.get_inline_info(inline_id).inline_gen;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, version, pc);
+                let f = &store[inline_id].inline_gen;
+                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
             }
             TraceIr::InlineObjectSend {
                 inline_id,
@@ -807,7 +807,7 @@ impl JitContext {
                 ..
             } => {
                 let f = object_send;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, version, pc);
+                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
             }
             TraceIr::InlineObjectSendSplat {
                 inline_id,
@@ -817,7 +817,7 @@ impl JitContext {
                 ..
             } => {
                 let f = object_send_splat;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, version, pc);
+                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
             }
             TraceIr::Yield { callid } => {
                 let callinfo = &store[callid];
@@ -1039,15 +1039,19 @@ impl JitContext {
         f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
         inline_id: inline::InlineMethodId,
         callid: CallSiteId,
+        recv_class: ClassId,
         version: u32,
         pc: BytecodePtr,
     ) {
         let recv = store[callid].recv;
-        let fid = store.get_inline_info(inline_id).fid;
+        let fid = store[inline_id].fid;
         ir.fetch_to_reg(bb, recv, GP::Rdi);
         let (deopt, error) = ir.new_deopt_error(bb, pc);
         let using_xmm = bb.get_using_xmm();
         ir.guard_version(fid, version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !bb.is_class(recv, recv_class) {
+            ir.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+        }
         f(ir, store, bb, callid, pc);
     }
 }

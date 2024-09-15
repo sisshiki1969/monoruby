@@ -434,14 +434,14 @@ impl BytecodePtr {
                                 return TraceIr::InlineObjectSendSplat {
                                     inline_id,
                                     callid,
-                                    recv_class,
+                                    recv_class: recv_class.unwrap(),
                                     version: cached_version,
                                 };
                             } else if is_simple {
                                 return TraceIr::InlineObjectSend {
                                     inline_id,
                                     callid,
-                                    recv_class,
+                                    recv_class: recv_class.unwrap(),
                                     version: cached_version,
                                 };
                             }
@@ -449,7 +449,7 @@ impl BytecodePtr {
                             return TraceIr::InlineCall {
                                 inline_id,
                                 callid,
-                                recv_class,
+                                recv_class: recv_class.unwrap(),
                                 version: cached_version,
                             };
                         }

@@ -55,10 +55,10 @@ impl ClassInfoTable {
     }
 }
 
-pub struct InlineFuncInfo {
+pub(crate) struct InlineFuncInfo {
     pub fid: FuncId,
-    pub inline_gen: Box<InlineGen>,
-    pub inline_analysis: InlineAnalysis,
+    pub(crate) inline_gen: Box<InlineGen>,
+    pub(crate) inline_analysis: InlineAnalysis,
     #[cfg(feature = "dump-bc")]
     pub name: String,
 }
@@ -130,6 +130,13 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
+impl std::ops::Index<InlineMethodId> for Store {
+    type Output = InlineFuncInfo;
+    fn index(&self, index: InlineMethodId) -> &Self::Output {
+        &self.inline_method[index.get()]
+    }
+}
+
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -168,11 +175,6 @@ impl Store {
             name: _name,
         });
         InlineMethodId::new(id)
-    }
-
-    pub(crate) fn get_inline_info(&self, id: InlineMethodId) -> &InlineFuncInfo {
-        let id: usize = id.into();
-        &self.inline_method[id]
     }
 }
 

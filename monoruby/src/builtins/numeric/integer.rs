@@ -247,12 +247,14 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::float(f))
 }
 
-fn integer_tof(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
-    let CallSiteInfo { recv, dst, .. } = store[callid];
-    let deopt = ir.new_deopt(bb, pc);
-    if !recv.is_self() {
-        ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
-    }
+fn integer_tof(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    _pc: BytecodePtr,
+) {
+    let CallSiteInfo { dst, .. } = store[callid];
     if let Some(ret) = dst {
         let fret = ir.xmm_write_enc(bb, ret);
         ir.inline(move |gen, _| {
@@ -402,12 +404,15 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-fn integer_shr(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
-    let CallSiteInfo {
-        recv, dst, args, ..
-    } = store[callid];
+fn integer_shr(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) {
+    let CallSiteInfo { dst, args, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
-    ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
@@ -428,12 +433,15 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-fn integer_shl(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr) {
-    let CallSiteInfo {
-        recv, dst, args, ..
-    } = store[callid];
+fn integer_shl(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) {
+    let CallSiteInfo { dst, args, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
-    ir.guard_class(bb, recv, GP::Rdi, INTEGER_CLASS, deopt);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
