@@ -1304,12 +1304,13 @@ impl Codegen {
 
         ctx.backedge_branches(func);
 
+        #[cfg(feature = "emit-cfg")]
         Self::dump_cfg(func, store, bb_begin, bb_end);
 
         // generate machine code for a main context
-        for (bbid, ir) in bbir.into_iter() {
+        for (_bbid, ir) in bbir.into_iter() {
             #[cfg(feature = "emit-asm")]
-            eprintln!("{:?}", bbid);
+            eprintln!("{:?}", _bbid);
             self.gen_asm(ir, store, func, &mut ctx, None, None);
         }
 
@@ -1342,6 +1343,7 @@ impl Codegen {
         sourcemap
     }
 
+    #[cfg(feature = "emit-cfg")]
     fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
         let mut s = format!(
             r###"digraph graph_name {{

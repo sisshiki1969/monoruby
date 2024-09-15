@@ -33,7 +33,7 @@ impl AsmIr {
             if !recv.is_self() && !bb.is_class(recv, recv_class) {
                 self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
             }
-            let evict = self.gen_call_cached(store, bb, callid, fid, pc)?;
+            let evict = self.gen_call_cached(store, bb, callid, fid, recv_class, pc)?;
             self.rax2acc(bb, dst);
             if let Some(evict) = evict {
                 self.inst.push(AsmInst::ImmediateEvict { evict });
@@ -56,13 +56,13 @@ impl AsmIr {
         bb: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
+        recv_class: ClassId,
         pc: BytecodePtr,
     ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo {
             args, pos_num, dst, ..
         } = store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let recv_class = pc.cached_class1().unwrap();
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);

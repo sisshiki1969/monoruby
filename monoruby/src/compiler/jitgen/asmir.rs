@@ -1497,6 +1497,7 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
+    #[cfg(feature = "emit-asm")]
     pub(crate) fn dump(&self, store: &Store) -> String {
         match self {
             Self::AccToStack(slot) => format!("{:?} = R15", slot),
