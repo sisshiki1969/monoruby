@@ -15,7 +15,7 @@ impl Globals {
                         Some((func_id, idx)) => {
                             format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
-                        _ => self.inspect2(block.get()),
+                        _ => block.get().debug(&self.store),
                     }
                 }
                 None => "None".to_string(),
@@ -33,7 +33,7 @@ impl Globals {
                 r,
                 if r == 0 { "(self)" } else { "" },
                 if let Some(v) = lfp.register(r) {
-                    self.inspect2(v)
+                    v.debug(&self.store)
                 } else {
                     "None".to_string()
                 }
@@ -244,7 +244,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = v {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, globals.inspect2(v));
+                    eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", bc_pos);

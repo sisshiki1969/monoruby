@@ -453,8 +453,8 @@ impl TraceIr {
             format!(
                 "{:36} [{}][{}]",
                 s,
-                store.get_class_name(lhs_class),
-                store.get_class_name(rhs_class)
+                store.debug_class_name(lhs_class),
+                store.debug_class_name(rhs_class)
             )
         }
 
@@ -632,7 +632,7 @@ impl TraceIr {
                     "{:?} = {id}: {}",
                     reg,
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.get_class_name(*id), ivar_id)
+                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
                     } else {
                         format!("-")
                     }
@@ -642,7 +642,7 @@ impl TraceIr {
                 format!(
                     "{id}: {} = {:?}",
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.get_class_name(*id), ivar_id)
+                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
                     } else {
                         format!("-")
                     },
@@ -688,7 +688,7 @@ impl TraceIr {
                 src_class,
             } => {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
-                format!("{:36} [{}]", op1, store.get_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
             }
             TraceIr::UnOp {
                 kind,
@@ -697,15 +697,15 @@ impl TraceIr {
                 src_class,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
             }
             TraceIr::IUnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(INTEGER_CLASS),)
+                format!("{:36} [{}]", op1, store.debug_class_name(INTEGER_CLASS),)
             }
             TraceIr::FUnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(FLOAT_CLASS),)
+                format!("{:36} [{}]", op1, store.debug_class_name(FLOAT_CLASS),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
@@ -837,7 +837,7 @@ impl TraceIr {
                             pos_num,
                         )
                     };
-                    format!("{:36} [{}]", op1, store.get_class_name(*recv_class))
+                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class))
                 } else {
                     let name = if let Some(name) = callsite.name {
                         name.to_string()
@@ -883,7 +883,7 @@ impl TraceIr {
                             "".to_string()
                         },
                     );
-                    format!("{:36} [{}]", op1, store.get_class_name(*recv_class),)
+                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class),)
                 }
             }
             TraceIr::Yield { callid } => {

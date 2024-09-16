@@ -386,7 +386,7 @@ impl RValue {
     pub(crate) fn debug(&self, store: &Store) -> String {
         unsafe {
             match self.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => store.get_class_name(self.as_class_id()),
+                ObjKind::CLASS | ObjKind::MODULE => store.debug_class_name(self.as_class_id()),
                 ObjKind::TIME => self.as_time().to_string(),
                 ObjKind::ARRAY => self.as_array().debug(store),
                 ObjKind::OBJECT => self.object_debug(store),
@@ -412,48 +412,30 @@ impl RValue {
         unsafe {
             match self.ty() {
                 ObjKind::CLASS | ObjKind::MODULE => globals.get_class_name(self.as_class_id()),
-                ObjKind::TIME => self.as_time().to_string(),
                 ObjKind::ARRAY => self.as_array().to_s(globals),
                 ObjKind::OBJECT => self.object_tos(globals),
                 ObjKind::RANGE => self.range_tos(globals),
                 ObjKind::PROC => self.proc_tos(),
                 ObjKind::HASH => self.as_hashmap().to_s(globals),
-                ObjKind::REGEXP => self.regexp_tos(),
-                ObjKind::IO => self.as_io().to_string(),
-                ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
                 ObjKind::METHOD => self.as_method().to_s(globals),
-                ObjKind::FIBER => self.fiber_debug(&globals.store),
                 ObjKind::ENUMERATOR => self.enumerator_tos(globals),
                 ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::COMPLEX => self.as_complex().debug(&globals.store),
                 ObjKind::BINDING => self.object_tos(globals),
                 ObjKind::UMETHOD => self.as_umethod().to_s(globals),
-                _ => format!("{:016x}", self.id()),
+                _ => self.debug(&globals.store),
             }
         }
     }
 
     pub(crate) fn inspect(&self, globals: &Globals) -> String {
-        unsafe {
-            match self.ty() {
-                ObjKind::OBJECT => self.object_inspect(globals),
-                ObjKind::EXCEPTION => {
-                    let class_name = globals.get_class_name(self.class());
-                    let msg = self.as_exception().msg();
-                    format!("#<{class_name}: {msg}>")
-                }
-                ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::COMPLEX => self.as_complex().inspect(globals),
-                _ => self.to_s(globals),
-            }
-        }
-    }
-
-    pub(crate) fn inspect2(&self, globals: &Globals) -> String {
         match self.ty() {
-            ObjKind::ARRAY => self.as_array().inspect2(globals),
-            ObjKind::HASH => self.as_hashmap().inspect2(globals),
-            _ => self.inspect(globals),
+            ObjKind::OBJECT => self.object_inspect(globals),
+            ObjKind::EXCEPTION => {
+                let class_name = globals.get_class_name(self.class());
+                let msg = self.as_exception().msg();
+                format!("#<{class_name}: {msg}>")
+            }
+            _ => self.to_s(globals),
         }
     }
 
@@ -463,7 +445,7 @@ impl RValue {
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                store.get_class_name(self.real_class(store).id()),
+                store.debug_class_name(self.real_class(store).id()),
                 self.id()
             )
         }

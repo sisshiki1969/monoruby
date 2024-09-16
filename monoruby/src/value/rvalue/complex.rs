@@ -84,13 +84,4 @@ impl ComplexInner {
             self.im.get().debug(store)
         )
     }
-
-    pub fn inspect(&self, globals: &Globals) -> String {
-        format!(
-            "({}{}{}i)",
-            self.re.get().to_s(globals),
-            if self.im.is_negative() { "" } else { "+" },
-            self.im.get().to_s(globals)
-        )
-    }
 }

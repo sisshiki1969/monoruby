@@ -373,7 +373,7 @@ impl Store {
 
 impl Store {
     /// Get class name of *ClassId*.
-    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
+    pub(crate) fn debug_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
             let class_obj = self.classes[class].get_module();
             match self.classes[class].get_name_id() {
@@ -389,7 +389,7 @@ impl Store {
                 }
                 None => match class_obj.is_singleton() {
                     None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.debug(self)),
+                    Some(base) => format!("#<Class:{}>", base.debug_tos(self)),
                 },
             }
         } else {

@@ -579,13 +579,6 @@ impl Globals {
         }
     }
 
-    pub(crate) fn inspect2(&self, val: Value) -> String {
-        match val.unpack() {
-            RV::Object(rvalue) => rvalue.inspect2(self),
-            _ => val.inspect(self),
-        }
-    }
-
     pub(crate) fn generate_range(
         &mut self,
         start: Value,
