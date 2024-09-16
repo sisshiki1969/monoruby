@@ -1331,8 +1331,7 @@ impl Codegen {
             self.guard_class_rdi(self_value.class(), side_exit);
         } else {
             // for method JIT, class of *self* is already checked in an entry stub.
-            let pc = func.get_top_pc();
-            self.prologue(func, store, pc);
+            self.prologue(func, store);
         }
 
         #[cfg(feature = "jit-debug")]
