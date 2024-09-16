@@ -22,7 +22,10 @@ pub(crate) enum TraceIr {
     /// check local var(%reg, dest)  : branch when reg was None.
     OptCase {
         cond: SlotId,
-        optid: OptCaseId,
+        min: u16,
+        max: u16,
+        dest_bb: Box<[BasicBlockId]>,
+        branch_table: Box<[BasicBlockId]>,
     },
     CheckLocal(SlotId, BasicBlockId),
     /// integer(%reg, i32)
@@ -541,8 +544,17 @@ impl TraceIr {
             TraceIr::NilBr(reg, dest) => {
                 format!("nilbr {:?} => {:?}", reg, dest)
             }
-            TraceIr::OptCase { cond: dst, optid } => {
-                format!("opt_case {:?}->({:?})", dst, store[*optid])
+            TraceIr::OptCase {
+                cond,
+                min,
+                max,
+                branch_table,
+                ..
+            } => {
+                format!(
+                    "opt_case {:?}: {min}..{max} -> branch_table:{:?}",
+                    cond, branch_table
+                )
             }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
             TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),

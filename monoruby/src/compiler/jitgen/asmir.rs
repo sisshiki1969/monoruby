@@ -396,12 +396,18 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardClass(r, class, deopt));
     }
 
-    pub(super) fn opt_case(&mut self, max: u16, min: u16, opt_case_id: usize, else_dest: AsmLabel) {
+    pub(super) fn opt_case(
+        &mut self,
+        max: u16,
+        min: u16,
+        else_dest: BasicBlockId,
+        branch_table: Box<[BasicBlockId]>,
+    ) {
         self.inst.push(AsmInst::OptCase {
             max,
             min,
-            opt_case_id,
             else_dest,
+            branch_table,
         });
     }
 
@@ -1114,8 +1120,8 @@ pub(super) enum AsmInst {
     OptCase {
         max: u16,
         min: u16,
-        opt_case_id: usize,
-        else_dest: AsmLabel,
+        else_dest: BasicBlockId,
+        branch_table: Box<[BasicBlockId]>,
     },
 
     /// deoptimize
@@ -1560,11 +1566,11 @@ impl AsmInst {
             Self::OptCase {
                 max,
                 min,
-                opt_case_id,
+                branch_table,
                 else_dest,
             } => format!(
-                "opt_case {:?}..{:?} {:?} {:?}",
-                min, max, opt_case_id, else_dest
+                "opt_case {:?}..{:?} {:?} else {:?}",
+                min, max, branch_table, else_dest
             ),
             Self::Deopt(deopt) => format!("deopt {:?}", deopt),
             Self::RecompileDeopt { position, deopt } => {
@@ -1609,7 +1615,6 @@ impl Codegen {
         &mut self,
         ir: AsmIr,
         store: &Store,
-        func: &ISeqInfo,
         ctx: &mut JitContext,
         entry: Option<AsmLabel>,
         exit: Option<BasicBlockId>,
@@ -1655,7 +1660,7 @@ impl Codegen {
             if let AsmInst::BcIndex(i) = &inst {
                 _sourcemap.push((*i, self.jit.get_current()));
             }
-            self.gen_asmir(store, func, ctx, &side_exits, inst);
+            self.gen_asmir(store, ctx, &side_exits, inst);
         }
 
         if let Some(exit) = exit {

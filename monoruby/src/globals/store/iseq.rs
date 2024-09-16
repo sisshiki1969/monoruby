@@ -508,10 +508,31 @@ impl ISeqInfo {
                 34..=35 => TraceIr::Yield {
                     callid: op1_l.into(),
                 },
-                36 => TraceIr::OptCase {
-                    cond: SlotId::new(op1_w),
-                    optid: OptCaseId::from(op1_l),
-                },
+                36 => {
+                    let optid = OptCaseId::from(op1_l);
+                    let OptCaseInfo {
+                        min,
+                        max,
+                        offsets,
+                        branch_table,
+                    } = &store[optid];
+                    let dest_bb: Box<[_]> = offsets
+                        .iter()
+                        .map(|ofs| self.bb_info.is_bb_head(bc_pos + 1 + (*ofs as i32)).unwrap())
+                        .collect();
+                    let branch_table: Box<[_]> = branch_table
+                        .iter()
+                        .map(|ofs| self.bb_info.is_bb_head(bc_pos + 1 + (*ofs as i32)).unwrap())
+                        .collect();
+
+                    TraceIr::OptCase {
+                        cond: SlotId::new(op1_w),
+                        min: *min,
+                        max: *max,
+                        dest_bb,
+                        branch_table,
+                    }
+                }
                 37 => TraceIr::NilBr(
                     SlotId::new(op1_w),
                     self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
