@@ -233,26 +233,6 @@ pub(crate) enum TraceIr {
         fid: Option<FuncId>,
         version: u32,
     },
-    InlineCall {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-    },
-    /// Object#send and is_simple
-    InlineObjectSend {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-    },
-    /// Object#send and if splat_pos.len() == 1 && pos_num == 1 && !kw_may_exists()
-    InlineObjectSendSplat {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-    },
     InlineCache,
     Yield {
         callid: CallSiteId,
@@ -820,96 +800,91 @@ impl TraceIr {
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
-                callid, recv_class, ..
+                callid,
+                recv_class,
+                fid,
+                ..
             }
             | TraceIr::MethodCallBlock {
-                callid, recv_class, ..
+                callid,
+                recv_class,
+                fid,
+                ..
             } => {
                 let callsite = &store[*callid];
-                let name = if let Some(name) = callsite.name {
-                    name.to_string()
-                } else {
-                    "super".to_string()
-                };
-                let CallSiteInfo {
-                    recv,
-                    args,
-                    pos_num,
-                    kw_pos,
-                    kw_args,
-                    dst,
-                    block_fid,
-                    block_arg,
-                    ..
-                } = callsite;
-                let has_splat = callsite.has_splat();
-                // TODO: we must handle hash aplat arguments correctly.
-                let kw_len = kw_args.len();
-                let op1 = format!(
-                    "{} = {:?}.{name}({}{}{}){}",
-                    ret_str(*dst),
-                    recv,
-                    if *pos_num == 0 {
-                        "".to_string()
-                    } else {
-                        format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
-                    },
-                    if kw_len == 0 {
-                        "".to_string()
-                    } else {
-                        format!(" kw:{:?};{}", kw_pos, kw_len)
-                    },
-                    if let Some(block_arg) = block_arg {
-                        format!(" &{:?}", block_arg)
-                    } else {
-                        "".to_string()
-                    },
-                    if let Some(block_fid) = block_fid {
-                        format!(" {{ {:?} }}", block_fid)
-                    } else {
-                        "".to_string()
-                    },
-                );
-                format!("{:36} [{}]", op1, store.get_class_name(*recv_class),)
-            }
-            TraceIr::InlineCall {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            }
-            | TraceIr::InlineObjectSend {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            }
-            | TraceIr::InlineObjectSendSplat {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            } => {
-                let CallSiteInfo {
-                    recv,
-                    args,
-                    pos_num,
-                    dst: ret,
-                    ..
-                } = store[*callid];
-                let name = &store[*inline_id].name;
-                let op1 = if pos_num == 0 {
-                    format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
-                } else {
-                    format!(
-                        "{} = {:?}.inline {name}({:?}; {})",
-                        ret_str(ret),
+                if callsite.block_fid.is_none()
+                    && let Some(fid) = fid
+                    && let Some(inline_id) = crate::executor::inline::InlineTable::get_inline(*fid)
+                    && (*fid == OBJECT_SEND_FUNCID && callsite.object_send_single_splat()
+                        || callsite.is_simple())
+                {
+                    let CallSiteInfo {
                         recv,
                         args,
                         pos_num,
-                    )
-                };
-                format!("{:36} [{}]", op1, store.get_class_name(*recv_class))
+                        dst,
+                        ..
+                    } = *callsite;
+                    let name = &store[inline_id].name;
+                    let op1 = if pos_num == 0 {
+                        format!("{} = {:?}.inline {name}()", ret_str(dst), recv)
+                    } else {
+                        format!(
+                            "{} = {:?}.inline {name}({:?}; {})",
+                            ret_str(dst),
+                            recv,
+                            args,
+                            pos_num,
+                        )
+                    };
+                    format!("{:36} [{}]", op1, store.get_class_name(*recv_class))
+                } else {
+                    let name = if let Some(name) = callsite.name {
+                        name.to_string()
+                    } else {
+                        "super".to_string()
+                    };
+                    let CallSiteInfo {
+                        recv,
+                        args,
+                        pos_num,
+                        kw_pos,
+                        kw_args,
+                        dst,
+                        block_fid,
+                        block_arg,
+                        ..
+                    } = callsite;
+                    let has_splat = callsite.has_splat();
+                    // TODO: we must handle hash aplat arguments correctly.
+                    let kw_len = kw_args.len();
+                    let op1 = format!(
+                        "{} = {:?}.{name}({}{}{}){}",
+                        ret_str(*dst),
+                        recv,
+                        if *pos_num == 0 {
+                            "".to_string()
+                        } else {
+                            format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
+                        },
+                        if kw_len == 0 {
+                            "".to_string()
+                        } else {
+                            format!(" kw:{:?};{}", kw_pos, kw_len)
+                        },
+                        if let Some(block_arg) = block_arg {
+                            format!(" &{:?}", block_arg)
+                        } else {
+                            "".to_string()
+                        },
+                        if let Some(block_fid) = block_fid {
+                            format!(" {{ {:?} }}", block_fid)
+                        } else {
+                            "".to_string()
+                        },
+                    );
+                    format!("{:36} [{}]", op1, store.get_class_name(*recv_class),)
+                }
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {

@@ -493,63 +493,18 @@ impl ISeqInfo {
                     src: SlotId::new(op1_w),
                     name: IdentId::from(op1_l),
                 },
-                30..=31 => {
-                    let cached_fid = pc.cached_fid();
-                    let recv_class = pc.cached_class1();
-                    let cached_version = (pc + 1).cached_version();
-                    let is_simple = opcode == 30;
-                    let callid: CallSiteId = op1_l.into();
-
-                    if let Some(fid) = cached_fid
-                        && let Some(inline_id) =
-                            crate::executor::inline::InlineTable::get_inline(fid)
-                    {
-                        if fid == OBJECT_SEND_FUNCID {
-                            if store[callid].splat_pos.len() == 1
-                                && store[callid].pos_num == 1
-                                && !store[callid].kw_may_exists()
-                            {
-                                return TraceIr::InlineObjectSendSplat {
-                                    inline_id,
-                                    callid,
-                                    recv_class: recv_class.unwrap(),
-                                    version: cached_version,
-                                };
-                            } else if is_simple {
-                                return TraceIr::InlineObjectSend {
-                                    inline_id,
-                                    callid,
-                                    recv_class: recv_class.unwrap(),
-                                    version: cached_version,
-                                };
-                            }
-                        } else if is_simple {
-                            return TraceIr::InlineCall {
-                                inline_id,
-                                callid,
-                                recv_class: recv_class.unwrap(),
-                                version: cached_version,
-                            };
-                        }
-                    }
-                    TraceIr::MethodCall {
-                        callid,
-                        recv_class,
-                        fid: cached_fid,
-                        version: cached_version,
-                    }
-                }
-                32..=33 => {
-                    let cached_fid = pc.cached_fid();
-                    let recv_class = pc.cached_class1();
-                    let cached_version = (pc + 1).cached_version();
-                    TraceIr::MethodCallBlock {
-                        callid: op1_l.into(),
-                        recv_class,
-                        fid: cached_fid,
-                        version: cached_version,
-                    }
-                }
+                30..=31 => TraceIr::MethodCall {
+                    callid: op1_l.into(),
+                    recv_class: pc.cached_class1(),
+                    fid: pc.cached_fid(),
+                    version: (pc + 1).cached_version(),
+                },
+                32..=33 => TraceIr::MethodCallBlock {
+                    callid: op1_l.into(),
+                    recv_class: pc.cached_class1(),
+                    fid: pc.cached_fid(),
+                    version: (pc + 1).cached_version(),
+                },
                 34..=35 => TraceIr::Yield {
                     callid: op1_l.into(),
                 },

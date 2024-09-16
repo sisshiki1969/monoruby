@@ -520,6 +520,17 @@ impl CallSiteInfo {
     pub fn kw_len(&self) -> usize {
         self.kw_args.len() + self.hash_splat_pos.len()
     }
+
+    ///
+    /// This call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
+    ///
+    pub fn is_simple(&self) -> bool {
+        self.kw_len() == 0 && !self.has_splat() && self.block_arg.is_none()
+    }
+
+    pub fn object_send_single_splat(&self) -> bool {
+        self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

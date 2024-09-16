@@ -5,7 +5,7 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
-use self::builtins::{object_send, object_send_splat};
+use self::builtins::object_send_splat;
 use self::slot::Guarded;
 
 use super::*;
@@ -777,45 +777,48 @@ impl JitContext {
                 version,
             } => {
                 if let Some(fid) = fid {
-                    if ir
-                        .gen_call(store, bb, fid, recv_class.unwrap(), version, callid, pc)
-                        .is_none()
+                    let recv_class = recv_class.unwrap();
+                    if store[callid].block_fid.is_none()
+                        && let Some(inline_id) =
+                            crate::executor::inline::InlineTable::get_inline(fid)
                     {
-                        return CompileResult::Recompile;
+                        let is_simple = store[callid].is_simple();
+                        if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
+                            let f = object_send_splat;
+                            self.gen_inline_call(
+                                ir, store, bb, f, inline_id, callid, recv_class, version, pc,
+                            );
+                        } else if is_simple {
+                            /*if fid == OBJECT_SEND_FUNCID {
+                                let f = object_send;
+                                self.gen_inline_call(
+                                    ir, store, bb, f, inline_id, callid, recv_class, version, pc,
+                                );
+                            } else {*/
+                            let f = &store[inline_id].inline_gen;
+                            self.gen_inline_call(
+                                ir, store, bb, f, inline_id, callid, recv_class, version, pc,
+                            );
+                            //}
+                        } else {
+                            if ir
+                                .gen_call(store, bb, fid, recv_class, version, callid, pc)
+                                .is_none()
+                            {
+                                return CompileResult::Recompile;
+                            }
+                        }
+                    } else {
+                        if ir
+                            .gen_call(store, bb, fid, recv_class, version, callid, pc)
+                            .is_none()
+                        {
+                            return CompileResult::Recompile;
+                        }
                     }
                 } else {
                     return CompileResult::Recompile;
                 }
-            }
-            TraceIr::InlineCall {
-                inline_id,
-                callid,
-                recv_class,
-                version,
-                ..
-            } => {
-                let f = &store[inline_id].inline_gen;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
-            }
-            TraceIr::InlineObjectSend {
-                inline_id,
-                callid,
-                recv_class,
-                version,
-                ..
-            } => {
-                let f = object_send;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
-            }
-            TraceIr::InlineObjectSendSplat {
-                inline_id,
-                callid,
-                recv_class,
-                version,
-                ..
-            } => {
-                let f = object_send_splat;
-                self.gen_inline_call(ir, store, bb, f, inline_id, callid, recv_class, version, pc);
             }
             TraceIr::Yield { callid } => {
                 let callinfo = &store[callid];
