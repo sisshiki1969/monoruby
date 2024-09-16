@@ -1,7 +1,6 @@
+use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
-
-use crate::executor::inline::InlineMethodId;
 
 use super::*;
 use std::pin::Pin;
@@ -55,14 +54,6 @@ impl ClassInfoTable {
     }
 }
 
-pub(crate) struct InlineFuncInfo {
-    pub fid: FuncId,
-    pub(crate) inline_gen: Box<InlineGen>,
-    pub(crate) inline_analysis: InlineAnalysis,
-    #[cfg(feature = "dump-bc")]
-    pub name: String,
-}
-
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
@@ -74,8 +65,8 @@ pub struct Store {
     constsite_info: Vec<ConstSiteInfo>,
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
-    /// inline method info.
-    inline_method: Vec<InlineFuncInfo>,
+    /// inline info.
+    pub(crate) inline_info: InlineTable,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -130,13 +121,6 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
-impl std::ops::Index<InlineMethodId> for Store {
-    type Output = InlineFuncInfo;
-    fn index(&self, index: InlineMethodId) -> &Self::Output {
-        &self.inline_method[index.get()]
-    }
-}
-
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -153,28 +137,8 @@ impl Store {
             callsite_info: vec![],
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
-            inline_method: vec![],
+            inline_info: InlineTable::default(),
         }
-    }
-}
-
-impl Store {
-    pub(super) fn add_inline_info(
-        &mut self,
-        fid: FuncId,
-        inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
-        _name: String,
-    ) -> InlineMethodId {
-        let id = self.inline_method.len();
-        self.inline_method.push(InlineFuncInfo {
-            fid,
-            inline_gen,
-            inline_analysis,
-            #[cfg(feature = "dump-bc")]
-            name: _name,
-        });
-        InlineMethodId::new(id)
     }
 }
 

@@ -1103,7 +1103,7 @@ impl Globals {
                 } else {
                     String::new()
                 },
-                self.get_class_name(self_value.class()),
+                self.store.debug_class_name(self_value.class()),
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );

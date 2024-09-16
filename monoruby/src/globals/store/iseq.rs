@@ -339,6 +339,10 @@ impl ISeqInfo {
         self.sp[i.0 as usize]
     }
 
+    fn get_bb(&self, bc_pos: BcIndex) -> BasicBlockId {
+        self.bb_info.is_bb_head(bc_pos).unwrap()
+    }
+
     pub(crate) fn get_location(&self) -> String {
         let loc = self.loc;
         format!(
@@ -418,31 +422,28 @@ impl ISeqInfo {
                     name: IdentId::from((op2.0) as u32),
                     func_id: FuncId::new((op2.0 >> 32) as u32),
                 },
-                3 => TraceIr::Br(self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap()),
-                4 => TraceIr::CondBr(
-                    SlotId::new(op1_w),
-                    self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
-                    false,
-                    BrKind::BrIf,
-                ),
-                5 => TraceIr::CondBr(
-                    SlotId::new(op1_w),
-                    self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
-                    false,
-                    BrKind::BrIfNot,
-                ),
+                3 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::Br(dest)
+                }
+                4 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, false, BrKind::BrIf)
+                }
+                5 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, false, BrKind::BrIfNot)
+                }
                 6 => TraceIr::Integer(SlotId::new(op1_w), op1_l as i32),
                 7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
                 8 => TraceIr::Nil(SlotId::new(op1_w)),
                 9 => TraceIr::Symbol(SlotId::new(op1_w), IdentId::from(op1_l)),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
-                12..=13 => TraceIr::CondBr(
-                    SlotId::new(op1_w),
-                    self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
-                    true,
-                    BrKind::from(opcode - 12),
-                ),
+                12..=13 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, true, BrKind::from(opcode - 12))
+                }
                 14 => TraceIr::LoopStart {
                     counter: op1_l,
                     jit_addr: pc.into_jit_addr(),
@@ -458,10 +459,10 @@ impl ISeqInfo {
                     let ivar = pc.cached_ivarid();
                     TraceIr::StoreIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
                 }
-                20 => TraceIr::CheckLocal(
-                    SlotId::new(op1_w),
-                    self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
-                ),
+                20 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CheckLocal(SlotId::new(op1_w), dest)
+                }
                 21 => TraceIr::BlockArgProxy(SlotId::new(op1_w), op1_l as usize),
                 22 => TraceIr::SingletonClassDef {
                     dst: SlotId::from(op1_w),
@@ -518,11 +519,11 @@ impl ISeqInfo {
                     } = &store[optid];
                     let dest_bb: Box<[_]> = offsets
                         .iter()
-                        .map(|ofs| self.bb_info.is_bb_head(bc_pos + 1 + (*ofs as i32)).unwrap())
+                        .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
                         .collect();
                     let branch_table: Box<[_]> = branch_table
                         .iter()
-                        .map(|ofs| self.bb_info.is_bb_head(bc_pos + 1 + (*ofs as i32)).unwrap())
+                        .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
                         .collect();
 
                     TraceIr::OptCase {
@@ -533,10 +534,10 @@ impl ISeqInfo {
                         branch_table,
                     }
                 }
-                37 => TraceIr::NilBr(
-                    SlotId::new(op1_w),
-                    self.bb_info.is_bb_head(bc_pos + 1 + op1_l as i32).unwrap(),
-                ),
+                37 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::NilBr(SlotId::new(op1_w), dest)
+                }
                 38 => TraceIr::Lambda {
                     dst: SlotId::new(op1_w),
                     func_id: FuncId::new(op1_l),

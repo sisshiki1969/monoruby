@@ -454,12 +454,11 @@ impl JitContext {
                 | TraceIr::MethodCallBlock { callid, fid, .. } => {
                     if store[callid].block_fid.is_none()
                         && let Some(fid) = fid
-                        && let Some(inline_id) =
-                            crate::executor::inline::InlineTable::get_inline(fid)
+                        && let Some(inline_info) = store.inline_info.get_inline(fid)
                         && (fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat()
                             || store[callid].is_simple())
                     {
-                        (store[inline_id].inline_analysis)(&mut info, &store[callid]);
+                        (inline_info.inline_analysis)(&mut info, &store[callid]);
                     } else {
                         let CallSiteInfo { recv, dst, .. } = store[callid];
                         info.r#use(recv);

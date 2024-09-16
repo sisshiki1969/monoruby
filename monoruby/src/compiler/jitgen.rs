@@ -767,25 +767,18 @@ impl JitContext {
                 if let Some(fid) = fid {
                     let recv_class = recv_class.unwrap();
                     if store[callid].block_fid.is_none()
-                        && let Some(inline_id) =
-                            crate::executor::inline::InlineTable::get_inline(fid)
+                        && let Some(info) = store.inline_info.get_inline(fid)
                     {
                         let is_simple = store[callid].is_simple();
                         if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
                             let f = object_send_splat;
                             self.gen_inline_call(
-                                ir, store, bbctx, f, inline_id, callid, recv_class, version, pc,
+                                ir, store, bbctx, f, fid, callid, recv_class, version, pc,
                             );
                         } else if is_simple {
-                            /*if fid == OBJECT_SEND_FUNCID {
-                                let f = object_send;
-                                self.gen_inline_call(
-                                    ir, store, bb, f, inline_id, callid, recv_class, version, pc,
-                                );
-                            } else {*/
-                            let f = &store[inline_id].inline_gen;
+                            let f = &info.inline_gen;
                             self.gen_inline_call(
-                                ir, store, bbctx, f, inline_id, callid, recv_class, version, pc,
+                                ir, store, bbctx, f, fid, callid, recv_class, version, pc,
                             );
                             //}
                         } else {
@@ -1011,14 +1004,13 @@ impl JitContext {
         store: &Store,
         bb: &mut BBContext,
         f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
-        inline_id: inline::InlineMethodId,
+        fid: FuncId,
         callid: CallSiteId,
         recv_class: ClassId,
         version: u32,
         pc: BytecodePtr,
     ) {
         let recv = store[callid].recv;
-        let fid = store[inline_id].fid;
         ir.fetch_to_reg(bb, recv, GP::Rdi);
         let (deopt, error) = ir.new_deopt_error(bb, pc);
         let using_xmm = bb.get_using_xmm();

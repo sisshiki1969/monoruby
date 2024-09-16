@@ -154,7 +154,7 @@ impl Globals {
                 eprintln!(
                     "{:30} {:30} {:10}",
                     name.to_string(),
-                    self.get_class_name(*class_id),
+                    self.store.debug_class_name(*class_id),
                     count
                 );
             }
@@ -168,7 +168,7 @@ impl Globals {
                 eprintln!(
                     "{:30} {:30} {:10}",
                     name.to_string(),
-                    self.get_class_name(*class_id),
+                    self.store.debug_class_name(*class_id),
                     count
                 );
             }
@@ -182,7 +182,7 @@ impl Globals {
                 eprintln!(
                     "{:40} {:30} {:10}",
                     self.func_description(*func_id),
-                    self.get_class_name(*class_id),
+                    self.store.debug_class_name(*class_id),
                     count
                 );
             }

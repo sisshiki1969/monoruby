@@ -826,7 +826,7 @@ impl TraceIr {
                 let callsite = &store[*callid];
                 if callsite.block_fid.is_none()
                     && let Some(fid) = fid
-                    && let Some(inline_id) = crate::executor::inline::InlineTable::get_inline(*fid)
+                    && let Some(inline_info) = store.inline_info.get_inline(*fid)
                     && (*fid == OBJECT_SEND_FUNCID && callsite.object_send_single_splat()
                         || callsite.is_simple())
                 {
@@ -837,7 +837,7 @@ impl TraceIr {
                         dst,
                         ..
                     } = *callsite;
-                    let name = &store[inline_id].name;
+                    let name = &inline_info.name;
                     let op1 = if pos_num == 0 {
                         format!("{} = {:?}.inline {name}()", ret_str(dst), recv)
                     } else {

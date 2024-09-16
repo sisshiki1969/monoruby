@@ -1,44 +1,20 @@
 use super::*;
-use std::sync::{LazyLock, RwLock};
 
-static INLINE_INFO: LazyLock<RwLock<InlineTable>> =
-    LazyLock::new(|| RwLock::new(InlineTable::default()));
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct InlineMethodId(usize);
-
-impl std::convert::From<InlineMethodId> for usize {
-    fn from(v: InlineMethodId) -> usize {
-        v.0
-    }
+pub(crate) struct InlineFuncInfo {
+    pub(crate) inline_gen: Box<InlineGen>,
+    pub(crate) inline_analysis: InlineAnalysis,
+    #[cfg(feature = "dump-bc")]
+    pub name: String,
 }
 
-impl InlineMethodId {
-    pub fn new(id: usize) -> Self {
-        Self(id)
-    }
-
-    pub fn get(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct InlineTable(HashMap<FuncId, InlineMethodId>);
+#[derive(Default)]
+pub(crate) struct InlineTable(HashMap<FuncId, InlineFuncInfo>);
 impl InlineTable {
-    pub fn get_inline(func_id: FuncId) -> Option<InlineMethodId> {
-        INLINE_INFO.read().unwrap().get(func_id)
+    pub fn get_inline(&self, func_id: FuncId) -> Option<&InlineFuncInfo> {
+        self.0.get(&func_id)
     }
 
-    pub(crate) fn add_inline(func_id: FuncId, id: InlineMethodId) {
-        INLINE_INFO.write().unwrap().add(func_id, id);
-    }
-
-    fn get(&self, func_id: FuncId) -> Option<InlineMethodId> {
-        self.0.get(&func_id).cloned()
-    }
-
-    fn add(&mut self, func_id: FuncId, id: InlineMethodId) {
-        self.0.insert(func_id, id);
+    pub(crate) fn add_inline(&mut self, func_id: FuncId, info: InlineFuncInfo) {
+        self.0.insert(func_id, info);
     }
 }
