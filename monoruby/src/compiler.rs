@@ -1121,7 +1121,9 @@ impl Globals {
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]
-        self.dump_disas(_sourcemap, func_id);
+        if self.startup_flag {
+            self.dump_disas(_sourcemap, func_id);
+        }
     }
 
     ///

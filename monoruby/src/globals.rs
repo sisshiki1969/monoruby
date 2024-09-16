@@ -114,6 +114,7 @@ pub struct Globals {
     random: Box<Prng>,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
+    pub(super) startup_flag: bool,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -127,8 +128,6 @@ pub struct Globals {
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
-    #[cfg(feature = "emit-bc")]
-    pub(super) startup_flag: bool,
 }
 
 impl std::ops::Index<FuncId> for Globals {
@@ -172,6 +171,7 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
+            startup_flag: false,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
@@ -182,8 +182,6 @@ impl Globals {
             jit_class_unmatched_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
-            #[cfg(feature = "emit-bc")]
-            startup_flag: false,
         };
 
         let mut object_class =
@@ -549,6 +547,15 @@ impl Globals {
 
     pub(crate) fn class_version(&self) -> u32 {
         self.codegen.class_version()
+    }
+}
+
+impl Globals {
+    pub fn clear_stats(&mut self) {
+        self.deopt_stats.clear();
+        self.global_method_cache_stats.clear();
+        self.method_exploration_stats.clear();
+        self.jit_class_unmatched_stats.clear();
     }
 }
 

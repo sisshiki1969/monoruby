@@ -267,6 +267,32 @@ impl SlotContext {
         }
     }
 
+    pub fn is_nil(&self, slot: SlotId) -> bool {
+        match self[slot].link {
+            LinkMode::Xmm(_) => false,
+            LinkMode::Both(_) => false,
+            LinkMode::ConcreteValue(v) => v.is_nil(),
+            LinkMode::Alias(origin) => self.is_nil(origin),
+            _ => false,
+        }
+    }
+
+    pub fn is_not_nil(&self, slot: SlotId) -> bool {
+        match self[slot].link {
+            LinkMode::Xmm(_) => true,
+            LinkMode::Both(_) => true,
+            LinkMode::ConcreteValue(v) => !v.is_nil(),
+            LinkMode::Alias(origin) => self.is_not_nil(origin),
+            _ => match self.guarded(slot) {
+                Guarded::Fixnum => true,
+                Guarded::Float => true,
+                Guarded::ArrayTy => true,
+                Guarded::Value => false,
+                Guarded::Class(_) => true,
+            },
+        }
+    }
+
     pub(super) fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
         self.xmm(xmm).is_empty()
     }
