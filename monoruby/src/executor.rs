@@ -110,6 +110,7 @@ impl Executor {
             panic!("error occurred in startup.");
         }
         globals.startup_flag = true;
+        #[cfg(feature = "profile")]
         globals.clear_stats();
         executor
     }
