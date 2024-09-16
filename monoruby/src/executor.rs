@@ -109,10 +109,9 @@ impl Executor {
             err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
         }
-        #[cfg(feature = "emit-bc")]
-        {
-            globals.startup_flag = true;
-        }
+        globals.startup_flag = true;
+        #[cfg(feature = "profile")]
+        globals.clear_stats();
         executor
     }
 

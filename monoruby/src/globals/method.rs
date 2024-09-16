@@ -382,13 +382,12 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_func(class_id, name, address, arg_num);
-        let inline_id = self.store.add_inline_info(
-            fid,
+        let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", self.get_class_name(class_id)),
-        );
-        inline::InlineTable::add_inline(fid, inline_id);
+            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
+        };
+        self.store.inline_info.add_inline(fid, info);
         fid
     }
 
@@ -413,13 +412,12 @@ impl Globals {
             rest,
             &[],
         );
-        let inline_id = self.store.add_inline_info(
-            fid,
+        let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", self.get_class_name(class_id)),
-        );
-        inline::InlineTable::add_inline(fid, inline_id);
+            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
+        };
+        self.store.inline_info.add_inline(fid, info);
         fid
     }
 
@@ -642,13 +640,12 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
-        let inline_id = self.store.add_inline_info(
-            fid,
+        let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
-            format!("{}#{name}", self.get_class_name(class_id)),
-        );
-        inline::InlineTable::add_inline(fid, inline_id);
+            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
+        };
+        self.store.inline_info.add_inline(fid, info);
         fid
     }
 

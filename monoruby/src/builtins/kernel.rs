@@ -81,16 +81,35 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-fn object_nil(ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, _pc: BytecodePtr) {
-    //bb.link_stack(dst);
-    ir.inline(|gen, _| {
-        monoasm! { &mut gen.jit,
-            movq rax, (FALSE_VALUE);
-            movq rsi, (TRUE_VALUE);
-            cmpq rdi, (NIL_VALUE);
-            cmoveqq rax, rsi;
-        }
-    });
+fn object_nil(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    _pc: BytecodePtr,
+) {
+    if bb.is_nil(store[callid].recv) {
+        ir.inline(|gen, _| {
+            monoasm! { &mut gen.jit,
+                movq rax, (TRUE_VALUE);
+            }
+        });
+    } else if bb.is_not_nil(store[callid].recv) {
+        ir.inline(|gen, _| {
+            monoasm! { &mut gen.jit,
+                movq rax, (FALSE_VALUE);
+            }
+        });
+    } else {
+        ir.inline(|gen, _| {
+            monoasm! { &mut gen.jit,
+                movq rax, (FALSE_VALUE);
+                movq rsi, (TRUE_VALUE);
+                cmpq rdi, (NIL_VALUE);
+                cmoveqq rax, rsi;
+            }
+        });
+    }
     ir.rax2acc(bb, store[callid].dst);
 }
 
@@ -290,8 +309,8 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let actual = lfp.arg(1);
     eprintln!(
         "expected:{} actual:{}",
-        expected.inspect(globals),
-        actual.inspect(globals)
+        expected.debug(&globals.store),
+        actual.debug(&globals.store)
     );
     assert!(Value::eq(expected, actual));
     Ok(Value::nil())
@@ -886,6 +905,15 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[cfg(test)]
 mod test {
     use super::tests::*;
+
+    #[test]
+    fn nil() {
+        run_test(r##"'woo'.nil?"##);
+        run_test(r##"3.nil?"##);
+        run_test(r##":x.nil?"##);
+        run_test(r##"nil.nil?"##);
+        run_test(r##"false.nil?"##);
+    }
 
     #[test]
     fn eval() {

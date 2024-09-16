@@ -15,7 +15,6 @@ impl Codegen {
     pub(super) fn gen_asmir(
         &mut self,
         store: &Store,
-        func: &ISeqInfo,
         ctx: &JitContext,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -25,7 +24,7 @@ impl Codegen {
             AsmInst::Label(label) => {
                 self.jit.bind_label(ctx[label]);
             }
-            AsmInst::DestLabel(label) => {
+            AsmInst::BasicBlockLabel(label) => {
                 self.jit.bind_label(label);
             }
             AsmInst::AccToStack(r) => {
@@ -275,24 +274,17 @@ impl Codegen {
             AsmInst::OptCase {
                 max,
                 min,
-                opt_case_id,
                 else_dest,
+                branch_table,
             } => {
-                let OptCaseAsmInfo {
-                    id,
-                    bb_pos,
-                    label_map,
-                } = &ctx.opt_case[opt_case_id];
-
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
-                for ofs in store[*id].branch_table.iter() {
-                    let idx = func.bb_info.get_bb_id(*bb_pos + 1 + (*ofs as i32));
-                    let dest_label = ctx[label_map.get(&idx).cloned().unwrap()];
+                for bbid in branch_table.iter() {
+                    let dest_label = ctx.basic_block_labels.get(&bbid).cloned().unwrap();
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = ctx[else_dest];
+                let else_dest = ctx.basic_block_labels.get(&else_dest).cloned().unwrap();
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);

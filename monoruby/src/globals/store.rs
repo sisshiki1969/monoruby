@@ -1,7 +1,6 @@
+use inline::InlineTable;
 use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
-
-use crate::executor::inline::InlineMethodId;
 
 use super::*;
 use std::pin::Pin;
@@ -55,14 +54,6 @@ impl ClassInfoTable {
     }
 }
 
-pub(crate) struct InlineFuncInfo {
-    pub fid: FuncId,
-    pub(crate) inline_gen: Box<InlineGen>,
-    pub(crate) inline_analysis: InlineAnalysis,
-    #[cfg(feature = "dump-bc")]
-    pub name: String,
-}
-
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
@@ -74,8 +65,8 @@ pub struct Store {
     constsite_info: Vec<ConstSiteInfo>,
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
-    /// inline method info.
-    inline_method: Vec<InlineFuncInfo>,
+    /// inline info.
+    pub(crate) inline_info: InlineTable,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -130,13 +121,6 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
-impl std::ops::Index<InlineMethodId> for Store {
-    type Output = InlineFuncInfo;
-    fn index(&self, index: InlineMethodId) -> &Self::Output {
-        &self.inline_method[index.get()]
-    }
-}
-
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -153,28 +137,8 @@ impl Store {
             callsite_info: vec![],
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
-            inline_method: vec![],
+            inline_info: InlineTable::default(),
         }
-    }
-}
-
-impl Store {
-    pub(super) fn add_inline_info(
-        &mut self,
-        fid: FuncId,
-        inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
-        _name: String,
-    ) -> InlineMethodId {
-        let id = self.inline_method.len();
-        self.inline_method.push(InlineFuncInfo {
-            fid,
-            inline_gen,
-            inline_analysis,
-            #[cfg(feature = "dump-bc")]
-            name: _name,
-        });
-        InlineMethodId::new(id)
     }
 }
 
@@ -373,7 +337,7 @@ impl Store {
 
 impl Store {
     /// Get class name of *ClassId*.
-    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
+    pub(crate) fn debug_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
             let class_obj = self.classes[class].get_module();
             match self.classes[class].get_name_id() {
@@ -389,7 +353,7 @@ impl Store {
                 }
                 None => match class_obj.is_singleton() {
                     None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.debug(self)),
+                    Some(base) => format!("#<Class:{}>", base.debug_tos(self)),
                 },
             }
         } else {
@@ -519,6 +483,17 @@ impl CallSiteInfo {
 
     pub fn kw_len(&self) -> usize {
         self.kw_args.len() + self.hash_splat_pos.len()
+    }
+
+    ///
+    /// This call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
+    ///
+    pub fn is_simple(&self) -> bool {
+        self.kw_len() == 0 && !self.has_splat() && self.block_arg.is_none()
+    }
+
+    pub fn object_send_single_splat(&self) -> bool {
+        self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 }
 

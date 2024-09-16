@@ -1103,7 +1103,7 @@ impl Globals {
                 } else {
                     String::new()
                 },
-                self.get_class_name(self_value.class()),
+                self.store.debug_class_name(self_value.class()),
                 func.sourceinfo.file_name(),
                 func.sourceinfo.get_line(&func.loc),
             );
@@ -1121,7 +1121,9 @@ impl Globals {
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]
-        self.dump_disas(_sourcemap, func_id);
+        if self.startup_flag {
+            self.dump_disas(_sourcemap, func_id);
+        }
     }
 
     ///

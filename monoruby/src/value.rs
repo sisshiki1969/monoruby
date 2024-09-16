@@ -463,46 +463,46 @@ impl Value {
 // display
 
 impl Value {
+    ///
+    /// Inspection for debugging.
+    ///
     pub fn debug(&self, store: &Store) -> String {
-        let s = match self.unpack() {
-            RV::None => "Undef".to_string(),
-            RV::Nil => "".to_string(),
+        match self.unpack() {
+            RV::None => "UNDEFINED".to_string(),
+            RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Complex(_) => self.as_complex().debug(store),
+            RV::Symbol(id) => format!(":{id}"),
+            RV::String(s) => format!(r#""{}""#, s.inspect()),
+            RV::Object(rvalue) => rvalue.debug(store),
+        }
+    }
+
+    pub fn debug_tos(&self, store: &Store) -> String {
+        let s = match self.unpack() {
+            RV::Nil => "".to_string(),
             RV::Symbol(id) => id.to_string(),
             RV::String(s) => s.to_str().unwrap().to_string(),
-            RV::Object(rvalue) => rvalue.debug(store),
+            _ => self.debug(store),
         };
         s
     }
 
     pub fn to_s(&self, globals: &Globals) -> String {
         let s = match self.unpack() {
-            RV::None => "Undef".to_string(),
-            RV::Nil => "".to_string(),
-            RV::Bool(b) => format!("{:?}", b),
-            RV::Fixnum(n) => format!("{}", n),
-            RV::BigInt(n) => format!("{}", n),
-            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Complex(_) => self.as_complex().debug(&globals.store),
-            RV::Symbol(id) => id.to_string(),
-            RV::String(s) => s.to_str().unwrap().to_string(),
             RV::Object(rvalue) => rvalue.to_s(globals),
+            _ => self.debug_tos(&globals.store),
         };
         s
     }
 
     pub fn inspect(&self, globals: &Globals) -> String {
         let s = match self.unpack() {
-            RV::Nil => "nil".to_string(),
-            RV::Complex(_) => self.as_complex().inspect(globals),
-            RV::Symbol(id) => format!(":{id}"),
-            RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.inspect(globals),
-            _ => self.to_s(globals),
+            _ => self.debug(&globals.store),
         };
         s
     }

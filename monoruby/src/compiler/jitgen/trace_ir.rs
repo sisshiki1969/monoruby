@@ -14,17 +14,20 @@ pub(crate) enum OpMode {
 #[derive(Debug, Clone)]
 pub(crate) enum TraceIr {
     /// branch(dest)
-    Br(BcIndex),
+    Br(BasicBlockId),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
-    CondBr(SlotId, BcIndex, bool, BrKind),
+    CondBr(SlotId, BasicBlockId, bool, BrKind),
     /// conditional branch(%reg, dest)  : branch when reg is nil.
-    NilBr(SlotId, BcIndex),
+    NilBr(SlotId, BasicBlockId),
     /// check local var(%reg, dest)  : branch when reg was None.
     OptCase {
         cond: SlotId,
-        optid: OptCaseId,
+        min: u16,
+        max: u16,
+        dest_bb: Box<[BasicBlockId]>,
+        branch_table: Box<[BasicBlockId]>,
     },
-    CheckLocal(SlotId, BcIndex),
+    CheckLocal(SlotId, BasicBlockId),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -178,14 +181,14 @@ pub(crate) enum TraceIr {
         mode: OpMode,
         lhs_class: Option<ClassId>,
         rhs_class: Option<ClassId>,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
     ICmpBr {
         kind: ruruby_parse::CmpKind,
         dst: Option<SlotId>,
         mode: OpMode,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
     FCmpBr {
@@ -194,7 +197,7 @@ pub(crate) enum TraceIr {
         mode: OpMode,
         lhs_class: ClassId,
         rhs_class: ClassId,
-        dest: BcIndex,
+        dest: BasicBlockId,
         brkind: BrKind,
     },
 
@@ -231,26 +234,6 @@ pub(crate) enum TraceIr {
         callid: CallSiteId,
         recv_class: Option<ClassId>,
         fid: Option<FuncId>,
-        version: u32,
-    },
-    InlineCall {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-    },
-    /// Object#send and is_simple
-    InlineObjectSend {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-    },
-    /// Object#send and if splat_pos.len() == 1 && pos_num == 1 && !kw_may_exists()
-    InlineObjectSendSplat {
-        inline_id: crate::executor::inline::InlineMethodId,
-        callid: CallSiteId,
-        recv_class: ClassId,
         version: u32,
     },
     InlineCache,
@@ -473,8 +456,8 @@ impl TraceIr {
             format!(
                 "{:36} [{}][{}]",
                 s,
-                store.get_class_name(lhs_class),
-                store.get_class_name(rhs_class)
+                store.debug_class_name(lhs_class),
+                store.debug_class_name(rhs_class)
             )
         }
 
@@ -544,19 +527,34 @@ impl TraceIr {
                 format!("init_method {info:?}")
             }
             TraceIr::CheckLocal(local, dest) => {
-                format!("check_local({:?}) =>{dest}", local)
+                format!("check_local({:?}) =>{:?}", local, dest)
             }
             TraceIr::Br(dest) => {
-                format!("br =>:{dest}")
+                format!("br => {:?}", dest)
             }
             TraceIr::CondBr(reg, dest, opt, kind) => {
-                format!("cond{}br {}{:?} =>{dest}", kind.to_s(), optstr(*opt), reg,)
+                format!(
+                    "cond{}br {}{:?} => {:?}",
+                    kind.to_s(),
+                    optstr(*opt),
+                    reg,
+                    dest
+                )
             }
             TraceIr::NilBr(reg, dest) => {
-                format!("nilbr {:?} =>{dest}", reg)
+                format!("nilbr {:?} => {:?}", reg, dest)
             }
-            TraceIr::OptCase { cond: dst, optid } => {
-                format!("opt_case {:?}->({:?})", dst, store[*optid])
+            TraceIr::OptCase {
+                cond,
+                min,
+                max,
+                branch_table,
+                ..
+            } => {
+                format!(
+                    "opt_case {:?}: {min}..{max} -> branch_table:{:?}",
+                    cond, branch_table
+                )
             }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
             TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
@@ -646,7 +644,7 @@ impl TraceIr {
                     "{:?} = {id}: {}",
                     reg,
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.get_class_name(*id), ivar_id)
+                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
                     } else {
                         format!("-")
                     }
@@ -656,7 +654,7 @@ impl TraceIr {
                 format!(
                     "{id}: {} = {:?}",
                     if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.get_class_name(*id), ivar_id)
+                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
                     } else {
                         format!("-")
                     },
@@ -702,7 +700,7 @@ impl TraceIr {
                 src_class,
             } => {
                 let op1 = format!("{:?} = ~{:?}", dst, src);
-                format!("{:36} [{}]", op1, store.get_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
             }
             TraceIr::UnOp {
                 kind,
@@ -711,15 +709,15 @@ impl TraceIr {
                 src_class,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(*src_class),)
+                format!("{:36} [{}]", op1, store.debug_class_name(*src_class),)
             }
             TraceIr::IUnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(INTEGER_CLASS),)
+                format!("{:36} [{}]", op1, store.debug_class_name(INTEGER_CLASS),)
             }
             TraceIr::FUnOp { kind, dst, src } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.get_class_name(FLOAT_CLASS),)
+                format!("{:36} [{}]", op1, store.debug_class_name(FLOAT_CLASS),)
             }
             TraceIr::Not { dst, src } => {
                 let op1 = format!("{:?} = !{:?}", dst, src);
@@ -814,96 +812,91 @@ impl TraceIr {
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
-                callid, recv_class, ..
+                callid,
+                recv_class,
+                fid,
+                ..
             }
             | TraceIr::MethodCallBlock {
-                callid, recv_class, ..
+                callid,
+                recv_class,
+                fid,
+                ..
             } => {
                 let callsite = &store[*callid];
-                let name = if let Some(name) = callsite.name {
-                    name.to_string()
-                } else {
-                    "super".to_string()
-                };
-                let CallSiteInfo {
-                    recv,
-                    args,
-                    pos_num,
-                    kw_pos,
-                    kw_args,
-                    dst,
-                    block_fid,
-                    block_arg,
-                    ..
-                } = callsite;
-                let has_splat = callsite.has_splat();
-                // TODO: we must handle hash aplat arguments correctly.
-                let kw_len = kw_args.len();
-                let op1 = format!(
-                    "{} = {:?}.{name}({}{}{}){}",
-                    ret_str(*dst),
-                    recv,
-                    if *pos_num == 0 {
-                        "".to_string()
-                    } else {
-                        format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
-                    },
-                    if kw_len == 0 {
-                        "".to_string()
-                    } else {
-                        format!(" kw:{:?};{}", kw_pos, kw_len)
-                    },
-                    if let Some(block_arg) = block_arg {
-                        format!(" &{:?}", block_arg)
-                    } else {
-                        "".to_string()
-                    },
-                    if let Some(block_fid) = block_fid {
-                        format!(" {{ {:?} }}", block_fid)
-                    } else {
-                        "".to_string()
-                    },
-                );
-                format!("{:36} [{}]", op1, store.get_class_name(*recv_class),)
-            }
-            TraceIr::InlineCall {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            }
-            | TraceIr::InlineObjectSend {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            }
-            | TraceIr::InlineObjectSendSplat {
-                inline_id,
-                callid,
-                recv_class,
-                ..
-            } => {
-                let CallSiteInfo {
-                    recv,
-                    args,
-                    pos_num,
-                    dst: ret,
-                    ..
-                } = store[*callid];
-                let name = &store[*inline_id].name;
-                let op1 = if pos_num == 0 {
-                    format!("{} = {:?}.inline {name}()", ret_str(ret), recv,)
-                } else {
-                    format!(
-                        "{} = {:?}.inline {name}({:?}; {})",
-                        ret_str(ret),
+                if callsite.block_fid.is_none()
+                    && let Some(fid) = fid
+                    && let Some(inline_info) = store.inline_info.get_inline(*fid)
+                    && (*fid == OBJECT_SEND_FUNCID && callsite.object_send_single_splat()
+                        || callsite.is_simple())
+                {
+                    let CallSiteInfo {
                         recv,
                         args,
                         pos_num,
-                    )
-                };
-                format!("{:36} [{}]", op1, store.get_class_name(*recv_class))
+                        dst,
+                        ..
+                    } = *callsite;
+                    let name = &inline_info.name;
+                    let op1 = if pos_num == 0 {
+                        format!("{} = {:?}.inline {name}()", ret_str(dst), recv)
+                    } else {
+                        format!(
+                            "{} = {:?}.inline {name}({:?}; {})",
+                            ret_str(dst),
+                            recv,
+                            args,
+                            pos_num,
+                        )
+                    };
+                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class))
+                } else {
+                    let name = if let Some(name) = callsite.name {
+                        name.to_string()
+                    } else {
+                        "super".to_string()
+                    };
+                    let CallSiteInfo {
+                        recv,
+                        args,
+                        pos_num,
+                        kw_pos,
+                        kw_args,
+                        dst,
+                        block_fid,
+                        block_arg,
+                        ..
+                    } = callsite;
+                    let has_splat = callsite.has_splat();
+                    // TODO: we must handle hash aplat arguments correctly.
+                    let kw_len = kw_args.len();
+                    let op1 = format!(
+                        "{} = {:?}.{name}({}{}{}){}",
+                        ret_str(*dst),
+                        recv,
+                        if *pos_num == 0 {
+                            "".to_string()
+                        } else {
+                            format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
+                        },
+                        if kw_len == 0 {
+                            "".to_string()
+                        } else {
+                            format!(" kw:{:?};{}", kw_pos, kw_len)
+                        },
+                        if let Some(block_arg) = block_arg {
+                            format!(" &{:?}", block_arg)
+                        } else {
+                            "".to_string()
+                        },
+                        if let Some(block_fid) = block_fid {
+                            format!(" {{ {:?} }}", block_fid)
+                        } else {
+                            "".to_string()
+                        },
+                    );
+                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class),)
+                }
             }
             TraceIr::Yield { callid } => {
                 let CallSiteInfo {

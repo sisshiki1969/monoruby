@@ -1,3 +1,10 @@
+use bytecodegen::{
+    inst::{BrKind, DynVar, FnInitInfo},
+    BinOpK, UnOpK,
+};
+use jitgen::trace_ir::{OpMode, TraceIr};
+use ruruby_parse::CmpKind;
+
 use super::*;
 use crate::{
     bytecodegen::BcIndex, compiler::jitgen::BasicBlockId, compiler::jitgen::BasicBlockInfo,
@@ -332,6 +339,10 @@ impl ISeqInfo {
         self.sp[i.0 as usize]
     }
 
+    fn get_bb(&self, bc_pos: BcIndex) -> BasicBlockId {
+        self.bb_info.is_bb_head(bc_pos).unwrap()
+    }
+
     pub(crate) fn get_location(&self) -> String {
         let loc = self.loc;
         format!(
@@ -339,11 +350,6 @@ impl ISeqInfo {
             self.sourceinfo.short_file_name(),
             self.sourceinfo.get_line(&loc)
         )
-    }
-
-    pub(crate) fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> jitgen::trace_ir::TraceIr {
-        let pc = self.get_pc(bc_pos);
-        pc.trace_ir(store, bc_pos)
     }
 
     ///
@@ -396,6 +402,545 @@ impl ISeqInfo {
             })
             .collect::<Vec<_>>()
     }
+}
+
+impl ISeqInfo {
+    pub(crate) fn trace_ir(&self, store: &Store, bc_pos: BcIndex) -> jitgen::trace_ir::TraceIr {
+        let pc = self.get_pc(bc_pos);
+        let op1 = pc.op1;
+        let op2 = pc.op2;
+        let opcode = pc.opcode();
+        if opcode & 0xc0 == 0 {
+            let (op1_w, op1_l) = dec_wl(op1);
+            match opcode {
+                1 => TraceIr::SingletonMethodDef {
+                    obj: SlotId::new(op1_w),
+                    name: IdentId::from(op2.0 as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                2 => TraceIr::MethodDef {
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                3 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::Br(dest)
+                }
+                4 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, false, BrKind::BrIf)
+                }
+                5 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, false, BrKind::BrIfNot)
+                }
+                6 => TraceIr::Integer(SlotId::new(op1_w), op1_l as i32),
+                7 => TraceIr::Literal(SlotId::new(op1_w), op2.get_value()),
+                8 => TraceIr::Nil(SlotId::new(op1_w)),
+                9 => TraceIr::Symbol(SlotId::new(op1_w), IdentId::from(op1_l)),
+                10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
+                11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
+                12..=13 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CondBr(SlotId::new(op1_w), dest, true, BrKind::from(opcode - 12))
+                }
+                14 => TraceIr::LoopStart {
+                    counter: op1_l,
+                    jit_addr: pc.into_jit_addr(),
+                },
+                15 => TraceIr::LoopEnd,
+                16 => {
+                    let class = pc.cached_class0();
+                    let ivar = pc.cached_ivarid();
+                    TraceIr::LoadIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                }
+                17 => {
+                    let class = pc.cached_class0();
+                    let ivar = pc.cached_ivarid();
+                    TraceIr::StoreIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                }
+                20 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::CheckLocal(SlotId::new(op1_w), dest)
+                }
+                21 => TraceIr::BlockArgProxy(SlotId::new(op1_w), op1_l as usize),
+                22 => TraceIr::SingletonClassDef {
+                    dst: SlotId::from(op1_w),
+                    base: SlotId::new(op1_l as u16),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                23 => TraceIr::BlockArg(SlotId::new(op1_w), op1_l as usize),
+                24 => TraceIr::CheckCvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                25 => TraceIr::LoadGvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                26 => TraceIr::StoreGvar {
+                    src: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                27 => TraceIr::LoadCvar {
+                    dst: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                28 => TraceIr::LoadSvar {
+                    dst: SlotId::new(op1_w),
+                    id: op1_l,
+                },
+                29 => TraceIr::StoreCvar {
+                    src: SlotId::new(op1_w),
+                    name: IdentId::from(op1_l),
+                },
+                30..=31 => TraceIr::MethodCall {
+                    callid: op1_l.into(),
+                    recv_class: pc.cached_class1(),
+                    fid: pc.cached_fid(),
+                    version: (pc + 1).cached_version(),
+                },
+                32..=33 => TraceIr::MethodCallBlock {
+                    callid: op1_l.into(),
+                    recv_class: pc.cached_class1(),
+                    fid: pc.cached_fid(),
+                    version: (pc + 1).cached_version(),
+                },
+                34..=35 => TraceIr::Yield {
+                    callid: op1_l.into(),
+                },
+                36 => {
+                    let optid = OptCaseId::from(op1_l);
+                    let OptCaseInfo {
+                        min,
+                        max,
+                        offsets,
+                        branch_table,
+                    } = &store[optid];
+                    let dest_bb: Box<[_]> = offsets
+                        .iter()
+                        .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
+                        .collect();
+                    let branch_table: Box<[_]> = branch_table
+                        .iter()
+                        .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
+                        .collect();
+
+                    TraceIr::OptCase {
+                        cond: SlotId::new(op1_w),
+                        min: *min,
+                        max: *max,
+                        dest_bb,
+                        branch_table,
+                    }
+                }
+                37 => {
+                    let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
+                    TraceIr::NilBr(SlotId::new(op1_w), dest)
+                }
+                38 => TraceIr::Lambda {
+                    dst: SlotId::new(op1_w),
+                    func_id: FuncId::new(op1_l),
+                },
+                39 => TraceIr::Array {
+                    dst: SlotId::new(op1_w),
+                    callid: CallSiteId::from(op1_l),
+                },
+                _ => unreachable!("{:016x}", op1),
+            }
+        } else {
+            let (op1_w1, op2_w2, op3_w3) = dec_www(op1);
+            match opcode {
+                64 => TraceIr::DefinedYield {
+                    dst: SlotId::new(op1_w1),
+                },
+                65 => TraceIr::DefinedConst {
+                    dst: SlotId::new(op1_w1),
+                    siteid: ConstSiteId(op2.0 as u32),
+                },
+                66 => TraceIr::DefinedMethod {
+                    dst: SlotId::new(op1_w1),
+                    recv: SlotId::new(op2_w2),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                67 => TraceIr::DefinedGvar {
+                    dst: SlotId::new(op1_w1),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                68 => TraceIr::DefinedIvar {
+                    dst: SlotId::new(op1_w1),
+                    name: IdentId::from(op2.0 as u32),
+                },
+                70 => TraceIr::ClassDef {
+                    dst: SlotId::from(op1_w1),
+                    base: SlotId::from(op2_w2),
+                    superclass: SlotId::from(op3_w3),
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                71 => TraceIr::ModuleDef {
+                    dst: SlotId::from(op1_w1),
+                    base: SlotId::from(op2_w2),
+                    name: IdentId::from((op2.0) as u32),
+                    func_id: FuncId::new((op2.0 >> 32) as u32),
+                },
+                80 => TraceIr::Ret(SlotId::new(op1_w1)),
+                81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
+                82 => TraceIr::Break(SlotId::new(op1_w1)),
+                83 => TraceIr::Raise(SlotId::new(op1_w1)),
+                85 => TraceIr::EnsureEnd,
+                86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                126 => {
+                    let kind = UnOpK::Pos;
+                    let dst = SlotId::new(op1_w1);
+                    let src = SlotId::new(op2_w2);
+                    if pc.is_integer1() {
+                        TraceIr::IUnOp { kind, dst, src }
+                    } else if pc.is_float1() {
+                        TraceIr::FUnOp { kind, dst, src }
+                    } else {
+                        TraceIr::UnOp {
+                            kind,
+                            dst,
+                            src,
+                            src_class: pc.classid1(),
+                        }
+                    }
+                }
+                127 => TraceIr::BitNot {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                    src_class: pc.classid1(),
+                },
+                128 => TraceIr::Not {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                },
+                129 => {
+                    let kind = UnOpK::Neg;
+                    let dst = SlotId::new(op1_w1);
+                    let src = SlotId::new(op2_w2);
+                    if pc.is_integer1() {
+                        TraceIr::IUnOp { kind, dst, src }
+                    } else if pc.is_float1() {
+                        TraceIr::FUnOp { kind, dst, src }
+                    } else {
+                        TraceIr::UnOp {
+                            kind,
+                            dst,
+                            src,
+                            src_class: pc.classid1(),
+                        }
+                    }
+                }
+                130 => TraceIr::InlineCache,
+                132 => {
+                    let base_class = pc.classid1();
+                    let idx_class = pc.classid2();
+                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+                        TraceIr::ArrayIndex {
+                            dst: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                        }
+                    } else {
+                        TraceIr::Index {
+                            dst: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                            base_class,
+                            idx_class,
+                        }
+                    }
+                }
+                133 => {
+                    let base_class = pc.classid1();
+                    let idx_class = pc.classid2();
+                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+                        TraceIr::ArrayIndexAssign {
+                            src: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                        }
+                    } else {
+                        TraceIr::IndexAssign {
+                            src: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                            base_class,
+                            idx_class,
+                        }
+                    }
+                }
+                134..=141 => {
+                    let kind = CmpKind::from(opcode - 134);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RR(SlotId::new(op2_w2), SlotId::new(op3_w3));
+                    let lhs_class = pc.classid1();
+                    let rhs_class = pc.classid2();
+                    if pc.is_float_binop() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                        }
+                    } else if pc.is_integer_binop() {
+                        TraceIr::ICmp { kind, dst, mode }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
+                    }
+                }
+                142..=149 => {
+                    let kind = CmpKind::from(opcode - 142);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
+                    let lhs_class = pc.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
+                    if pc.is_float1() {
+                        TraceIr::FCmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                        }
+                    } else if pc.is_integer1() {
+                        TraceIr::ICmp { kind, dst, mode }
+                    } else {
+                        TraceIr::Cmp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
+                    }
+                }
+                150 => TraceIr::LoadDynVar(
+                    SlotId::new(op1_w1),
+                    DynVar {
+                        reg: SlotId::new(op2_w2),
+                        outer: op3_w3 as usize,
+                    },
+                ),
+                151 => TraceIr::StoreDynVar(
+                    DynVar {
+                        reg: SlotId::new(op1_w1),
+                        outer: op2_w2 as usize,
+                    },
+                    SlotId::new(op3_w3),
+                ),
+                154..=161 => {
+                    let kind = CmpKind::from(opcode - 154);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RR(SlotId(op2_w2), SlotId(op3_w3));
+                    let lhs_class = pc.classid1();
+                    let rhs_class = pc.classid2();
+                    let (dest, brkind) = match self.trace_ir(store, bc_pos + 1) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest, brkind),
+                        _ => unreachable!(),
+                    };
+                    if pc.is_float_binop() {
+                        TraceIr::FCmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                            dest,
+                            brkind,
+                        }
+                    } else if pc.is_integer_binop() {
+                        TraceIr::ICmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            dest,
+                            brkind,
+                        }
+                    } else {
+                        TraceIr::CmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            dest,
+                            brkind,
+                        }
+                    }
+                }
+                162..=169 => {
+                    let kind = CmpKind::from(opcode - 162);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
+                    let lhs_class = pc.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
+                    let (dest, brkind) = match self.trace_ir(store, bc_pos + 1) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest, brkind),
+                        _ => unreachable!(),
+                    };
+                    if pc.is_float1() {
+                        TraceIr::FCmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                            dest,
+                            brkind,
+                        }
+                    } else if pc.is_integer1() {
+                        TraceIr::ICmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            dest,
+                            brkind,
+                        }
+                    } else {
+                        TraceIr::CmpBr {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                            dest,
+                            brkind,
+                        }
+                    }
+                }
+                170 | 172 => TraceIr::InitMethod(FnInitInfo {
+                    reg_num: op1_w1 as usize,
+                    arg_num: pc.u16(3) as usize,
+                    reqopt_num: op2_w2 as usize,
+                    req_num: pc.u16(0) as usize,
+                    info: pc.u16(2) as usize,
+                    stack_offset: op3_w3 as usize,
+                }),
+                171 => TraceIr::ExpandArray {
+                    src: SlotId::new(op1_w1),
+                    dst: (SlotId::new(op2_w2), op3_w3),
+                },
+                173 => {
+                    let (new, old) = op2.get_ident2();
+                    TraceIr::AliasMethod { new, old }
+                }
+                174 => TraceIr::Hash {
+                    dst: SlotId::new(op1_w1),
+                    args: SlotId::new(op2_w2),
+                    len: op3_w3,
+                },
+                176 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
+                177..=178 => TraceIr::Range {
+                    dst: SlotId::new(op1_w1),
+                    start: SlotId::new(op2_w2),
+                    end: SlotId::new(op3_w3),
+                    exclude_end: match opcode - 177 {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    },
+                },
+                179 => TraceIr::ConcatStr(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
+                180..=189 => {
+                    let kind = BinOpK::from(opcode - 180);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::IR(op2_w2 as i16, SlotId::new(op3_w3));
+                    let lhs_class = Some(INTEGER_CLASS);
+                    let rhs_class = pc.classid2();
+                    if pc.is_integer2() {
+                        TraceIr::IBinOp { kind, dst, mode }
+                    } else if pc.is_float2() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
+                    }
+                }
+                190..=199 => {
+                    let kind = BinOpK::from(opcode - 190);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
+                    let lhs_class = pc.classid1();
+                    let rhs_class = Some(INTEGER_CLASS);
+                    if pc.is_integer1() {
+                        TraceIr::IBinOp { kind, dst, mode }
+                    } else if pc.is_float1() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
+                    }
+                }
+                200..=209 => {
+                    let kind = BinOpK::from(opcode - 200);
+                    let dst = SlotId::from(op1_w1);
+                    let mode = OpMode::RR(SlotId::new(op2_w2), SlotId::new(op3_w3));
+                    let lhs_class = pc.classid1();
+                    let rhs_class = pc.classid2();
+                    if pc.is_integer_binop() {
+                        TraceIr::IBinOp { kind, dst, mode }
+                    } else if pc.is_float_binop() {
+                        TraceIr::FBinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class: lhs_class.unwrap(),
+                            rhs_class: rhs_class.unwrap(),
+                        }
+                    } else {
+                        TraceIr::BinOp {
+                            kind,
+                            dst,
+                            mode,
+                            lhs_class,
+                            rhs_class,
+                        }
+                    }
+                }
+                _ => unreachable!("{:016x}", op1),
+            }
+        }
+    }
+}
+
+fn dec_wl(op: u64) -> (u16, u32) {
+    ((op >> 32) as u16, op as u32)
+}
+
+fn dec_www(op: u64) -> (u16, u16, u16) {
+    ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
 ///

@@ -166,12 +166,12 @@ impl ArrayInner {
         match self.len() {
             0 => "[]".to_string(),
             1 => format!("[{}]", self[0].debug(store)),
-            _ => {
+            i => {
                 let mut s = format!("[{}", self[0].debug(store));
-                for val in self[1..].iter() {
+                for val in self[1..].iter().take(3) {
                     s += &format!(", {}", val.debug(store));
                 }
-                s += "]";
+                s += if i > 3 { " .. ]" } else { "]" };
                 s
             }
         }
@@ -187,21 +187,6 @@ impl ArrayInner {
                     s += &format!(", {}", val.inspect(globals));
                 }
                 s += "]";
-                s
-            }
-        }
-    }
-
-    pub fn inspect2(&self, globals: &Globals) -> String {
-        match self.len() {
-            0 => "[]".to_string(),
-            1 => format!("[{}]", globals.inspect2(self[0])),
-            _ => {
-                let mut s = format!("[{}", globals.inspect2(self[0]));
-                for val in self[1..].iter().take(3) {
-                    s += &format!(", {}", globals.inspect2(*val));
-                }
-                s += " .. ]";
                 s
             }
         }

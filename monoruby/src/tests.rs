@@ -187,7 +187,7 @@ pub fn run_test_error(code: &str) {
     let mut globals = Globals::new(1, false);
     match globals.run(code, std::path::Path::new(".")) {
         Ok(v) => {
-            eprintln!("{}", v.inspect(&globals));
+            eprintln!("{}", v.debug(&globals.store));
             panic!()
         }
         Err(err) => err.show_error_message_and_all_loc(&globals),
@@ -206,7 +206,7 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
         }
     };
 
-    let jit_str = res.inspect(&globals);
+    let jit_str = res.debug(&globals.store);
     #[cfg(not(debug_assertions))]
     eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
@@ -254,7 +254,7 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let res = Value::from_ast(&nodes, globals);
 
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", res.inspect(globals));
+    eprintln!("ruby: {}", res.debug(&globals.store));
     res
 }
 

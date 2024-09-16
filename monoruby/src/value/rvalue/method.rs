@@ -28,7 +28,7 @@ impl MethodInner {
     pub fn debug(&self, store: &Store) -> String {
         format!(
             "#<Method: {}#{}()>",
-            store.get_class_name(self.receiver.class()),
+            store.debug_class_name(self.receiver.class()),
             store[self.func_id()].name().unwrap()
         )
     }
@@ -61,7 +61,7 @@ impl UMethodInner {
     pub fn debug(&self, store: &Store) -> String {
         format!(
             "#<UnboundMethod: {}#{}()>",
-            store.get_class_name(self.owner),
+            store.debug_class_name(self.owner),
             store[self.func_id()].name().unwrap()
         )
     }

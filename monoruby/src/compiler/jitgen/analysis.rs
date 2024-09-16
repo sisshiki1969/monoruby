@@ -450,26 +450,24 @@ impl JitContext {
                     info.use_args(&store[callid]);
                     info.def(dst);
                 }
-                TraceIr::MethodCall { callid, .. } | TraceIr::MethodCallBlock { callid, .. } => {
-                    let has_block = store[callid].block_fid.is_some();
-                    let CallSiteInfo { recv, dst, .. } = store[callid];
-                    info.r#use(recv);
-                    info.use_args(&store[callid]);
-                    if has_block {
-                        info.unlink_locals(func);
+                TraceIr::MethodCall { callid, fid, .. }
+                | TraceIr::MethodCallBlock { callid, fid, .. } => {
+                    if store[callid].block_fid.is_none()
+                        && let Some(fid) = fid
+                        && let Some(inline_info) = store.inline_info.get_inline(fid)
+                        && (fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat()
+                            || store[callid].is_simple())
+                    {
+                        (inline_info.inline_analysis)(&mut info, &store[callid]);
+                    } else {
+                        let CallSiteInfo { recv, dst, .. } = store[callid];
+                        info.r#use(recv);
+                        info.use_args(&store[callid]);
+                        if store[callid].block_fid.is_some() {
+                            info.unlink_locals(func);
+                        }
+                        info.def(dst);
                     }
-                    info.def(dst);
-                }
-                TraceIr::InlineCall {
-                    inline_id, callid, ..
-                }
-                | TraceIr::InlineObjectSend {
-                    inline_id, callid, ..
-                }
-                | TraceIr::InlineObjectSendSplat {
-                    inline_id, callid, ..
-                } => {
-                    (store[inline_id].inline_analysis)(&mut info, &store[callid]);
                 }
                 TraceIr::InlineCache => {}
                 TraceIr::Ret(src)
