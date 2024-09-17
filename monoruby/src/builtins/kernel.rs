@@ -309,8 +309,8 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let actual = lfp.arg(1);
     eprintln!(
         "expected:{} actual:{}",
-        expected.debug(&globals.store),
-        actual.debug(&globals.store)
+        expected.inspect(globals),
+        actual.inspect(globals)
     );
     assert!(Value::eq(expected, actual));
     Ok(Value::nil())

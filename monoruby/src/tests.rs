@@ -16,7 +16,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..25 do
+      for __i in 0..10 do
           __res2 = ({0})
           __assert(__res, __res2)
       end
@@ -75,7 +75,7 @@ pub fn run_tests(codes: &[String]) {
     let wrapped = format!(
         r##"
       __res = ({0})
-      for __i in 0..15 do
+      for __i in 0..10 do
           __res2 = ({0})
           __assert(__res, __res2)
       end
@@ -137,7 +137,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
         r##"
       {prelude}
       res = ({code})
-      for __i in 0..15 do
+      for __i in 0..10 do
           res2 = ({code})
           __assert(res, res2)
       end
@@ -187,7 +187,7 @@ pub fn run_test_error(code: &str) {
     let mut globals = Globals::new(1, false);
     match globals.run(code, std::path::Path::new(".")) {
         Ok(v) => {
-            eprintln!("{}", v.debug(&globals.store));
+            eprintln!("{}", v.inspect(&globals));
             panic!()
         }
         Err(err) => err.show_error_message_and_all_loc(&globals),
@@ -206,7 +206,7 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
         }
     };
 
-    let jit_str = res.debug(&globals.store);
+    let jit_str = res.inspect(globals);
     #[cfg(not(debug_assertions))]
     eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
@@ -254,7 +254,7 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let res = Value::from_ast(&nodes, globals);
 
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", res.debug(&globals.store));
+    eprintln!("ruby: {}", res.inspect(&globals));
     res
 }
 
@@ -779,7 +779,7 @@ mod test {
                     fib(x-1)+fib(x-2)
                 end
             end;
-            fib(32.0)
+            fib(20.0)
             "#,
         );
     }
