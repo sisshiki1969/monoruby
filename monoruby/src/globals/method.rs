@@ -385,6 +385,7 @@ impl Globals {
         let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
+            #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };
         self.store.inline_info.add_inline(fid, info);
@@ -415,6 +416,7 @@ impl Globals {
         let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
+            #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };
         self.store.inline_info.add_inline(fid, info);
@@ -643,6 +645,7 @@ impl Globals {
         let info = inline::InlineFuncInfo {
             inline_gen,
             inline_analysis,
+            #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };
         self.store.inline_info.add_inline(fid, info);
