@@ -50,7 +50,7 @@ fn main() {
         directories.extend(copy_dir(from_dir, to_dir).unwrap());
     }
 
-    println!("cargo:rerun-if-changed=startup");
+    //println!("cargo:rerun-if-changed=startup");
 }
 
 fn copy_dir(

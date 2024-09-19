@@ -58,7 +58,7 @@ impl JitContext {
     pub(in crate::compiler::jitgen) fn gen_continuation(&mut self, ir: &mut AsmIr) {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
             ir.inst.push(AsmInst::Label(entry));
-            if let Some(ContinuationInfo(from, to, pc)) = data {
+            if let Some(ContinuationInfo { from, to, pc }) = data {
                 ir.gen_bridge_for_target(from, &to, pc);
             }
         }

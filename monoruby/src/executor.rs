@@ -109,6 +109,15 @@ impl Executor {
             err.show_error_message_and_all_loc(globals);
             panic!("error occurred in startup.");
         }
+        #[cfg(not(feature = "test"))]
+        {
+            executor
+                .require(globals, &std::path::PathBuf::from("rubygems"), false)
+                .expect("error occurred in startup.");
+            executor
+                .require(globals, &std::path::PathBuf::from("pp"), false)
+                .expect("error occurred in startup.");
+        }
         globals.startup_flag = true;
         #[cfg(feature = "profile")]
         globals.clear_stats();

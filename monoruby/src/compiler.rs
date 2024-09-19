@@ -605,7 +605,8 @@ impl Codegen {
 
     fn save_registers(&mut self) {
         monoasm! { &mut self.jit,
-            subq rsp, 176;
+            subq rsp, 192;
+            movq [rsp + 176], rax;
             movq [rsp + 168], r11;
             movq [rsp + 160], r10;
             movq [rsp + 152], r9;
@@ -655,7 +656,8 @@ impl Codegen {
             movq r9, [rsp + 152];
             movq r10, [rsp + 160];
             movq r11, [rsp + 168];
-            addq rsp, 176;
+            movq rax, [rsp + 176];
+            addq rsp, 192;
         }
     }
 

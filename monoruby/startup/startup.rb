@@ -186,5 +186,3 @@ class Errno
 end
 
 File::ALT_SEPARATOR = nil
-require 'rubygems'
-require 'pp'

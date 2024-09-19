@@ -25,11 +25,21 @@ pub mod trace_ir;
 // Just-in-time compiler module.
 //
 
-struct ContinuationInfo(BBContext, MergeContext, BytecodePtr);
+#[derive(Debug)]
+struct BackedgeInfo {
+    target_ctx: MergeContext,
+    unused: Vec<SlotId>,
+}
+
+struct ContinuationInfo {
+    from: BBContext,
+    to: MergeContext,
+    pc: BytecodePtr,
+}
 
 impl ContinuationInfo {
-    fn new(bb: BBContext, ctx: MergeContext, pc: BytecodePtr) -> Self {
-        Self(bb, ctx, pc)
+    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
+        Self { from, to, pc }
     }
 }
 
@@ -118,12 +128,6 @@ struct JitContext {
     ///
     #[cfg(feature = "emit-asm")]
     start_codepos: usize,
-}
-
-#[derive(Debug)]
-struct BackedgeInfo {
-    target_ctx: MergeContext,
-    unused: Vec<SlotId>,
 }
 
 /*
