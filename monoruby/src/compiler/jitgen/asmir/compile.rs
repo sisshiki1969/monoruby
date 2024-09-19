@@ -22,9 +22,6 @@ impl Codegen {
         match inst {
             AsmInst::BcIndex(_) => {}
             AsmInst::Label(label) => {
-                self.jit.bind_label(ctx[label]);
-            }
-            AsmInst::BasicBlockLabel(label) => {
                 self.jit.bind_label(label);
             }
             AsmInst::AccToStack(r) => {
@@ -241,13 +238,11 @@ impl Codegen {
                 };
             }
             AsmInst::Br(dest) => {
-                let dest = ctx[dest];
                 monoasm!( &mut self.jit,
                     jmp dest;
                 );
             }
             AsmInst::CondBr(brkind, dest) => {
-                let dest = ctx[dest];
                 monoasm!( &mut self.jit,
                     orq rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -258,17 +253,15 @@ impl Codegen {
                 }
             }
             AsmInst::NilBr(dest) => {
-                let dest = ctx[dest];
                 monoasm!( &mut self.jit,
                     cmpq rax, (NIL_VALUE);
                     jeq  dest;
                 );
             }
-            AsmInst::CheckLocal(branch_dest) => {
-                let branch_dest = ctx[branch_dest];
+            AsmInst::CheckLocal(dest) => {
                 monoasm!( &mut self.jit,
                     testq rax, rax;
-                    jnz  branch_dest;
+                    jnz  dest;
                 );
             }
             AsmInst::OptCase {
@@ -384,7 +377,6 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx[branch_dest];
                 self.cmp_integer(&mode);
                 self.condbr_int(kind, branch_dest, brkind);
             }
@@ -401,7 +393,6 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx[branch_dest];
                 self.cmp_float(&mode);
                 self.condbr_float(kind, branch_dest, brkind);
             }
@@ -676,7 +667,6 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = ctx[branch_dest];
                 self.cond_br(branch_dest, brkind);
             }
 

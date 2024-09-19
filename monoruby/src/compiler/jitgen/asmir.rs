@@ -677,7 +677,7 @@ impl AsmIr {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     ) {
         self.inst.push(AsmInst::IntegerCmpBr {
             mode,
@@ -692,7 +692,7 @@ impl AsmIr {
         mode: FMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     ) {
         self.inst.push(AsmInst::FloatCmpBr {
             mode,
@@ -1101,10 +1101,10 @@ pub(super) enum AsmInst {
     Raise,
     MethodRet(BytecodePtr),
     EnsureEnd,
-    Br(AsmLabel),
-    CondBr(BrKind, AsmLabel),
-    NilBr(AsmLabel),
-    CheckLocal(AsmLabel),
+    Br(DestLabel),
+    CondBr(BrKind, DestLabel),
+    NilBr(DestLabel),
+    CheckLocal(DestLabel),
     ///
     /// Conditional branch
     ///
@@ -1115,7 +1115,7 @@ pub(super) enum AsmInst {
     ///
     GenericCondBr {
         brkind: BrKind,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     },
     OptCase {
         max: u16,
@@ -1287,7 +1287,7 @@ pub(super) enum AsmInst {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     },
     FloatCmp {
         kind: CmpKind,
@@ -1297,7 +1297,7 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         mode: FMode,
         brkind: BrKind,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     },
 
     GuardBaseClass {
@@ -1505,8 +1505,7 @@ pub(super) enum AsmInst {
 
     #[allow(dead_code)]
     BcIndex(BcIndex),
-    Label(AsmLabel),
-    BasicBlockLabel(DestLabel),
+    Label(DestLabel),
 }
 
 impl AsmInst {
@@ -1616,7 +1615,7 @@ impl Codegen {
         ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
-        entry: Option<AsmLabel>,
+        entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
     ) {
         #[cfg(feature = "emit-asm")]
@@ -1641,15 +1640,11 @@ impl Codegen {
             }
         }
 
-        for label in ctx.asm_labels.iter_mut().filter(|i| i.is_none()) {
-            *label = Some(self.jit.label());
-        }
-
         if exit.is_some() {
             self.jit.select_page(1);
         }
         if let Some(entry) = entry {
-            self.jit.bind_label(ctx[entry]);
+            self.jit.bind_label(entry);
         }
 
         #[cfg(feature = "emit-asm")]

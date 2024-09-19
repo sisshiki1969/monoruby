@@ -42,10 +42,6 @@ struct JitContext {
     ///
     basic_block_labels: HashMap<BasicBlockId, DestLabel>,
     ///
-    /// Destination labels for AsmLabels.
-    ///
-    asm_labels: Vec<Option<DestLabel>>,
-    ///
     /// Basic block information.
     ///
     bb_scan: Vec<(ExitType, SlotInfo)>,
@@ -102,11 +98,11 @@ struct JitContext {
     ///
     /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, AsmLabel, BasicBlockId)>,
+    bridges: Vec<(AsmIr, DestLabel, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
-    continuation_bridge: Option<(Option<ContinuationInfo>, AsmLabel)>,
+    continuation_bridge: Option<(Option<ContinuationInfo>, DestLabel)>,
     ///
     /// Class version at compile time.
     ///
@@ -122,13 +118,6 @@ struct JitContext {
     ///
     #[cfg(feature = "emit-asm")]
     start_codepos: usize,
-}
-
-impl std::ops::Index<AsmLabel> for JitContext {
-    type Output = DestLabel;
-    fn index(&self, index: AsmLabel) -> &Self::Output {
-        self.asm_labels[index.0].as_ref().unwrap()
-    }
 }
 
 #[derive(Debug)]
@@ -159,9 +148,6 @@ impl std::ops::Index<BcIndex> for Incoming {
 }
 */
 
-#[derive(Clone, Copy, Debug)]
-struct AsmLabel(usize);
-
 impl JitContext {
     ///
     /// Create new JitContext.
@@ -184,7 +170,6 @@ impl JitContext {
         let local_num = func.local_num();
         Self {
             basic_block_labels,
-            asm_labels: vec![],
             bb_scan,
             loop_backedges: HashMap::default(),
             loop_info: HashMap::default(),
@@ -206,12 +191,6 @@ impl JitContext {
         }
     }
 
-    fn asm_label(&mut self) -> AsmLabel {
-        let label = AsmLabel(self.asm_labels.len());
-        self.asm_labels.push(None);
-        label
-    }
-
     ///
     /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
     ///
@@ -221,7 +200,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -243,7 +222,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: AsmLabel,
+        branch_dest: DestLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -280,15 +259,15 @@ impl JitContext {
 
     fn compile_bb(
         &mut self,
+        codegen: &mut Codegen,
         store: &Store,
         func: &ISeqInfo,
         position: Option<BytecodePtr>,
         bbid: BasicBlockId,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
-        ir.inst
-            .push(AsmInst::BasicBlockLabel(self.basic_block_labels[&bbid]));
-        let mut bb = if let Some(bb) = self.target_ctx.remove(&bbid) {
+        ir.inst.push(AsmInst::Label(self.basic_block_labels[&bbid]));
+        let mut bbctx = if let Some(bb) = self.target_ctx.remove(&bbid) {
             bb
         } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
             self.gen_continuation(&mut ir);
@@ -300,29 +279,29 @@ impl JitContext {
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
-        for bb_pos in begin..=end {
-            ir.bc_index(bb_pos);
-            bb.next_sp = func.get_sp(bb_pos);
+        for bc_pos in begin..=end {
+            ir.bc_index(bc_pos);
+            bbctx.next_sp = func.get_sp(bc_pos);
 
-            match self.compile_inst(&mut ir, &mut bb, store, func, bb_pos) {
+            match self.compile_inst(codegen, &mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Exit => return ir,
                 CompileResult::Recompile => {
-                    let pc = func.get_pc(bb_pos);
-                    ir.recompile_and_deopt(&mut bb, pc, position);
+                    let pc = func.get_pc(bc_pos);
+                    ir.recompile_and_deopt(&mut bbctx, pc, position);
                     return ir;
                 }
                 CompileResult::Break => break,
             }
 
-            ir.clear(&mut bb);
-            bb.sp = bb.next_sp;
+            ir.clear(&mut bbctx);
+            bbctx.sp = bbctx.next_sp;
         }
 
         let next_idx = end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
-            let label = self.asm_label();
-            self.new_continue(func, end, next_bbid, bb, label);
+            let label = codegen.jit.label();
+            self.new_continue(func, end, next_bbid, bbctx, label);
             if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
                 self.gen_continuation(&mut ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
@@ -333,6 +312,7 @@ impl JitContext {
 
     fn compile_inst(
         &mut self,
+        codegen: &mut Codegen,
         ir: &mut AsmIr,
         bbctx: &mut BBContext,
         store: &Store,
@@ -676,7 +656,7 @@ impl JitContext {
                 brkind,
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = self.asm_label();
+                let branch_dest = codegen.jit.label();
                 let deopt = ir.new_deopt(bbctx, pc);
                 let mode = ir.fmode(&mode, bbctx, lhs_class, rhs_class, deopt);
                 ir.unlink(bbctx, dst);
@@ -692,7 +672,7 @@ impl JitContext {
                 brkind,
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = self.asm_label();
+                let branch_dest = codegen.jit.label();
                 ir.fetch_fixnum_binary(bbctx, pc, &mode);
                 ir.unlink(bbctx, dst);
                 ir.clear(bbctx);
@@ -708,7 +688,7 @@ impl JitContext {
                 ..
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = self.asm_label();
+                let branch_dest = codegen.jit.label();
                 ir.fetch_binary(bbctx, mode);
                 ir.unlink(bbctx, dst);
                 ir.clear(bbctx);
@@ -930,36 +910,36 @@ impl JitContext {
                 ir.inst.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {
-                self.gen_branch(ir, bbctx, func, bc_pos, dest_idx);
+                self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                 return CompileResult::Exit;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.gen_branch(ir, bbctx, func, bc_pos, dest_idx);
+                        self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Exit;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.gen_branch(ir, bbctx, func, bc_pos, dest_idx);
+                        self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Exit;
                     }
                 } else {
-                    let branch_dest = self.asm_label();
+                    let branch_dest = codegen.jit.label();
                     ir.fetch_to_reg(bbctx, cond_, GP::Rax);
                     ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                     self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
                 }
             }
             TraceIr::NilBr(cond_, dest_idx) => {
-                let branch_dest = self.asm_label();
+                let branch_dest = codegen.jit.label();
                 ir.fetch_to_reg(bbctx, cond_, GP::Rax);
                 ir.inst.push(AsmInst::NilBr(branch_dest));
                 self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => {
-                let branch_dest = self.asm_label();
+                let branch_dest = codegen.jit.label();
                 ir.fetch_to_reg(bbctx, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
                 self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
@@ -973,7 +953,7 @@ impl JitContext {
             } => {
                 let else_idx = dest_bb[0];
                 for bbid in dest_bb {
-                    let branch_dest = self.asm_label();
+                    let branch_dest = codegen.jit.label();
                     self.new_branch(func, bc_pos, bbid, bbctx.clone(), branch_dest);
                 }
                 let deopt = ir.new_deopt(bbctx, pc);
@@ -987,13 +967,14 @@ impl JitContext {
 
     fn gen_branch(
         &mut self,
+        codegen: &mut Codegen,
         ir: &mut AsmIr,
         bb: &mut BBContext,
         func: &ISeqInfo,
         bc_pos: BcIndex,
         dest: BasicBlockId,
     ) {
-        let branch_dest = self.asm_label();
+        let branch_dest = codegen.jit.label();
         ir.inst.push(AsmInst::Br(branch_dest));
         self.new_branch(func, bc_pos, dest, bb.clone(), branch_dest);
     }
@@ -1032,7 +1013,7 @@ struct BranchEntry {
     /// context of the source basic block.
     bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
-    branch_dest: AsmLabel,
+    branch_dest: DestLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
@@ -1138,7 +1119,6 @@ impl BBContext {
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
-            branch_dest: _,
             ..
         } in entries.iter()
         {
@@ -1309,7 +1289,7 @@ impl Codegen {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
         let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = ctx.asm_label();
+        let branch_dest = self.jit.label();
         ctx.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -1330,7 +1310,7 @@ impl Codegen {
 
         let mut bbir = vec![];
         for bbid in bb_begin..=bb_end {
-            let ir = ctx.compile_bb(store, func, position, bbid);
+            let ir = ctx.compile_bb(self, store, func, position, bbid);
             bbir.push((bbid, ir));
         }
 
