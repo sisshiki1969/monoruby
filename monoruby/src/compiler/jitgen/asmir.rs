@@ -456,10 +456,15 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo { recv, .. } = callsite;
+    pub(crate) fn write_back_callargs_and_dst(
+        &mut self,
+        bb: &mut BBContext,
+        callsite: &CallSiteInfo,
+    ) {
+        let CallSiteInfo { recv, dst, .. } = callsite;
         self.write_back_slot(bb, *recv);
         self.write_back_args(bb, callsite);
+        self.unlink(bb, *dst);
     }
 
     fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {

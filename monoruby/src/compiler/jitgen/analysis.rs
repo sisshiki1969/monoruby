@@ -224,8 +224,7 @@ impl JitContext {
                     info.use_range(args, len * 2);
                     info.def(dst);
                 }
-                TraceIr::ArrayIndex { dst, base, idx, .. }
-                | TraceIr::Index { dst, base, idx, .. } => {
+                TraceIr::Index { dst, base, idx, .. } => {
                     info.use_slots(&[base, idx]);
                     info.def(dst);
                 }
@@ -235,8 +234,7 @@ impl JitContext {
                     info.use_slots(&[start, end]);
                     info.def(dst);
                 }
-                TraceIr::ArrayIndexAssign { src, base, idx, .. }
-                | TraceIr::IndexAssign { src, base, idx, .. } => {
+                TraceIr::IndexAssign { src, base, idx, .. } => {
                     info.use_slots(&[src, base, idx]);
                 }
                 TraceIr::ClassDef {
@@ -451,7 +449,7 @@ impl JitContext {
                     info.def(dst);
                 }
                 TraceIr::MethodCall { callid, fid, .. }
-                | TraceIr::MethodCallBlock { callid, fid, .. } => {
+                | TraceIr::MethodCallWithBlock { callid, fid, .. } => {
                     if store[callid].block_fid.is_none()
                         && let Some(fid) = fid
                         && let Some(inline_info) = store.inline_info.get_inline(fid)

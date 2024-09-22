@@ -411,7 +411,6 @@ impl alloc::GC<RValue> for ConstSiteInfo {
 }
 
 impl ConstSiteInfo {
-    //#[cfg(feature = "dump-bc")]
     pub fn format(&self) -> String {
         let ConstSiteInfo {
             name,
@@ -422,12 +421,11 @@ impl ConstSiteInfo {
         } = self;
         let mut const_name = if *toplevel { "::" } else { "" }.to_string();
         for c in prefix {
-            (*c).append_to(&mut const_name);
-            const_name += "::";
+            const_name += &format!("{:?}::", c);
         }
-        (*name).append_to(&mut const_name);
+        const_name += &format!("{:?}", name);
         format!(
-            "{}const[{}]",
+            "{}{}",
             if let Some(base) = base {
                 format!("{:?}::", base)
             } else {
@@ -494,6 +492,55 @@ impl CallSiteInfo {
 
     pub fn object_send_single_splat(&self) -> bool {
         self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
+    }
+
+    pub fn format_args(&self) -> String {
+        let CallSiteInfo {
+            pos_num,
+            splat_pos,
+            kw_pos,
+            kw_args,
+            hash_splat_pos,
+            block_arg,
+            block_fid,
+            args,
+            ..
+        } = self;
+        let mut s = String::new();
+        if *pos_num > 0 {
+            for i in 0..*pos_num {
+                if i > 0 {
+                    s += ",";
+                }
+                if splat_pos.contains(&i) {
+                    s += "*";
+                }
+                s += &format!("{:?}", *args + i);
+            }
+        }
+        for (i, (k, v)) in kw_args.iter().enumerate() {
+            if i > 0 || *pos_num > 0 {
+                s += ",";
+            }
+            s += &format!("{}:{:?}", k, *kw_pos + *v);
+        }
+        for pos in hash_splat_pos.iter() {
+            if s.len() > 0 {
+                s += ",";
+            }
+            s += &format!("**{:?}", pos);
+        }
+        if let Some(block_arg) = block_arg {
+            if s.len() > 0 {
+                s += ",";
+            }
+            s += &format!("&{:?}", block_arg);
+        }
+        s = format!("({})", s);
+        if let Some(block_fid) = block_fid {
+            s += &format!(" {{ {:?} }}", block_fid);
+        }
+        s
     }
 }
 

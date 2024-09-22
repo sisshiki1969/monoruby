@@ -107,7 +107,8 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}{}{}{} {:?} reg_num:{}",
+            "{:?} {}{}{}{} reg_num:{}",
+            self.func_id(),
             if self.is_native() { "NATIVE " } else { "" },
             if self.is_class_def() {
                 "class_def "
@@ -116,7 +117,6 @@ impl std::fmt::Debug for Meta {
             },
             if self.is_simple() { "SIMPLE " } else { "" },
             if self.on_stack() { "stack" } else { "heap" },
-            self.func_id(),
             self.reg_num()
         )
     }
@@ -1012,26 +1012,22 @@ impl FuncInfo {
             "<{}> {file_name}:{line}",
             globals.func_description(func.id()),
         );
-        eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
+        eprintln!(
+            "{:?} local_vars:{} temp:{}",
+            self.data.meta,
+            func.local_num(),
+            func.temp_num
+        );
+        eprintln!("{:?}", func.args);
         eprintln!("{:?}", func.get_exception_map());
         for i in 0..func.bytecode().len() {
-            let trace_ir = func.trace_ir(&globals.store, BcIndex::from(i));
+            let bc_pos = BcIndex::from(i);
+            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
+                eprintln!("{:?}", bbid);
+            };
+            let trace_ir = func.trace_ir(&globals.store, bc_pos);
             if let Some(fmt) = trace_ir.format(&globals.store) {
-                eprint!(
-                    "{}:{:05} [{:02}] ",
-                    if func
-                        .bb_info
-                        .is_bb_head(bytecodegen::BcIndex::from(i))
-                        .is_some()
-                    {
-                        "+"
-                    } else {
-                        " "
-                    },
-                    i,
-                    func.sp[i].0
-                );
-                eprintln!("{}", fmt);
+                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
             };
         }
         eprintln!("------------------------------------");

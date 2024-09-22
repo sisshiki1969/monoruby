@@ -15,8 +15,7 @@ impl AsmIr {
         if recv.is_self() && bb.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_locals(bb);
-            self.write_back_callargs(bb, &store[callid]);
-            self.unlink(bb, dst);
+            self.write_back_callargs_and_dst(bb, &store[callid]);
             self.writeback_acc(bb);
             self.send_not_cached(bb, pc, callid);
             self.rax2acc(bb, dst);

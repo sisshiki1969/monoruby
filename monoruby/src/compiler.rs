@@ -1116,7 +1116,7 @@ impl Globals {
 
         let _sourcemap =
             self.codegen
-                .compile(&self.store, func_id, self_value, position, entry_label);
+                .jit_compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
             let desc = format!("JIT:<{}>", self.func_description(func_id));
