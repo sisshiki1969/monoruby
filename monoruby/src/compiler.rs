@@ -527,7 +527,7 @@ impl Codegen {
         self.push_frame();
         self.set_lfp();
         monoasm!( &mut self.jit,
-            call rax;
+            call rax;   // CALL_SITE
         );
         self.pop_frame();
     }
@@ -1006,7 +1006,7 @@ fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
 }
 
 fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
-    let lebel = jit.get_current_address();
+    let label = jit.get_current_address();
     monoasm! { jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1016,7 +1016,7 @@ fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
             leave;
             ret;
     }
-    lebel
+    label
 }
 
 #[cfg(feature = "profile")]

@@ -233,8 +233,7 @@ impl Globals {
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
-        let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
-        let val = Value::string_from_str(&description);
+        let val = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]",));
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
@@ -245,7 +244,7 @@ impl Globals {
             .join("ruby_version");
         let ruby_version = std::fs::read_to_string(&version_path).unwrap();
 
-        let val = Value::string_from_vec(ruby_version.into_bytes());
+        let val = Value::string(ruby_version);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals

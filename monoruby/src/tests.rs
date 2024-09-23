@@ -216,15 +216,6 @@ fn run_test_main(globals: &mut Globals, code: &str, no_gc: bool) -> Value {
 }
 
 fn run_ruby(globals: &mut Globals, code: &str) -> Value {
-    let ruby_path = dirs::home_dir()
-        .unwrap()
-        .join(".monoruby")
-        .join("ruby_path");
-    let ruby_path = std::fs::read_to_string(&ruby_path)
-        .unwrap()
-        .trim_end()
-        .to_string();
-
     let code = format!(
         r#"
             ____a = ({});
@@ -236,8 +227,8 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let mut tmpfile = NamedTempFile::new().unwrap();
     tmpfile.write_all(code.as_bytes()).unwrap();
 
-    let res = match std::process::Command::new(dbg!(ruby_path))
-        .args([tmpfile.path()])
+    let res = match std::process::Command::new("bash")
+        .args(["-c", &format!("ruby {}", tmpfile.path().to_str().unwrap())])
         .output()
     {
         Ok(output) => String::from_utf8(output.stdout).unwrap(),

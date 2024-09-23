@@ -201,7 +201,7 @@ impl Codegen {
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
-            call [r15 + (FUNCDATA_CODEPTR)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
         }
         self.pop_frame();
         monoasm! { &mut self.jit,

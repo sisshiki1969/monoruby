@@ -119,7 +119,7 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, r14;    // rdx <- lfp
             movq rax, (abs_address);
-            call rax;
+            call rax;   // CALL_SITE
 
             leave;
             ret;

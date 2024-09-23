@@ -589,12 +589,12 @@ impl Codegen {
             }
             None => BasicBlockId(func.bb_info.len() - 1),
         };
-
-        let mut bbir = vec![];
-        for bbid in bb_begin..=bb_end {
-            let ir = ctx.compile_basic_block(self, store, func, position, bbid);
-            bbir.push((bbid, ir));
-        }
+        let bbir: Vec<_> = (bb_begin..=bb_end)
+            .map(|bbid| {
+                let ir = ctx.compile_basic_block(self, store, func, position, bbid);
+                (bbid, ir)
+            })
+            .collect();
 
         ctx.backedge_branches(func);
 
@@ -614,9 +614,8 @@ impl Codegen {
         }
         assert!(ctx.continuation_bridge.is_none());
 
-        let sourcemap = std::mem::take(&mut ctx.sourcemap);
-
         self.jit.finalize();
+
         #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
         {
             self.jit.select_page(0);
@@ -634,7 +633,7 @@ impl Codegen {
         #[cfg(feature = "emit-asm")]
         eprintln!("<== finished compile.");
 
-        sourcemap
+        ctx.sourcemap
     }
 
     #[cfg(feature = "emit-cfg")]

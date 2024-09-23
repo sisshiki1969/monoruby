@@ -297,7 +297,7 @@ impl Codegen {
             match store[callee_fid].get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
-                        call dest;
+                        call dest;  // CALL_SITE
                     }
                 }
                 None => {
@@ -438,7 +438,7 @@ impl Codegen {
     fn call_codeptr(&mut self, codeptr: CodePtr) {
         let src_point = self.jit.get_current_address();
         monoasm! { &mut self.jit,
-            call (codeptr - src_point - 5);
+            call (codeptr - src_point - 5); // CALL_SITE
         }
     }
 
@@ -456,7 +456,7 @@ impl Codegen {
         }
         self.set_lfp();
         monoasm! { &mut self.jit,
-            call [r15 + (FUNCDATA_CODEPTR)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
         }
         let return_addr = self.jit.get_current_address();
         self.pop_frame();

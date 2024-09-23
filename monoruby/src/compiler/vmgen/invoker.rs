@@ -149,7 +149,7 @@ impl Codegen {
             // r15 : &FuncData
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
             movq rdi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };
@@ -490,7 +490,7 @@ impl Codegen {
             // r15 : &FuncData
             // set pc
             movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
             movq rdi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };
