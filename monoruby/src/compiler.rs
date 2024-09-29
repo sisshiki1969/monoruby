@@ -300,27 +300,6 @@ impl Codegen {
         self.return_addr_table.get(&return_addr).cloned()
     }
 
-    pub(crate) fn set_deopt_with_return_addr(
-        &mut self,
-        return_addr: CodePtr,
-        evict: AsmEvict,
-        evict_label: DestLabel,
-    ) {
-        self.asm_return_addr_table.insert(evict, return_addr);
-        self.return_addr_table
-            .insert(return_addr, (None, evict_label));
-    }
-
-    pub(crate) fn set_deopt_patch_point_with_return_addr(
-        &mut self,
-        return_addr: CodePtr,
-        patch_point: CodePtr,
-    ) {
-        self.return_addr_table
-            .entry(return_addr)
-            .and_modify(|e| e.0 = Some(patch_point));
-    }
-
     ///
     /// Check whether *addr* is in VM code or invokers.
     ///

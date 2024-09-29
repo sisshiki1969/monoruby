@@ -903,6 +903,14 @@ impl FuncInfo {
         }
     }
 
+    pub(crate) fn is_native(&self) -> bool {
+        self.meta().is_native()
+    }
+
+    pub(crate) fn get_offset(&self) -> usize {
+        ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * self.total_args() + 8) / 16 * 16
+    }
+
     ///
     /// Get the max number of positional arguments (= required + optional) of this function.
     ///

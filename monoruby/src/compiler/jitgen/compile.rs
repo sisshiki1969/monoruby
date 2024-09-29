@@ -462,58 +462,14 @@ impl JitContext {
                 fid,
                 version,
             } => {
-                if let Some(fid) = fid {
-                    let recv_class = recv_class.unwrap();
-                    if store[callid].block_fid.is_none()
-                        && let Some(info) = store.inline_info.get_inline(fid)
-                    {
-                        let is_simple = store[callid].is_simple();
-                        if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
-                            let f = object_send_splat;
-                            self.gen_inline_call(
-                                ir, store, bbctx, f, fid, callid, recv_class, version, pc,
-                            );
-                        } else if is_simple {
-                            let f = &info.inline_gen;
-                            self.gen_inline_call(
-                                ir, store, bbctx, f, fid, callid, recv_class, version, pc,
-                            );
-                            //}
-                        } else {
-                            if ir
-                                .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
-                                .is_none()
-                            {
-                                return CompileResult::Recompile;
-                            }
-                        }
-                    } else {
-                        if ir
-                            .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
-                            .is_none()
-                        {
-                            return CompileResult::Recompile;
-                        }
-                    }
-                } else {
-                    return CompileResult::Recompile;
+                if let Some(res) =
+                    self.compile_call(ir, store, bbctx, pc, callid, recv_class, fid, version)
+                {
+                    return res;
                 }
             }
             TraceIr::Yield { callid } => {
-                let callinfo = &store[callid];
-                let dst = callinfo.dst;
-                ir.write_back_callargs_and_dst(bbctx, &callinfo);
-                ir.writeback_acc(bbctx);
-                let using_xmm = bbctx.get_using_xmm();
-                let error = ir.new_error(bbctx, pc);
-                let evict = ir.new_evict();
-                ir.inst.push(AsmInst::Yield {
-                    callid,
-                    using_xmm,
-                    error,
-                    evict,
-                });
-                ir.rax2acc(bbctx, dst);
+                ir.gen_yield(store, bbctx, pc, callid);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -680,5 +636,73 @@ impl JitContext {
             }
         }
         CompileResult::Continue
+    }
+
+    fn compile_call(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        bbctx: &mut BBContext,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+        recv_class: Option<ClassId>,
+        fid: Option<FuncId>,
+        version: u32,
+    ) -> Option<CompileResult> {
+        if let Some(fid) = fid {
+            let recv_class = recv_class.unwrap();
+            if store[callid].block_fid.is_none()
+                && let Some(info) = store.inline_info.get_inline(fid)
+            {
+                let is_simple = store[callid].is_simple();
+                if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
+                    let f = object_send_splat;
+                    self.gen_inline_call(ir, store, bbctx, f, fid, callid, recv_class, version, pc);
+                } else if is_simple {
+                    let f = &info.inline_gen;
+                    self.gen_inline_call(ir, store, bbctx, f, fid, callid, recv_class, version, pc);
+                } else {
+                    if ir
+                        .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
+                        .is_none()
+                    {
+                        return Some(CompileResult::Recompile);
+                    }
+                }
+            } else {
+                if ir
+                    .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
+                    .is_none()
+                {
+                    return Some(CompileResult::Recompile);
+                }
+            }
+        } else {
+            return Some(CompileResult::Recompile);
+        }
+        None
+    }
+
+    fn gen_inline_call(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        bb: &mut BBContext,
+        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
+        fid: FuncId,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        version: u32,
+        pc: BytecodePtr,
+    ) {
+        let recv = store[callid].recv;
+        ir.fetch_to_reg(bb, recv, GP::Rdi);
+        let (deopt, error) = ir.new_deopt_error(bb, pc);
+        let using_xmm = bb.get_using_xmm();
+        ir.guard_version(fid, version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !bb.is_class(recv, recv_class) {
+            ir.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+        }
+        f(ir, store, bb, callid, pc);
     }
 }

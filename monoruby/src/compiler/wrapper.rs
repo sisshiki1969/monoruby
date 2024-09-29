@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> DestLabel {
+    pub(crate) fn gen_wrapper(&mut self, kind: &FuncKind, no_jit: bool) -> DestLabel {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         match kind {
@@ -12,9 +12,9 @@ impl Codegen {
                     self.gen_vm_stub()
                 }
             }
-            FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
-            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(ivar_name),
-            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
+            FuncKind::Builtin { abs_address } => self.wrap_native_func(*abs_address),
+            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
+            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
         };
         self.jit.finalize();
         entry

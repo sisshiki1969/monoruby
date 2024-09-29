@@ -414,31 +414,6 @@ impl AsmIr {
     pub(super) fn handle_error(&mut self, error: AsmError) {
         self.inst.push(AsmInst::HandleError(error));
     }
-
-    ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rdx: value: Value
-    ///
-    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BytecodePtr, ivar_id: IvarId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::AttrWriter {
-            using_xmm,
-            error,
-            ivar_id,
-        });
-    }
-
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
-        self.inst.push(AsmInst::AttrReader { ivar_id });
-    }
 }
 
 // write back operations
@@ -484,45 +459,6 @@ impl AsmIr {
 }
 
 impl AsmIr {
-    ///
-    /// ### in
-    /// rdi: receiver: Value
-    ///
-    pub(super) fn send_cached(
-        &mut self,
-        store: &Store,
-        bb: &mut BBContext,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        native: bool,
-        evict: AsmEvict,
-    ) {
-        self.reg_move(GP::Rdi, GP::R13);
-        self.exec_gc(bb.get_register());
-        let using_xmm = bb.get_using_xmm();
-        self.xmm_save(using_xmm);
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        self.set_arguments(bb, caller, callid, callee, pc);
-        self.unlink(bb, caller.dst);
-        self.clear(bb);
-        let error = self.new_error(bb, pc);
-        self.writeback_acc(bb);
-        let offset = ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * callee.total_args() + 8) / 16 * 16;
-        self.inst.push(AsmInst::SendCached {
-            callid,
-            callee_fid,
-            recv_class,
-            native,
-            offset,
-            using_xmm,
-            error,
-            evict,
-        });
-    }
-
     ///
     /// Set positional arguments for callee.
     ///
@@ -593,21 +529,6 @@ impl AsmIr {
             });
             self.handle_error(error);
         }
-    }
-
-    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BytecodePtr, callid: CallSiteId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        let evict = self.new_evict();
-        let self_class = bb.self_value.class();
-        self.inst.push(AsmInst::SendNotCached {
-            self_class,
-            callid,
-            pc,
-            using_xmm,
-            error,
-            evict,
-        });
     }
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BytecodePtr, func: UnaryOpFn) {
@@ -1177,9 +1098,6 @@ pub(super) enum AsmInst {
     AttrReader {
         ivar_id: IvarId,
     },
-    ImmediateEvict {
-        evict: AsmEvict,
-    },
     ///
     /// ### in
     /// - rdi: receiver: Value
@@ -1188,8 +1106,6 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         recv_class: ClassId,
         callee_fid: FuncId,
-        native: bool,
-        offset: usize,
         using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
@@ -1207,6 +1123,9 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: AsmError,
+        evict: AsmEvict,
+    },
+    ImmediateEvict {
         evict: AsmEvict,
     },
     CheckBOP {

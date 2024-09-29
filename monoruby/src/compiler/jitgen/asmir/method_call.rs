@@ -44,6 +44,29 @@ impl AsmIr {
         Some(())
     }
 
+    pub(in crate::compiler::jitgen) fn gen_yield(
+        &mut self,
+        store: &Store,
+        bbctx: &mut BBContext,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+    ) {
+        let callinfo = &store[callid];
+        let dst = callinfo.dst;
+        self.write_back_callargs_and_dst(bbctx, &callinfo);
+        self.writeback_acc(bbctx);
+        let using_xmm = bbctx.get_using_xmm();
+        let error = self.new_error(bbctx, pc);
+        let evict = self.new_evict();
+        self.inst.push(AsmInst::Yield {
+            callid,
+            using_xmm,
+            error,
+            evict,
+        });
+        self.rax2acc(bbctx, dst);
+    }
+
     ///
     /// generate JIT code for a method call which was cached.
     ///
@@ -87,18 +110,88 @@ impl AsmIr {
                 self.fetch_to_reg(bb, args, GP::Rdx);
                 self.attr_writer(bb, pc, ivar_id);
             }
-            FuncKind::Builtin { .. } => {
+            FuncKind::Builtin { .. } | FuncKind::ISeq(_) => {
                 let evict = self.new_evict();
-                self.send_cached(store, bb, pc, callid, fid, recv_class, true, evict);
-                return Some(Some(evict));
-            }
-            FuncKind::ISeq(_) => {
-                let evict = self.new_evict();
-                self.send_cached(store, bb, pc, callid, fid, recv_class, false, evict);
+                self.send_cached(store, bb, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
             }
         };
         Some(None)
+    }
+
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    fn send_cached(
+        &mut self,
+        store: &Store,
+        bb: &mut BBContext,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+        evict: AsmEvict,
+    ) {
+        self.reg_move(GP::Rdi, GP::R13);
+        self.exec_gc(bb.get_register());
+        let using_xmm = bb.get_using_xmm();
+        self.xmm_save(using_xmm);
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
+        self.set_arguments(bb, caller, callid, callee, pc);
+        self.unlink(bb, caller.dst);
+        self.clear(bb);
+        let error = self.new_error(bb, pc);
+        self.writeback_acc(bb);
+        self.inst.push(AsmInst::SendCached {
+            callid,
+            callee_fid,
+            recv_class,
+            using_xmm,
+            error,
+            evict,
+        });
+    }
+
+    fn send_not_cached(&mut self, bb: &BBContext, pc: BytecodePtr, callid: CallSiteId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        let evict = self.new_evict();
+        let self_class = bb.self_value.class();
+        self.inst.push(AsmInst::SendNotCached {
+            self_class,
+            callid,
+            pc,
+            using_xmm,
+            error,
+            evict,
+        });
+    }
+
+    ///
+    /// Attribute writer
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    /// - rdx: value: Value
+    ///
+    fn attr_writer(&mut self, bb: &BBContext, pc: BytecodePtr, ivar_id: IvarId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb, pc);
+        self.inst.push(AsmInst::AttrWriter {
+            using_xmm,
+            error,
+            ivar_id,
+        });
+    }
+
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    fn attr_reader(&mut self, ivar_id: IvarId) {
+        self.inst.push(AsmInst::AttrReader { ivar_id });
     }
 }
 

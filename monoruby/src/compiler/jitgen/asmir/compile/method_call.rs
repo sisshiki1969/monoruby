@@ -44,9 +44,7 @@ impl Codegen {
             addq rsp, (offset);
         }
     }
-}
 
-impl Codegen {
     ///
     /// generate JIT code for a method call which was not cached.
     ///
@@ -274,8 +272,6 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        native: bool,
-        offset: usize,
         using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
@@ -285,16 +281,17 @@ impl Codegen {
         self.setup_frame(meta, caller);
         self.copy_keyword_args(caller, callee);
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            let offset = callee.get_offset();
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
         self.set_lfp();
         self.push_frame();
 
-        if native {
+        if callee.is_native() {
             self.call_codeptr(codeptr)
         } else {
-            match store[callee_fid].get_jit_code(recv_class) {
+            match callee.get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE
@@ -371,9 +368,7 @@ impl Codegen {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: DestLabel,
-        deopt_lazy: AsmEvict,
-        deopt: DestLabel,
-    ) {
+    ) -> CodePtr {
         self.xmm_save(using_xmm);
         self.get_proc_data();
         self.handle_error(error);
@@ -407,7 +402,7 @@ impl Codegen {
         let return_addr = self.generic_call(callid, store[callid].args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
-        self.set_deopt_with_return_addr(return_addr, deopt_lazy, deopt);
+        return_addr
     }
 
     ///

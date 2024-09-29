@@ -292,7 +292,9 @@ impl Codegen {
             AsmInst::ImmediateEvict { evict } => {
                 let patch_point = self.jit.get_current_address();
                 let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
-                self.set_deopt_patch_point_with_return_addr(*return_addr, patch_point);
+                self.return_addr_table
+                    .entry(*return_addr)
+                    .and_modify(|e| e.0 = Some(patch_point));
             }
             AsmInst::AttrWriter {
                 ivar_id,
@@ -308,16 +310,13 @@ impl Codegen {
                 callid,
                 callee_fid,
                 recv_class,
-                native,
-                offset,
                 using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.send_cached(
-                    store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
-                );
+                let return_addr =
+                    self.send_cached(store, callid, callee_fid, recv_class, using_xmm, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendNotCached {
@@ -340,7 +339,8 @@ impl Codegen {
                 evict,
             } => {
                 let error = labels[error];
-                self.gen_yield(store, callid, using_xmm, error, evict, labels[evict]);
+                let return_addr = self.gen_yield(store, callid, using_xmm, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 
             AsmInst::Not => {
@@ -672,6 +672,17 @@ impl Codegen {
 
             AsmInst::Inline(proc) => (proc.proc)(self, labels),
         }
+    }
+
+    fn set_deopt_with_return_addr(
+        &mut self,
+        return_addr: CodePtr,
+        evict: AsmEvict,
+        evict_label: DestLabel,
+    ) {
+        self.asm_return_addr_table.insert(evict, return_addr);
+        self.return_addr_table
+            .insert(return_addr, (None, evict_label));
     }
 
     ///

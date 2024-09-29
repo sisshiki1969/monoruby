@@ -260,29 +260,6 @@ impl JitContext {
         ir.inst.push(AsmInst::Br(branch_dest));
         self.new_branch(func, bc_pos, dest, bb.clone(), branch_dest);
     }
-
-    fn gen_inline_call(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        bb: &mut BBContext,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
-        fid: FuncId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-        pc: BytecodePtr,
-    ) {
-        let recv = store[callid].recv;
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(bb, pc);
-        let using_xmm = bb.get_using_xmm();
-        ir.guard_version(fid, version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !bb.is_class(recv, recv_class) {
-            ir.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
-        }
-        f(ir, store, bb, callid, pc);
-    }
 }
 
 ///
