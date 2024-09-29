@@ -1,50 +1,42 @@
 use super::*;
 
 impl AsmIr {
-    pub(in crate::compiler::jitgen) fn gen_call(
+    pub(in crate::compiler::jitgen) fn compile_call(
         &mut self,
         store: &Store,
-        bb: &mut BBContext,
-        fid: FuncId,
-        recv_class: ClassId,
-        version: u32,
-        callid: CallSiteId,
+        bbctx: &mut BBContext,
         pc: BytecodePtr,
-    ) -> Option<()> {
-        let CallSiteInfo { dst, recv, .. } = store[callid];
-        if recv.is_self() && bb.self_value.class() != recv_class {
-            // the inline method cache is invalid because the receiver class is not matched.
-            self.write_back_locals(bb);
-            self.write_back_callargs_and_dst(bb, &store[callid]);
-            self.writeback_acc(bb);
-            self.send_not_cached(bb, pc, callid);
-            self.rax2acc(bb, dst);
+        callid: CallSiteId,
+        recv_class: Option<ClassId>,
+        fid: Option<FuncId>,
+        version: u32,
+    ) -> CompileResult {
+        if let Some(fid) = fid {
+            let recv_class = recv_class.unwrap();
+            if store[callid].block_fid.is_none()
+                && let Some(info) = store.inline_info.get_inline(fid)
+            {
+                let is_simple = store[callid].is_simple();
+                if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
+                    let f = object_send_splat;
+                    self.inline_call(store, bbctx, f, fid, callid, recv_class, version, pc);
+                    CompileResult::Continue
+                } else if is_simple {
+                    let f = &info.inline_gen;
+                    self.inline_call(store, bbctx, f, fid, callid, recv_class, version, pc);
+                    CompileResult::Continue
+                } else {
+                    self.call(store, bbctx, fid, recv_class, version, callid, pc)
+                }
+            } else {
+                self.call(store, bbctx, fid, recv_class, version, callid, pc)
+            }
         } else {
-            // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
-            if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
-                self.write_back_locals(bb);
-            }
-            self.fetch_to_reg(bb, recv, GP::Rdi);
-            let (deopt, error) = self.new_deopt_error(bb, pc);
-            let using_xmm = bb.get_using_xmm();
-            self.guard_version(fid, version, callid, using_xmm, deopt, error);
-            // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-            // Thus, we can omit a class guard.
-            if !recv.is_self() && !bb.is_class(recv, recv_class) {
-                self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
-            }
-            let evict = self.gen_call_cached(store, bb, callid, fid, recv_class, pc)?;
-            self.rax2acc(bb, dst);
-            if let Some(evict) = evict {
-                self.inst.push(AsmInst::ImmediateEvict { evict });
-                self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
-            }
+            CompileResult::Recompile
         }
-
-        Some(())
     }
 
-    pub(in crate::compiler::jitgen) fn gen_yield(
+    pub(in crate::compiler::jitgen) fn compile_yield(
         &mut self,
         store: &Store,
         bbctx: &mut BBContext,
@@ -67,13 +59,81 @@ impl AsmIr {
         self.rax2acc(bbctx, dst);
     }
 
+    fn call(
+        &mut self,
+        store: &Store,
+        bb: &mut BBContext,
+        fid: FuncId,
+        recv_class: ClassId,
+        version: u32,
+        callid: CallSiteId,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        let CallSiteInfo { dst, recv, .. } = store[callid];
+        if recv.is_self() && bb.self_value.class() != recv_class {
+            // the inline method cache is invalid because the receiver class is not matched.
+            self.write_back_locals(bb);
+            self.write_back_callargs_and_dst(bb, &store[callid]);
+            self.writeback_acc(bb);
+            self.send_not_cached(bb, pc, callid);
+            self.rax2acc(bb, dst);
+        } else {
+            // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
+            if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
+                self.write_back_locals(bb);
+            }
+            self.fetch_to_reg(bb, recv, GP::Rdi);
+            let (deopt, error) = self.new_deopt_error(bb, pc);
+            let using_xmm = bb.get_using_xmm();
+            self.guard_version(fid, version, callid, using_xmm, deopt, error);
+            // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+            // Thus, we can omit a class guard.
+            if !recv.is_self() && !bb.is_class(recv, recv_class) {
+                self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+            }
+            if let Some(evict) = self.call_cached(store, bb, callid, fid, recv_class, pc) {
+                self.rax2acc(bb, dst);
+                if let Some(evict) = evict {
+                    self.inst.push(AsmInst::ImmediateEvict { evict });
+                    self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
+                }
+            } else {
+                return CompileResult::Recompile;
+            }
+        }
+
+        CompileResult::Continue
+    }
+
+    fn inline_call(
+        &mut self,
+        store: &Store,
+        bb: &mut BBContext,
+        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
+        fid: FuncId,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        version: u32,
+        pc: BytecodePtr,
+    ) {
+        let recv = store[callid].recv;
+        self.fetch_to_reg(bb, recv, GP::Rdi);
+        let (deopt, error) = self.new_deopt_error(bb, pc);
+        let using_xmm = bb.get_using_xmm();
+        self.guard_version(fid, version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !bb.is_class(recv, recv_class) {
+            self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+        }
+        f(self, store, bb, callid, pc);
+    }
+
     ///
     /// generate JIT code for a method call which was cached.
     ///
     /// ### in
     /// - rdi: receiver: Value
     ///
-    fn gen_call_cached(
+    fn call_cached(
         &mut self,
         store: &Store,
         bb: &mut BBContext,

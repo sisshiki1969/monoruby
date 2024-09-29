@@ -447,7 +447,6 @@ impl JitContext {
                 ir.expand_array(bbctx, dst, len);
             }
             TraceIr::AliasMethod { new, old } => {
-                //ir.write_back_slots(bb, &[new, old]);
                 ir.alias_method(bbctx, pc, new, old);
             }
             TraceIr::MethodCall {
@@ -461,15 +460,9 @@ impl JitContext {
                 recv_class,
                 fid,
                 version,
-            } => {
-                if let Some(res) =
-                    self.compile_call(ir, store, bbctx, pc, callid, recv_class, fid, version)
-                {
-                    return res;
-                }
-            }
+            } => return ir.compile_call(store, bbctx, pc, callid, recv_class, fid, version),
             TraceIr::Yield { callid } => {
-                ir.gen_yield(store, bbctx, pc, callid);
+                ir.compile_yield(store, bbctx, pc, callid);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -499,7 +492,7 @@ impl JitContext {
                 name,
                 func_id,
             } => {
-                self.class_def(ir, bbctx, dst, base, superclass, name, func_id, false, pc);
+                ir.class_def(bbctx, dst, base, superclass, name, func_id, false, pc);
             }
             TraceIr::ModuleDef {
                 dst,
@@ -507,10 +500,10 @@ impl JitContext {
                 name,
                 func_id,
             } => {
-                self.class_def(ir, bbctx, dst, base, None, name, func_id, true, pc);
+                ir.class_def(bbctx, dst, base, None, name, func_id, true, pc);
             }
             TraceIr::SingletonClassDef { dst, base, func_id } => {
-                self.singleton_class_def(ir, bbctx, dst, base, func_id, pc);
+                ir.singleton_class_def(bbctx, dst, base, func_id, pc);
             }
             TraceIr::DefinedYield { dst } => {
                 ir.write_back_slots(bbctx, &[dst]);
@@ -583,18 +576,18 @@ impl JitContext {
                 ir.inst.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {
-                self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
+                self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                 return CompileResult::Exit;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
+                        self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Exit;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.gen_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
+                        self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Exit;
                     }
                 } else {
@@ -638,71 +631,17 @@ impl JitContext {
         CompileResult::Continue
     }
 
-    fn compile_call(
+    fn compile_branch(
         &mut self,
+        codegen: &mut Codegen,
         ir: &mut AsmIr,
-        store: &Store,
         bbctx: &mut BBContext,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        recv_class: Option<ClassId>,
-        fid: Option<FuncId>,
-        version: u32,
-    ) -> Option<CompileResult> {
-        if let Some(fid) = fid {
-            let recv_class = recv_class.unwrap();
-            if store[callid].block_fid.is_none()
-                && let Some(info) = store.inline_info.get_inline(fid)
-            {
-                let is_simple = store[callid].is_simple();
-                if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
-                    let f = object_send_splat;
-                    self.gen_inline_call(ir, store, bbctx, f, fid, callid, recv_class, version, pc);
-                } else if is_simple {
-                    let f = &info.inline_gen;
-                    self.gen_inline_call(ir, store, bbctx, f, fid, callid, recv_class, version, pc);
-                } else {
-                    if ir
-                        .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
-                        .is_none()
-                    {
-                        return Some(CompileResult::Recompile);
-                    }
-                }
-            } else {
-                if ir
-                    .gen_call(store, bbctx, fid, recv_class, version, callid, pc)
-                    .is_none()
-                {
-                    return Some(CompileResult::Recompile);
-                }
-            }
-        } else {
-            return Some(CompileResult::Recompile);
-        }
-        None
-    }
-
-    fn gen_inline_call(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        bb: &mut BBContext,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
-        fid: FuncId,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
-        pc: BytecodePtr,
+        func: &ISeqInfo,
+        bc_pos: BcIndex,
+        dest: BasicBlockId,
     ) {
-        let recv = store[callid].recv;
-        ir.fetch_to_reg(bb, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(bb, pc);
-        let using_xmm = bb.get_using_xmm();
-        ir.guard_version(fid, version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !bb.is_class(recv, recv_class) {
-            ir.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
-        }
-        f(ir, store, bb, callid, pc);
+        let branch_dest = codegen.jit.label();
+        ir.inst.push(AsmInst::Br(branch_dest));
+        self.new_branch(func, bc_pos, dest, bbctx.clone(), branch_dest);
     }
 }

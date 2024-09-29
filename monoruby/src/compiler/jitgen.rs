@@ -246,20 +246,6 @@ impl JitContext {
             },
         );
     }
-
-    fn gen_branch(
-        &mut self,
-        codegen: &mut Codegen,
-        ir: &mut AsmIr,
-        bb: &mut BBContext,
-        func: &ISeqInfo,
-        bc_pos: BcIndex,
-        dest: BasicBlockId,
-    ) {
-        let branch_dest = codegen.jit.label();
-        ir.inst.push(AsmInst::Br(branch_dest));
-        self.new_branch(func, bc_pos, dest, bb.clone(), branch_dest);
-    }
 }
 
 ///
