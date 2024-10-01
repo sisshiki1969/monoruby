@@ -443,14 +443,14 @@ impl Codegen {
     ///
     fn call_funcdata(&mut self) -> CodePtr {
         monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
             // push cfp
             lea  rsi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rsi;
         }
         self.set_lfp();
         monoasm! { &mut self.jit,
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
             call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
         }
         let return_addr = self.jit.get_current_address();

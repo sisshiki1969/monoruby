@@ -441,7 +441,7 @@ impl RValue {
 
     fn object_debug(&self, store: &Store) -> String {
         if let Some(name) = self.get_ivar(store, IdentId::_NAME) {
-            name.debug(store)
+            name.debug_tos(store)
         } else {
             format!(
                 "#<{}:0x{:016x}>",

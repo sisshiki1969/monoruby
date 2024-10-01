@@ -385,7 +385,7 @@ impl Codegen {
         );
     }
 
-    fn restore_lbp(&mut self) {
+    fn restore_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // restore lfp
             movq r14, [rbp - (BP_CFP + CFP_LFP)];
@@ -399,7 +399,7 @@ impl Codegen {
             lea  r14, [rbp - (BP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], r14;
         );
-        self.restore_lbp();
+        self.restore_lfp();
     }
 
     ///

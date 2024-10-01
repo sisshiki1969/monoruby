@@ -648,7 +648,9 @@ impl Codegen {
             for bc in begin..=end {
                 if let Some(inst) = func.trace_ir(store, bc).format(store) {
                     s += "|";
-                    let html = html_escape::encode_text(&inst).replace('|', "\\|");
+                    let html = html_escape::encode_text(&inst)
+                        .replace('|', "\\|")
+                        .replace('"', "\\\"");
                     s += &format!("{} {}\\l", bc, html);
                 }
             }

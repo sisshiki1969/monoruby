@@ -195,12 +195,12 @@ impl Codegen {
             self.vm_handle_error();
         }
         monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
         }
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
             call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
         }
         self.pop_frame();
