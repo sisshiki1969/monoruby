@@ -908,7 +908,7 @@ impl FuncInfo {
     }
 
     pub(crate) fn get_offset(&self) -> usize {
-        ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * self.total_args() + 8) / 16 * 16
+        ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * self.total_args() + 8) & !0xf
     }
 
     ///

@@ -197,10 +197,8 @@ impl AsmIr {
         self.exec_gc(bb.get_register());
         let using_xmm = bb.get_using_xmm();
         self.xmm_save(using_xmm);
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        self.set_arguments(bb, caller, callid, callee, pc);
-        self.unlink(bb, caller.dst);
+        self.set_arguments(store, bb, callid, callee_fid, pc);
+        self.unlink(bb, store[callid].dst);
         self.clear(bb);
         let error = self.new_error(bb, pc);
         self.writeback_acc(bb);

@@ -779,7 +779,6 @@ impl Codegen {
     /// - r15: &FuncData
     /// - rdx: src: *const Value
     /// - r8: CallsiteId
-    /// - r9: arg_num
     ///
     /// ### out
     /// - rax: arg_num: Value

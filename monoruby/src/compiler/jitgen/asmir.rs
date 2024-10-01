@@ -464,12 +464,14 @@ impl AsmIr {
     ///
     fn set_arguments(
         &mut self,
+        store: &Store,
         bb: &mut BBContext,
-        caller: &CallSiteInfo,
         callid: CallSiteId,
-        callee: &FuncInfo,
+        callee_fid: FuncId,
         pc: BytecodePtr,
     ) {
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
         let args = caller.args;
         let pos_num = caller.pos_num;
         let kw_pos = caller.kw_pos;
@@ -486,8 +488,6 @@ impl AsmIr {
         {
             // write back keyword arguments.
             for arg in kw_pos..kw_pos + kw_num {
-                //assert_eq!(kw_pos, args + pos_num);
-                //assert_eq!(kw_pos + kw_num, args + caller.len);
                 self.write_back_slot(bb, arg);
             }
             // write back block argument.
@@ -496,7 +496,7 @@ impl AsmIr {
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
             {
-                (RSP_STACK_LFP + LFP_ARG0 + (8 * pos_num) as i32 + 8) / 16 * 16
+                (RSP_STACK_LFP + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
             } else {
                 0
             };
@@ -517,16 +517,9 @@ impl AsmIr {
             self.reg_add(GP::Rsp, ofs);
         } else {
             self.write_back_args(bb, caller);
-            let meta = callee.meta();
-            let offset =
-                ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * callee.max_positional_args() + 8) & !0xf;
+
             let error = self.new_error(bb, pc);
-            self.inst.push(AsmInst::SetArguments {
-                callid,
-                args,
-                meta,
-                offset,
-            });
+            self.inst.push(AsmInst::SetArguments { callid, callee_fid });
             self.handle_error(error);
         }
     }
@@ -1072,9 +1065,7 @@ pub(super) enum AsmInst {
     ///
     SetArguments {
         callid: CallSiteId,
-        args: SlotId,
-        meta: Meta,
-        offset: usize,
+        callee_fid: FuncId,
     },
 
     ///
@@ -1099,8 +1090,14 @@ pub(super) enum AsmInst {
         ivar_id: IvarId,
     },
     ///
+    /// Send cached method
+    ///
     /// ### in
     /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - r15
     ///
     SendCached {
         callid: CallSiteId,
@@ -1110,6 +1107,13 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
+    ///
+    /// Send non-cached method
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - r15
+    ///
     SendNotCached {
         callid: CallSiteId,
         self_class: ClassId,

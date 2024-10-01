@@ -195,12 +195,10 @@ impl Codegen {
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
-            AsmInst::SetArguments {
-                callid,
-                args,
-                meta,
-                offset,
-            } => {
+            AsmInst::SetArguments { callid, callee_fid } => {
+                let meta = store[callee_fid].meta();
+                let offset = store[callee_fid].get_offset();
+                let args = store[callid].args;
                 self.jit_set_arguments(callid, args, offset, meta);
             }
 

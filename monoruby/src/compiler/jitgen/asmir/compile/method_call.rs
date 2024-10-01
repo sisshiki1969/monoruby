@@ -58,9 +58,6 @@ impl Codegen {
         error: DestLabel,
     ) -> CodePtr {
         let callsite = &store[callid];
-        // argument registers:
-        //   rdi: args len
-        //
         let resolved = self.jit.label();
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
@@ -509,6 +506,15 @@ impl Codegen {
         self.handle_error(error);
     }
 
+    ///
+    /// Invoke method.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    /// ### out
+    /// - rax: return value
+    ///
     fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) -> CodePtr {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
