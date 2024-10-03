@@ -193,10 +193,16 @@ pub(crate) enum TraceIr {
 
     /// return(%src)
     Ret(SlotId),
+    ///
+    /// Return from method.
+    ///
     /// method_return(%src)
     MethodRet(SlotId),
-    /// method_return(%src)
-    Break(SlotId),
+    ///
+    /// Break from block.
+    ///
+    /// break(%src)
+    BlockBreak(SlotId),
     /// raise(%src)
     Raise(SlotId),
     /// ensure_end
@@ -327,7 +333,10 @@ impl<'a> DefKind<'a> {
 impl TraceIr {
     pub(crate) fn get_exit_type(&self) -> Option<ExitType> {
         match self {
-            TraceIr::Ret(..) | TraceIr::MethodRet(..) | TraceIr::Break(..) | TraceIr::Raise(..) => {
+            TraceIr::Ret(..)
+            | TraceIr::MethodRet(..)
+            | TraceIr::BlockBreak(..)
+            | TraceIr::Raise(..) => {
                 return Some(ExitType::Return);
             }
             TraceIr::Br(_)
@@ -789,7 +798,7 @@ impl TraceIr {
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
-            TraceIr::Break(reg) => format!("break {:?}", reg),
+            TraceIr::BlockBreak(reg) => format!("break {:?}", reg),
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),

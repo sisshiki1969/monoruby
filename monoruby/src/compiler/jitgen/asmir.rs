@@ -1016,7 +1016,7 @@ pub(super) enum AsmInst {
     GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,
-    Break,
+    BlockBreak,
     Raise,
     MethodRet(BytecodePtr),
     EnsureEnd,
@@ -1477,7 +1477,7 @@ impl AsmInst {
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
             Self::Ret => "ret".to_string(),
-            Self::Break => "break".to_string(),
+            Self::BlockBreak => "break".to_string(),
             Self::Raise => "raise".to_string(),
             Self::MethodRet(_pc) => format!("method_return"),
             Self::EnsureEnd => "ensure_end".to_string(),

@@ -211,7 +211,7 @@ impl Codegen {
                 };
                 self.method_return();
             }
-            AsmInst::Break => {
+            AsmInst::BlockBreak => {
                 self.block_break();
                 self.epilogue();
             }

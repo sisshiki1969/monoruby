@@ -180,7 +180,7 @@ pub(super) enum BytecodeInst {
     },
     Ret(BcReg),
     MethodRet(BcReg),
-    Break(BcReg),
+    BlockBreak(BcReg),
     Raise(BcReg),
     EnsureEnd,
     MethodCall(Box<CallSite>),
@@ -256,7 +256,7 @@ impl BytecodeInst {
             Self::Br(_)
             | Self::Ret(_)
             | Self::MethodRet(_)
-            | Self::Break(_)
+            | Self::BlockBreak(_)
             | Self::Raise(_)
             | Self::OptCase { .. } => true,
             _ => false,

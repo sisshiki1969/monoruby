@@ -470,7 +470,7 @@ impl JitContext {
                 TraceIr::InlineCache => {}
                 TraceIr::Ret(src)
                 | TraceIr::MethodRet(src)
-                | TraceIr::Break(src)
+                | TraceIr::BlockBreak(src)
                 | TraceIr::Raise(src) => {
                     info.r#use(src);
                 }

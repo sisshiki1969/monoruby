@@ -206,7 +206,7 @@ impl BytecodeGen {
                 // terminal inst.
                 Bytecode::from(enc_w(81, op1.0))
             }
-            BytecodeInst::Break(reg) => {
+            BytecodeInst::BlockBreak(reg) => {
                 // 82
                 let op1 = self.slot_id(&reg);
                 // terminal inst.

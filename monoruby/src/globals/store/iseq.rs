@@ -586,7 +586,7 @@ impl ISeqInfo {
                 },
                 80 => TraceIr::Ret(SlotId::new(op1_w1)),
                 81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
-                82 => TraceIr::Break(SlotId::new(op1_w1)),
+                82 => TraceIr::BlockBreak(SlotId::new(op1_w1)),
                 83 => TraceIr::Raise(SlotId::new(op1_w1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),

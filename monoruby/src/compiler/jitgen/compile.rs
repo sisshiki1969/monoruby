@@ -29,13 +29,13 @@ impl JitContext {
 
             match self.compile_instruction(codegen, &mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Exit => return ir,
+                CompileResult::Branch => return ir,
                 CompileResult::Recompile => {
                     let pc = func.get_pc(bc_pos);
                     ir.recompile_and_deopt(&mut bbctx, pc, position);
                     return ir;
                 }
-                CompileResult::Break => break,
+                CompileResult::ExitLoop => break,
             }
 
             ir.clear(&mut bbctx);
@@ -77,7 +77,7 @@ impl JitContext {
                 self.loop_count -= 1;
                 if self.is_loop && self.loop_count == 0 {
                     ir.deopt(bbctx, pc);
-                    return CompileResult::Break;
+                    return CompileResult::ExitLoop;
                 }
             }
             TraceIr::Integer(dst, i) => {
@@ -551,25 +551,25 @@ impl JitContext {
                 ir.write_back_locals(bbctx);
                 ir.fetch_to_reg(bbctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::Ret);
-                return CompileResult::Exit;
+                return CompileResult::Branch;
             }
             TraceIr::MethodRet(ret) => {
                 ir.write_back_locals(bbctx);
                 ir.fetch_to_reg(bbctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::MethodRet(pc));
-                return CompileResult::Exit;
+                return CompileResult::Branch;
             }
-            TraceIr::Break(ret) => {
+            TraceIr::BlockBreak(ret) => {
                 ir.write_back_locals(bbctx);
                 ir.fetch_to_reg(bbctx, ret, GP::Rax);
-                ir.inst.push(AsmInst::Break);
-                return CompileResult::Exit;
+                ir.inst.push(AsmInst::BlockBreak);
+                return CompileResult::Branch;
             }
             TraceIr::Raise(ret) => {
                 ir.write_back_locals(bbctx);
                 ir.fetch_to_reg(bbctx, ret, GP::Rax);
                 ir.inst.push(AsmInst::Raise);
-                return CompileResult::Exit;
+                return CompileResult::Branch;
             }
             TraceIr::EnsureEnd => {
                 ir.write_back_locals(bbctx);
@@ -577,18 +577,18 @@ impl JitContext {
             }
             TraceIr::Br(dest_idx) => {
                 self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
-                return CompileResult::Exit;
+                return CompileResult::Branch;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
                         self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
-                        return CompileResult::Exit;
+                        return CompileResult::Branch;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
                         self.compile_branch(codegen, ir, bbctx, func, bc_pos, dest_idx);
-                        return CompileResult::Exit;
+                        return CompileResult::Branch;
                     }
                 } else {
                     let branch_dest = codegen.jit.label();
@@ -625,7 +625,7 @@ impl JitContext {
                 let deopt = ir.new_deopt(bbctx, pc);
                 ir.fetch_guard_fixnum(bbctx, cond, GP::Rdi, deopt);
                 ir.opt_case(max, min, else_idx, branch_table);
-                return CompileResult::Exit;
+                return CompileResult::Branch;
             }
         }
         CompileResult::Continue

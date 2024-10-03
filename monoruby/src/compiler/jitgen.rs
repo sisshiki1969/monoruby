@@ -44,10 +44,17 @@ impl ContinuationInfo {
     }
 }
 
+///
+/// Compile result of the current instruction.
+///
 enum CompileResult {
+    /// continue to the next instruction.
     Continue,
-    Break,
-    Exit,
+    /// exit from the loop.
+    ExitLoop,
+    /// jump to another basic block.
+    Branch,
+    /// deoptimize and fallback to the interpreter.
     Recompile,
 }
 
