@@ -36,7 +36,7 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (callid.get());
             lea  rcx, [r14 - (conv(args))];
-            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
+            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
             movq r9, (meta.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
@@ -100,7 +100,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
             xorq rax, rax;
@@ -381,7 +381,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
             lea  rax, [rdi - (LFP_OUTER)];
@@ -472,12 +472,12 @@ impl Codegen {
                     let caller_ofs = (kw_pos.0 as i32 + *caller as i32) * 8 + LFP_SELF;
                     monoasm! { &mut self.jit,
                         movq  rax, [r14 - (caller_ofs)];
-                        movq  [rsp - (RSP_STACK_LFP + callee_ofs)], rax;
+                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], rax;
                     }
                 }
                 None => {
                     monoasm! { &mut self.jit,
-                        movq  [rsp - (RSP_STACK_LFP + callee_ofs)], 0;
+                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], 0;
                     }
                 }
             }
@@ -497,7 +497,7 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movl rdx, (callid.get());
             movq rcx, (meta.get());
-            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
+            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
             subq rsp, (offset);
             movq rax, (jit_handle_hash_splat_kw_rest);
             call rax;
@@ -662,7 +662,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
             xorq rax, rax;
@@ -769,7 +769,7 @@ impl Codegen {
             cmpw  rax, (pos_num - 1);
             jne  arg_error;
             lea  rdi, [r14 - (conv(args + 1usize))];
-            lea  rdx, [rsp - (RSP_STACK_LFP + LFP_ARG0)];
+            lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
             movq r8, (pos_num);
             // src: rdi, dst: rdx
         loop0:

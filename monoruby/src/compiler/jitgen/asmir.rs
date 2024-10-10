@@ -496,7 +496,7 @@ impl AsmIr {
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
             {
-                (RSP_STACK_LFP + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
+                (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
             } else {
                 0
             };
@@ -504,13 +504,13 @@ impl AsmIr {
             self.reg_sub(GP::Rsp, ofs);
             for i in 0..pos_num {
                 let reg = args + i;
-                let offset = ofs - (RSP_STACK_LFP + LFP_ARG0 + (8 * i) as i32);
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                 self.fetch_to_rsp_offset(bb, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
                 for i in pos_num..callee.max_positional_args() {
-                    let offset = ofs - (RSP_STACK_LFP + LFP_ARG0 as i32 + (8 * i) as i32);
+                    let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
                     self.reg2rsp_offset(GP::Rax, offset);
                 }
             }

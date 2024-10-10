@@ -62,7 +62,12 @@ impl FuncData {
 
     fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
-        self.ofs = ((reg_num as usize * 8 + LFP_SELF as usize + 15) >> 4) as u16;
+        self.set_offset(reg_num);
+    }
+
+    fn set_offset(&mut self, reg_num: u16) {
+        self.ofs =
+            ((reg_num as usize * 8 + (RSP_LOCAL_FRAME + LFP_SELF) as usize + 31) / 16) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -661,17 +666,18 @@ impl FuncInfo {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.reqopt_num() as u16;
-        let ofs = ((max as usize * 8 + LFP_ARG0 as usize + 15) >> 4) as u16;
+        let mut data = FuncData {
+            codeptr: None,
+            pc: None,
+            meta,
+            ofs: 0,
+            min,
+            max,
+            _padding: [0; 4],
+        };
+        data.set_offset(max);
         Self {
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta,
-                ofs,
-                min,
-                max,
-                _padding: [0; 4],
-            },
+            data,
             kind,
             ext: Box::new(FuncExt {
                 name,
@@ -908,7 +914,7 @@ impl FuncInfo {
     }
 
     pub(crate) fn get_offset(&self) -> usize {
-        ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * self.total_args() + 8) & !0xf
+        ((RSP_LOCAL_FRAME + LFP_ARG0) as usize + 8 * self.total_args() + 8) & !0xf
     }
 
     ///

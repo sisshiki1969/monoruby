@@ -11,6 +11,8 @@
       "cargo": {
         "args": [
           "run",
+          "--features",
+          "no-startup",
           "--bin=monoruby",
           "--package=monoruby",
         ],

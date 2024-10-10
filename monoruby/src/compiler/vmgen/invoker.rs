@@ -336,7 +336,7 @@ impl Codegen {
         if invoke_block {
             monoasm! { &mut self.jit,
                 // set block
-                movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], 0;
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
                 movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
                 movl rdx, [rdx + (PROCINNER_FUNCID)];    // rdx <- FuncId
             };
@@ -353,16 +353,16 @@ impl Codegen {
             self.get_func_data();
             monoasm! { &mut self.jit,
                 // set block
-                movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], r11;
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], r11;
             };
             self.set_method_outer()
         }
         monoasm! { &mut self.jit,
             // set self
-            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], rcx;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rcx;
             // set meta
             movq rsi, [r15 + (FUNCDATA_META)];
-            movq [rsp - (RSP_STACK_LFP + LFP_META)], rsi;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rsi;
         };
     }
 
@@ -389,7 +389,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
+            movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
             subq r10, 1;
             addq r9, 1;
             jne  loop_;
@@ -412,7 +412,7 @@ impl Codegen {
         let loop_ = self.jit.label();
         monoasm! { &mut self.jit,
             // set block
-            movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], r11;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], r11;
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;
@@ -421,7 +421,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - (RSP_STACK_LFP + LFP_SELF)], rax;
+            movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
             addq r9, 1;
             jne  loop_;
         loop_exit:
@@ -460,7 +460,7 @@ impl Codegen {
             cmpw rdi, [r15 + (FUNCDATA_MIN)];
             jeq exit;
         generic:
-            lea  rdx, [rsp - (RSP_STACK_LFP)]; // callee lfp: Lfp
+            lea  rdx, [rsp - (RSP_LOCAL_FRAME)]; // callee lfp: Lfp
             subq rsp, 4096;
             movq rcx, rdi; // arg_num
             movq rdi, rbx; // &mut Executor

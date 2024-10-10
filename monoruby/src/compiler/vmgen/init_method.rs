@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) const INIT_METHOD_OFS: i32 = -16;
+const INIT_METHOD_OFS: i32 = -16;
 const INIT_METHOD_REG: i32 = -12;
 const INIT_METHOD_ARG: i32 = -2;
 
@@ -24,26 +24,10 @@ impl Codegen {
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.stack_setup();
         self.vm_init_func();
         self.fill(NIL_VALUE);
         self.fetch_and_dispatch();
         label
-    }
-
-    ///
-    /// Setup stack pointer.
-    ///
-    /// ###  destroy
-    /// - rax
-    ///
-    fn stack_setup(&mut self) {
-        monoasm! { &mut self.jit,
-            // setup stack pointer
-            movsxw rax, [r13 + (INIT_METHOD_OFS)];
-            shlq rax, 4;
-            subq rsp, rax;
-        };
     }
 
     ///
@@ -60,6 +44,10 @@ impl Codegen {
     ///
     fn vm_init_func(&mut self) {
         monoasm! { &mut self.jit,
+            // setup stack pointer
+            movsxw rax, [r13 + (INIT_METHOD_OFS)];
+            shlq rax, 4;
+            subq rsp, rax;
             movzxw r15, [r13 + (INIT_METHOD_REG)];
             movq rax, r15;        // r15: reg_num
             subw rax, [r13 + (INIT_METHOD_ARG)];   // rax: reg_num - arg_num

@@ -188,7 +188,7 @@ impl Lfp {
     ///
     fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { Cfp::new(self.sub(BP_CFP as _) as _) }
+        unsafe { Cfp::new(self.as_ptr().add(16) as _) }
     }
 
     ///
@@ -296,12 +296,6 @@ impl Lfp {
         v.push(meta.get());
         // outer
         v.push(0);
-        // dummy
-        v.push(0);
-        // dummy
-        v.push(0);
-        // dummy
-        v.push(0);
         let v = v.into_boxed_slice();
         let len = v.len() * 8;
         unsafe {
@@ -313,7 +307,7 @@ impl Lfp {
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
         unsafe {
-            let v = vec![0, 0, self_val.id(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
+            let v = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
             let len = v.len() * 8;
             let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();

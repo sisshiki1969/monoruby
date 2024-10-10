@@ -15,21 +15,23 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<V
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
-pub(crate) const RSP_STACK_LFP: i32 = 40 - LFP_OFFSET;
+pub(crate) const RSP_LOCAL_FRAME: i32 = 40;
 pub(crate) const RSP_CFP: i32 = 24;
 pub(crate) const BP_CFP: i32 = 8;
+
+// Control frame offsets
 pub(crate) const CFP_LFP: i32 = 8;
 
-const LFP_OFFSET: i32 = 24;
-pub(crate) const LFP_OUTER: i32 = 0 + LFP_OFFSET;
+// Local frame offsets
+pub(crate) const LFP_OUTER: i32 = 0;
 /// Meta 8bytes
-pub(crate) const LFP_META: i32 = 8 + LFP_OFFSET;
+pub(crate) const LFP_META: i32 = 8;
 /// Meta::Regnum 2bytes
 pub(crate) const LFP_META_REGNUM: i32 = LFP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
 //pub(crate) const LBP_META_FUNCID: i64 = LBP_META + META_FUNCID as i64;
-pub(crate) const LFP_BLOCK: i32 = 16 + LFP_OFFSET;
-pub(crate) const LFP_SELF: i32 = 24 + LFP_OFFSET;
+pub(crate) const LFP_BLOCK: i32 = 16;
+pub(crate) const LFP_SELF: i32 = 24;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
@@ -100,16 +102,22 @@ impl alloc::GC<RValue> for Executor {
 
 impl Executor {
     pub fn init(globals: &mut Globals) -> Self {
+        #[cfg(not(feature = "no-startup"))]
         let mut executor = Self::default();
-        let path = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("startup.rb");
-        if let Err(err) = executor.require(globals, &path, false) {
-            err.show_error_message_and_all_loc(globals);
-            panic!("error occurred in startup.");
+        #[cfg(feature = "no-startup")]
+        let executor = Self::default();
+        #[cfg(not(feature = "no-startup"))]
+        {
+            let path = dirs::home_dir()
+                .unwrap()
+                .join(".monoruby")
+                .join("startup.rb");
+            if let Err(err) = executor.require(globals, &path, false) {
+                err.show_error_message_and_all_loc(globals);
+                panic!("error occurred in startup.");
+            }
         }
-        #[cfg(not(feature = "test"))]
+        #[cfg(not(feature = "no-gems"))]
         {
             executor
                 .require(globals, &std::path::PathBuf::from("rubygems"), false)

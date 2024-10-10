@@ -6,8 +6,8 @@ impl Codegen {
         self.jit.bind_label(entry);
         match kind {
             FuncKind::ISeq(_) => {
-                if !no_jit {
-                    self.gen_jit_stub(entry)
+                if !no_jit && !cfg!(feature = "no-jit") {
+                    self.gen_jit_stub(entry);
                 } else {
                     self.gen_vm_stub()
                 }
@@ -110,7 +110,7 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
             movzxw rax, [r14 - (LFP_META_REGNUM)];
-            addq rax, (LFP_ARG0 / 8 + 1);
+            addq rax, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
             subq rsp, rax;
