@@ -414,7 +414,7 @@ impl Globals {
     fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
-        lfp.set_outer(Some(binding.outer_lfp().outer_address()));
+        lfp.set_outer(Some(binding.outer_lfp()));
         if let Some(binding_lfp) = binding.binding() {
             let locals_len = self[binding_lfp.meta().func_id()].locals_len();
             for i in 1..1 + locals_len {
