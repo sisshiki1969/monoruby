@@ -549,16 +549,11 @@ impl BytecodeGen {
                 let op3 = self.slot_id(&src);
                 Bytecode::from(enc_www(151, op1.0, op2, op3.0))
             }
-            BytecodeInst::InitMethod(fn_info) => {
-                Bytecode::from_fn_info(enc_www_fn_info(170, &fn_info), &fn_info)
-            }
+            BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(170, &fn_info)),
             BytecodeInst::ExpandArray(src, dst, len) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&dst);
                 Bytecode::from(enc_www(171, op1.0, op2.0, len))
-            }
-            BytecodeInst::InitBlock(fn_info) => {
-                Bytecode::from_fn_info(enc_www_fn_info(172, &fn_info), &fn_info)
             }
             BytecodeInst::AliasMethod { new, old } => {
                 Bytecode::from_with_ident2(enc_www(173, 0, 0, 0), new, old)
@@ -748,14 +743,14 @@ fn enc_www(opcode: u16, op1: u16, op2: u16, op3: u16) -> u64 {
 fn enc_www_fn_info(opcode: u16, fn_info: &FnInitInfo) -> u64 {
     let FnInitInfo {
         reg_num,
-        reqopt_num,
+        arg_num,
         stack_offset,
         ..
     } = fn_info;
     enc_www(
         opcode,
         *reg_num as u16,
-        *reqopt_num as u16,
+        *arg_num as u16,
         *stack_offset as u16,
     )
 }

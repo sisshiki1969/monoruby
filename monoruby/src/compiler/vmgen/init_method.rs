@@ -1,8 +1,8 @@
 use super::*;
 
 const INIT_METHOD_OFS: i32 = -16;
+const INIT_METHOD_ARG: i32 = -14;
 const INIT_METHOD_REG: i32 = -12;
-const INIT_METHOD_ARG: i32 = -2;
 
 impl Codegen {
     /// Initialize method frame
@@ -11,7 +11,7 @@ impl Codegen {
     /// ~~~text
     /// -16 -14 -12 -10  -8  -6  -4  -2
     /// +---+---+---+---++---+---+---+---+
-    /// |ofs|rop|reg| op||req|   |   |arg|
+    /// |ofs|arg|reg| op||   |   |   |   |
     /// +---+---+---+---++---+---+---+---+
     ///  rsi rdi r15
     /// ~~~
@@ -19,8 +19,6 @@ impl Codegen {
     /// - +reg: a number of registers
     /// - +arg: a number of arguments.
     /// - +ofs: stack pointer offset
-    /// - req: a number of required arguments
-    /// - rop: req + optional arguments
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();

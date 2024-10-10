@@ -232,10 +232,6 @@ impl Lfp {
         unsafe { self.as_ptr().sub(count as usize) }
     }
 
-    fn meta_mut(&mut self) -> &mut Meta {
-        unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
-    }
-
     pub fn on_stack(self) -> bool {
         self.meta().on_stack()
     }
@@ -342,6 +338,10 @@ impl Lfp {
     ///
     pub(crate) fn meta(&self) -> &Meta {
         unsafe { &*(self.sub(LFP_META as _) as *const Meta) }
+    }
+
+    fn meta_mut(&mut self) -> &mut Meta {
+        unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
     }
 
     ///

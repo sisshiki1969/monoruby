@@ -564,7 +564,7 @@ impl BytecodeGen {
                 ir.add_local(*name);
             });
         }
-        ir.gen_dummy_init(info.is_block_style());
+        ir.gen_dummy_init();
 
         ir
     }
@@ -1359,13 +1359,9 @@ impl BytecodeGen {
         Ok((arg, len, splat_pos))
     }
 
-    fn gen_dummy_init(&mut self, is_block: bool) {
+    fn gen_dummy_init(&mut self) {
         self.emit(
-            if is_block {
-                BytecodeInst::InitBlock(FnInitInfo::default())
-            } else {
-                BytecodeInst::InitMethod(FnInitInfo::default())
-            },
+            BytecodeInst::InitMethod(FnInitInfo::default()),
             Loc::default(),
         );
     }
@@ -1383,14 +1379,7 @@ impl BytecodeGen {
 
     fn replace_init(&mut self, info: &ISeqInfo) {
         let fninfo = FnInitInfo::new(self.total_reg_num(), info);
-        self.ir[0] = (
-            if info.is_block_style() {
-                BytecodeInst::InitBlock(fninfo)
-            } else {
-                BytecodeInst::InitMethod(fninfo)
-            },
-            Loc::default(),
-        );
+        self.ir[0] = (BytecodeInst::InitMethod(fninfo), Loc::default());
     }
 }
 
