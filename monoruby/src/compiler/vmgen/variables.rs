@@ -368,14 +368,13 @@ impl Codegen {
         let loop_exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
-            movq rax, [r14 - (LFP_OUTER)];
+            movq rax, [r14];
         loop_:
             subq rsi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             negq rdi;
             movq rax, [rax + rdi * 8 - (LFP_SELF)];
         };
@@ -404,14 +403,13 @@ impl Codegen {
         let loop_exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
-            movq rax, [r14 - (LFP_OUTER)];
+            movq rax, [r14];
         loop_:
             subq rdi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             negq rsi;
             negq r15;
             movq rdi, [r14 + rsi * 8 - (LFP_SELF)];

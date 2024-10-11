@@ -1110,7 +1110,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LFP_OUTER)];
+            movq  rax, r14;
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1118,7 +1118,6 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             movq rax, [rax - (LFP_BLOCK)];
             movq rdi, (Value::nil().id());
             testq rax, rax;
@@ -1146,7 +1145,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LFP_OUTER)];
+            movq  rax, r14;
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1154,7 +1153,6 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;

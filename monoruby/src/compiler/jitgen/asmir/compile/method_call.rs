@@ -384,8 +384,7 @@ impl Codegen {
             lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
-            lea  rax, [rdi - (LFP_OUTER)];
-            pushq rax;
+            pushq rdi;
             // set meta
             pushq [r15 + (FUNCDATA_META)];
             // set block

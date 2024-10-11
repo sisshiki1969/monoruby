@@ -467,14 +467,10 @@ impl Codegen {
     /// ### in
     /// - rax: outer_lfp
     ///
-    /// ### destroy
-    /// - rsi
-    ///
     fn set_block_outer(&mut self) {
         monoasm! { &mut self.jit,
             // set outer
-            lea  rsi, [rax - (LFP_OUTER)];
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rsi;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
         };
     }
 
