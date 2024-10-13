@@ -53,7 +53,7 @@ impl Cfp {
     /// Get outermost LFP.
     ///
     pub(crate) fn outermost_lfp(&self) -> Lfp {
-        self.lfp().outermost()
+        self.lfp().outermost().0
     }
 
     ///
@@ -164,7 +164,7 @@ impl alloc::GC<RValue> for Lfp {
             v.0.mark(alloc)
         };
         if let Some(outer) = self.outer() {
-            outer.lfp().mark(alloc);
+            outer.mark(alloc);
         }
     }
 }
@@ -188,31 +188,48 @@ impl Lfp {
     ///
     fn cfp(&self) -> Cfp {
         assert!(self.on_stack());
-        unsafe { Cfp::new(self.sub(BP_CFP as _) as _) }
+        unsafe { Cfp::new(self.as_ptr().add(16) as _) }
+    }
+
+    ///
+    /// Get outer LFP.
+    ///
+    pub fn outer(self) -> Option<Lfp> {
+        unsafe { *(self.0.as_ptr() as *mut Option<Lfp>) }
+    }
+
+    ///
+    /// Get DFP of an outermost frame of *self*.
+    ///
+    fn outermost(&self) -> (Lfp, usize) {
+        let mut lfp = *self;
+        let mut depth = 0;
+        while let Some(outer) = lfp.outer() {
+            lfp = outer;
+            depth += 1;
+        }
+        (lfp, depth)
+    }
+
+    ///
+    /// Get outermost LFP and the depth.
+    ///
+    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
+        match self.outer() {
+            Some(lfp) => lfp.outermost(),
+            None => (*self, 0),
+        }
     }
 
     ///
     /// Set outer.
     ///
-    pub fn set_outer(&mut self, outer: Option<Dfp>) {
-        unsafe {
-            *(self.outer_address().0.as_ptr()) = outer;
-        }
+    pub(crate) fn set_outer(&mut self, outer: Option<Lfp>) {
+        unsafe { *(self.0.as_ptr() as *mut Option<Lfp>) = outer }
     }
 
     fn sub(self, count: i64) -> *mut u8 {
         unsafe { self.as_ptr().sub(count as usize) }
-    }
-
-    ///
-    /// Get the address of outer.
-    ///
-    pub(crate) fn outer_address(self) -> Dfp {
-        unsafe { Dfp::new(self.sub(LFP_OUTER as _) as _) }
-    }
-
-    fn meta_mut(&mut self) -> &mut Meta {
-        unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
     }
 
     pub fn on_stack(self) -> bool {
@@ -271,9 +288,8 @@ impl Lfp {
                 let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
                 heap_lfp.meta_mut().set_on_heap();
                 cfp.set_lfp(heap_lfp);
-                if let Some(outer) = heap_lfp.outer() {
-                    let outer_lfp = outer.lfp();
-                    let outer = outer_lfp.move_frame_to_heap().outer_address();
+                if let Some(outer_lfp) = heap_lfp.outer() {
+                    let outer = outer_lfp.move_frame_to_heap();
                     heap_lfp.set_outer(Some(outer));
                 }
                 assert!(!heap_lfp.on_stack());
@@ -296,12 +312,6 @@ impl Lfp {
         v.push(meta.get());
         // outer
         v.push(0);
-        // dummy
-        v.push(0);
-        // dummy
-        v.push(0);
-        // dummy
-        v.push(0);
         let v = v.into_boxed_slice();
         let len = v.len() * 8;
         unsafe {
@@ -312,9 +322,9 @@ impl Lfp {
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
+        let v = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
+        let len = v.len() * 8;
         unsafe {
-            let v = vec![0, 0, self_val.id(), 0, 0, 0, 0, 0, 0].into_boxed_slice();
-            let len = v.len() * 8;
             let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();
             heap_lfp.meta_mut().set_reg_num(1);
@@ -324,40 +334,14 @@ impl Lfp {
     }
 
     ///
-    /// Get outer DFP.
-    ///
-    pub fn outer(self) -> Option<Dfp> {
-        self.outer_address().outer()
-    }
-
-    ///
-    /// Get outermost LFP.
-    ///
-    pub fn outermost(self) -> Lfp {
-        match self.outer() {
-            Some(dfp) => dfp.outermost().0.lfp(),
-            None => self,
-        }
-    }
-
-    ///
-    /// Get outermost LFP and the depth.
-    ///
-    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        match self.outer() {
-            Some(dfp) => {
-                let (dfp, depth) = dfp.outermost();
-                (dfp.lfp(), depth)
-            }
-            None => (*self, 0),
-        }
-    }
-
-    ///
     /// Get Meta.
     ///
     pub(crate) fn meta(&self) -> &Meta {
         unsafe { &*(self.sub(LFP_META as _) as *const Meta) }
+    }
+
+    fn meta_mut(&mut self) -> &mut Meta {
+        unsafe { &mut *(self.sub(LFP_META as _) as *mut Meta) }
     }
 
     ///
@@ -498,51 +482,5 @@ impl Lfp {
             }
         }
         max
-    }
-}
-
-///
-/// Dynamic frame pointer.
-///
-/// The DFP points to a DFP in the frame that holds a scope outside the current frame.
-///
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[repr(transparent)]
-pub struct Dfp(std::ptr::NonNull<Option<Dfp>>);
-
-impl Dfp {
-    unsafe fn new(ptr: *mut u8) -> Self {
-        Dfp(std::ptr::NonNull::new(ptr as *mut Option<Dfp>).unwrap())
-    }
-
-    fn get(&self) -> *const Option<Dfp> {
-        self.0.as_ptr()
-    }
-
-    ///
-    /// Get DFP of an outer frame of *self*.
-    ///
-    pub fn outer(&self) -> Option<Self> {
-        unsafe { *self.get() }
-    }
-
-    ///
-    /// Get DFP of an outermost frame of *self*.
-    ///
-    fn outermost(&self) -> (Dfp, usize) {
-        let mut dfp = *self;
-        let mut depth = 0;
-        while let Some(outer) = dfp.outer() {
-            dfp = outer;
-            depth += 1;
-        }
-        (dfp, depth)
-    }
-
-    ///
-    /// Get LFP.
-    ///
-    pub fn lfp(&self) -> Lfp {
-        unsafe { Lfp::new((self.get() as *const u8).add(LFP_OUTER as usize) as _) }
     }
 }

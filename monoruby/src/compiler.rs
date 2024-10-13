@@ -300,27 +300,6 @@ impl Codegen {
         self.return_addr_table.get(&return_addr).cloned()
     }
 
-    pub(crate) fn set_deopt_with_return_addr(
-        &mut self,
-        return_addr: CodePtr,
-        evict: AsmEvict,
-        evict_label: DestLabel,
-    ) {
-        self.asm_return_addr_table.insert(evict, return_addr);
-        self.return_addr_table
-            .insert(return_addr, (None, evict_label));
-    }
-
-    pub(crate) fn set_deopt_patch_point_with_return_addr(
-        &mut self,
-        return_addr: CodePtr,
-        patch_point: CodePtr,
-    ) {
-        self.return_addr_table
-            .entry(return_addr)
-            .and_modify(|e| e.0 = Some(patch_point));
-    }
-
     ///
     /// Check whether *addr* is in VM code or invokers.
     ///
@@ -406,7 +385,7 @@ impl Codegen {
         );
     }
 
-    fn restore_lbp(&mut self) {
+    fn restore_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // restore lfp
             movq r14, [rbp - (BP_CFP + CFP_LFP)];
@@ -420,7 +399,7 @@ impl Codegen {
             lea  r14, [rbp - (BP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], r14;
         );
-        self.restore_lbp();
+        self.restore_lfp();
     }
 
     ///
@@ -479,7 +458,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set self
             movq rsi, [rax - (LFP_SELF)];
-            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], rsi;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rsi;
         };
     }
 
@@ -488,21 +467,17 @@ impl Codegen {
     /// ### in
     /// - rax: outer_lfp
     ///
-    /// ### destroy
-    /// - rsi
-    ///
     fn set_block_outer(&mut self) {
         monoasm! { &mut self.jit,
             // set outer
-            lea  rsi, [rax - (LFP_OUTER)];
-            movq [rsp - (RSP_STACK_LFP + LFP_OUTER)], rsi;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
         };
     }
 
     /// Set outer.
     fn set_method_outer(&mut self) {
         monoasm! { &mut self.jit,
-            movq [rsp - (RSP_STACK_LFP + LFP_OUTER)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
         };
     }
 
@@ -513,7 +488,7 @@ impl Codegen {
     fn set_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // set lfp
-            lea  r14, [rsp - (RSP_STACK_LFP)];
+            lea  r14, [rsp - (RSP_LOCAL_FRAME)];
             movq [rsp - (RSP_CFP + CFP_LFP)], r14;
         );
     }
@@ -527,7 +502,7 @@ impl Codegen {
         self.push_frame();
         self.set_lfp();
         monoasm!( &mut self.jit,
-            call rax;
+            call rax;   // CALL_SITE
         );
         self.pop_frame();
     }
@@ -800,7 +775,6 @@ impl Codegen {
     /// - r15: &FuncData
     /// - rdx: src: *const Value
     /// - r8: CallsiteId
-    /// - r9: arg_num
     ///
     /// ### out
     /// - rax: arg_num: Value
@@ -820,11 +794,11 @@ impl Codegen {
     ) {
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
-            lea  rcx, [rsp - (RSP_STACK_LFP)];
-            // rdi <- stacck_offset
+            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];
+            // rdi <- stack_offset
             movzxw rdi, [r15 + (FUNCDATA_OFS)];
             shlq rdi, 4;
-            addq rdi, 24;
+            addq rdi, 8;
             subq rsp, rdi;
             pushq rdi;
             movq rdi, rbx;
@@ -1006,7 +980,7 @@ fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
 }
 
 fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
-    let lebel = jit.get_current_address();
+    let label = jit.get_current_address();
     monoasm! { jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1016,7 +990,7 @@ fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
             leave;
             ret;
     }
-    lebel
+    label
 }
 
 #[cfg(feature = "profile")]
@@ -1116,7 +1090,7 @@ impl Globals {
 
         let _sourcemap =
             self.codegen
-                .compile(&self.store, func_id, self_value, position, entry_label);
+                .jit_compile(&self.store, func_id, self_value, position, entry_label);
         #[cfg(feature = "perf")]
         {
             let desc = format!("JIT:<{}>", self.func_description(func_id));

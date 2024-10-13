@@ -233,8 +233,7 @@ impl Globals {
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
-        let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
-        let val = Value::string_from_str(&description);
+        let val = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]",));
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::string_from_str("ruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
@@ -245,7 +244,7 @@ impl Globals {
             .join("ruby_version");
         let ruby_version = std::fs::read_to_string(&version_path).unwrap();
 
-        let val = Value::string_from_vec(ruby_version.into_bytes());
+        let val = Value::string(ruby_version);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals
@@ -415,7 +414,7 @@ impl Globals {
     fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
-        lfp.set_outer(Some(binding.outer_lfp().outer_address()));
+        lfp.set_outer(Some(binding.outer_lfp()));
         if let Some(binding_lfp) = binding.binding() {
             let locals_len = self[binding_lfp.meta().func_id()].locals_len();
             for i in 1..1 + locals_len {
@@ -531,7 +530,7 @@ impl Globals {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
         let kind = self[func_id].kind.clone();
-        let entry = self.codegen.gen_wrapper(kind, self.no_jit);
+        let entry = self.codegen.gen_wrapper(&kind, self.no_jit);
         let codeptr = self.codegen.jit.get_label_address(entry);
         self[func_id].set_entry(entry, codeptr);
         #[cfg(feature = "perf")]

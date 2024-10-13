@@ -36,7 +36,7 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (callid.get());
             lea  rcx, [r14 - (conv(args))];
-            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
+            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
             movq r9, (meta.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
@@ -44,9 +44,7 @@ impl Codegen {
             addq rsp, (offset);
         }
     }
-}
 
-impl Codegen {
     ///
     /// generate JIT code for a method call which was not cached.
     ///
@@ -60,9 +58,6 @@ impl Codegen {
         error: DestLabel,
     ) -> CodePtr {
         let callsite = &store[callid];
-        // argument registers:
-        //   rdi: args len
-        //
         let resolved = self.jit.label();
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
@@ -105,7 +100,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
             xorq rax, rax;
@@ -274,8 +269,6 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        native: bool,
-        offset: usize,
         using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
@@ -285,19 +278,20 @@ impl Codegen {
         self.setup_frame(meta, caller);
         self.copy_keyword_args(caller, callee);
         if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            let offset = callee.get_offset();
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
         self.set_lfp();
         self.push_frame();
 
-        if native {
+        if callee.is_native() {
             self.call_codeptr(codeptr)
         } else {
-            match store[callee_fid].get_jit_code(recv_class) {
+            match callee.get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
-                        call dest;
+                        call dest;  // CALL_SITE
                     }
                 }
                 None => {
@@ -371,9 +365,7 @@ impl Codegen {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: DestLabel,
-        deopt_lazy: AsmEvict,
-        deopt: DestLabel,
-    ) {
+    ) -> CodePtr {
         self.xmm_save(using_xmm);
         self.get_proc_data();
         self.handle_error(error);
@@ -389,11 +381,10 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
-            lea  rax, [rdi - (LFP_OUTER)];
-            pushq rax;
+            pushq rdi;
             // set meta
             pushq [r15 + (FUNCDATA_META)];
             // set block
@@ -407,7 +398,7 @@ impl Codegen {
         let return_addr = self.generic_call(callid, store[callid].args, error);
         self.xmm_restore(using_xmm);
         self.handle_error(error);
-        self.set_deopt_with_return_addr(return_addr, deopt_lazy, deopt);
+        return_addr
     }
 
     ///
@@ -438,7 +429,7 @@ impl Codegen {
     fn call_codeptr(&mut self, codeptr: CodePtr) {
         let src_point = self.jit.get_current_address();
         monoasm! { &mut self.jit,
-            call (codeptr - src_point - 5);
+            call (codeptr - src_point - 5); // CALL_SITE
         }
     }
 
@@ -448,15 +439,15 @@ impl Codegen {
     ///
     fn call_funcdata(&mut self) -> CodePtr {
         monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
             // push cfp
             lea  rsi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rsi;
         }
         self.set_lfp();
         monoasm! { &mut self.jit,
-            call [r15 + (FUNCDATA_CODEPTR)];
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
         }
         let return_addr = self.jit.get_current_address();
         self.pop_frame();
@@ -480,12 +471,12 @@ impl Codegen {
                     let caller_ofs = (kw_pos.0 as i32 + *caller as i32) * 8 + LFP_SELF;
                     monoasm! { &mut self.jit,
                         movq  rax, [r14 - (caller_ofs)];
-                        movq  [rsp - (RSP_STACK_LFP + callee_ofs)], rax;
+                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], rax;
                     }
                 }
                 None => {
                     monoasm! { &mut self.jit,
-                        movq  [rsp - (RSP_STACK_LFP + callee_ofs)], 0;
+                        movq  [rsp - (RSP_LOCAL_FRAME + callee_ofs)], 0;
                     }
                 }
             }
@@ -505,7 +496,7 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movl rdx, (callid.get());
             movq rcx, (meta.get());
-            lea  r8, [rsp - (RSP_STACK_LFP)];   // callee_lfp
+            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
             subq rsp, (offset);
             movq rax, (jit_handle_hash_splat_kw_rest);
             call rax;
@@ -514,6 +505,15 @@ impl Codegen {
         self.handle_error(error);
     }
 
+    ///
+    /// Invoke method.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    /// ### out
+    /// - rax: return value
+    ///
     fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) -> CodePtr {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
@@ -661,7 +661,7 @@ impl Codegen {
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
             // set lfp
-            lea   rax, [rsp + (24 - RSP_STACK_LFP)];
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
             pushq rax;
             // set outer
             xorq rax, rax;
@@ -768,7 +768,7 @@ impl Codegen {
             cmpw  rax, (pos_num - 1);
             jne  arg_error;
             lea  rdi, [r14 - (conv(args + 1usize))];
-            lea  rdx, [rsp - (RSP_STACK_LFP + LFP_ARG0)];
+            lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
             movq r8, (pos_num);
             // src: rdi, dst: rdx
         loop0:

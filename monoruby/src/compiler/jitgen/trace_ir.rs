@@ -53,22 +53,12 @@ pub(crate) enum TraceIr {
         end: SlotId,
         exclude_end: bool,
     },
-    ArrayIndex {
-        dst: SlotId,
-        base: SlotId,
-        idx: SlotId,
-    },
     Index {
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
         base_class: Option<ClassId>,
         idx_class: Option<ClassId>,
-    },
-    ArrayIndexAssign {
-        src: SlotId,
-        base: SlotId,
-        idx: SlotId,
     },
     IndexAssign {
         src: SlotId,
@@ -203,10 +193,16 @@ pub(crate) enum TraceIr {
 
     /// return(%src)
     Ret(SlotId),
+    ///
+    /// Return from method.
+    ///
     /// method_return(%src)
     MethodRet(SlotId),
-    /// method_return(%src)
-    Break(SlotId),
+    ///
+    /// Break from block.
+    ///
+    /// break(%src)
+    BlockBreak(SlotId),
     /// raise(%src)
     Raise(SlotId),
     /// ensure_end
@@ -230,7 +226,7 @@ pub(crate) enum TraceIr {
         fid: Option<FuncId>,
         version: u32,
     },
-    MethodCallBlock {
+    MethodCallWithBlock {
         callid: CallSiteId,
         recv_class: Option<ClassId>,
         fid: Option<FuncId>,
@@ -337,7 +333,10 @@ impl<'a> DefKind<'a> {
 impl TraceIr {
     pub(crate) fn get_exit_type(&self) -> Option<ExitType> {
         match self {
-            TraceIr::Ret(..) | TraceIr::MethodRet(..) | TraceIr::Break(..) | TraceIr::Raise(..) => {
+            TraceIr::Ret(..)
+            | TraceIr::MethodRet(..)
+            | TraceIr::BlockBreak(..)
+            | TraceIr::Raise(..) => {
                 return Some(ExitType::Return);
             }
             TraceIr::Br(_)
@@ -583,10 +582,6 @@ impl TraceIr {
             TraceIr::Hash { dst, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
             }
-            TraceIr::ArrayIndex { dst, base, idx } => {
-                let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                fmt(store, op1, Some(ARRAY_CLASS), Some(INTEGER_CLASS))
-            }
             TraceIr::Index {
                 dst,
                 base,
@@ -596,10 +591,6 @@ impl TraceIr {
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
                 fmt(store, op1, *base_class, *idx_class)
-            }
-            TraceIr::ArrayIndexAssign { src, base, idx } => {
-                let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
-                fmt(store, op1, Some(ARRAY_CLASS), Some(INTEGER_CLASS))
             }
             TraceIr::IndexAssign {
                 src,
@@ -807,7 +798,7 @@ impl TraceIr {
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
-            TraceIr::Break(reg) => format!("break {:?}", reg),
+            TraceIr::BlockBreak(reg) => format!("break {:?}", reg),
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
@@ -817,7 +808,7 @@ impl TraceIr {
                 fid,
                 ..
             }
-            | TraceIr::MethodCallBlock {
+            | TraceIr::MethodCallWithBlock {
                 callid,
                 recv_class,
                 fid,
@@ -830,25 +821,10 @@ impl TraceIr {
                     && (*fid == OBJECT_SEND_FUNCID && callsite.object_send_single_splat()
                         || callsite.is_simple())
                 {
-                    let CallSiteInfo {
-                        recv,
-                        args,
-                        pos_num,
-                        dst,
-                        ..
-                    } = *callsite;
+                    let CallSiteInfo { recv, dst, .. } = *callsite;
                     let name = &inline_info.name;
-                    let op1 = if pos_num == 0 {
-                        format!("{} = {:?}.inline {name}()", ret_str(dst), recv)
-                    } else {
-                        format!(
-                            "{} = {:?}.inline {name}({:?}; {})",
-                            ret_str(dst),
-                            recv,
-                            args,
-                            pos_num,
-                        )
-                    };
+                    let s = callsite.format_args();
+                    let op1 = format!("{} = {:?}.inline {name}{s}", ret_str(dst), recv,);
                     format!("{:36} [{}]", op1, store.debug_class_name(*recv_class))
                 } else {
                     let name = if let Some(name) = callsite.name {
@@ -856,57 +832,16 @@ impl TraceIr {
                     } else {
                         "super".to_string()
                     };
-                    let CallSiteInfo {
-                        recv,
-                        args,
-                        pos_num,
-                        kw_pos,
-                        kw_args,
-                        dst,
-                        block_fid,
-                        block_arg,
-                        ..
-                    } = callsite;
-                    let has_splat = callsite.has_splat();
-                    // TODO: we must handle hash aplat arguments correctly.
-                    let kw_len = kw_args.len();
-                    let op1 = format!(
-                        "{} = {:?}.{name}({}{}{}){}",
-                        ret_str(*dst),
-                        recv,
-                        if *pos_num == 0 {
-                            "".to_string()
-                        } else {
-                            format!("{:?};{}{}", args, pos_num, if has_splat { "*" } else { "" })
-                        },
-                        if kw_len == 0 {
-                            "".to_string()
-                        } else {
-                            format!(" kw:{:?};{}", kw_pos, kw_len)
-                        },
-                        if let Some(block_arg) = block_arg {
-                            format!(" &{:?}", block_arg)
-                        } else {
-                            "".to_string()
-                        },
-                        if let Some(block_fid) = block_fid {
-                            format!(" {{ {:?} }}", block_fid)
-                        } else {
-                            "".to_string()
-                        },
-                    );
+                    let CallSiteInfo { recv, dst, .. } = callsite;
+                    let s = callsite.format_args();
+                    let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
                     format!("{:36} [{}]", op1, store.debug_class_name(*recv_class),)
                 }
             }
             TraceIr::Yield { callid } => {
-                let CallSiteInfo {
-                    args, pos_num, dst, ..
-                } = store[*callid];
-                if pos_num == 0 {
-                    format!("{} = yield", ret_str(dst))
-                } else {
-                    format!("{} = yield({:?}; {})", ret_str(dst), args, pos_num)
-                }
+                let dst = store[*callid].dst;
+                let s = store[*callid].format_args();
+                format!("{} = yield{s}", ret_str(dst))
             }
             TraceIr::InlineCache => return None,
             TraceIr::MethodDef { name, func_id } => {
@@ -923,14 +858,18 @@ impl TraceIr {
                 func_id,
             } => {
                 format!(
-                    "{} = class_def {}{name} < {:?}: {:?}",
+                    "{} = class_def {}{name}{}: {:?}",
                     ret_str(*dst),
                     if let Some(base) = base {
                         format!("{:?}::", base)
                     } else {
                         "".to_string()
                     },
-                    superclass,
+                    if let Some(superclass) = superclass {
+                        format!(" < {:?}", superclass)
+                    } else {
+                        "".to_string()
+                    },
                     func_id
                 )
             }
@@ -978,21 +917,10 @@ impl TraceIr {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
-            TraceIr::DefinedYield { dst: ret } => format!("{:?} = defined?(yield)", ret),
-            TraceIr::DefinedConst { dst: ret, siteid } => {
-                let ConstSiteInfo {
-                    name,
-                    prefix,
-                    toplevel,
-                    ..
-                } = &store[*siteid];
-                let mut const_name = if *toplevel { "::" } else { "" }.to_string();
-                for c in prefix {
-                    c.append_to(&mut const_name);
-                    const_name += "::";
-                }
-                name.append_to(&mut const_name);
-                format!("{:?} = defined?(constant) {const_name}", ret)
+            TraceIr::DefinedYield { dst } => format!("{:?} = defined?(yield)", dst),
+            TraceIr::DefinedConst { dst, siteid } => {
+                let s = store[*siteid].format();
+                format!("{:?} = defined?(constant) {s}", dst)
             }
             TraceIr::DefinedMethod {
                 dst: ret,

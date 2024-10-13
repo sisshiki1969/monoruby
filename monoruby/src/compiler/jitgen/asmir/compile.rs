@@ -195,12 +195,10 @@ impl Codegen {
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
-            AsmInst::SetArguments {
-                callid,
-                args,
-                meta,
-                offset,
-            } => {
+            AsmInst::SetArguments { callid, callee_fid } => {
+                let meta = store[callee_fid].meta();
+                let offset = store[callee_fid].get_offset();
+                let args = store[callid].args;
                 self.jit_set_arguments(callid, args, offset, meta);
             }
 
@@ -213,7 +211,7 @@ impl Codegen {
                 };
                 self.method_return();
             }
-            AsmInst::Break => {
+            AsmInst::BlockBreak => {
                 self.block_break();
                 self.epilogue();
             }
@@ -292,7 +290,9 @@ impl Codegen {
             AsmInst::ImmediateEvict { evict } => {
                 let patch_point = self.jit.get_current_address();
                 let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
-                self.set_deopt_patch_point_with_return_addr(*return_addr, patch_point);
+                self.return_addr_table
+                    .entry(*return_addr)
+                    .and_modify(|e| e.0 = Some(patch_point));
             }
             AsmInst::AttrWriter {
                 ivar_id,
@@ -308,16 +308,13 @@ impl Codegen {
                 callid,
                 callee_fid,
                 recv_class,
-                native,
-                offset,
                 using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.send_cached(
-                    store, callid, callee_fid, recv_class, native, offset, using_xmm, error,
-                );
+                let return_addr =
+                    self.send_cached(store, callid, callee_fid, recv_class, using_xmm, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendNotCached {
@@ -340,7 +337,8 @@ impl Codegen {
                 evict,
             } => {
                 let error = labels[error];
-                self.gen_yield(store, callid, using_xmm, error, evict, labels[evict]);
+                let return_addr = self.gen_yield(store, callid, using_xmm, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 
             AsmInst::Not => {
@@ -674,6 +672,17 @@ impl Codegen {
         }
     }
 
+    fn set_deopt_with_return_addr(
+        &mut self,
+        return_addr: CodePtr,
+        evict: AsmEvict,
+        evict_label: DestLabel,
+    ) {
+        self.asm_return_addr_table.insert(evict, return_addr);
+        self.return_addr_table
+            .insert(return_addr, (None, evict_label));
+    }
+
     ///
     /// Class version guard for JIT.
     ///
@@ -761,16 +770,13 @@ impl Codegen {
             };
         } else {
             monoasm!( &mut self.jit,
-                movq rax, [r14 - (LFP_OUTER)];
+                movq rax, [r14];
             );
             for _ in 0..outer - 1 {
                 monoasm!( &mut self.jit,
                     movq rax, [rax];
                 );
             }
-            monoasm!( &mut self.jit,
-                lea rax, [rax + (LFP_OUTER)];
-            );
         }
     }
 
@@ -796,7 +802,7 @@ impl Codegen {
             movq rax, (runtime::gen_lambda);
             call rax;
         };
-        self.restore_lbp();
+        self.restore_lfp();
         self.xmm_restore(using_xmm);
     }
 

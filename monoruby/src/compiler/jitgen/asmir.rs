@@ -414,31 +414,6 @@ impl AsmIr {
     pub(super) fn handle_error(&mut self, error: AsmError) {
         self.inst.push(AsmInst::HandleError(error));
     }
-
-    ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rdx: value: Value
-    ///
-    pub(super) fn attr_writer(&mut self, bb: &BBContext, pc: BytecodePtr, ivar_id: IvarId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::AttrWriter {
-            using_xmm,
-            error,
-            ivar_id,
-        });
-    }
-
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
-        self.inst.push(AsmInst::AttrReader { ivar_id });
-    }
 }
 
 // write back operations
@@ -456,10 +431,15 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn write_back_callargs(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
-        let CallSiteInfo { recv, .. } = callsite;
+    pub(crate) fn write_back_callargs_and_dst(
+        &mut self,
+        bb: &mut BBContext,
+        callsite: &CallSiteInfo,
+    ) {
+        let CallSiteInfo { recv, dst, .. } = callsite;
         self.write_back_slot(bb, *recv);
         self.write_back_args(bb, callsite);
+        self.unlink(bb, *dst);
     }
 
     fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
@@ -480,55 +460,18 @@ impl AsmIr {
 
 impl AsmIr {
     ///
-    /// ### in
-    /// rdi: receiver: Value
-    ///
-    pub(super) fn send_cached(
-        &mut self,
-        store: &Store,
-        bb: &mut BBContext,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        native: bool,
-        evict: AsmEvict,
-    ) {
-        self.reg_move(GP::Rdi, GP::R13);
-        self.exec_gc(bb.get_register());
-        let using_xmm = bb.get_using_xmm();
-        self.xmm_save(using_xmm);
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        self.set_arguments(bb, caller, callid, callee, pc);
-        self.unlink(bb, caller.dst);
-        self.clear(bb);
-        let error = self.new_error(bb, pc);
-        self.writeback_acc(bb);
-        let offset = ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * callee.total_args() + 8) / 16 * 16;
-        self.inst.push(AsmInst::SendCached {
-            callid,
-            callee_fid,
-            recv_class,
-            native,
-            offset,
-            using_xmm,
-            error,
-            evict,
-        });
-    }
-
-    ///
     /// Set positional arguments for callee.
     ///
     fn set_arguments(
         &mut self,
+        store: &Store,
         bb: &mut BBContext,
-        caller: &CallSiteInfo,
         callid: CallSiteId,
-        callee: &FuncInfo,
+        callee_fid: FuncId,
         pc: BytecodePtr,
     ) {
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
         let args = caller.args;
         let pos_num = caller.pos_num;
         let kw_pos = caller.kw_pos;
@@ -545,8 +488,6 @@ impl AsmIr {
         {
             // write back keyword arguments.
             for arg in kw_pos..kw_pos + kw_num {
-                //assert_eq!(kw_pos, args + pos_num);
-                //assert_eq!(kw_pos + kw_num, args + caller.len);
                 self.write_back_slot(bb, arg);
             }
             // write back block argument.
@@ -555,7 +496,7 @@ impl AsmIr {
             }
             let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
             {
-                (RSP_STACK_LFP + LFP_ARG0 + (8 * pos_num) as i32 + 8) / 16 * 16
+                (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
             } else {
                 0
             };
@@ -563,46 +504,24 @@ impl AsmIr {
             self.reg_sub(GP::Rsp, ofs);
             for i in 0..pos_num {
                 let reg = args + i;
-                let offset = ofs - (RSP_STACK_LFP + LFP_ARG0 + (8 * i) as i32);
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                 self.fetch_to_rsp_offset(bb, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
                 for i in pos_num..callee.max_positional_args() {
-                    let offset = ofs - (RSP_STACK_LFP + LFP_ARG0 as i32 + (8 * i) as i32);
+                    let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
                     self.reg2rsp_offset(GP::Rax, offset);
                 }
             }
             self.reg_add(GP::Rsp, ofs);
         } else {
             self.write_back_args(bb, caller);
-            let meta = callee.meta();
-            let offset =
-                ((RSP_STACK_LFP + LFP_ARG0) as usize + 8 * callee.max_positional_args() + 8) & !0xf;
+
             let error = self.new_error(bb, pc);
-            self.inst.push(AsmInst::SetArguments {
-                callid,
-                args,
-                meta,
-                offset,
-            });
+            self.inst.push(AsmInst::SetArguments { callid, callee_fid });
             self.handle_error(error);
         }
-    }
-
-    pub(super) fn send_not_cached(&mut self, bb: &BBContext, pc: BytecodePtr, callid: CallSiteId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        let evict = self.new_evict();
-        let self_class = bb.self_value.class();
-        self.inst.push(AsmInst::SendNotCached {
-            self_class,
-            callid,
-            pc,
-            using_xmm,
-            error,
-            evict,
-        });
     }
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BytecodePtr, func: UnaryOpFn) {
@@ -1097,7 +1016,7 @@ pub(super) enum AsmInst {
     GuardClass(GP, ClassId, AsmDeopt),
 
     Ret,
-    Break,
+    BlockBreak,
     Raise,
     MethodRet(BytecodePtr),
     EnsureEnd,
@@ -1146,9 +1065,7 @@ pub(super) enum AsmInst {
     ///
     SetArguments {
         callid: CallSiteId,
-        args: SlotId,
-        meta: Meta,
-        offset: usize,
+        callee_fid: FuncId,
     },
 
     ///
@@ -1172,23 +1089,31 @@ pub(super) enum AsmInst {
     AttrReader {
         ivar_id: IvarId,
     },
-    ImmediateEvict {
-        evict: AsmEvict,
-    },
+    ///
+    /// Send cached method
     ///
     /// ### in
     /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - r15
     ///
     SendCached {
         callid: CallSiteId,
         recv_class: ClassId,
         callee_fid: FuncId,
-        native: bool,
-        offset: usize,
         using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },
+    ///
+    /// Send non-cached method
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - r15
+    ///
     SendNotCached {
         callid: CallSiteId,
         self_class: ClassId,
@@ -1202,6 +1127,9 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         using_xmm: UsingXmm,
         error: AsmError,
+        evict: AsmEvict,
+    },
+    ImmediateEvict {
         evict: AsmEvict,
     },
     CheckBOP {
@@ -1549,7 +1477,7 @@ impl AsmInst {
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
             Self::Ret => "ret".to_string(),
-            Self::Break => "break".to_string(),
+            Self::BlockBreak => "break".to_string(),
             Self::Raise => "raise".to_string(),
             Self::MethodRet(_pc) => format!("method_return"),
             Self::EnsureEnd => "ensure_end".to_string(),

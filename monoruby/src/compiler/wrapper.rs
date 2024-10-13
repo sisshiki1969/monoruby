@@ -1,20 +1,20 @@
 use super::*;
 
 impl Codegen {
-    pub(crate) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> DestLabel {
+    pub(crate) fn gen_wrapper(&mut self, kind: &FuncKind, no_jit: bool) -> DestLabel {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         match kind {
             FuncKind::ISeq(_) => {
-                if !no_jit {
-                    self.gen_jit_stub(entry)
+                if !no_jit && !cfg!(feature = "no-jit") {
+                    self.gen_jit_stub(entry);
                 } else {
                     self.gen_vm_stub()
                 }
             }
-            FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
-            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(ivar_name),
-            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
+            FuncKind::Builtin { abs_address } => self.wrap_native_func(*abs_address),
+            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
+            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
         };
         self.jit.finalize();
         entry
@@ -110,7 +110,7 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
             movzxw rax, [r14 - (LFP_META_REGNUM)];
-            addq rax, (LFP_ARG0 / 8 + 1);
+            addq rax, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
             subq rsp, rax;
@@ -119,7 +119,7 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, r14;    // rdx <- lfp
             movq rax, (abs_address);
-            call rax;
+            call rax;   // CALL_SITE
 
             leave;
             ret;

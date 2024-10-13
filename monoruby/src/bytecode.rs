@@ -1,4 +1,4 @@
-use bytecodegen::{inst::FnInitInfo, BcIndex};
+use bytecodegen::BcIndex;
 
 use super::*;
 
@@ -85,16 +85,6 @@ impl Bytecode {
         }
     }
 
-    pub fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
-        let FnInitInfo {
-            arg_num,
-            req_num,
-            info,
-            ..
-        } = fn_info;
-        Bytecode::from_with_num(op1, *req_num as u16, 0, *info as u16, *arg_num as u16)
-    }
-
     pub fn from_with_value(op1: u64, val: Value) -> Self {
         Self {
             op1,
@@ -147,10 +137,6 @@ impl Bytecode {
                     + (num0 as u64),
             ),
         }
-    }
-
-    pub fn u16(&self, id: usize) -> u16 {
-        (self.op2.0 >> (id * 16)) as u16
     }
 }
 

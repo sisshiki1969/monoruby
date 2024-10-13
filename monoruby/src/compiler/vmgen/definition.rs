@@ -76,9 +76,9 @@ impl Codegen {
 
             movq r13, rax;
             movq rdi, [r13 + (FUNCDATA_META)];
-            movq [rsp - (RSP_STACK_LFP + LFP_META)], rdi;
-            movq [rsp - (RSP_STACK_LFP + LFP_BLOCK)], 0;
-            movq [rsp - (RSP_STACK_LFP + LFP_SELF)], r15;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rdi;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], r15;
         };
         self.set_method_outer();
         monoasm! { &mut self.jit,

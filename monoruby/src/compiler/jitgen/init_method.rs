@@ -8,24 +8,23 @@ impl Codegen {
         );
         match func.trace_ir(store, BcIndex::from(0)) {
             TraceIr::InitMethod(fn_info) => {
-                self.setup_stack(fn_info.stack_offset);
                 self.init_func(&fn_info);
             }
             _ => unreachable!(),
         }
     }
 
-    fn setup_stack(&mut self, stack_offset: usize) {
+    fn init_func(&mut self, fn_info: &FnInitInfo) {
+        let FnInitInfo {
+            reg_num,
+            arg_num,
+            stack_offset,
+            ..
+        } = *fn_info;
+
         monoasm!( &mut self.jit,
             subq rsp, (stack_offset * 16);
         );
-    }
-
-    fn init_func(&mut self, fn_info: &FnInitInfo) {
-        // fill block parameter.
-        let FnInitInfo {
-            reg_num, arg_num, ..
-        } = *fn_info;
 
         let l1 = self.jit.label();
         self.test_heap_frame();

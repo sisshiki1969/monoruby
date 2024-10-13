@@ -890,9 +890,9 @@ impl Codegen {
 
     fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        let count = self.jit.label();
         let compile = self.jit.label();
-        if !no_jit {
+        if !no_jit && !cfg!(feature = "no-jit") {
+            let count = self.jit.label();
             monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
                 testq rax, rax;
@@ -905,7 +905,7 @@ impl Codegen {
             };
         };
         self.fetch_and_dispatch();
-        if !no_jit {
+        if !no_jit && !cfg!(feature = "no-jit") {
             monoasm!( &mut self.jit,
             compile:
                 movq rdi, rbx;
@@ -1009,7 +1009,7 @@ impl Codegen {
             movq rax, (runtime::gen_lambda);
             call rax;
         }
-        self.restore_lbp();
+        self.restore_lfp();
         monoasm! { &mut self.jit,
             movzxw rdi, [r13 - 12];  // r15 <- :1
             negq rdi;
@@ -1110,7 +1110,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LFP_OUTER)];
+            movq  rax, r14;
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1118,7 +1118,6 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             movq rax, [rax - (LFP_BLOCK)];
             movq rdi, (Value::nil().id());
             testq rax, rax;
@@ -1146,7 +1145,7 @@ impl Codegen {
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            lea  rax, [r14 - (LFP_OUTER)];
+            movq  rax, r14;
             testq rdi, rdi;
             jz   loop_exit;
         loop_:
@@ -1154,7 +1153,6 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
-            lea  rax, [rax + (LFP_OUTER)];
             movq rdx, [rax - (LFP_BLOCK)];
             movq rdi, rbx;
             movq rsi, r12;

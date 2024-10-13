@@ -22,7 +22,7 @@ impl Globals {
             },
             match outer {
                 None => "None".to_string(),
-                Some(outer) => format!("{:?}", outer.lfp()),
+                Some(outer) => format!("{:?}", outer),
             },
             meta,
         );

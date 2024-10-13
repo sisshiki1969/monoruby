@@ -185,7 +185,7 @@ impl Codegen {
 
     fn get_outer(&mut self, outer: usize) {
         monoasm!( &mut self.jit,
-            movq rax, [r14 - (LFP_OUTER)];
+            movq rax, [r14];
         );
         for _ in 0..outer - 1 {
             monoasm!( &mut self.jit,

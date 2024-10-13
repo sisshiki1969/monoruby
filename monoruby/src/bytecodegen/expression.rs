@@ -551,7 +551,7 @@ impl BytecodeGen {
                     Some(data) => data.clone(),
                     None => {
                         if self.is_block() {
-                            self.gen_break(val, use_mode)?;
+                            self.gen_block_break(val, use_mode)?;
                             return Ok(());
                         } else {
                             return Err(self.escape_from_eval("break", loc));
@@ -1157,13 +1157,13 @@ impl BytecodeGen {
         Ok(())
     }
 
-    fn gen_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
+    fn gen_block_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodeInst::Break(local.into()), Loc::default());
+            self.emit(BytecodeInst::BlockBreak(local.into()), Loc::default());
         } else {
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.pop().into();
-            self.emit(BytecodeInst::Break(ret), Loc::default());
+            self.emit(BytecodeInst::BlockBreak(ret), Loc::default());
         }
         if use_mode == UseMode2::Push {
             self.push();

@@ -218,44 +218,11 @@ impl ISeqInfo {
         self.non_temp_num as usize
     }
 
-    /*///
-    /// Get a number of optional and rest parameters.
-    ///
-    pub(crate) fn optional_num(&self) -> usize {
-        self.args.pos_num - self.args.required_num
-    }*/
-
-    ///
-    /// Get a number of required parameters.
-    ///
-    pub(crate) fn req_num(&self) -> usize {
-        self.args.required_num
-    }
-
-    ///
-    /// get a number of required or optional parameters.
-    ///
-    pub(crate) fn reqopt_num(&self) -> usize {
-        self.args.reqopt_num
-    }
-
     ///
     /// Get a number of required + optional + rest arguments.
     ///
     pub(crate) fn pos_num(&self) -> usize {
         self.args.pos_num
-    }
-
-    ///
-    /// Get a parameter info.
-    ///
-    /// bit 0:rest(yes=1 no =0) bit 1:block
-    pub(crate) fn info(&self) -> usize {
-        (if self.args.block_param.is_some() {
-            2
-        } else {
-            0
-        }) + (self.args.pos_num - self.args.reqopt_num)
     }
 
     ///
@@ -500,7 +467,7 @@ impl ISeqInfo {
                     fid: pc.cached_fid(),
                     version: (pc + 1).cached_version(),
                 },
-                32..=33 => TraceIr::MethodCallBlock {
+                32..=33 => TraceIr::MethodCallWithBlock {
                     callid: op1_l.into(),
                     recv_class: pc.cached_class1(),
                     fid: pc.cached_fid(),
@@ -586,7 +553,7 @@ impl ISeqInfo {
                 },
                 80 => TraceIr::Ret(SlotId::new(op1_w1)),
                 81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
-                82 => TraceIr::Break(SlotId::new(op1_w1)),
+                82 => TraceIr::BlockBreak(SlotId::new(op1_w1)),
                 83 => TraceIr::Raise(SlotId::new(op1_w1)),
                 85 => TraceIr::EnsureEnd,
                 86 => TraceIr::ConcatRegexp(SlotId::from(op1_w1), SlotId::new(op2_w2), op3_w3),
@@ -637,39 +604,25 @@ impl ISeqInfo {
                 132 => {
                     let base_class = pc.classid1();
                     let idx_class = pc.classid2();
-                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
-                        TraceIr::ArrayIndex {
-                            dst: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                        }
-                    } else {
-                        TraceIr::Index {
-                            dst: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                            base_class,
-                            idx_class,
-                        }
+
+                    TraceIr::Index {
+                        dst: SlotId::new(op1_w1),
+                        base: SlotId::new(op2_w2),
+                        idx: SlotId::new(op3_w3),
+                        base_class,
+                        idx_class,
                     }
                 }
                 133 => {
                     let base_class = pc.classid1();
                     let idx_class = pc.classid2();
-                    if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
-                        TraceIr::ArrayIndexAssign {
-                            src: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                        }
-                    } else {
-                        TraceIr::IndexAssign {
-                            src: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                            base_class,
-                            idx_class,
-                        }
+
+                    TraceIr::IndexAssign {
+                        src: SlotId::new(op1_w1),
+                        base: SlotId::new(op2_w2),
+                        idx: SlotId::new(op3_w3),
+                        base_class,
+                        idx_class,
                     }
                 }
                 134..=141 => {
@@ -818,12 +771,9 @@ impl ISeqInfo {
                         }
                     }
                 }
-                170 | 172 => TraceIr::InitMethod(FnInitInfo {
+                170 => TraceIr::InitMethod(FnInitInfo {
                     reg_num: op1_w1 as usize,
-                    arg_num: pc.u16(3) as usize,
-                    reqopt_num: op2_w2 as usize,
-                    req_num: pc.u16(0) as usize,
-                    info: pc.u16(2) as usize,
+                    arg_num: op2_w2 as usize,
                     stack_offset: op3_w3 as usize,
                 }),
                 171 => TraceIr::ExpandArray {

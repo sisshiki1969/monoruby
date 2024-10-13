@@ -62,7 +62,12 @@ impl FuncData {
 
     fn set_reg_num(&mut self, reg_num: u16) {
         self.meta.set_reg_num(reg_num);
-        self.ofs = ((reg_num as usize * 8 + LFP_SELF as usize + 15) >> 4) as u16;
+        self.set_offset(reg_num);
+    }
+
+    fn set_offset(&mut self, reg_num: u16) {
+        self.ofs =
+            ((reg_num as usize * 8 + (RSP_LOCAL_FRAME + LFP_SELF) as usize + 31) / 16) as u16;
     }
 
     pub(in crate::globals) fn set_codeptr(&mut self, codeptr: monoasm::CodePtr) {
@@ -107,7 +112,8 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}{}{}{} {:?} reg_num:{}",
+            "{:?} {}{}{}{} reg_num:{}",
+            self.func_id(),
             if self.is_native() { "NATIVE " } else { "" },
             if self.is_class_def() {
                 "class_def "
@@ -116,7 +122,6 @@ impl std::fmt::Debug for Meta {
             },
             if self.is_simple() { "SIMPLE " } else { "" },
             if self.on_stack() { "stack" } else { "heap" },
-            self.func_id(),
             self.reg_num()
         )
     }
@@ -661,17 +666,18 @@ impl FuncInfo {
         let name = name.into();
         let min = params.req_num() as u16;
         let max = params.reqopt_num() as u16;
-        let ofs = ((max as usize * 8 + LFP_ARG0 as usize + 15) >> 4) as u16;
+        let mut data = FuncData {
+            codeptr: None,
+            pc: None,
+            meta,
+            ofs: 0,
+            min,
+            max,
+            _padding: [0; 4],
+        };
+        data.set_offset(max);
         Self {
-            data: FuncData {
-                codeptr: None,
-                pc: None,
-                meta,
-                ofs,
-                min,
-                max,
-                _padding: [0; 4],
-            },
+            data,
             kind,
             ext: Box::new(FuncExt {
                 name,
@@ -903,6 +909,14 @@ impl FuncInfo {
         }
     }
 
+    pub(crate) fn is_native(&self) -> bool {
+        self.meta().is_native()
+    }
+
+    pub(crate) fn get_offset(&self) -> usize {
+        ((RSP_LOCAL_FRAME + LFP_ARG0) as usize + 8 * self.total_args() + 8) & !0xf
+    }
+
     ///
     /// Get the max number of positional arguments (= required + optional) of this function.
     ///
@@ -1012,26 +1026,22 @@ impl FuncInfo {
             "<{}> {file_name}:{line}",
             globals.func_description(func.id()),
         );
-        eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
+        eprintln!(
+            "{:?} local_vars:{} temp:{}",
+            self.data.meta,
+            func.local_num(),
+            func.temp_num
+        );
+        eprintln!("{:?}", func.args);
         eprintln!("{:?}", func.get_exception_map());
         for i in 0..func.bytecode().len() {
-            let trace_ir = func.trace_ir(&globals.store, BcIndex::from(i));
+            let bc_pos = BcIndex::from(i);
+            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
+                eprintln!("{:?}", bbid);
+            };
+            let trace_ir = func.trace_ir(&globals.store, bc_pos);
             if let Some(fmt) = trace_ir.format(&globals.store) {
-                eprint!(
-                    "{}:{:05} [{:02}] ",
-                    if func
-                        .bb_info
-                        .is_bb_head(bytecodegen::BcIndex::from(i))
-                        .is_some()
-                    {
-                        "+"
-                    } else {
-                        " "
-                    },
-                    i,
-                    func.sp[i].0
-                );
-                eprintln!("{}", fmt);
+                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
             };
         }
         eprintln!("------------------------------------");

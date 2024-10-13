@@ -33,17 +33,6 @@ fn main() {
         }
     }
 
-    match Command::new("which").args(["ruby"]).output() {
-        Ok(output) => {
-            let dest_path = lib_path.clone().join("ruby_path");
-            let load_path = std::str::from_utf8(&output.stdout).unwrap();
-            fs::write(dest_path, load_path).unwrap();
-        }
-        Err(_) => {
-            eprintln!("failed to read ruby path");
-        }
-    }
-
     let mut directories = vec![(std::path::PathBuf::from("startup"), lib_path)];
 
     while let Some((from_dir, to_dir)) = directories.pop() {
