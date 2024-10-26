@@ -376,7 +376,7 @@ impl BBContext {
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
-            merge_ctx.union(bbctx);
+            merge_ctx.merge(bbctx);
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  union_entries: {:?}", &merge_ctx);

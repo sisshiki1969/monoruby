@@ -95,7 +95,7 @@ impl JitContext {
                     ir.store_concrete_value(bbctx, dst, val);
                 } else {
                     ir.deep_copy_lit(bbctx, val);
-                    ir.reg2acc_guarded(bbctx, GP::Rax, dst, Guarded::from_concrete_value(val));
+                    ir.reg2acc_concrete_value(bbctx, GP::Rax, dst, val);
                 }
             }
             TraceIr::Array { dst, callid } => {
@@ -103,7 +103,7 @@ impl JitContext {
                 ir.write_back_range(bbctx, args, pos_num as u16);
                 ir.unlink(bbctx, dst);
                 ir.new_array(bbctx, callid);
-                ir.reg2acc_guarded(bbctx, GP::Rax, dst, Guarded::ArrayTy);
+                ir.reg2acc_array_ty(bbctx, GP::Rax, dst);
             }
             TraceIr::Lambda { dst, func_id } => {
                 ir.unlink(bbctx, dst);
@@ -157,31 +157,12 @@ impl JitContext {
                     let base_slot = store[id].base;
                     if let Some(slot) = base_slot {
                         if let Some(base_class) = cached_base_class {
-                            ir.fetch_to_reg(bbctx, slot, GP::Rax);
-                            let deopt = ir.new_deopt(bbctx, pc);
-                            ir.inst.push(AsmInst::GuardBaseClass { base_class, deopt });
+                            ir.guard_base_class(bbctx, slot, base_class, pc);
                         } else {
                             return CompileResult::Recompile;
                         }
                     }
-                    let deopt = ir.new_deopt(bbctx, pc);
-                    if let Some(f) = cached_val.try_float() {
-                        let fdst = ir.store_new_both(bbctx, dst, Guarded::Float);
-                        ir.inst.push(AsmInst::LoadFloatConstant {
-                            fdst,
-                            f,
-                            cached_version,
-                            deopt,
-                        });
-                        ir.reg2stack(GP::Rax, dst);
-                    } else {
-                        ir.inst.push(AsmInst::LoadGenericConstant {
-                            cached_val,
-                            cached_version,
-                            deopt,
-                        });
-                        ir.rax2acc(bbctx, dst);
-                    }
+                    ir.load_constant(bbctx, dst, cached_version, cached_val, pc);
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -341,6 +322,7 @@ impl JitContext {
                     ir.inst.push(AsmInst::FloatCmp { kind, mode });
                 } else {
                     ir.fetch_binary(bbctx, mode);
+                    ir.unlink(bbctx, dst);
                     ir.generic_cmp(bbctx, pc, kind);
                 }
                 ir.rax2acc(bbctx, dst);

@@ -224,7 +224,8 @@ impl AsmIr {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
             if target.slot(slot) == LinkMode::Stack {
-                self.write_back_with_guarded(&mut bbctx, slot, guarded);
+                self.write_back_slot(&mut bbctx, slot);
+                bbctx.set_slot(slot, LinkMode::Stack, guarded);
             };
         }
 
@@ -233,12 +234,8 @@ impl AsmIr {
             let guarded = target.guarded(slot);
             match (bbctx.slot(slot), target.slot(slot)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
-                    if l == r {
-                    } else if bbctx.is_xmm_vacant(r) {
-                        self.store_xmm(&mut bbctx, slot, r);
-                        self.xmm_move(l, r);
-                    } else {
-                        self.xmm_swap(&mut bbctx, l, r);
+                    if l != r {
+                        self.to_xmm(&mut bbctx, slot, l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
@@ -248,12 +245,8 @@ impl AsmIr {
                     if l == r {
                         // Both(l) -> Xmm(l)
                         bbctx.set_xmm(slot, l);
-                    } else if bbctx.is_xmm_vacant(r) {
-                        // Xmm(l) -> Xmm(r)
-                        self.store_xmm(&mut bbctx, slot, r);
-                        self.xmm_move(l, r);
                     } else {
-                        self.xmm_swap(&mut bbctx, l, r);
+                        self.to_xmm(&mut bbctx, slot, l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
@@ -261,20 +254,13 @@ impl AsmIr {
                     self.xmm2stack(l, vec![slot]);
                     if l == r {
                         bbctx.set_both_float(slot, l);
-                    } else if bbctx.is_xmm_vacant(r) {
-                        self.store_both(&mut bbctx, slot, r, guarded);
-                        self.xmm_move(l, r);
                     } else {
-                        self.xmm_swap(&mut bbctx, l, r);
+                        self.to_both(&mut bbctx, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
-                    if l == r {
-                    } else if bbctx.is_xmm_vacant(r) {
-                        self.store_both(&mut bbctx, slot, r, guarded);
-                        self.xmm_move(l, r);
-                    } else {
-                        self.xmm_swap(&mut bbctx, l, r);
+                    if l != r {
+                        self.to_both(&mut bbctx, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
@@ -282,7 +268,6 @@ impl AsmIr {
                     self.stack2reg(slot, GP::Rax);
                     self.inst.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                     self.store_both(&mut bbctx, slot, r, guarded);
-                    //conv_list.push((slot, r));
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
                 (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
@@ -295,6 +280,26 @@ impl AsmIr {
                 }
                 (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
             }
+        }
+    }
+
+    /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Xmm.
+    fn to_xmm(&mut self, bbctx: &mut BBContext, slot: SlotId, l: Xmm, r: Xmm) {
+        if bbctx.is_xmm_vacant(r) {
+            self.store_xmm(bbctx, slot, r);
+            self.xmm_move(l, r);
+        } else {
+            self.xmm_swap(bbctx, l, r);
+        }
+    }
+
+    /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Both.
+    fn to_both(&mut self, bbctx: &mut BBContext, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
+        if bbctx.is_xmm_vacant(r) {
+            self.store_both(bbctx, slot, r, guarded);
+            self.xmm_move(l, r);
+        } else {
+            self.xmm_swap(bbctx, l, r);
         }
     }
 }

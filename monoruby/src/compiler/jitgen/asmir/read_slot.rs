@@ -9,9 +9,9 @@ impl AsmIr {
     ///
     pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
         if slot >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
-            panic!();
+            unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
         };
+        bb[slot].r#use();
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
@@ -45,7 +45,7 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn fetch_to_rsp_offset(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
+    pub(crate) fn fetch_to_callee_stack(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
         match bb.slot(reg) {
             LinkMode::Accumulator => {
                 self.reg2rsp_offset(GP::R15, offset);
@@ -104,28 +104,29 @@ impl AsmIr {
     fn fetch_float_assume_integer(
         &mut self,
         bb: &mut BBContext,
-        reg: SlotId,
+        slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match bb.slot(reg) {
+        bb[slot].r#use();
+        match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                self.stack2reg(reg, GP::Rdi);
+                let x = self.store_new_both_integer(bb, slot);
+                self.stack2reg(slot, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                self.reg2stack(GP::R15, reg);
+                let x = self.store_new_both_integer(bb, slot);
+                self.reg2stack(GP::R15, slot);
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.store_new_both(bb, origin, Guarded::Fixnum);
+                let x = self.store_new_both_integer(bb, origin);
                 self.stack2reg(origin, GP::Rdi);
                 self.int2xmm(GP::Rdi, x, deopt);
                 x
@@ -133,13 +134,13 @@ impl AsmIr {
             LinkMode::ConcreteValue(v) => {
                 if let Some(f) = v.try_float() {
                     // -> Xmm
-                    let x = self.store_new_xmm(bb, reg);
+                    let x = self.store_new_xmm(bb, slot);
                     self.f64toxmm(f, x);
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                    self.i64toboth(i, reg, x);
+                    let x = self.store_new_both_integer(bb, slot);
+                    self.i64toboth(i, slot, x);
                     x
                 } else {
                     unreachable!()
@@ -161,25 +162,26 @@ impl AsmIr {
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
+        bb[slot].r#use();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
                 // -> Both
-                let x = self.store_new_both(bb, slot, Guarded::Float);
+                let x = self.store_new_both_float(bb, slot);
                 self.stack2reg(slot, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
             }
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both(bb, slot, Guarded::Float);
+                let x = self.store_new_both_float(bb, slot);
                 self.reg2stack(GP::R15, slot);
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
             LinkMode::Alias(origin) => {
                 // -> Both
-                let x = self.store_new_both(bb, origin, Guarded::Float);
+                let x = self.store_new_both_float(bb, origin);
                 self.stack2reg(origin, GP::Rdi);
                 self.float2xmm(GP::Rdi, x, deopt);
                 x
@@ -192,7 +194,7 @@ impl AsmIr {
                     x
                 } else if let Some(i) = v.try_fixnum() {
                     // -> Both
-                    let x = self.store_new_both(bb, slot, Guarded::Float);
+                    let x = self.store_new_both_float(bb, slot);
                     self.i64toboth(i, slot, x);
                     x
                 } else {

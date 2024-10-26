@@ -148,7 +148,26 @@ impl AsmIr {
         self.reg2acc_guarded(bb, src, dst, slot::Guarded::Fixnum)
     }
 
-    pub(crate) fn reg2acc_guarded(
+    pub(crate) fn reg2acc_array_ty(
+        &mut self,
+        bb: &mut BBContext,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(bb, src, dst, slot::Guarded::ArrayTy)
+    }
+
+    pub(crate) fn reg2acc_concrete_value(
+        &mut self,
+        bb: &mut BBContext,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        v: Value,
+    ) {
+        self.reg2acc_guarded(bb, src, dst, Guarded::from_concrete_value(v))
+    }
+
+    fn reg2acc_guarded(
         &mut self,
         bb: &mut BBContext,
         src: GP,
@@ -411,6 +430,69 @@ impl AsmIr {
         });
     }
 
+    pub fn guard_base_class(
+        &mut self,
+        bbctx: &mut BBContext,
+        slot: SlotId,
+        base_class: Value,
+        pc: BytecodePtr,
+    ) {
+        self.fetch_to_reg(bbctx, slot, GP::Rax);
+        let deopt = self.new_deopt(bbctx, pc);
+        self.inst
+            .push(AsmInst::GuardBaseClass { base_class, deopt });
+    }
+
+    pub fn load_constant(
+        &mut self,
+        bbctx: &mut BBContext,
+        dst: SlotId,
+        cached_version: usize,
+        cached_val: Value,
+        pc: BytecodePtr,
+    ) {
+        let deopt = self.new_deopt(bbctx, pc);
+        if let Some(f) = cached_val.try_float() {
+            self.load_float_constant(bbctx, f, dst, cached_version, deopt);
+        } else {
+            self.load_generic_constant(bbctx, cached_val, dst, cached_version, deopt);
+        }
+    }
+
+    fn load_float_constant(
+        &mut self,
+        bbctx: &mut BBContext,
+        f: f64,
+        dst: SlotId,
+        cached_version: usize,
+        deopt: AsmDeopt,
+    ) {
+        let fdst = self.store_new_both_float(bbctx, dst);
+        self.inst.push(AsmInst::LoadFloatConstant {
+            fdst,
+            f,
+            cached_version,
+            deopt,
+        });
+        self.reg2stack(GP::Rax, dst);
+    }
+
+    fn load_generic_constant(
+        &mut self,
+        bbctx: &mut BBContext,
+        cached_val: Value,
+        dst: SlotId,
+        cached_version: usize,
+        deopt: AsmDeopt,
+    ) {
+        self.inst.push(AsmInst::LoadGenericConstant {
+            cached_val,
+            cached_version,
+            deopt,
+        });
+        self.rax2acc(bbctx, dst);
+    }
+
     pub(super) fn handle_error(&mut self, error: AsmError) {
         self.inst.push(AsmInst::HandleError(error));
     }
@@ -505,7 +587,7 @@ impl AsmIr {
             for i in 0..pos_num {
                 let reg = args + i;
                 let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_to_rsp_offset(bb, reg, offset);
+                self.fetch_to_callee_stack(bb, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
