@@ -11,13 +11,13 @@ impl AsmIr {
         if slot >= bb.sp {
             unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
         };
-        bb[slot].r#use();
+        bb[slot].use_as_non_float();
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.xmm2stack(xmm, vec![slot]);
+                self.xmm2stack(xmm, slot);
                 self.reg_move(GP::Rax, dst);
                 bb.set_both_float(slot, xmm);
             }
@@ -101,13 +101,13 @@ impl AsmIr {
     /// ### destroy
     /// - rdi
     ///
-    fn fetch_float_assume_integer(
+    pub(super) fn fetch_float_assume_integer(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        bb[slot].r#use();
+        bb[slot].use_as_non_float();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
@@ -162,7 +162,7 @@ impl AsmIr {
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        bb[slot].r#use();
+        bb[slot].use_as_float();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => {
@@ -201,46 +201,6 @@ impl AsmIr {
                     unreachable!()
                 }
             }
-        }
-    }
-
-    ///
-    /// Read from a slot *reg* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi, rax
-    ///
-    fn fetch_float_assume(
-        &mut self,
-        bb: &mut BBContext,
-        rhs: SlotId,
-        class: ClassId,
-        deopt: AsmDeopt,
-    ) -> Xmm {
-        match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
-            _ => unreachable!(),
-        }
-    }
-
-    pub(super) fn fetch_float_binary(
-        &mut self,
-        bb: &mut BBContext,
-        lhs: SlotId,
-        rhs: SlotId,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        deopt: AsmDeopt,
-    ) -> (Xmm, Xmm) {
-        if lhs != rhs {
-            (
-                self.fetch_float_assume(bb, lhs, lhs_class, deopt),
-                self.fetch_float_assume(bb, rhs, rhs_class, deopt),
-            )
-        } else {
-            let lhs = self.fetch_float_assume(bb, lhs, lhs_class, deopt);
-            (lhs, lhs)
         }
     }
 }

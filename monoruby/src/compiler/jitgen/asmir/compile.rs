@@ -127,7 +127,7 @@ impl Codegen {
                     movq xmm(x.enc()), [rip + f];
                 }
             }
-            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &slots),
+            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &[slots]),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => {
                 self.xmm_save(using_xmm);

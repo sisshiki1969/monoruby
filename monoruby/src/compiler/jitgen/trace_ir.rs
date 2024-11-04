@@ -306,30 +306,6 @@ pub(crate) enum TraceIr {
     LoopEnd,
 }
 
-/*enum DefKind<'a> {
-    None,
-    Reg { slot: &'a SlotId, is_float: bool },
-    Range { start: &'a SlotId, len: u16 },
-}
-
-impl<'a> DefKind<'a> {
-    fn reg(slot: &'a SlotId, is_float: bool) -> Self {
-        Self::Reg { slot, is_float }
-    }
-
-    fn range(start: &'a SlotId, len: u16) -> Self {
-        Self::Range { start, len }
-    }
-
-    fn from_slot(slot: &'a Option<SlotId>, is_float: bool) -> Self {
-        if let Some(slot) = slot {
-            Self::Reg { slot, is_float }
-        } else {
-            Self::None
-        }
-    }
-}*/
-
 impl TraceIr {
     pub(crate) fn get_exit_type(&self) -> Option<ExitType> {
         match self {
@@ -350,82 +326,6 @@ impl TraceIr {
         }
         None
     }
-
-    /*pub(crate) fn get_def(&self, store: &Store) -> DefKind {
-        match self {
-            TraceIr::DefinedYield { dst }
-            | TraceIr::DefinedConst { dst, .. }
-            | TraceIr::DefinedGvar { dst, .. }
-            | TraceIr::DefinedIvar { dst, .. }
-            | TraceIr::Integer(dst, ..)
-            | TraceIr::Symbol(dst, ..)
-            | TraceIr::Nil(dst)
-            | TraceIr::DefinedMethod { dst, .. }
-            | TraceIr::Array { dst, .. }
-            | TraceIr::Hash { dst, .. }
-            | TraceIr::Range { dst, .. }
-            | TraceIr::Index { dst, .. }
-            | TraceIr::Lambda { dst, .. }
-            | TraceIr::BlockArgProxy(dst, _)
-            | TraceIr::BlockArg(dst, _)
-            | TraceIr::LoadDynVar(dst, ..)
-            | TraceIr::LoadIvar(dst, ..)
-            | TraceIr::LoadCvar { dst, .. }
-            | TraceIr::CheckCvar { dst, .. }
-            | TraceIr::LoadGvar { dst, .. }
-            | TraceIr::LoadSvar { dst, .. }
-            | TraceIr::BitNot { dst, .. }
-            | TraceIr::Not { dst, .. } => DefKind::reg(dst, false),
-            TraceIr::Literal(dst, val) => {
-                let is_float = val.class() == FLOAT_CLASS;
-                DefKind::reg(dst, is_float)
-            }
-            TraceIr::ClassDef { dst, .. }
-            | TraceIr::ModuleDef { dst, .. }
-            | TraceIr::SingletonClassDef { dst, .. } => DefKind::from_slot(dst, false),
-            TraceIr::LoadConst(dst, constsite) => {
-                let is_float = if let Some(value) = store[*constsite].cache.2 {
-                    value.is_float()
-                } else {
-                    false
-                };
-                DefKind::reg(dst, is_float)
-            }
-            TraceIr::UnOp { kind: _, dst, src } => {
-                let is_float = pc.is_float1();
-                &[(dst, is_float)]
-            }
-            TraceIr::FBinOp { dst, mode, .. } => DefKind::from_slot(dst, true),
-            TraceIr::IBinOp { dst, .. }
-            | TraceIr::BinOp { dst, .. }
-            | TraceIr::IBinOp { dst, .. }
-            | TraceIr::IBinOp { dst, .. }
-            | TraceIr::BinOp { dst, .. }
-            | TraceIr::BinOp { dst, .. }
-            | TraceIr::Cmp(_, dst, ..) => DefKind::from_slot(dst, false),
-            TraceIr::Mov(dst, src) => {
-                info.copy(dst, src);
-            }
-            TraceIr::ConcatStr(dst, ..) | TraceIr::ConcatRegexp(dst, ..) => {
-                DefKind::from_slot(dst, false)
-            }
-            TraceIr::ExpandArray {
-                dst: (dst, len), ..
-            } => DefKind::range(dst, *len),
-            TraceIr::Yield { callid }
-            | TraceIr::MethodCall { callid, .. }
-            | TraceIr::MethodCallBlock { callid, .. } => {
-                let CallSiteInfo { dst, .. } = &store[*callid];
-                DefKind::from_slot(dst, false)
-            }
-            TraceIr::InlineCall { inline_id, callid }
-            | TraceIr::InlineObjectSend { inline_id, callid }
-            | TraceIr::InlineObjectSendSplat { inline_id, callid } => {
-                (store.get_inline_info(inline_id).inline_analysis)(&mut info, &store[callid]);
-            }
-            _ => DefKind::None,
-        }
-    }*/
 }
 
 impl TraceIr {

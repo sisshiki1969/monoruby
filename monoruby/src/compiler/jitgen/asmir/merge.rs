@@ -251,7 +251,7 @@ impl AsmIr {
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.xmm2stack(l, vec![slot]);
+                    self.xmm2stack(l, slot);
                     if l == r {
                         bbctx.set_both_float(slot, l);
                     } else {

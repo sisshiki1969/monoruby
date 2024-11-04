@@ -41,8 +41,12 @@ pub(crate) struct SlotState {
 }
 
 impl SlotState {
-    pub(super) fn r#use(&mut self) {
-        self.is_used.r#use();
+    pub(super) fn use_as_float(&mut self) {
+        self.is_used.use_as_float();
+    }
+
+    pub(super) fn use_as_non_float(&mut self) {
+        self.is_used.use_as_non_float();
     }
 }
 
@@ -56,7 +60,7 @@ enum IsUsed {
     ///
     /// Used in any of paths.
     ///
-    Used,
+    Used(UsedAs),
     ///
     /// Guaranteed not to be used (= killed) in all paths.
     ///
@@ -66,26 +70,101 @@ enum IsUsed {
 impl IsUsed {
     fn merge(&mut self, other: &Self) {
         *self = match (&self, other) {
-            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
+            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.merge(r)),
+            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
             (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
             _ => IsUsed::ND,
         };
     }
 
-    fn concat(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used, _) => IsUsed::Used,
-            (IsUsed::Killed, _) => IsUsed::Killed,
-            (IsUsed::ND, other) => *other,
-        };
+    fn use_as_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
+        }
     }
 
-    fn r#use(&mut self) {
-        self.concat(&IsUsed::Used);
+    fn use_as_non_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_non_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
+        }
     }
 
     fn kill(&mut self) {
-        self.concat(&IsUsed::Killed);
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.kill(),
+            IsUsed::ND => *self = IsUsed::Killed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UsedAs {
+    ty: UseTy,
+    killed: bool,
+}
+
+impl UsedAs {
+    fn float() -> Self {
+        UsedAs {
+            ty: UseTy::Float,
+            killed: false,
+        }
+    }
+
+    fn non_float() -> Self {
+        UsedAs {
+            ty: UseTy::NonFloat,
+            killed: false,
+        }
+    }
+
+    fn use_as_float(&mut self) {
+        self.use_as(UseTy::Float);
+    }
+
+    fn use_as_non_float(&mut self) {
+        self.use_as(UseTy::NonFloat);
+    }
+
+    fn use_as(&mut self, other: UseTy) {
+        if self.killed {
+            return;
+        } else {
+            self.ty = self.ty.union(&other);
+        }
+    }
+
+    fn merge(&self, other: &Self) -> Self {
+        Self {
+            ty: self.ty.union(&other.ty),
+            killed: self.killed && other.killed,
+        }
+    }
+
+    fn kill(&mut self) {
+        self.killed = true;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UseTy {
+    Float,
+    NonFloat,
+    Both,
+}
+
+impl UseTy {
+    fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (UseTy::Float, UseTy::Float) => UseTy::Float,
+            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
+            (_, _) => UseTy::Both,
+        }
     }
 }
 
@@ -499,7 +578,7 @@ impl AsmIr {
             LinkMode::Xmm(xmm) => {
                 // Xmm -> Both
                 bbctx.set_both_float(slot, xmm);
-                self.xmm2stack(xmm, vec![slot]);
+                self.xmm2stack(xmm, slot);
             }
             LinkMode::ConcreteValue(v) => {
                 // Literal -> Stack
@@ -535,18 +614,15 @@ impl AsmIr {
                 LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
                     assert!(bbctx.xmm(xmm).contains(&slot));
                     bbctx.xmm_mut(xmm).retain(|e| *e != slot);
-                    bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value)
                 }
                 LinkMode::Alias(origin) => {
                     assert_eq!(bbctx[origin].link, LinkMode::Stack);
                     assert!(bbctx[origin].alias.contains(&slot));
                     bbctx[origin].alias.retain(|e| *e != slot);
-                    bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value)
                 }
-                LinkMode::ConcreteValue(_) => bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value),
+                LinkMode::ConcreteValue(_) => {}
                 LinkMode::Accumulator => {
                     bbctx.r15 = None;
-                    bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value)
                 }
                 LinkMode::Stack => {
                     // We must write back all aliases of *reg*.
@@ -561,6 +637,7 @@ impl AsmIr {
                     }
                 }
             }
+            bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value)
         }
     }
 
@@ -662,7 +739,6 @@ impl AsmIr {
         slot: SlotId,
         v: Value,
     ) {
-        self.unlink(bbctx, slot);
         let guarded = Guarded::from_concrete_value(v);
         bbctx.set_slot(slot, LinkMode::ConcreteValue(v), guarded);
     }
@@ -761,6 +837,7 @@ impl AsmIr {
                 self.store_alias(bbctx, origin, dst);
             }
             LinkMode::ConcreteValue(v) => {
+                self.unlink(bbctx, dst);
                 self.store_concrete_value(bbctx, dst, v);
             }
             LinkMode::Accumulator => {
@@ -833,6 +910,7 @@ impl MergeContext {
                     ir.store_new_xmm(&mut self.0, i);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {
+                    ir.unlink(&mut self.0, i);
                     ir.store_concrete_value(&mut self.0, i, l)
                 }
                 _ => ir.unlink(&mut self.0, i),

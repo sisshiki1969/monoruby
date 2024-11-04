@@ -292,7 +292,7 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm2stack(&mut self, xmm: Xmm, reg: Vec<SlotId>) {
+    fn xmm2stack(&mut self, xmm: Xmm, reg: SlotId) {
         self.inst.push(AsmInst::XmmToStack(xmm, reg));
     }
 
@@ -976,17 +976,40 @@ impl AsmIr {
         }
     }
 
+    fn fetch_float_assume(
+        &mut self,
+        bb: &mut BBContext,
+        rhs: SlotId,
+        class: ClassId,
+        deopt: AsmDeopt,
+    ) -> Xmm {
+        match class {
+            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
+            _ => unreachable!(),
+        }
+    }
+
     pub(super) fn fmode(
         &mut self,
         mode: &OpMode,
         bb: &mut BBContext,
         lhs_class: ClassId,
         rhs_class: ClassId,
-        deopt: AsmDeopt,
+        pc: BytecodePtr,
     ) -> FMode {
+        let deopt = self.new_deopt(bb, pc);
         match mode {
             OpMode::RR(l, r) => {
-                let (flhs, frhs) = self.fetch_float_binary(bb, *l, *r, lhs_class, rhs_class, deopt);
+                let (flhs, frhs) = if l != r {
+                    (
+                        self.fetch_float_assume(bb, *l, lhs_class, deopt),
+                        self.fetch_float_assume(bb, *r, rhs_class, deopt),
+                    )
+                } else {
+                    let lhs = self.fetch_float_assume(bb, *l, lhs_class, deopt);
+                    (lhs, lhs)
+                };
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
@@ -1051,7 +1074,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToStack(Xmm, Vec<SlotId>),
+    XmmToStack(Xmm, SlotId),
     ///
     /// ### destroy
     /// - rax

@@ -561,7 +561,7 @@ impl Codegen {
         };
         let bbir: Vec<_> = (bb_begin..=bb_end)
             .map(|bbid| {
-                let ir = ctx.compile_basic_block(self, store, func, position, bbid);
+                let ir = ctx.compile_basic_block(&mut self.jit, store, func, position, bbid);
                 (bbid, ir)
             })
             .collect();
