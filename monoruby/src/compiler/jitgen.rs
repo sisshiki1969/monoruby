@@ -11,7 +11,7 @@ use self::slot::Guarded;
 use super::*;
 use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::SlotContext;
+use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
 pub mod analysis;
@@ -54,6 +54,8 @@ enum CompileResult {
     ExitLoop,
     /// jump to another basic block.
     Branch,
+    /// leave the current method/block.
+    Leave,
     /// deoptimize and fallback to the interpreter.
     Recompile,
 }
@@ -128,6 +130,7 @@ struct JitContext {
     /// Information for continuation bridge.
     ///
     continuation_bridge: Option<(Option<ContinuationInfo>, DestLabel)>,
+    liveness: Liveness,
     ///
     /// Class version at compile time.
     ///
@@ -181,6 +184,7 @@ impl JitContext {
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
+            liveness: Liveness::new(total_reg_num),
             class_version: codegen.class_version(),
             bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
@@ -359,7 +363,7 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            slot_state: SlotContext::new(cc),
+            slot_state: SlotContext::from(cc),
             sp: SlotId(cc.local_num as u16),
             next_sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,

@@ -35,7 +35,7 @@ impl AsmIr {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.fetch_to_reg(bb, src, GP::Rax);
+        self.fetch_for_gpr(bb, src, GP::Rax);
         self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);

@@ -431,7 +431,7 @@ fn array_shl(
     _pc: BytecodePtr,
 ) {
     let CallSiteInfo { dst, args, .. } = store[callid];
-    ir.fetch_to_reg(bb, args, GP::Rsi);
+    ir.fetch_for_gpr(bb, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using_xmm);

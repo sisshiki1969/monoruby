@@ -82,7 +82,7 @@ impl AsmIr {
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
                 self.write_back_locals(bb);
             }
-            self.fetch_to_reg(bb, recv, GP::Rdi);
+            self.fetch_for_gpr(bb, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
             let using_xmm = bb.get_using_xmm();
             self.guard_version(fid, version, callid, using_xmm, deopt, error);
@@ -117,7 +117,7 @@ impl AsmIr {
         pc: BytecodePtr,
     ) {
         let recv = store[callid].recv;
-        self.fetch_to_reg(bb, recv, GP::Rdi);
+        self.fetch_for_gpr(bb, recv, GP::Rdi);
         let (deopt, error) = self.new_deopt_error(bb, pc);
         let using_xmm = bb.get_using_xmm();
         self.guard_version(fid, version, callid, using_xmm, deopt, error);
@@ -167,7 +167,7 @@ impl AsmIr {
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                self.fetch_to_reg(bb, args, GP::Rdx);
+                self.fetch_for_gpr(bb, args, GP::Rdx);
                 self.attr_writer(bb, pc, ivar_id);
             }
             FuncKind::Builtin { .. } | FuncKind::ISeq(_) => {

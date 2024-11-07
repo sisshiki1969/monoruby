@@ -2,14 +2,14 @@ use super::*;
 
 impl AsmIr {
     ///
-    /// fetch *reg* and store in *dst*.
+    /// fetch *slot* and store in *dst*.
     ///
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
+    pub(crate) fn fetch_for_gpr(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
         if slot >= bb.sp {
-            unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
+            unreachable!("{:?} >= {:?} in fetch_for_gpr()", slot, bb.sp);
         };
         bb[slot].use_as_value();
         match bb.slot(slot) {
@@ -45,17 +45,17 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn fetch_to_callee_stack(&mut self, bb: &mut BBContext, slot: SlotId, offset: i32) {
+    pub(crate) fn fetch_for_callee(&mut self, bb: &mut BBContext, slot: SlotId, offset: i32) {
         match bb.slot(slot) {
             LinkMode::Accumulator => {
                 if slot >= bb.sp {
-                    unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
+                    unreachable!("{:?} >= {:?} in fetch_for_callee()", slot, bb.sp);
                 };
                 bb[slot].use_as_value();
                 self.reg2rsp_offset(GP::R15, offset);
             }
             _ => {
-                self.fetch_to_reg(bb, slot, GP::Rax);
+                self.fetch_for_gpr(bb, slot, GP::Rax);
                 self.reg2rsp_offset(GP::Rax, offset);
             }
         }
@@ -69,7 +69,7 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) {
         let is_array = bb.is_array_ty(slot);
-        self.fetch_to_reg(bb, slot, dst);
+        self.fetch_for_gpr(bb, slot, dst);
         if !is_array {
             self.guard_array_ty(dst, deopt);
             bb.set_guard_array_ty(slot);
@@ -84,7 +84,7 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) {
         let is_fixnum = bb.is_fixnum(slot);
-        self.fetch_to_reg(bb, slot, dst);
+        self.fetch_for_gpr(bb, slot, dst);
         if !is_fixnum {
             self.guard_fixnum(dst, deopt);
             bb.set_guard_fixnum(slot);
@@ -105,7 +105,7 @@ impl AsmIr {
     /// ### destroy
     /// - rdi
     ///
-    pub(super) fn fetch_float_assume_integer(
+    pub(super) fn fetch_integer_for_xmm(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
@@ -129,7 +129,7 @@ impl AsmIr {
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::ConcreteValue(v) => self.fetch_float_from_concrete_value(bb, slot, v),
+            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(bb, slot, v),
         }
     }
 
@@ -140,7 +140,7 @@ impl AsmIr {
     /// - rdi, rax
     ///
     ///
-    pub(crate) fn fetch_float_assume_float(
+    pub(crate) fn fetch_float_for_xmm(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
@@ -164,11 +164,11 @@ impl AsmIr {
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::ConcreteValue(v) => self.fetch_float_from_concrete_value(bb, slot, v),
+            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(bb, slot, v),
         }
     }
 
-    fn fetch_float_from_concrete_value(
+    fn fetch_float_concrete_value_for_xmm(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,

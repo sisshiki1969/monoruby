@@ -1,173 +1,5 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum Guarded {
-    #[default]
-    Value,
-    Fixnum,
-    Float,
-    ArrayTy,
-    Class(ClassId),
-}
-
-impl Guarded {
-    pub fn from_concrete_value(v: Value) -> Self {
-        if v.is_fixnum() {
-            Guarded::Fixnum
-        } else if v.is_float() {
-            Guarded::Float
-        } else if v.is_array_ty() {
-            Guarded::ArrayTy
-        } else {
-            Guarded::Class(v.class())
-        }
-    }
-
-    pub(super) fn union(&self, other: &Self) -> Self {
-        if self == other {
-            *self
-        } else {
-            Guarded::Value
-        }
-    }
-}
-
-#[derive(Clone, Default, Debug)]
-pub(crate) struct SlotState {
-    link: LinkMode,
-    guarded: Guarded,
-    alias: Vec<SlotId>,
-    is_used: IsUsed,
-}
-
-impl SlotState {
-    pub(super) fn use_as_float(&mut self) {
-        self.is_used.use_as_float();
-    }
-
-    pub(super) fn use_as_value(&mut self) {
-        self.is_used.use_as_non_float();
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum IsUsed {
-    ///
-    /// Not be used nor be killed.
-    ///
-    #[default]
-    ND,
-    ///
-    /// Used in any of paths.
-    ///
-    Used(UsedAs),
-    ///
-    /// Guaranteed not to be used (= killed) in all paths.
-    ///
-    Killed,
-}
-
-impl IsUsed {
-    fn merge(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.merge(r)),
-            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
-            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
-            _ => IsUsed::ND,
-        };
-    }
-
-    fn use_as_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
-        }
-    }
-
-    fn use_as_non_float(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.use_as_non_float(),
-            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
-        }
-    }
-
-    fn kill(&mut self) {
-        match self {
-            IsUsed::Killed => {}
-            IsUsed::Used(used) => used.kill(),
-            IsUsed::ND => *self = IsUsed::Killed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct UsedAs {
-    ty: UseTy,
-    killed: bool,
-}
-
-impl UsedAs {
-    fn float() -> Self {
-        UsedAs {
-            ty: UseTy::Float,
-            killed: false,
-        }
-    }
-
-    fn non_float() -> Self {
-        UsedAs {
-            ty: UseTy::NonFloat,
-            killed: false,
-        }
-    }
-
-    fn use_as_float(&mut self) {
-        self.use_as(UseTy::Float);
-    }
-
-    fn use_as_non_float(&mut self) {
-        self.use_as(UseTy::NonFloat);
-    }
-
-    fn use_as(&mut self, other: UseTy) {
-        if self.killed {
-            return;
-        } else {
-            self.ty = self.ty.union(&other);
-        }
-    }
-
-    fn merge(&self, other: &Self) -> Self {
-        Self {
-            ty: self.ty.union(&other.ty),
-            killed: self.killed && other.killed,
-        }
-    }
-
-    fn kill(&mut self) {
-        self.killed = true;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum UseTy {
-    Float,
-    NonFloat,
-    Both,
-}
-
-impl UseTy {
-    fn union(&self, other: &Self) -> Self {
-        match (self, other) {
-            (UseTy::Float, UseTy::Float) => UseTy::Float,
-            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
-            (_, _) => UseTy::Both,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct SlotContext {
     slots: Vec<SlotState>,
@@ -175,6 +7,48 @@ pub(crate) struct SlotContext {
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
     local_num: usize,
+}
+
+impl SlotContext {
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    pub(crate) fn get_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .flat_map(|(i, state)| {
+                let slot = SlotId(i as u16);
+                match state.is_used {
+                    IsUsed::Used(used_as) => match used_as.ty {
+                        UseTy::Float => Some((slot, true)),
+                        UseTy::Both => Some((slot, false)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    ///
+    /// Extract 'dead' slots.
+    ///
+    pub(crate) fn get_dead_slots(&self) -> Vec<SlotId> {
+        self.slots
+            .iter()
+            .enumerate()
+            .flat_map(|(i, state)| {
+                let i = SlotId(i as u16);
+                if state.is_killed() {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl std::ops::Index<SlotId> for SlotContext {
@@ -203,17 +77,20 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    pub(in crate::compiler::jitgen) fn new(cc: &JitContext) -> Self {
-        let len = cc.total_reg_num;
+    pub(in crate::compiler::jitgen) fn new(total_reg_num: usize, local_num: usize) -> Self {
         SlotContext {
-            slots: vec![SlotState::default(); len],
+            slots: vec![SlotState::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
                 v.try_into().unwrap()
             },
             r15: None,
-            local_num: cc.local_num,
+            local_num,
         }
+    }
+
+    pub(in crate::compiler::jitgen) fn from(cc: &JitContext) -> Self {
+        Self::new(cc.total_reg_num, cc.local_num)
     }
 
     fn xmm(&self, xmm: Xmm) -> &[SlotId] {
@@ -558,6 +435,193 @@ impl SlotContext {
             }
         }
         panic!("no xmm reg is vacant.")
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Liveness(Vec<IsUsed>);
+
+impl Liveness {
+    pub(in crate::compiler::jitgen) fn new(total_reg_num: usize) -> Self {
+        Self(vec![IsUsed::default(); total_reg_num])
+    }
+
+    pub(in crate::compiler::jitgen) fn merge(&mut self, bbctx: BBContext) {
+        for (i, is_used) in &mut self.0.iter_mut().enumerate() {
+            is_used.merge(&bbctx[SlotId(i as u16)].is_used);
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub(crate) struct SlotState {
+    link: LinkMode,
+    guarded: Guarded,
+    alias: Vec<SlotId>,
+    is_used: IsUsed,
+}
+
+impl SlotState {
+    pub(super) fn use_as_float(&mut self) {
+        self.is_used.use_as_float();
+    }
+
+    pub(super) fn use_as_value(&mut self) {
+        self.is_used.use_as_non_float();
+    }
+
+    fn is_killed(&self) -> bool {
+        self.is_used == IsUsed::Killed
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Guarded {
+    #[default]
+    Value,
+    Fixnum,
+    Float,
+    ArrayTy,
+    Class(ClassId),
+}
+
+impl Guarded {
+    pub fn from_concrete_value(v: Value) -> Self {
+        if v.is_fixnum() {
+            Guarded::Fixnum
+        } else if v.is_float() {
+            Guarded::Float
+        } else if v.is_array_ty() {
+            Guarded::ArrayTy
+        } else {
+            Guarded::Class(v.class())
+        }
+    }
+
+    pub(super) fn union(&self, other: &Self) -> Self {
+        if self == other {
+            *self
+        } else {
+            Guarded::Value
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum IsUsed {
+    ///
+    /// Not be used nor be killed.
+    ///
+    #[default]
+    ND,
+    ///
+    /// Used in any of paths.
+    ///
+    Used(UsedAs),
+    ///
+    /// Guaranteed not to be used (= killed) in all paths.
+    ///
+    Killed,
+}
+
+impl IsUsed {
+    fn merge(&mut self, other: &Self) {
+        *self = match (&self, other) {
+            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.merge(r)),
+            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
+            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
+            _ => IsUsed::ND,
+        };
+    }
+
+    fn use_as_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
+        }
+    }
+
+    fn use_as_non_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_non_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
+        }
+    }
+
+    fn kill(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.kill(),
+            IsUsed::ND => *self = IsUsed::Killed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UsedAs {
+    ty: UseTy,
+    killed: bool,
+}
+
+impl UsedAs {
+    fn float() -> Self {
+        UsedAs {
+            ty: UseTy::Float,
+            killed: false,
+        }
+    }
+
+    fn non_float() -> Self {
+        UsedAs {
+            ty: UseTy::NonFloat,
+            killed: false,
+        }
+    }
+
+    fn use_as_float(&mut self) {
+        self.use_as(UseTy::Float);
+    }
+
+    fn use_as_non_float(&mut self) {
+        self.use_as(UseTy::NonFloat);
+    }
+
+    fn use_as(&mut self, other: UseTy) {
+        if self.killed {
+            return;
+        } else {
+            self.ty = self.ty.union(&other);
+        }
+    }
+
+    fn merge(&self, other: &Self) -> Self {
+        Self {
+            ty: self.ty.union(&other.ty),
+            killed: self.killed && other.killed,
+        }
+    }
+
+    fn kill(&mut self) {
+        self.killed = true;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UseTy {
+    Float,
+    NonFloat,
+    Both,
+}
+
+impl UseTy {
+    fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (UseTy::Float, UseTy::Float) => UseTy::Float,
+            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
+            (_, _) => UseTy::Both,
+        }
     }
 }
 

@@ -437,7 +437,7 @@ impl AsmIr {
         base_class: Value,
         pc: BytecodePtr,
     ) {
-        self.fetch_to_reg(bbctx, slot, GP::Rax);
+        self.fetch_for_gpr(bbctx, slot, GP::Rax);
         let deopt = self.new_deopt(bbctx, pc);
         self.inst
             .push(AsmInst::GuardBaseClass { base_class, deopt });
@@ -587,7 +587,7 @@ impl AsmIr {
             for i in 0..pos_num {
                 let reg = args + i;
                 let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_to_callee_stack(bb, reg, offset);
+                self.fetch_for_callee(bb, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
@@ -962,16 +962,16 @@ impl AsmIr {
     pub(super) fn fetch_binary(&mut self, bb: &mut BBContext, mode: OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.fetch_to_reg(bb, lhs, GP::Rdi);
-                self.fetch_to_reg(bb, rhs, GP::Rsi);
+                self.fetch_for_gpr(bb, lhs, GP::Rdi);
+                self.fetch_for_gpr(bb, rhs, GP::Rsi);
             }
             OpMode::RI(lhs, rhs) => {
-                self.fetch_to_reg(bb, lhs, GP::Rdi);
+                self.fetch_for_gpr(bb, lhs, GP::Rdi);
                 self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
                 self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
-                self.fetch_to_reg(bb, rhs, GP::Rsi);
+                self.fetch_for_gpr(bb, rhs, GP::Rsi);
             }
         }
     }
@@ -984,8 +984,8 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
+            INTEGER_CLASS => self.fetch_integer_for_xmm(bb, rhs, deopt),
+            FLOAT_CLASS => self.fetch_float_for_xmm(bb, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -1013,11 +1013,11 @@ impl AsmIr {
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
-                let l = self.fetch_float_assume_float(bb, *l, deopt);
+                let l = self.fetch_float_for_xmm(bb, *l, deopt);
                 FMode::RI(l, *r)
             }
             OpMode::IR(l, r) => {
-                let r = self.fetch_float_assume_float(bb, *r, deopt);
+                let r = self.fetch_float_for_xmm(bb, *r, deopt);
                 FMode::IR(*l, r)
             }
         }

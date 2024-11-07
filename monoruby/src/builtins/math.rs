@@ -105,7 +105,7 @@ fn math_sqrt(
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
+    let fsrc = ir.fetch_float_for_xmm(bb, args, deopt).enc();
     if let Some(dst) = dst {
         let fret = ir.xmm_write_enc(bb, dst);
         ir.inline(move |gen, _| {
@@ -126,7 +126,7 @@ fn math_cos(
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
+    let fsrc = ir.fetch_float_for_xmm(bb, args, deopt).enc();
     if let Some(ret) = dst {
         let fret = ir.xmm_write_enc(bb, ret);
         let using_xmm = bb.get_using_xmm();
@@ -155,7 +155,7 @@ fn math_sin(
     let callsite = &store[callid];
     let CallSiteInfo { args, dst: ret, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
-    let fsrc = ir.fetch_float_assume_float(bb, args, deopt).enc();
+    let fsrc = ir.fetch_float_for_xmm(bb, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = ir.xmm_write_enc(bb, ret);
         let using_xmm = bb.get_using_xmm();
