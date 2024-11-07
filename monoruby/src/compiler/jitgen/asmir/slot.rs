@@ -45,7 +45,7 @@ impl SlotState {
         self.is_used.use_as_float();
     }
 
-    pub(super) fn use_as_non_float(&mut self) {
+    pub(super) fn use_as_value(&mut self) {
         self.is_used.use_as_non_float();
     }
 }

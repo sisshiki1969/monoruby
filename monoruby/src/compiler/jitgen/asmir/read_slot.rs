@@ -11,7 +11,7 @@ impl AsmIr {
         if slot >= bb.sp {
             unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
         };
-        bb[slot].use_as_non_float();
+        bb[slot].use_as_value();
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
@@ -45,13 +45,17 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn fetch_to_callee_stack(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
-        match bb.slot(reg) {
+    pub(crate) fn fetch_to_callee_stack(&mut self, bb: &mut BBContext, slot: SlotId, offset: i32) {
+        match bb.slot(slot) {
             LinkMode::Accumulator => {
+                if slot >= bb.sp {
+                    unreachable!("{:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
+                };
+                bb[slot].use_as_value();
                 self.reg2rsp_offset(GP::R15, offset);
             }
             _ => {
-                self.fetch_to_reg(bb, reg, GP::Rax);
+                self.fetch_to_reg(bb, slot, GP::Rax);
                 self.reg2rsp_offset(GP::Rax, offset);
             }
         }
@@ -107,16 +111,17 @@ impl AsmIr {
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        bb[slot].use_as_non_float();
+        fn int_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
+            let x = ir.store_new_both_integer(bb, slot);
+            ir.stack2reg(slot, GP::Rdi);
+            ir.int2xmm(GP::Rdi, x, deopt);
+            x
+        }
+        bb[slot].use_as_float();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.store_new_both_integer(bb, slot);
-                self.stack2reg(slot, GP::Rdi);
-                self.int2xmm(GP::Rdi, x, deopt);
-                x
-            }
+            LinkMode::Stack => int_to_both(self, bb, slot, deopt),
+            LinkMode::Alias(origin) => int_to_both(self, bb, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
                 let x = self.store_new_both_integer(bb, slot);
@@ -124,28 +129,7 @@ impl AsmIr {
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::Alias(origin) => {
-                // -> Both
-                let x = self.store_new_both_integer(bb, origin);
-                self.stack2reg(origin, GP::Rdi);
-                self.int2xmm(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::ConcreteValue(v) => {
-                if let Some(f) = v.try_float() {
-                    // -> Xmm
-                    let x = self.store_new_xmm(bb, slot);
-                    self.f64toxmm(f, x);
-                    x
-                } else if let Some(i) = v.try_fixnum() {
-                    // -> Both
-                    let x = self.store_new_both_integer(bb, slot);
-                    self.i64toboth(i, slot, x);
-                    x
-                } else {
-                    unreachable!()
-                }
-            }
+            LinkMode::ConcreteValue(v) => self.fetch_float_from_concrete_value(bb, slot, v),
         }
     }
 
@@ -162,16 +146,17 @@ impl AsmIr {
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
+        fn float_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
+            let x = ir.store_new_both_float(bb, slot);
+            ir.stack2reg(slot, GP::Rdi);
+            ir.float2xmm(GP::Rdi, x, deopt);
+            x
+        }
         bb[slot].use_as_float();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.store_new_both_float(bb, slot);
-                self.stack2reg(slot, GP::Rdi);
-                self.float2xmm(GP::Rdi, x, deopt);
-                x
-            }
+            LinkMode::Stack => float_to_both(self, bb, slot, deopt),
+            LinkMode::Alias(origin) => float_to_both(self, bb, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
                 let x = self.store_new_both_float(bb, slot);
@@ -179,28 +164,28 @@ impl AsmIr {
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::Alias(origin) => {
-                // -> Both
-                let x = self.store_new_both_float(bb, origin);
-                self.stack2reg(origin, GP::Rdi);
-                self.float2xmm(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::ConcreteValue(v) => {
-                if let Some(f) = v.try_float() {
-                    // -> Xmm
-                    let x = self.store_new_xmm(bb, slot);
-                    self.f64toxmm(f, x);
-                    x
-                } else if let Some(i) = v.try_fixnum() {
-                    // -> Both
-                    let x = self.store_new_both_float(bb, slot);
-                    self.i64toboth(i, slot, x);
-                    x
-                } else {
-                    unreachable!()
-                }
-            }
+            LinkMode::ConcreteValue(v) => self.fetch_float_from_concrete_value(bb, slot, v),
+        }
+    }
+
+    fn fetch_float_from_concrete_value(
+        &mut self,
+        bb: &mut BBContext,
+        slot: SlotId,
+        v: Value,
+    ) -> Xmm {
+        if let Some(f) = v.try_float() {
+            // -> Xmm
+            let x = self.store_new_xmm(bb, slot);
+            self.f64toxmm(f, x);
+            x
+        } else if let Some(i) = v.try_fixnum() {
+            // -> Both
+            let x = self.store_new_both_integer(bb, slot);
+            self.i64toboth(i, slot, x);
+            x
+        } else {
+            unreachable!()
         }
     }
 }
