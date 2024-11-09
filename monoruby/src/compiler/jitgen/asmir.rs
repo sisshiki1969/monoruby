@@ -678,7 +678,7 @@ impl AsmIr {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         self.inst.push(AsmInst::IntegerCmpBr {
             mode,
@@ -693,7 +693,7 @@ impl AsmIr {
         mode: FMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         self.inst.push(AsmInst::FloatCmpBr {
             mode,
@@ -1125,10 +1125,10 @@ pub(super) enum AsmInst {
     Raise,
     MethodRet(BytecodePtr),
     EnsureEnd,
-    Br(DestLabel),
-    CondBr(BrKind, DestLabel),
-    NilBr(DestLabel),
-    CheckLocal(DestLabel),
+    Br(JitLabel),
+    CondBr(BrKind, JitLabel),
+    NilBr(JitLabel),
+    CheckLocal(JitLabel),
     ///
     /// Conditional branch
     ///
@@ -1139,7 +1139,7 @@ pub(super) enum AsmInst {
     ///
     GenericCondBr {
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     },
     OptCase {
         max: u16,
@@ -1320,7 +1320,7 @@ pub(super) enum AsmInst {
         mode: OpMode,
         kind: CmpKind,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     },
     FloatCmp {
         kind: CmpKind,
@@ -1330,7 +1330,7 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         mode: FMode,
         brkind: BrKind,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     },
 
     GuardBaseClass {
@@ -1538,7 +1538,7 @@ pub(super) enum AsmInst {
 
     #[allow(dead_code)]
     BcIndex(BcIndex),
-    Label(DestLabel),
+    Label(JitLabel),
 }
 
 impl AsmInst {
@@ -1693,6 +1693,7 @@ impl Codegen {
 
         if let Some(exit) = exit {
             let exit = *ctx.basic_block_labels.get(&exit).unwrap();
+            let exit = ctx.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }

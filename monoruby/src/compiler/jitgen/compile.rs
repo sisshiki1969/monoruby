@@ -3,7 +3,6 @@ use super::*;
 impl JitContext {
     pub(super) fn compile_basic_block(
         &mut self,
-        jit: &mut JitMemory,
         store: &Store,
         func: &ISeqInfo,
         position: Option<BytecodePtr>,
@@ -27,7 +26,7 @@ impl JitContext {
             ir.bc_index(bc_pos);
             bbctx.next_sp = func.get_sp(bc_pos);
 
-            match self.compile_instruction(jit, &mut ir, &mut bbctx, store, func, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return ir,
                 CompileResult::Leave => {
@@ -49,7 +48,7 @@ impl JitContext {
 
         let next_idx = end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
-            let label = jit.label();
+            let label = self.label();
             self.new_continue(func, end, next_bbid, bbctx, label);
             if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
                 self.gen_continuation(&mut ir);
@@ -63,7 +62,6 @@ impl JitContext {
 
     fn compile_instruction(
         &mut self,
-        jit: &mut JitMemory,
         ir: &mut AsmIr,
         bbctx: &mut BBContext,
         store: &Store,
@@ -365,7 +363,7 @@ impl JitContext {
                 brkind,
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = jit.label();
+                let branch_dest = self.label();
                 let mode = ir.fmode(&mode, bbctx, lhs_class, rhs_class, pc);
                 ir.unlink(bbctx, dst);
                 ir.clear(bbctx);
@@ -380,7 +378,7 @@ impl JitContext {
                 brkind,
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = jit.label();
+                let branch_dest = self.label();
                 ir.fetch_fixnum_binary(bbctx, pc, &mode);
                 ir.unlink(bbctx, dst);
                 ir.clear(bbctx);
@@ -396,7 +394,7 @@ impl JitContext {
                 ..
             } => {
                 let index = bc_pos + 1;
-                let branch_dest = jit.label();
+                let branch_dest = self.label();
                 ir.fetch_binary(bbctx, mode);
                 ir.unlink(bbctx, dst);
                 ir.clear(bbctx);
@@ -566,36 +564,36 @@ impl JitContext {
                 ir.inst.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {
-                self.compile_branch(jit, ir, bbctx, func, bc_pos, dest_idx);
+                self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
                 return CompileResult::Branch;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.compile_branch(jit, ir, bbctx, func, bc_pos, dest_idx);
+                        self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Branch;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.compile_branch(jit, ir, bbctx, func, bc_pos, dest_idx);
+                        self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Branch;
                     }
                 } else {
-                    let branch_dest = jit.label();
+                    let branch_dest = self.label();
                     ir.fetch_for_gpr(bbctx, cond_, GP::Rax);
                     ir.inst.push(AsmInst::CondBr(brkind, branch_dest));
                     self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
                 }
             }
             TraceIr::NilBr(cond_, dest_idx) => {
-                let branch_dest = jit.label();
+                let branch_dest = self.label();
                 ir.fetch_for_gpr(bbctx, cond_, GP::Rax);
                 ir.inst.push(AsmInst::NilBr(branch_dest));
                 self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => {
-                let branch_dest = jit.label();
+                let branch_dest = self.label();
                 ir.fetch_for_gpr(bbctx, local, GP::Rax);
                 ir.inst.push(AsmInst::CheckLocal(branch_dest));
                 self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
@@ -609,7 +607,7 @@ impl JitContext {
             } => {
                 let else_idx = dest_bb[0];
                 for bbid in dest_bb {
-                    let branch_dest = jit.label();
+                    let branch_dest = self.label();
                     self.new_branch(func, bc_pos, bbid, bbctx.clone(), branch_dest);
                 }
                 let deopt = ir.new_deopt(bbctx, pc);
@@ -623,14 +621,13 @@ impl JitContext {
 
     fn compile_branch(
         &mut self,
-        jit: &mut JitMemory,
         ir: &mut AsmIr,
         bbctx: &mut BBContext,
         func: &ISeqInfo,
         bc_pos: BcIndex,
         dest: BasicBlockId,
     ) {
-        let branch_dest = jit.label();
+        let branch_dest = self.label();
         ir.inst.push(AsmInst::Br(branch_dest));
         self.new_branch(func, bc_pos, dest, bbctx.clone(), branch_dest);
     }

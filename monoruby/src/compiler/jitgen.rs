@@ -26,40 +26,6 @@ pub mod trace_ir;
 // Just-in-time compiler module.
 //
 
-#[derive(Debug)]
-struct BackedgeInfo {
-    target_ctx: MergeContext,
-    unused: Vec<SlotId>,
-}
-
-struct ContinuationInfo {
-    from: BBContext,
-    to: MergeContext,
-    pc: BytecodePtr,
-}
-
-impl ContinuationInfo {
-    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
-        Self { from, to, pc }
-    }
-}
-
-///
-/// Compile result of the current instruction.
-///
-enum CompileResult {
-    /// continue to the next instruction.
-    Continue,
-    /// exit from the loop.
-    ExitLoop,
-    /// jump to another basic block.
-    Branch,
-    /// leave the current method/block.
-    Leave,
-    /// deoptimize and fallback to the interpreter.
-    Recompile,
-}
-
 ///
 /// Context for JIT compilation.
 ///
@@ -67,7 +33,7 @@ struct JitContext {
     ///
     /// Destination labels for each BasicBlock.
     ///
-    basic_block_labels: HashMap<BasicBlockId, DestLabel>,
+    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
     ///
     /// Basic block information.
     ///
@@ -125,11 +91,12 @@ struct JitContext {
     ///
     /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, DestLabel, BasicBlockId)>,
+    bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
-    continuation_bridge: Option<(Option<ContinuationInfo>, DestLabel)>,
+    continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
+    labels: Vec<Option<DestLabel>>,
     liveness: Liveness,
     ///
     /// Class version at compile time.
@@ -160,9 +127,11 @@ impl JitContext {
         self_value: Value,
     ) -> Self {
         let mut basic_block_labels = HashMap::default();
+        let mut labels = vec![];
         for i in 0..func.bb_info.len() {
             let idx = BasicBlockId(i);
-            basic_block_labels.insert(idx, codegen.jit.label());
+            basic_block_labels.insert(idx, JitLabel(labels.len()));
+            labels.push(Some(codegen.jit.label()));
         }
         let bb_scan = func.bb_info.init_bb_scan(func, store);
 
@@ -184,11 +153,35 @@ impl JitContext {
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
+            labels,
             liveness: Liveness::new(total_reg_num),
             class_version: codegen.class_version(),
             bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
             start_codepos: codegen.jit.get_current(),
+        }
+    }
+
+    ///
+    /// Create a new *JitLabel*.
+    ///
+    fn label(&mut self) -> JitLabel {
+        let id = self.labels.len();
+        self.labels.push(None);
+        JitLabel(id)
+    }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match self.labels[label.0] {
+            Some(l) => l,
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l);
+                l
+            }
         }
     }
 
@@ -201,7 +194,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -223,7 +216,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -259,6 +252,43 @@ impl JitContext {
     }
 }
 
+#[derive(Debug)]
+struct BackedgeInfo {
+    target_ctx: MergeContext,
+    unused: Vec<SlotId>,
+}
+
+struct ContinuationInfo {
+    from: BBContext,
+    to: MergeContext,
+    pc: BytecodePtr,
+}
+
+impl ContinuationInfo {
+    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
+        Self { from, to, pc }
+    }
+}
+
+///
+/// Compile result of the current instruction.
+///
+enum CompileResult {
+    /// continue to the next instruction.
+    Continue,
+    /// exit from the loop.
+    ExitLoop,
+    /// jump to another basic block.
+    Branch,
+    /// leave the current method/block.
+    Leave,
+    /// deoptimize and fallback to the interpreter.
+    Recompile,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JitLabel(usize);
+
 ///
 /// The information for branches.
 ///
@@ -269,7 +299,7 @@ struct BranchEntry {
     /// context of the source basic block.
     bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
-    branch_dest: DestLabel,
+    branch_dest: JitLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
@@ -277,60 +307,6 @@ struct BranchEntry {
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
-}
-
-///
-/// The strust holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
-///
-/// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
-///
-#[derive(Clone)]
-pub(crate) struct WriteBack {
-    xmm: Vec<(Xmm, Vec<SlotId>)>,
-    literal: Vec<(Value, SlotId)>,
-    alias: Vec<(SlotId, Vec<SlotId>)>,
-    r15: Option<SlotId>,
-}
-
-impl std::fmt::Debug for WriteBack {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::new();
-        for (xmm, slots) in &self.xmm {
-            s.push_str(&format!(" {:?}->", xmm));
-            for slot in slots {
-                s.push_str(&format!("{:?}", slot));
-            }
-        }
-        for (val, slot) in &self.literal {
-            s.push_str(&format!(" {:?}->{:?}", val, slot));
-        }
-        for (slot, slots) in &self.alias {
-            s.push_str(&format!(" {:?}->", slot));
-            for slot in slots {
-                s.push_str(&format!("{:?}", slot));
-            }
-        }
-        if let Some(slot) = self.r15 {
-            s.push_str(&format!(" R15->{:?}", slot));
-        }
-        write!(f, "WriteBack({})", s)
-    }
-}
-
-impl WriteBack {
-    fn new(
-        xmm: Vec<(Xmm, Vec<SlotId>)>,
-        literal: Vec<(Value, SlotId)>,
-        alias: Vec<(SlotId, Vec<SlotId>)>,
-        r15: Option<SlotId>,
-    ) -> Self {
-        Self {
-            xmm,
-            literal,
-            alias,
-            r15,
-        }
-    }
 }
 
 ///
@@ -400,6 +376,60 @@ impl BBContext {
     }
 }
 
+///
+/// The strust holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
+///
+/// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
+///
+#[derive(Clone)]
+pub(crate) struct WriteBack {
+    xmm: Vec<(Xmm, Vec<SlotId>)>,
+    literal: Vec<(Value, SlotId)>,
+    alias: Vec<(SlotId, Vec<SlotId>)>,
+    r15: Option<SlotId>,
+}
+
+impl std::fmt::Debug for WriteBack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        for (xmm, slots) in &self.xmm {
+            s.push_str(&format!(" {:?}->", xmm));
+            for slot in slots {
+                s.push_str(&format!("{:?}", slot));
+            }
+        }
+        for (val, slot) in &self.literal {
+            s.push_str(&format!(" {:?}->{:?}", val, slot));
+        }
+        for (slot, slots) in &self.alias {
+            s.push_str(&format!(" {:?}->", slot));
+            for slot in slots {
+                s.push_str(&format!("{:?}", slot));
+            }
+        }
+        if let Some(slot) = self.r15 {
+            s.push_str(&format!(" R15->{:?}", slot));
+        }
+        write!(f, "WriteBack({})", s)
+    }
+}
+
+impl WriteBack {
+    fn new(
+        xmm: Vec<(Xmm, Vec<SlotId>)>,
+        literal: Vec<(Value, SlotId)>,
+        alias: Vec<(SlotId, Vec<SlotId>)>,
+        r15: Option<SlotId>,
+    ) -> Self {
+        Self {
+            xmm,
+            literal,
+            alias,
+            r15,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct UsingXmm {
     inner: bitvec::prelude::BitArr!(for 14, in u16),
@@ -442,7 +472,7 @@ impl UsingXmm {
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(crate) enum LinkMode {
+enum LinkMode {
     ///
     /// No linkage with xmm regiter.
     ///
@@ -545,7 +575,7 @@ impl Codegen {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
         let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = self.jit.label();
+        let branch_dest = ctx.label();
         ctx.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -565,7 +595,7 @@ impl Codegen {
         };
         let bbir: Vec<_> = (bb_begin..=bb_end)
             .map(|bbid| {
-                let ir = ctx.compile_basic_block(&mut self.jit, store, func, position, bbid);
+                let ir = ctx.compile_basic_block(store, func, position, bbid);
                 (bbid, ir)
             })
             .collect();
@@ -584,6 +614,7 @@ impl Codegen {
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+            let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
