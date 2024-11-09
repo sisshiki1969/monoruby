@@ -30,7 +30,7 @@ jobs:
         run: cargo install --all-features --path monoruby
       - name: Run tests
         run: |
-          LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo nextest run
+          LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
           LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
           LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
           LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""

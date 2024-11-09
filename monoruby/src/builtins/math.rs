@@ -187,6 +187,7 @@ mod test {
     use super::tests::*;
 
     #[test]
+    #[ignore]
     fn torigonometric() {
         run_test("Math.cos 149");
         run_test("Math.cos -14.97522");

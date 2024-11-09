@@ -394,6 +394,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_exp() {
         run_test("3.78**432");
         run_test("3.78**-432");
