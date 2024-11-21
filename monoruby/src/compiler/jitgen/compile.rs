@@ -60,6 +60,56 @@ impl JitContext {
         ir
     }
 
+    pub(super) fn analyse_basic_block(
+        &mut self,
+        store: &Store,
+        func: &ISeqInfo,
+        bbid: BasicBlockId,
+    ) {
+        let mut ir = AsmIr::new();
+        let mut bbctx = if let Some(bb) = self.target_ctx.remove(&bbid) {
+            bb
+        } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
+            self.gen_continuation(&mut ir);
+            bb
+        } else {
+            return;
+        };
+
+        let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+        for bc_pos in begin..=end {
+            bbctx.next_sp = func.get_sp(bc_pos);
+
+            match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
+                CompileResult::Continue => {}
+                CompileResult::Branch => return,
+                CompileResult::Leave => {
+                    self.liveness.merge(bbctx);
+                    return;
+                }
+                CompileResult::Deopt => {
+                    self.liveness.merge(bbctx);
+                    return;
+                }
+                CompileResult::ExitLoop => break,
+            }
+
+            bbctx.sp = bbctx.next_sp;
+        }
+
+        let next_idx = end + 1;
+        if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
+            let label = self.label();
+            self.new_continue(func, end, next_bbid, bbctx, label);
+            if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
+                self.gen_continuation(&mut ir);
+                assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
+            }
+        } else {
+            unreachable!();
+        }
+    }
+
     fn compile_instruction(
         &mut self,
         ir: &mut AsmIr,

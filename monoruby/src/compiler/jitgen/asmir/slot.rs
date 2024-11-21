@@ -409,6 +409,20 @@ impl Liveness {
             is_used.merge(&bbctx[SlotId(i as u16)].is_used);
         }
     }
+
+    fn get_unused(&self) -> Vec<SlotId> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, is_used)| {
+                if is_used == &IsUsed::Killed {
+                    Some(SlotId(i as u16))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Default, Debug)]
