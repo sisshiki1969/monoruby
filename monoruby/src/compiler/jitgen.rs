@@ -283,7 +283,7 @@ enum CompileResult {
     /// leave the current method/block.
     Leave,
     /// deoptimize and fallback to the interpreter.
-    Recompile,
+    Deopt,
 }
 
 #[derive(Debug, Clone, Copy)]

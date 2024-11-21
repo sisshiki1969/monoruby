@@ -32,7 +32,7 @@ impl AsmIr {
                 self.call(store, bbctx, fid, recv_class, version, callid, pc)
             }
         } else {
-            CompileResult::Recompile
+            CompileResult::Deopt
         }
     }
 
@@ -98,7 +98,7 @@ impl AsmIr {
                     self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
                 }
             } else {
-                return CompileResult::Recompile;
+                return CompileResult::Deopt;
             }
         }
 

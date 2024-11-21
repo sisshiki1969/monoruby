@@ -9,48 +9,6 @@ pub(crate) struct SlotContext {
     local_num: usize,
 }
 
-impl SlotContext {
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    pub(crate) fn get_used_as_float(&self) -> Vec<(SlotId, bool)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .flat_map(|(i, state)| {
-                let slot = SlotId(i as u16);
-                match state.is_used {
-                    IsUsed::Used(used_as) => match used_as.ty {
-                        UseTy::Float => Some((slot, true)),
-                        UseTy::Both => Some((slot, false)),
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            })
-            .collect()
-    }
-
-    ///
-    /// Extract 'dead' slots.
-    ///
-    pub(crate) fn get_dead_slots(&self) -> Vec<SlotId> {
-        self.slots
-            .iter()
-            .enumerate()
-            .flat_map(|(i, state)| {
-                let i = SlotId(i as u16);
-                if state.is_killed() {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
 impl std::ops::Index<SlotId> for SlotContext {
     type Output = SlotState;
     fn index(&self, i: SlotId) -> &Self::Output {
@@ -468,10 +426,6 @@ impl SlotState {
 
     pub(super) fn use_as_value(&mut self) {
         self.is_used.use_as_non_float();
-    }
-
-    fn is_killed(&self) -> bool {
-        self.is_used == IsUsed::Killed
     }
 }
 

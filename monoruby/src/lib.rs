@@ -1,6 +1,6 @@
 #![feature(box_patterns)]
 #![feature(int_roundings)]
-#![feature(const_option)]
+//#![feature(const_option)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
 #![feature(result_flattening)]
@@ -8,7 +8,7 @@
 #![feature(step_trait)]
 #![feature(naked_functions)]
 #![feature(iter_array_chunks)]
-#![feature(offset_of_nested)]
+//#![feature(offset_of_nested)]
 
 mod alloc;
 mod builtins;

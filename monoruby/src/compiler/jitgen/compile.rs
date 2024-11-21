@@ -33,7 +33,7 @@ impl JitContext {
                     self.liveness.merge(bbctx);
                     return ir;
                 }
-                CompileResult::Recompile => {
+                CompileResult::Deopt => {
                     let pc = func.get_pc(bc_pos);
                     ir.recompile_and_deopt(&mut bbctx, pc, position);
                     self.liveness.merge(bbctx);
@@ -165,12 +165,12 @@ impl JitContext {
                         if let Some(base_class) = cached_base_class {
                             ir.guard_base_class(bbctx, slot, base_class, pc);
                         } else {
-                            return CompileResult::Recompile;
+                            return CompileResult::Deopt;
                         }
                     }
                     ir.load_constant(bbctx, dst, cached_version, cached_val, pc);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
             }
             TraceIr::StoreConst(src, id) => {
@@ -190,14 +190,14 @@ impl JitContext {
                 if let Some(cached_class) = cached_class {
                     ir.load_ivar(bbctx, id, ret, cached_class, cached_ivarid);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
             }
             TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
                 if let Some(cached_class) = cached_class {
                     ir.store_ivar(bbctx, id, src, pc, cached_class, cached_ivarid);
                 } else {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
             }
             TraceIr::LoadCvar { dst, name } => {
@@ -237,7 +237,7 @@ impl JitContext {
                 src_class,
             } => {
                 if src_class.is_none() {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
                 ir.fetch_for_gpr(bbctx, src, GP::Rdi);
                 ir.generic_unop(bbctx, pc, bitnot_value);
@@ -276,7 +276,7 @@ impl JitContext {
                 src_class,
             } => {
                 if src_class.is_none() {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
                 ir.fetch_for_gpr(bbctx, src, GP::Rdi);
                 ir.generic_unop(bbctx, pc, kind.generic_func());
@@ -309,7 +309,7 @@ impl JitContext {
                 rhs_class,
             } => {
                 if lhs_class.is_none() || rhs_class.is_none() {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
                 ir.fetch_binary(bbctx, mode);
                 ir.generic_binop(bbctx, pc, kind);
@@ -347,7 +347,7 @@ impl JitContext {
                 rhs_class,
             } => {
                 if lhs_class.is_none() || rhs_class.is_none() {
-                    return CompileResult::Recompile;
+                    return CompileResult::Deopt;
                 }
                 ir.fetch_binary(bbctx, mode);
                 ir.generic_cmp(bbctx, pc, kind);

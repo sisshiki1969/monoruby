@@ -127,7 +127,7 @@ impl Bytecode {
         }
     }
 
-    pub fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
+    /*pub fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
         Self {
             op1,
             op2: Bc2::from(
@@ -137,7 +137,7 @@ impl Bytecode {
                     + (num0 as u64),
             ),
         }
-    }
+    }*/
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
