@@ -51,6 +51,25 @@ impl SlotContext {
         Self::new(cc.total_reg_num, cc.local_num)
     }
 
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match b.is_used {
+                IsUsed::Used(used) => match used.ty {
+                    UseTy::Float => Some((SlotId(i as u16), true)),
+                    UseTy::Both => Some((SlotId(i as u16), false)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     fn xmm(&self, xmm: Xmm) -> &[SlotId] {
         &self.xmm[xmm.0 as usize]
     }

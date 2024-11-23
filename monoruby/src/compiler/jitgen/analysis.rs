@@ -30,25 +30,12 @@ impl JitContext {
     /// 2) Type information of a backedge branch of this loop.
     ///     (Float? not Float? or a Value which is coerced into Float?)
     ///
-    pub(super) fn analyse(
-        &mut self,
-        func: &ISeqInfo,
-        entry_bb: BasicBlockId,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let (begin, end) = func.bb_info.get_loop(entry_bb).unwrap();
-
-        let backedge = self.loop_backedges.get(&begin).unwrap();
-        let exit = self.analyse_loop(func, begin, end).1;
-
-        (backedge.get_loop_used_as_float(), exit.get_unused())
-    }
-
     pub(super) fn analyse_loop(
-        &self,
+        &mut self,
         func: &ISeqInfo,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-    ) -> (SlotInfo, SlotInfo) {
+    ) {
         let mut return_edge = SlotMerger::new();
         let mut back_edge = None;
         let mut exit_edge = None;
@@ -79,7 +66,7 @@ impl JitContext {
             }
             let mut slots = slots.0.unwrap();
             if i != 0 {
-                if let Some((bb_end, loop_exit)) = self.loop_info.get(&bb_id) {
+                if let Some((bb_end, loop_exit, _)) = self.loop_info.get(&bb_id) {
                     // if reached another loop's beginning, use shortcut.
                     slots.concat(loop_exit);
                     nest_loop = Some(*bb_end);
@@ -102,7 +89,7 @@ impl JitContext {
                         } else if *dst < loop_start {
                             // backedge of an outer loop
                             // unreachable in "loop mode"
-                            let (end, exit) = self.loop_info.get(dst).unwrap();
+                            let (end, exit, _) = self.loop_info.get(dst).unwrap();
                             let mut slots = slots.clone();
                             let next = *end + 1;
                             slots.concat(exit);
@@ -149,7 +136,8 @@ impl JitContext {
             Some((_, slots)) => slots,
             None => SlotInfo::new(func.total_reg_num()),
         };
-        (backedge, exit)
+        self.loop_info
+            .insert(loop_start, (loop_end, exit, backedge));
     }
 }
 
@@ -518,7 +506,7 @@ impl SlotInfo {
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
         self.info
             .iter()
             .enumerate()
@@ -533,7 +521,7 @@ impl SlotInfo {
     ///
     /// Extract unsed slots.
     ///
-    fn get_unused(&self) -> Vec<SlotId> {
+    pub(super) fn get_unused(&self) -> Vec<SlotId> {
         self.info
             .iter()
             .enumerate()

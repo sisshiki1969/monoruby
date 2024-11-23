@@ -32,8 +32,9 @@ impl std::ops::AddAssign<usize> for BasicBlockId {
 }
 
 impl Step for BasicBlockId {
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        Some(end.0 - start.0)
+    fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
+        let d = end.0 - start.0;
+        (d, Some(d))
     }
 
     fn forward_checked(start: Self, count: usize) -> Option<Self> {

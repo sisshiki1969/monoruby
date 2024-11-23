@@ -39,19 +39,15 @@ struct JitContext {
     ///
     bb_scan: Vec<(ExitType, SlotInfo)>,
     ///
-    /// Backedges to the loop head.
-    ///
-    loop_backedges: HashMap<BasicBlockId, SlotInfo>,
-    ///
     /// Loop information.
     ///
     /// ### key
     /// the entry basic block of the loop.
     ///
     /// ### value
-    /// (the last basic block, slot_info at the loop exit)
+    /// (the last basic block, slot_info at the loop exit, slot_info of the backedge)
     ///
-    loop_info: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
+    loop_info: HashMap<BasicBlockId, (BasicBlockId, SlotInfo, SlotInfo)>,
     ///
     /// Nested loop count.
     ///
@@ -140,7 +136,6 @@ impl JitContext {
         Self {
             basic_block_labels,
             bb_scan,
-            loop_backedges: HashMap::default(),
             loop_info: HashMap::default(),
             loop_count: 0,
             is_loop,
@@ -183,6 +178,17 @@ impl JitContext {
                 l
             }
         }
+    }
+
+    fn analyse(
+        &self,
+        func: &ISeqInfo,
+        entry_bb: BasicBlockId,
+    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        let (begin, _) = func.bb_info.get_loop(entry_bb).unwrap();
+        let (_, exit, backedge) = self.loop_info.get(&begin).unwrap();
+
+        (backedge.get_loop_used_as_float(), exit.get_unused())
     }
 
     ///
@@ -552,9 +558,7 @@ impl Codegen {
 
         let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
         for (loop_start, loop_end) in func.bb_info.loops() {
-            let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
-            ctx.loop_backedges.insert(*loop_start, backedge);
-            ctx.loop_info.insert(*loop_start, (*loop_end, exit));
+            ctx.analyse_loop(func, *loop_start, *loop_end);
         }
 
         let bbctx = BBContext::new(&ctx);
