@@ -51,25 +51,6 @@ impl SlotContext {
         Self::new(cc.total_reg_num, cc.local_num)
     }
 
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    pub fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .flat_map(|(i, b)| match b.is_used {
-                IsUsed::Used(used) => match used.ty {
-                    UseTy::Float => Some((SlotId(i as u16), true)),
-                    UseTy::Both => Some((SlotId(i as u16), false)),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect()
-    }
-
     fn xmm(&self, xmm: Xmm) -> &[SlotId] {
         &self.xmm[xmm.0 as usize]
     }
@@ -415,8 +396,26 @@ impl SlotContext {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Liveness(Vec<IsUsed>);
+
+impl std::fmt::Debug for Liveness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s: String = self
+            .0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, is_used)| match is_used {
+                IsUsed::Used(UsedAs { ty, .. }) => {
+                    Some(format!("[{:?}: {:?}] ", SlotId(i as u16), ty))
+                }
+                IsUsed::Killed => Some(format!("[{:?}: Killed] ", SlotId(i as u16))),
+                _ => None,
+            })
+            .collect();
+        write!(f, "Liveness {{{s}}}")
+    }
+}
 
 impl Liveness {
     pub(in crate::compiler::jitgen) fn new(total_reg_num: usize) -> Self {
@@ -439,6 +438,25 @@ impl Liveness {
                 } else {
                     None
                 }
+            })
+            .collect()
+    }
+
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    pub fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match b {
+                IsUsed::Used(used) => match used.ty {
+                    UseTy::Float => Some((SlotId(i as u16), true)),
+                    UseTy::Both => Some((SlotId(i as u16), false)),
+                    _ => None,
+                },
+                _ => None,
             })
             .collect()
     }

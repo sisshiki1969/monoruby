@@ -41,9 +41,9 @@ struct JitContext {
     /// the entry basic block of the loop.
     ///
     /// ### value
-    /// (the last basic block, liveness info, slot_info of the backedge)
+    /// (the last basic block, liveness info)
     ///
-    loop_info: HashMap<BasicBlockId, (Liveness, SlotContext)>,
+    loop_info: HashMap<BasicBlockId, Liveness>,
     ///
     /// Nested loop count.
     ///
@@ -193,9 +193,7 @@ impl JitContext {
 
     fn loop_info(&self, entry_bb: BasicBlockId) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         match self.loop_info.get(&entry_bb) {
-            Some((liveness, backedge)) => {
-                (backedge.get_loop_used_as_float(), liveness.get_unused())
-            }
+            Some(liveness) => (liveness.get_loop_used_as_float(), liveness.get_unused()),
             None => (vec![], vec![]),
         }
     }

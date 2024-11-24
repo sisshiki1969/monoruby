@@ -71,15 +71,15 @@ impl JitContext {
             ctx.analyse_basic_block(store, func, &mut liveness, bbid);
         }
 
-        let backedge = ctx
-            .backedge_map
-            .remove(&loop_start)
-            .unwrap()
-            .target_ctx
-            .0
-            .slot_state;
+        if let Some(mut branches) = ctx.branch_map.remove(&loop_start) {
+            assert_eq!(1, branches.len());
+            let bbctx = branches.remove(0).bbctx;
+            liveness.merge(bbctx);
+        }
 
-        self.loop_info.insert(loop_start, (liveness, backedge));
+        //dbg!(loop_start, loop_end, &liveness);
+
+        self.loop_info.insert(loop_start, liveness);
     }
 
     fn analyse_basic_block(
@@ -108,7 +108,7 @@ impl JitContext {
                 }
             }
 
-            ir.clear(&mut bbctx);
+            //ir.clear(&mut bbctx);
             bbctx.sp = bbctx.next_sp;
         }
 
