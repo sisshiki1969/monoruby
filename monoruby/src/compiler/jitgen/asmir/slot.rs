@@ -55,7 +55,7 @@ impl SlotContext {
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+    pub fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
         self.slots
             .iter()
             .enumerate()
@@ -415,7 +415,7 @@ impl SlotContext {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Liveness(Vec<IsUsed>);
 
 impl Liveness {
@@ -429,7 +429,7 @@ impl Liveness {
         }
     }
 
-    fn get_unused(&self) -> Vec<SlotId> {
+    pub fn get_unused(&self) -> Vec<SlotId> {
         self.0
             .iter()
             .enumerate()

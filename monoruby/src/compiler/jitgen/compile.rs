@@ -10,15 +10,14 @@ impl JitContext {
     ) -> AsmIr {
         let mut ir = AsmIr::new();
         ir.inst.push(AsmInst::Label(self.basic_block_labels[&bbid]));
-        let mut bbctx = if let Some(bb) = self.target_ctx.remove(&bbid) {
-            bb
-        } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
-            self.gen_continuation(&mut ir);
-            bb
-        } else {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("=== no entry");
-            return ir;
+
+        let mut bbctx = match self.generate_entry_bb(&mut ir, func, bbid) {
+            Some(bb) => bb,
+            None => {
+                #[cfg(feature = "jit-debug")]
+                eprintln!("=== no entry");
+                return ir;
+            }
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
@@ -28,15 +27,10 @@ impl JitContext {
 
             match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
-                CompileResult::Branch => return ir,
-                CompileResult::Leave => {
-                    self.liveness.merge(bbctx);
-                    return ir;
-                }
+                CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Deopt => {
                     let pc = func.get_pc(bc_pos);
                     ir.recompile_and_deopt(&mut bbctx, pc, position);
-                    self.liveness.merge(bbctx);
                     return ir;
                 }
                 CompileResult::ExitLoop => break,
@@ -46,34 +40,59 @@ impl JitContext {
             bbctx.sp = bbctx.next_sp;
         }
 
-        let next_idx = end + 1;
-        if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
-            let label = self.label();
-            self.new_continue(func, end, next_bbid, bbctx, label);
-            if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
-                self.gen_continuation(&mut ir);
-                assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
-            }
-        } else {
-            unreachable!();
-        }
+        self.prepare_next(&mut ir, bbctx, func, end);
+
         ir
     }
 
-    pub(super) fn analyse_basic_block(
+    pub(super) fn analyse_loop(
         &mut self,
         store: &Store,
         func: &ISeqInfo,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) {
+        let mut ctx = JitContext::from(self);
+        let mut liveness = Liveness::new(self.total_reg_num);
+
+        let bbctx = BBContext::new(&ctx);
+        let branch_dest = ctx.label();
+        ctx.branch_map.insert(
+            loop_start,
+            vec![BranchEntry {
+                src_idx: BcIndex(0),
+                bbctx,
+                branch_dest,
+                cont: true,
+            }],
+        );
+
+        for bbid in loop_start..=loop_end {
+            ctx.analyse_basic_block(store, func, &mut liveness, bbid);
+        }
+
+        let backedge = ctx
+            .backedge_map
+            .remove(&loop_start)
+            .unwrap()
+            .target_ctx
+            .0
+            .slot_state;
+
+        self.loop_info.insert(loop_start, (liveness, backedge));
+    }
+
+    fn analyse_basic_block(
+        &mut self,
+        store: &Store,
+        func: &ISeqInfo,
+        liveness: &mut Liveness,
         bbid: BasicBlockId,
     ) {
         let mut ir = AsmIr::new();
-        let mut bbctx = if let Some(bb) = self.target_ctx.remove(&bbid) {
-            bb
-        } else if let Some(bb) = self.incoming_context(&mut ir, func, bbid) {
-            self.gen_continuation(&mut ir);
-            bb
-        } else {
-            return;
+        let mut bbctx = match self.generate_entry_bb(&mut ir, func, bbid) {
+            Some(bb) => bb,
+            None => return,
         };
 
         let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
@@ -83,26 +102,42 @@ impl JitContext {
             match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
-                CompileResult::Leave => {
-                    self.liveness.merge(bbctx);
+                CompileResult::Leave | CompileResult::Deopt | CompileResult::ExitLoop => {
+                    liveness.merge(bbctx);
                     return;
                 }
-                CompileResult::Deopt => {
-                    self.liveness.merge(bbctx);
-                    return;
-                }
-                CompileResult::ExitLoop => break,
             }
 
+            ir.clear(&mut bbctx);
             bbctx.sp = bbctx.next_sp;
         }
 
+        self.prepare_next(&mut ir, bbctx, func, end);
+    }
+
+    fn generate_entry_bb(
+        &mut self,
+        ir: &mut AsmIr,
+        func: &ISeqInfo,
+        bbid: BasicBlockId,
+    ) -> Option<BBContext> {
+        if let Some(bb) = self.target_ctx.remove(&bbid) {
+            Some(bb)
+        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
+            self.gen_continuation(ir);
+            Some(bb)
+        } else {
+            None
+        }
+    }
+
+    fn prepare_next(&mut self, ir: &mut AsmIr, bbctx: BBContext, func: &ISeqInfo, end: BcIndex) {
         let next_idx = end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.label();
             self.new_continue(func, end, next_bbid, bbctx, label);
-            if let Some(target_ctx) = self.incoming_context(&mut ir, func, next_bbid) {
-                self.gen_continuation(&mut ir);
+            if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
+                self.gen_continuation(ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }
         } else {

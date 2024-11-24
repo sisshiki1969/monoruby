@@ -10,14 +10,7 @@ use std::{io::Write, mem::transmute};
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(
-        kernel_class,
-        "nil?",
-        nil,
-        Box::new(object_nil),
-        analysis::v_v,
-        0,
-    );
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(object_nil), 0);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func_rest(kernel_class, "gets", gets);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);

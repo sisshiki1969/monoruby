@@ -15,30 +15,9 @@ pub(super) fn init(globals: &mut Globals) {
         .as_class();
     globals.define_class_by_str("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
-    globals.define_builtin_module_inline_func(
-        klass,
-        "sqrt",
-        sqrt,
-        Box::new(math_sqrt),
-        analysis::f_v_f,
-        1,
-    );
-    globals.define_builtin_module_inline_func(
-        klass,
-        "cos",
-        cos,
-        Box::new(math_cos),
-        analysis::f_v_f,
-        1,
-    );
-    globals.define_builtin_module_inline_func(
-        klass,
-        "sin",
-        sin,
-        Box::new(math_sin),
-        analysis::f_v_f,
-        1,
-    );
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
+    globals.define_builtin_module_inline_func(klass, "cos", cos, Box::new(math_cos), 1);
+    globals.define_builtin_module_inline_func(klass, "sin", sin, Box::new(math_sin), 1);
 }
 
 /// ### Math.#sqrt

@@ -9,12 +9,12 @@ use self::builtins::object_send_splat;
 use self::slot::Guarded;
 
 use super::*;
-use analysis::{ExitType, SlotInfo};
+//use analysis::{ExitType, SlotInfo};
 use asmir::*;
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
-pub mod analysis;
+//pub mod analysis;
 pub mod asmir;
 mod basic_block;
 mod compile;
@@ -35,19 +35,15 @@ struct JitContext {
     ///
     basic_block_labels: HashMap<BasicBlockId, JitLabel>,
     ///
-    /// Basic block information.
-    ///
-    bb_scan: Vec<(ExitType, SlotInfo)>,
-    ///
     /// Loop information.
     ///
     /// ### key
     /// the entry basic block of the loop.
     ///
     /// ### value
-    /// (the last basic block, slot_info at the loop exit, slot_info of the backedge)
+    /// (the last basic block, liveness info, slot_info of the backedge)
     ///
-    loop_info: HashMap<BasicBlockId, (BasicBlockId, SlotInfo, SlotInfo)>,
+    loop_info: HashMap<BasicBlockId, (Liveness, SlotContext)>,
     ///
     /// Nested loop count.
     ///
@@ -93,7 +89,6 @@ struct JitContext {
     ///
     continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
     labels: Vec<Option<DestLabel>>,
-    liveness: Liveness,
     ///
     /// Class version at compile time.
     ///
@@ -115,13 +110,7 @@ impl JitContext {
     ///
     /// Create new JitContext.
     ///
-    fn new(
-        func: &ISeqInfo,
-        store: &Store,
-        codegen: &mut Codegen,
-        is_loop: bool,
-        self_value: Value,
-    ) -> Self {
+    fn new(func: &ISeqInfo, codegen: &mut Codegen, is_loop: bool, self_value: Value) -> Self {
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..func.bb_info.len() {
@@ -129,13 +118,11 @@ impl JitContext {
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(Some(codegen.jit.label()));
         }
-        let bb_scan = func.bb_info.init_bb_scan(func, store);
 
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
             basic_block_labels,
-            bb_scan,
             loop_info: HashMap::default(),
             loop_count: 0,
             is_loop,
@@ -149,11 +136,35 @@ impl JitContext {
             bridges: vec![],
             continuation_bridge: None,
             labels,
-            liveness: Liveness::new(total_reg_num),
             class_version: codegen.class_version(),
             bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
             start_codepos: codegen.jit.get_current(),
+        }
+    }
+
+    fn from(&self) -> Self {
+        let total_reg_num = self.total_reg_num;
+        let local_num = self.local_num;
+        Self {
+            basic_block_labels: HashMap::default(),
+            loop_info: HashMap::default(),
+            loop_count: 0,
+            is_loop: true,
+            branch_map: HashMap::default(),
+            target_ctx: HashMap::default(),
+            backedge_map: HashMap::default(),
+            total_reg_num,
+            local_num,
+            self_value: Value::nil(),
+            sourcemap: vec![],
+            bridges: vec![],
+            continuation_bridge: None,
+            labels: vec![],
+            class_version: 0,
+            bop_redefine_flags: 0,
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
         }
     }
 
@@ -180,15 +191,13 @@ impl JitContext {
         }
     }
 
-    fn analyse(
-        &self,
-        func: &ISeqInfo,
-        entry_bb: BasicBlockId,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let (begin, _) = func.bb_info.get_loop(entry_bb).unwrap();
-        let (_, exit, backedge) = self.loop_info.get(&begin).unwrap();
-
-        (backedge.get_loop_used_as_float(), exit.get_unused())
+    fn loop_info(&self, entry_bb: BasicBlockId) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        match self.loop_info.get(&entry_bb) {
+            Some((liveness, backedge)) => {
+                (backedge.get_loop_used_as_float(), liveness.get_unused())
+            }
+            None => (vec![], vec![]),
+        }
     }
 
     ///
@@ -556,9 +565,9 @@ impl Codegen {
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
-        let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
+        let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
         for (loop_start, loop_end) in func.bb_info.loops() {
-            ctx.analyse_loop(func, *loop_start, *loop_end);
+            ctx.analyse_loop(store, func, *loop_start, *loop_end);
         }
 
         let bbctx = BBContext::new(&ctx);

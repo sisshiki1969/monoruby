@@ -307,28 +307,6 @@ pub(crate) enum TraceIr {
 }
 
 impl TraceIr {
-    pub(crate) fn get_exit_type(&self) -> Option<ExitType> {
-        match self {
-            TraceIr::Ret(..)
-            | TraceIr::MethodRet(..)
-            | TraceIr::BlockBreak(..)
-            | TraceIr::Raise(..) => {
-                return Some(ExitType::Return);
-            }
-            TraceIr::Br(_)
-            | TraceIr::CondBr(..)
-            | TraceIr::NilBr(..)
-            | TraceIr::CheckLocal(..)
-            | TraceIr::OptCase { .. } => {
-                return Some(ExitType::Continue);
-            }
-            _ => {}
-        }
-        None
-    }
-}
-
-impl TraceIr {
     #[cfg(feature = "dump-bc")]
     pub(crate) fn format(&self, store: &Store) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {

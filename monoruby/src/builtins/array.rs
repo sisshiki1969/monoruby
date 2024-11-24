@@ -13,7 +13,6 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         new,
         Box::new(super::class::gen_class_new(allocate_array)),
-        analysis::v_v_vv,
         0,
         0,
         true,
@@ -32,14 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "unshift", unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "prepend", unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
-    globals.define_builtin_inline_func(
-        ARRAY_CLASS,
-        "<<",
-        shl,
-        Box::new(array_shl),
-        analysis::v_v_v,
-        1,
-    );
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
     globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);

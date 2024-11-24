@@ -160,14 +160,6 @@ impl BasicBlockInfo {
         self.info.len()
     }
 
-    pub(super) fn init_bb_scan(&self, func: &ISeqInfo, store: &Store) -> Vec<(ExitType, SlotInfo)> {
-        let mut bb_scan = vec![];
-        for entry in &self.info {
-            bb_scan.push(JitContext::scan_bb(func, store, entry));
-        }
-        bb_scan
-    }
-
     pub(crate) fn is_bb_head(&self, i: BcIndex) -> Option<BasicBlockId> {
         if *self.bb_head.get(i.0 as usize)? {
             Some(self.get_bb_id(i))

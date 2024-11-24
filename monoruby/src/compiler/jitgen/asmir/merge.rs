@@ -92,7 +92,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let (use_set, unused) = self.analyse(func, bbid);
+        let (use_set, unused) = self.loop_info(bbid);
 
         #[cfg(feature = "jit-debug")]
         {

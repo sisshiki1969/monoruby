@@ -43,7 +43,6 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         &["[]"],
         new,
         Box::new(super::class::gen_class_new_object()),
-        analysis::v_v_vv,
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
 
