@@ -322,8 +322,8 @@ extern "C" fn set_instance_var(
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn ivar_in_different_class() {

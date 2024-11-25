@@ -1735,8 +1735,8 @@ fn insert(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn array_new() {

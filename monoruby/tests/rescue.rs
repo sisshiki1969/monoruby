@@ -1,48 +1,47 @@
-#[cfg(test)]
-mod test {
-    use crate::tests::*;
+extern crate monoruby;
+use monoruby::tests::*;
 
-    #[test]
-    fn begin_use() {
-        run_test(
-            r#"
+#[test]
+fn begin_use() {
+    run_test(
+        r#"
             # Use
             begin
               100
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn begin_nouse() {
-        run_test(
-            r#"
+#[test]
+fn begin_nouse() {
+    run_test(
+        r#"
             # NoUse
             begin
               100
             end
             nil
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn begin_ret() {
-        run_test_once(
-            r#"
+#[test]
+fn begin_ret() {
+    run_test_once(
+        r#"
             # Ret
             begin
               100
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_ret() {
-        run_test_once(
-            r#"
+#[test]
+fn rescue_ret() {
+    run_test_once(
+        r#"
             #Ret
             begin
               100
@@ -50,26 +49,26 @@ mod test {
               200
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_use() {
-        run_test(
-            r#"
+#[test]
+fn rescue_use() {
+    run_test(
+        r#"
             begin
               100
             rescue
               200
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_else() {
-        run_test(
-            r#"
+#[test]
+fn rescue_else() {
+    run_test(
+        r#"
             begin
               100
             rescue
@@ -77,13 +76,13 @@ mod test {
               200
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_else_ensure() {
-        run_test(
-            r#"
+#[test]
+fn rescue_else_ensure() {
+    run_test(
+        r#"
             begin
               100
             rescue
@@ -93,13 +92,13 @@ mod test {
               300
             end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue8() {
-        run_test(
-            r#"
+#[test]
+fn rescue8() {
+    run_test(
+        r#"
             $x = []
             begin
                 begin
@@ -120,13 +119,13 @@ mod test {
             end
             $x
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_write_back1() {
-        run_test(
-            r#"
+#[test]
+fn rescue_write_back1() {
+    run_test(
+        r#"
         res = []
         for i in 0..10
             begin
@@ -145,13 +144,13 @@ mod test {
         res << x
         res
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn rescue_write_back2() {
-        run_test(
-            r#"
+#[test]
+fn rescue_write_back2() {
+    run_test(
+        r#"
         res = []
         begin
             for i in 0..10
@@ -168,17 +167,17 @@ mod test {
         end
         res << x
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn block_return_ensure() {
-        run_test_with_prelude(
-            r#"
+#[test]
+fn block_return_ensure() {
+    run_test_with_prelude(
+        r#"
             $x = []
             [foo, $x]
             "#,
-            r#"
+        r#"
             def foo
               2.times do |i|
                 2.times  do |j|
@@ -194,6 +193,5 @@ mod test {
               $x << "foo"
             end
             "#,
-        );
-    }
+    );
 }

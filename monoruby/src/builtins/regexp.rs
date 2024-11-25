@@ -184,7 +184,7 @@ fn match_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::tests::*;
     #[test]
     fn regexp_last_match() {

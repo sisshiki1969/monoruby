@@ -12,6 +12,9 @@ struct CommandLineArgs {
     /// switch just-in-time compilation.
     #[arg(short, long)]
     no_jit: bool,
+    /// switch loading gems.
+    #[arg(short, long)]
+    no_gems: bool,
     #[arg(short = 'I')]
     import: Vec<String>,
     #[arg(short = 'W', default_value = "1")]
@@ -26,7 +29,7 @@ fn main() {
     let args = CommandLineArgs::parse();
 
     let mut rl = DefaultEditor::new().unwrap();
-    let mut globals = Globals::new(args.warning, args.no_jit);
+    let mut globals = Globals::new(args.warning, args.no_jit, args.no_gems);
 
     let mut cont_mode = false;
     let mut buf = String::new();

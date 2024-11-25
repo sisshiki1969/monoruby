@@ -24,7 +24,7 @@ fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::tests::*;
 
     #[test]

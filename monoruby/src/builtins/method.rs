@@ -40,7 +40,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::tests::*;
     #[test]
     fn call() {

@@ -162,11 +162,10 @@ extern "C" fn extern_sin(f: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
-    #[ignore]
     fn torigonometric() {
         run_test("Math.cos 149");
         run_test("Math.cos -14.97522");

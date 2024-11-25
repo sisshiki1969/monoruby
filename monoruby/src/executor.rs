@@ -102,34 +102,29 @@ impl alloc::GC<RValue> for Executor {
 
 impl Executor {
     pub fn init(globals: &mut Globals) -> Self {
-        #[cfg(not(feature = "no-startup"))]
         let mut executor = Self::default();
-        #[cfg(feature = "no-startup")]
-        let executor = Self::default();
-        #[cfg(not(feature = "no-startup"))]
-        {
-            let path = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("startup.rb");
-            if let Err(err) = executor.require(globals, &path, false) {
-                err.show_error_message_and_all_loc(globals);
-                panic!("error occurred in startup.");
-            }
+        let path = dirs::home_dir()
+            .unwrap()
+            .join(".monoruby")
+            .join("startup.rb");
+        if let Err(err) = executor.require(globals, &path, false) {
+            err.show_error_message_and_all_loc(globals);
+            panic!("error occurred in startup.");
         }
-        #[cfg(not(feature = "no-gems"))]
-        {
-            executor
-                .require(globals, &std::path::PathBuf::from("rubygems"), false)
-                .expect("error occurred in startup.");
-            executor
-                .require(globals, &std::path::PathBuf::from("pp"), false)
-                .expect("error occurred in startup.");
+        if !globals.no_gems {
+            executor.load_gems(globals);
         }
         globals.startup_flag = true;
         #[cfg(feature = "profile")]
         globals.clear_stats();
         executor
+    }
+
+    fn load_gems(&mut self, globals: &mut Globals) {
+        self.require(globals, &std::path::PathBuf::from("rubygems"), false)
+            .expect("error occurred in startup.");
+        self.require(globals, &std::path::PathBuf::from("pp"), false)
+            .expect("error occurred in startup.");
     }
 
     pub fn cfp(&self) -> Cfp {

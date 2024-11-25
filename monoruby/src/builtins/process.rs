@@ -111,8 +111,8 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn process() {

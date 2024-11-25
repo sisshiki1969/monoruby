@@ -71,10 +71,10 @@ impl JitContext {
             ctx.analyse_basic_block(store, func, &mut liveness, bbid);
         }
 
-        if let Some(mut branches) = ctx.branch_map.remove(&loop_start) {
-            assert_eq!(1, branches.len());
-            let bbctx = branches.remove(0).bbctx;
-            liveness.merge(bbctx);
+        if let Some(branches) = ctx.branch_map.remove(&loop_start) {
+            for entry in branches {
+                liveness.merge(entry.bbctx);
+            }
         }
 
         //dbg!(loop_start, loop_end, &liveness);

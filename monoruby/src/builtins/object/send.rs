@@ -69,8 +69,8 @@ fn object_send_inner(
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn object_send() {

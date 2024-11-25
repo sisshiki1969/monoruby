@@ -28,8 +28,8 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn include() {

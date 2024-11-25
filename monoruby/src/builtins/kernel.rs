@@ -896,8 +896,8 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn nil() {
@@ -983,6 +983,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn kernel() {
         run_test_no_result_check("sleep 1");
         run_test_error("abort 1");

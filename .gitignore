@@ -13,3 +13,4 @@ perf.data
 .quine
 .ruby-version
 out.*
+lcov.info

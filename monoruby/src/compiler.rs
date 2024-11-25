@@ -55,9 +55,6 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
-#[cfg(feature = "test")]
-const COUNT_START_COMPILE: i32 = 5;
-#[cfg(not(feature = "test"))]
 const COUNT_START_COMPILE: i32 = 20;
 const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 5;
@@ -1000,55 +997,60 @@ extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Val
     globals.jit_class_guard_failed(func_id, self_val.class());
 }
 
-#[test]
-fn guard_class() {
-    let mut gen = Codegen::new(false);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    for (class, value) in [
-        (INTEGER_CLASS, Value::integer(-2558)),
-        (INTEGER_CLASS, Value::integer(i32::MAX as i64)),
-        (INTEGER_CLASS, Value::integer(i32::MIN as i64)),
-        (FLOAT_CLASS, Value::float(1.44e-17)),
-        (FLOAT_CLASS, Value::float(0.0)),
-        (FLOAT_CLASS, Value::float(f64::NAN)),
-        (FLOAT_CLASS, Value::float(f64::INFINITY)),
-        (FLOAT_CLASS, Value::float(f64::NEG_INFINITY)),
-        (FLOAT_CLASS, Value::float(f64::MAX)),
-        (FLOAT_CLASS, Value::float(f64::MIN)),
-        (NIL_CLASS, Value::nil()),
-        (SYMBOL_CLASS, Value::symbol_from_str("Ruby")),
-        (TRUE_CLASS, Value::bool(true)),
-        (FALSE_CLASS, Value::bool(false)),
-        (ARRAY_CLASS, Value::array_from_vec(vec![])),
-        (HASH_CLASS, Value::hash(IndexMap::default())),
-        (STRING_CLASS, Value::string_from_str("Ruby")),
-    ] {
-        let func = gen.jit.get_label_addr(gen.get_class);
+    #[test]
+    fn guard_class() {
+        let mut gen = Codegen::new(false);
 
-        assert_eq!(class, func(value))
+        for (class, value) in [
+            (INTEGER_CLASS, Value::integer(-2558)),
+            (INTEGER_CLASS, Value::integer(i32::MAX as i64)),
+            (INTEGER_CLASS, Value::integer(i32::MIN as i64)),
+            (FLOAT_CLASS, Value::float(1.44e-17)),
+            (FLOAT_CLASS, Value::float(0.0)),
+            (FLOAT_CLASS, Value::float(f64::NAN)),
+            (FLOAT_CLASS, Value::float(f64::INFINITY)),
+            (FLOAT_CLASS, Value::float(f64::NEG_INFINITY)),
+            (FLOAT_CLASS, Value::float(f64::MAX)),
+            (FLOAT_CLASS, Value::float(f64::MIN)),
+            (NIL_CLASS, Value::nil()),
+            (SYMBOL_CLASS, Value::symbol_from_str("Ruby")),
+            (TRUE_CLASS, Value::bool(true)),
+            (FALSE_CLASS, Value::bool(false)),
+            (ARRAY_CLASS, Value::array_from_vec(vec![])),
+            (HASH_CLASS, Value::hash(IndexMap::default())),
+            (STRING_CLASS, Value::string_from_str("Ruby")),
+        ] {
+            let func = gen.jit.get_label_addr(gen.get_class);
+
+            assert_eq!(class, func(value))
+        }
     }
-}
 
-#[test]
-fn test_f64_to_val() {
-    let mut gen = Codegen::new(false);
+    #[test]
+    fn test_f64_to_val() {
+        let mut gen = Codegen::new(false);
 
-    for f in [
-        1.44e-17,
-        0.0,
-        1285.333,
-        -7512.0255,
-        f64::NAN,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::MAX,
-        f64::MIN,
-    ] {
-        let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(gen.f64_to_val);
-        if f.is_nan() {
-            assert!(func(f).try_float().unwrap().is_nan())
-        } else {
-            assert_eq!(Value::float(f).try_float(), func(f).try_float());
+        for f in [
+            1.44e-17,
+            0.0,
+            1285.333,
+            -7512.0255,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            f64::MIN,
+        ] {
+            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(gen.f64_to_val);
+            if f.is_nan() {
+                assert!(func(f).try_float().unwrap().is_nan())
+            } else {
+                assert_eq!(Value::float(f).try_float(), func(f).try_float());
+            }
         }
     }
 }

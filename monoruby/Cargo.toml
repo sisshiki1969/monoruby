@@ -31,34 +31,31 @@ gc-stress = []
 profile = ["dump-bc"]
 perf = []
 emit-cfg = ["dump-bc"]
-no-gems = []
-no-startup = ["no-gems"]
-test = ["no-gems", "emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "gc-stress", "profile", "perf"]
 
 [dependencies]
-clap = { version = "4.1.4", features = ["derive"] }
-rustyline = "14.0.0"
-paste = "1.0.7"
+clap = { version = "4.5.21", features = ["derive"] }
+rustyline = "15.0.0"
+paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
 ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
 monoruby-attr = { path = "../monoruby_attr" }
-num = "0.4.0"
+num = "0.4.3"
 fxhash = "0.2.1"
-tempfile = "3.3.0"
-dtoa = "1.0"
-chrono = "0.4.19"
+tempfile = "3.14.0"
+dtoa = "1.0.9"
+chrono = "0.4.38"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
 ] }
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.8.5"
-indexmap = "2.0.0"
-regex = "1.7.1"
-fancy-regex = "0.13.0"
-libc = "0.2.139"
-getrandom = "0.2.8"
+indexmap = "2.6.0"
+regex = "1.11.1"
+fancy-regex = "0.14.0"
+libc = "0.2.165"
+getrandom = "0.2.15"
 sfmt = "0.7.0"
 bitvec = "1.0.1"
 ansi_term = "0.12.1"

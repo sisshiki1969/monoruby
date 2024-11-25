@@ -353,8 +353,8 @@ impl TimeInner {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn test_time() {

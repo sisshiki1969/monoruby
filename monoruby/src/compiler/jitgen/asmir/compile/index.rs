@@ -9,7 +9,13 @@ impl Codegen {
     /// ### out
     /// - rax: result Option<Value>
     ///
-    pub(super) fn generic_index(&mut self, using: UsingXmm, base: SlotId, idx: SlotId, pc: BytecodePtr) {
+    pub(super) fn generic_index(
+        &mut self,
+        using: UsingXmm,
+        base: SlotId,
+        idx: SlotId,
+        pc: BytecodePtr,
+    ) {
         self.xmm_save(using);
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Interp
@@ -281,7 +287,7 @@ extern "C" fn set_array_integer_index(
 
 #[cfg(test)]
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn array_index() {

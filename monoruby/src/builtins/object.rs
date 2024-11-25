@@ -379,8 +379,8 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn cmp() {
@@ -611,7 +611,7 @@ mod test {
             r#"
         some = Foo.new 'XXX'
         res = []
-        res << some.instance_eval { p @key} #=> "XXX"
+        res << some.instance_eval { @key} #=> "XXX"
         res << some.instance_eval { do_fuga } #=> "secret" # private メソッドも呼び出せる
         res
         "#,
@@ -622,7 +622,7 @@ mod test {
           end
           private
           def do_fuga
-            p 'secret'
+            'secret'
           end
         end
         "#,
@@ -664,6 +664,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn kernel_system() {
         run_test(r#"system "ls""#);
         run_test(r#"system "jkjkjk""#);

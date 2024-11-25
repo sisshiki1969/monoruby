@@ -1,11 +1,10 @@
-#[cfg(test)]
-mod test {
-    use crate::tests::*;
+extern crate monoruby;
+use monoruby::tests::*;
 
-    #[test]
-    fn class_variables1() {
-        run_test_once(
-            r#"
+#[test]
+fn class_variables1() {
+    run_test_once(
+        r#"
             class Foo
               @@foo = 1
               def foo
@@ -30,13 +29,13 @@ mod test {
             end
             $res
             "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn class_variables2() {
-        run_test_once(
-            r#"
+#[test]
+fn class_variables2() {
+    run_test_once(
+        r#"
             module Foo
               @@foo = 1
               def foo
@@ -63,13 +62,13 @@ mod test {
             end
             $res
             "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn class_variables3() {
-        run_test_error(
-            r#"
+#[test]
+fn class_variables3() {
+    run_test_error(
+        r#"
             class Foo
             end
 
@@ -85,21 +84,21 @@ mod test {
               p @@v       #=> RuntimeError (class variable @@v of Bar is overtaken by Foo)
             end
         "#,
-        );
-        run_test_error(
-            r#"
+    );
+    run_test_error(
+        r#"
             @@x = 1
         "#,
-        );
-        run_test_error(
-            r#"
+    );
+    run_test_error(
+        r#"
             class C
               @@x
             end
         "#,
-        );
-        run_test_error(
-            r#"
+    );
+    run_test_error(
+        r#"
             class C
               def foo
                 @@x
@@ -107,29 +106,29 @@ mod test {
             end
             C.new.foo
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn class_variables4() {
-        run_test(
-            r##"
+#[test]
+fn class_variables4() {
+    run_test(
+        r##"
             class C
               @@x ||= 100
               @@x
             end
         "##,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn constant() {
-        run_test_with_prelude(
-            r#"
+#[test]
+fn constant() {
+    run_test_with_prelude(
+        r#"
           C::D::E = 100
           C::D.e
           "#,
-            r#"
+        r#"
           class C
             class D
               E = 1
@@ -139,20 +138,19 @@ mod test {
             end
           end
       "#,
-        );
-        run_test(
-            r#"
+    );
+    run_test(
+        r#"
           ::E = 100
           Object::E
             "#,
-        );
-        run_test(
-            r##"
+    );
+    run_test(
+        r##"
             class C
               D ||= 100
               D
             end
         "##,
-        );
-    }
+    );
 }

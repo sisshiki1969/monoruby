@@ -17,6 +17,9 @@ struct CommandLineArgs {
     /// switch for just-in-time compilation.
     #[arg(long)]
     no_jit: bool,
+    /// switch for loading gems.
+    #[arg(long)]
+    no_gems: bool,
     /// switch for garbage collection.
     #[arg(long)]
     no_gc: bool,
@@ -38,7 +41,7 @@ fn main() {
     use clap::Parser;
     let mut finish_flag = false;
     let args = CommandLineArgs::parse();
-    let mut globals = Globals::new(args.warning, args.no_jit);
+    let mut globals = Globals::new(args.warning, args.no_jit, args.no_gems);
     Globals::gc_enable(!args.no_gc);
     let lib = args.directory.iter().filter_map(|s| {
         std::path::Path::new(s)

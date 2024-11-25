@@ -137,8 +137,8 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn exception() {

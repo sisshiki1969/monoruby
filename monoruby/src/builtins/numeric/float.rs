@@ -242,8 +242,8 @@ fn abs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::tests::*;
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn float() {

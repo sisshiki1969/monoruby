@@ -1103,7 +1103,6 @@ impl Value {
 }
 
 impl Value {
-    #[cfg(test)]
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
         use ruruby_parse::NReal;
 

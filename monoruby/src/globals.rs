@@ -105,6 +105,8 @@ pub struct Globals {
     global_method_cache: GlobalMethodCache,
     /// suppress jit compilation.
     no_jit: bool,
+    /// suppress loading gem.
+    pub no_gems: bool,
     /// stdout.
     stdout: BufWriter<Stdout>,
     /// library directries.
@@ -152,7 +154,7 @@ impl alloc::GC<RValue> for Globals {
 }
 
 impl Globals {
-    pub fn new(warning: u8, no_jit: bool) -> Self {
+    pub fn new(warning: u8, no_jit: bool, no_gems: bool) -> Self {
         assert_eq!(64, std::mem::size_of::<FuncInfo>());
 
         WARNING.store(warning, std::sync::atomic::Ordering::Relaxed);
@@ -166,6 +168,7 @@ impl Globals {
             global_vars: HashMap::default(),
             global_method_cache: GlobalMethodCache::default(),
             no_jit,
+            no_gems,
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
@@ -246,6 +249,10 @@ impl Globals {
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals
+    }
+
+    pub fn new_test() -> Self {
+        Globals::new(1, false, true)
     }
 
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {

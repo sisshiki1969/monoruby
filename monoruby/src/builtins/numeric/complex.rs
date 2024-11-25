@@ -121,7 +121,7 @@ fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::tests::*;
 
     #[test]
