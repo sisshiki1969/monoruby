@@ -39,7 +39,6 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     .ok_or_else(|| vm.take_error())
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
     #[test]

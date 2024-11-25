@@ -183,7 +183,6 @@ fn match_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     ))
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
     #[test]

@@ -23,7 +23,6 @@ fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     Ok(Value::array_from_vec(v))
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
 

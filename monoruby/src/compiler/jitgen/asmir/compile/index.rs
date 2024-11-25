@@ -279,7 +279,6 @@ extern "C" fn set_array_integer_index(
         .ok()
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

@@ -378,7 +378,6 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::array_from_iter(iter))
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

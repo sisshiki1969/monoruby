@@ -141,7 +141,6 @@ fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     Ok(members)
 }
 
-#[cfg(test)]
 mod tests {
     use crate::tests::*;
 

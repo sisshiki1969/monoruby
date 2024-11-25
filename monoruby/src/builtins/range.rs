@@ -213,7 +213,6 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

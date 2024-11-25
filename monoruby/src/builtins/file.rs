@@ -485,7 +485,6 @@ fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
         .replace('\\', "/")
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

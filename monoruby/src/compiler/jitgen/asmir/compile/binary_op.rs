@@ -943,7 +943,6 @@ impl Codegen {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

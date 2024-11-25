@@ -321,7 +321,6 @@ extern "C" fn set_instance_var(
     Some(val)
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

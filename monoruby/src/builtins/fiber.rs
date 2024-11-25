@@ -114,7 +114,6 @@ fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     self_val.resume(vm, globals, lfp)
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
     #[test]

@@ -257,7 +257,6 @@ impl Meta {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::*;
 

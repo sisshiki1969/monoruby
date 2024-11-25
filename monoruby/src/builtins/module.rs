@@ -664,7 +664,6 @@ fn extract_names(arg: Array) -> Result<(Value, Vec<IdentId>)> {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

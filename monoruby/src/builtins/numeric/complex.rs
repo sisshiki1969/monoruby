@@ -120,7 +120,6 @@ fn rect(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::array2(r.get(), i.get()))
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
 

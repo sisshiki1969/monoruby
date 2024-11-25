@@ -352,7 +352,6 @@ impl TimeInner {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

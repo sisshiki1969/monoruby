@@ -68,7 +68,6 @@ fn object_send_inner(
     ir.reg2acc(bb, GP::Rax, dst);
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

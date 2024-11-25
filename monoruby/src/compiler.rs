@@ -55,9 +55,6 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
-#[cfg(feature = "test")]
-const COUNT_START_COMPILE: i32 = 5;
-#[cfg(not(feature = "test"))]
 const COUNT_START_COMPILE: i32 = 20;
 const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 5;

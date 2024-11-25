@@ -562,7 +562,6 @@ impl TypeErrKind {
     }
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
 

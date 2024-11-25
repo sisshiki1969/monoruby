@@ -253,9 +253,9 @@ impl AsmIr {
     }
 }
 
-#[cfg(test)]
 mod test {
     use crate::tests::*;
+
     #[test]
     fn polymorphic() {
         run_test_with_prelude(

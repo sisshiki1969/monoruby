@@ -513,7 +513,6 @@ fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     Ok(Value::bool(b))
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

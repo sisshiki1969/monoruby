@@ -467,7 +467,6 @@ impl HashContent {
     }
 }
 
-#[cfg(test)]
 mod test {
     use super::*;
 

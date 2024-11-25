@@ -27,7 +27,6 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     Ok(class.as_val())
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

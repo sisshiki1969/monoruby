@@ -538,7 +538,6 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(s)
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

@@ -895,7 +895,6 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(ary)
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

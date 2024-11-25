@@ -2135,7 +2135,6 @@ fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
     Ok(Value::bool(lfp.self_val().as_bytes().valid()))
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 

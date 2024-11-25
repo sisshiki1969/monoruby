@@ -1734,7 +1734,6 @@ fn insert(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
-#[cfg(test)]
 mod test {
     use super::tests::*;
 
