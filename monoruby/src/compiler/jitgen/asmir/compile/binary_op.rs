@@ -943,7 +943,8 @@ impl Codegen {
     }
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

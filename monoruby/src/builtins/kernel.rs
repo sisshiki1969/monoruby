@@ -895,7 +895,8 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(ary)
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

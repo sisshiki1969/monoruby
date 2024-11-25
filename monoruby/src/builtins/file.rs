@@ -485,7 +485,8 @@ fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
         .replace('\\', "/")
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

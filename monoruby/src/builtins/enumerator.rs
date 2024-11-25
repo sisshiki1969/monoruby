@@ -268,8 +268,8 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 
     res
 }
-
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

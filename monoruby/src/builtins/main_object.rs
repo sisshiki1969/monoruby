@@ -27,7 +27,8 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     Ok(class.as_val())
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

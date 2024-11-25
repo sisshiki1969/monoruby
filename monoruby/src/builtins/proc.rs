@@ -42,7 +42,8 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     vm.invoke_proc(globals, p, &lfp.arg(0).as_array())
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

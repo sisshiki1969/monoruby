@@ -148,7 +148,8 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     Ok(lfp.self_val())
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

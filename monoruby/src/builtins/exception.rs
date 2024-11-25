@@ -136,7 +136,8 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     Ok(ex)
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
 
     #[test]

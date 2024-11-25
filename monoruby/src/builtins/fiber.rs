@@ -114,7 +114,8 @@ fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     self_val.resume(vm, globals, lfp)
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use crate::tests::*;
     #[test]
     fn fiber_error() {
