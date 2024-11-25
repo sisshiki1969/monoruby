@@ -1,11 +1,10 @@
-#[cfg(test)]
-mod test {
-    use crate::tests::*;
+extern crate monoruby;
+use monoruby::tests::*;
 
-    #[test]
-    fn comparable() {
-        run_test_with_prelude(
-            r##"
+#[test]
+fn comparable() {
+    run_test_with_prelude(
+        r##"
           res = []
           res << ( C.new(1) == C.new(2) )
           res << ( C.new(1) == C.new(1) )
@@ -27,7 +26,7 @@ mod test {
           res << ( C.new(2) < C.new(1) )
           res
 "##,
-            r##"
+        r##"
           class C
             include Comparable
             attr_accessor :x
@@ -39,6 +38,5 @@ mod test {
             end
           end
             "##,
-        );
-    }
+    );
 }

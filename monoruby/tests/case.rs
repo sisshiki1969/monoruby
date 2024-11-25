@@ -1,11 +1,10 @@
-#[cfg(test)]
-mod test {
-    use crate::tests::*;
+extern crate monoruby;
+use monoruby::tests::*;
 
-    #[test]
-    fn case0() {
-        run_test(
-            r#"
+#[test]
+fn case0() {
+    run_test(
+        r#"
         foo = false
         bar = true
         quu = false
@@ -16,13 +15,13 @@ mod test {
         when quu then 'quu is true'
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case1() {
-        run_test(
-            r#"
+#[test]
+fn case1() {
+    run_test(
+        r#"
         foo = false
         bar = true
         quu = false
@@ -34,13 +33,13 @@ mod test {
         end
         100
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case2() {
-        run_test(
-            r#"
+#[test]
+fn case2() {
+    run_test(
+        r#"
         foo = false
         bar = true
         quu = false
@@ -51,13 +50,13 @@ mod test {
         when quu then 'quu is true'
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case3() {
-        run_test(
-            r#"
+#[test]
+fn case3() {
+    run_test(
+        r#"
         c = 5
         case
         when c == 3, c == 6, c == 9
@@ -70,39 +69,39 @@ mod test {
           'それ以外'
         end
         "#,
-        )
-    }
+    )
+}
 
-    #[test]
-    fn case4() {
-        run_test(
-            r#"
+#[test]
+fn case4() {
+    run_test(
+        r#"
         case :symbol
         when Integer then 'integer'
         when Float then 'float'
         when Symbol then 'symbol'
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case5() {
-        run_test(
-            r#"
+#[test]
+fn case5() {
+    run_test(
+        r#"
         x = case :symbol
         when Integer then 'integer'
         when Float then 'float'
         when Symbol,String then 'symbol'
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case_opt1() {
-        run_test(
-            r#"
+#[test]
+fn case_opt1() {
+    run_test(
+        r#"
         case 4
         when 0
           a = 10
@@ -115,13 +114,13 @@ mod test {
         end
         a
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case_opt2() {
-        run_test(
-            r#"
+#[test]
+fn case_opt2() {
+    run_test(
+        r#"
         case 9
         when 0,4,8
           0
@@ -135,13 +134,13 @@ mod test {
           4
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case_opt3() {
-        run_test(
-            r#"
+#[test]
+fn case_opt3() {
+    run_test(
+        r#"
         case 9
         when 0,4,8
           0
@@ -155,13 +154,13 @@ mod test {
           4
         end
         "#,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn case_opt4() {
-        run_test(
-            r#"
+#[test]
+fn case_opt4() {
+    run_test(
+        r#"
         case 9
         when 0,4,8
           0
@@ -175,6 +174,5 @@ mod test {
           4
         end
         "#,
-        );
-    }
+    );
 }

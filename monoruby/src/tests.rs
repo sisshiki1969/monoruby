@@ -1,16 +1,7 @@
-use super::*;
+use crate::*;
 use ruruby_parse::Parser;
 use std::{io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
-
-mod case;
-mod comparable;
-mod literal;
-mod method_call;
-mod redefine;
-mod require;
-mod rescue;
-mod variables;
 
 pub fn run_test(code: &str) {
     let wrapped = format!(

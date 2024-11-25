@@ -18,8 +18,7 @@ mod compiler;
 mod executor;
 mod globals;
 mod id_table;
-#[cfg(test)]
-mod tests;
+pub mod tests;
 mod value;
 
 pub(crate) use bytecode::*;

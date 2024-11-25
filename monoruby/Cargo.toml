@@ -33,21 +33,21 @@ perf = []
 emit-cfg = ["dump-bc"]
 no-gems = []
 no-startup = ["no-gems"]
-test = ["no-gems", "emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "gc-stress", "profile", "perf"]
+test = ["no-gems", "emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "profile", "perf"]
 
 [dependencies]
-clap = { version = "4.1.4", features = ["derive"] }
-rustyline = "14.0.0"
-paste = "1.0.7"
+clap = { version = "4.5.21", features = ["derive"] }
+rustyline = "15.0.0"
+paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
 ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
 monoruby-attr = { path = "../monoruby_attr" }
-num = "0.4.0"
+num = "0.4.3"
 fxhash = "0.2.1"
-tempfile = "3.3.0"
-dtoa = "1.0"
-chrono = "0.4.19"
+tempfile = "3.14.0"
+dtoa = "1.0.9"
+chrono = "0.4.38"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
 ] }

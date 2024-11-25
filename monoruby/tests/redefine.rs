@@ -1,11 +1,10 @@
-#[cfg(test)]
-mod test {
-    use crate::tests::*;
+extern crate monoruby;
+use monoruby::tests::*;
 
-    #[test]
-    fn redefine_test1() {
-        run_test_once(
-            r##"
+#[test]
+fn redefine_test1() {
+    run_test_once(
+        r##"
         a = [100 * 100]
         class Integer
           def *(other)
@@ -15,13 +14,13 @@ mod test {
         a << 100 * 100
         a
         "##,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn redefine_test2() {
-        run_test_once(
-            r##"
+#[test]
+fn redefine_test2() {
+    run_test_once(
+        r##"
         res = []
         50.times do |x|
           res << 100 * 100
@@ -35,13 +34,13 @@ mod test {
         end
         res
         "##,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn redefine_test3() {
-        run_test_once(
-            r##"
+#[test]
+fn redefine_test3() {
+    run_test_once(
+        r##"
         a = 0
         30.times do |x|
           30.times do |y|
@@ -60,13 +59,13 @@ mod test {
         end
         a
         "##,
-        );
-    }
+    );
+}
 
-    #[test]
-    fn redefine_test4() {
-        run_test_once(
-            r##"
+#[test]
+fn redefine_test4() {
+    run_test_once(
+        r##"
         a = 0
         for x in 0..30
           for y in 0..30
@@ -85,6 +84,5 @@ mod test {
         end
         a
         "##,
-        );
-    }
+    );
 }
