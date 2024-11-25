@@ -126,18 +126,6 @@ impl Bytecode {
             op2: Bc2::ident2(id1, id2),
         }
     }
-
-    /*pub fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(
-                ((num3 as u64) << 48)
-                    + ((num2 as u64) << 32)
-                    + ((num1 as u64) << 16)
-                    + (num0 as u64),
-            ),
-        }
-    }*/
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
