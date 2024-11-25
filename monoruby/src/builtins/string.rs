@@ -2135,8 +2135,9 @@ fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
     Ok(Value::bool(lfp.self_val().as_bytes().valid()))
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn string_empty() {

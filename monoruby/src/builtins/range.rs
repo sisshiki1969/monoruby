@@ -213,8 +213,9 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn range() {

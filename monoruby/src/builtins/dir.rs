@@ -169,7 +169,8 @@ fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
     Ok(Value::string(home.to_string_lossy().to_string()))
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use super::tests::*;
 
     #[test]

@@ -513,8 +513,9 @@ fn zero_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     Ok(Value::bool(b))
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn times() {

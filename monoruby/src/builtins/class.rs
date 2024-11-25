@@ -174,7 +174,8 @@ extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Optio
     globals.check_method(receiver, IdentId::INITIALIZE)
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
     use super::tests::*;
 
     #[test]

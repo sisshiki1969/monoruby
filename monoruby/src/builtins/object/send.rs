@@ -68,8 +68,9 @@ fn object_send_inner(
     ir.reg2acc(bb, GP::Rax, dst);
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn object_send() {

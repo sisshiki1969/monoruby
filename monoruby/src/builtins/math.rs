@@ -161,8 +161,9 @@ extern "C" fn extern_sin(f: f64) -> f64 {
     f.sin()
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     #[ignore]

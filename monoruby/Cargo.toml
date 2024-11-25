@@ -33,7 +33,7 @@ perf = []
 emit-cfg = ["dump-bc"]
 no-gems = []
 no-startup = ["no-gems"]
-test = ["no-gems", "emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "profile", "perf"]
+# test = ["no-gems", "emit-asm", "emit-bc", "jit-log", "jit-debug", "deopt", "gc-log", "profile", "perf"]
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }

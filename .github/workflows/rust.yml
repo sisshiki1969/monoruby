@@ -26,10 +26,12 @@ jobs:
       - run: |
           cargo install grcov cargo-nextest
           rustup component add llvm-tools-preview
+          export RUSTFLAGS="-Cinstrument-coverage"
       - name: Install
         run: cargo install --all-features --path monoruby
       - name: Run tests
         run: |
+          cargo build
           LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
           LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
           LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
