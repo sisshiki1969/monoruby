@@ -176,7 +176,7 @@ extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn test_class() {

@@ -896,7 +896,7 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn nil() {

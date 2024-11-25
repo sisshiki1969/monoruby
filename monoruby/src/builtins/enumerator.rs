@@ -270,7 +270,7 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn enumerator1() {

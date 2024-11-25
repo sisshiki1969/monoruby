@@ -322,7 +322,7 @@ extern "C" fn set_instance_var(
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn ivar_in_different_class() {

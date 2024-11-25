@@ -115,7 +115,7 @@ fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
     #[test]
     fn fiber_error() {
         run_test_error("Fiber.yield");

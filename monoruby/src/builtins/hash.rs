@@ -539,7 +539,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn test_hash() {

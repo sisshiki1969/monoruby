@@ -664,8 +664,9 @@ fn extract_names(arg: Array) -> Result<(Value, Vec<IdentId>)> {
     }
 }
 
-mod test {
-    use super::tests::*;
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
 
     #[test]
     fn test_teq() {

@@ -944,7 +944,7 @@ impl Codegen {
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn rem() {

@@ -486,7 +486,7 @@ fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
 }
 
 mod test {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn join() {

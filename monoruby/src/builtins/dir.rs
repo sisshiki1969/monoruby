@@ -171,7 +171,7 @@ fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn glob() {
