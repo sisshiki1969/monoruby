@@ -22,7 +22,6 @@ pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| 
 
 pub(crate) type InlineGen =
     dyn Fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, CallSiteId, BytecodePtr);
-pub(crate) type InlineAnalysis = fn(&mut analysis::SlotInfo, &CallSiteInfo);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
@@ -209,7 +208,6 @@ impl Globals {
                 &["__send__"],
                 crate::builtins::send,
                 Box::new(crate::builtins::object_send),
-                analysis::v_v_vv,
                 0,
                 0,
                 true,

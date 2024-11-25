@@ -683,7 +683,7 @@ impl Codegen {
             movq rsi, r14;
             movl rdx, (exit_patch_point.to_usize());
             subq rsp, 4088;
-            movq rax, (exec_jit_compile_patch);
+            movq rax, (exec_jit_compile_patch as usize);
             call rax;
             addq rsp, 4088;
             jmp exit_patch_point;
@@ -981,11 +981,12 @@ fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
 
 fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
     let label = jit.get_current_address();
+    let f = runtime::unimplemented_inst as usize;
     monoasm! { jit,
             movq rdi, rbx;
             movq rsi, r12;
             movzxw rdx, [r13 - 10];
-            movq rax, (runtime::unimplemented_inst);
+            movq rax, (f);
             call rax;
             leave;
             ret;

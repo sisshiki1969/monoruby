@@ -1,5 +1,4 @@
 use super::*;
-use crate::builtins::slot::Guarded;
 use smallvec::smallvec;
 use std::cmp::Ordering;
 
@@ -14,7 +13,6 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         new,
         Box::new(super::class::gen_class_new(allocate_array)),
-        analysis::v_v_vv,
         0,
         0,
         true,
@@ -33,14 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "unshift", unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "prepend", unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
-    globals.define_builtin_inline_func(
-        ARRAY_CLASS,
-        "<<",
-        shl,
-        Box::new(array_shl),
-        analysis::v_v_v,
-        1,
-    );
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
     globals.define_builtin_func(ARRAY_CLASS, "pop", pop, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
@@ -432,7 +423,7 @@ fn array_shl(
     _pc: BytecodePtr,
 ) {
     let CallSiteInfo { dst, args, .. } = store[callid];
-    ir.fetch_to_reg(bb, args, GP::Rsi);
+    ir.fetch_for_gpr(bb, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using_xmm);
@@ -442,7 +433,7 @@ fn array_shl(
         );
         gen.xmm_restore(using_xmm);
     });
-    ir.reg2acc_guarded(bb, GP::Rax, dst, Guarded::ArrayTy);
+    ir.reg2acc_array_ty(bb, GP::Rax, dst);
 }
 
 ///

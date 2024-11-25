@@ -1151,11 +1151,12 @@ pub enum FiberState {
 pub(crate) struct SlotId(pub u16);
 
 impl std::iter::Step for SlotId {
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+    fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
         if start.0 <= end.0 {
-            Some((end.0 - start.0) as usize)
+            let d = end.0 as usize - start.0 as usize;
+            (d, Some(d))
         } else {
-            None
+            (0, None)
         }
     }
 

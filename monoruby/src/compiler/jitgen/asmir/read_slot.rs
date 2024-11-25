@@ -2,22 +2,22 @@ use super::*;
 
 impl AsmIr {
     ///
-    /// fetch *reg* and store in *dst*.
+    /// fetch *slot* and store in *dst*.
     ///
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(crate) fn fetch_to_reg(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
+    pub(crate) fn fetch_for_gpr(&mut self, bb: &mut BBContext, slot: SlotId, dst: GP) {
         if slot >= bb.sp {
-            eprintln!("warning: {:?} >= {:?} in fetch_to_reg()", slot, bb.sp);
-            panic!();
+            unreachable!("{:?} >= {:?} in fetch_for_gpr()", slot, bb.sp);
         };
+        bb[slot].use_as_value();
         match bb.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 if dst == GP::R15 {
                     self.writeback_acc(bb);
                 }
-                self.xmm2stack(xmm, vec![slot]);
+                self.xmm2stack(xmm, slot);
                 self.reg_move(GP::Rax, dst);
                 bb.set_both_float(slot, xmm);
             }
@@ -45,13 +45,17 @@ impl AsmIr {
         }
     }
 
-    pub(crate) fn fetch_to_rsp_offset(&mut self, bb: &mut BBContext, reg: SlotId, offset: i32) {
-        match bb.slot(reg) {
+    pub(crate) fn fetch_for_callee(&mut self, bb: &mut BBContext, slot: SlotId, offset: i32) {
+        match bb.slot(slot) {
             LinkMode::Accumulator => {
+                if slot >= bb.sp {
+                    unreachable!("{:?} >= {:?} in fetch_for_callee()", slot, bb.sp);
+                };
+                bb[slot].use_as_value();
                 self.reg2rsp_offset(GP::R15, offset);
             }
             _ => {
-                self.fetch_to_reg(bb, reg, GP::Rax);
+                self.fetch_for_gpr(bb, slot, GP::Rax);
                 self.reg2rsp_offset(GP::Rax, offset);
             }
         }
@@ -65,7 +69,7 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) {
         let is_array = bb.is_array_ty(slot);
-        self.fetch_to_reg(bb, slot, dst);
+        self.fetch_for_gpr(bb, slot, dst);
         if !is_array {
             self.guard_array_ty(dst, deopt);
             bb.set_guard_array_ty(slot);
@@ -80,7 +84,7 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) {
         let is_fixnum = bb.is_fixnum(slot);
-        self.fetch_to_reg(bb, slot, dst);
+        self.fetch_for_gpr(bb, slot, dst);
         if !is_fixnum {
             self.guard_fixnum(dst, deopt);
             bb.set_guard_fixnum(slot);
@@ -101,50 +105,31 @@ impl AsmIr {
     /// ### destroy
     /// - rdi
     ///
-    fn fetch_float_assume_integer(
+    pub(super) fn fetch_integer_for_xmm(
         &mut self,
         bb: &mut BBContext,
-        reg: SlotId,
+        slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
-        match bb.slot(reg) {
+        fn int_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
+            let x = ir.store_new_both_integer(bb, slot);
+            ir.stack2reg(slot, GP::Rdi);
+            ir.int2xmm(GP::Rdi, x, deopt);
+            x
+        }
+        bb[slot].use_as_float();
+        match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                self.stack2reg(reg, GP::Rdi);
-                self.int2xmm(GP::Rdi, x, deopt);
-                x
-            }
+            LinkMode::Stack => int_to_both(self, bb, slot, deopt),
+            LinkMode::Alias(origin) => int_to_both(self, bb, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                self.reg2stack(GP::R15, reg);
+                let x = self.store_new_both_integer(bb, slot);
+                self.reg2stack(GP::R15, slot);
                 self.int2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::Alias(origin) => {
-                // -> Both
-                let x = self.store_new_both(bb, origin, Guarded::Fixnum);
-                self.stack2reg(origin, GP::Rdi);
-                self.int2xmm(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::ConcreteValue(v) => {
-                if let Some(f) = v.try_float() {
-                    // -> Xmm
-                    let x = self.store_new_xmm(bb, reg);
-                    self.f64toxmm(f, x);
-                    x
-                } else if let Some(i) = v.try_fixnum() {
-                    // -> Both
-                    let x = self.store_new_both(bb, reg, Guarded::Fixnum);
-                    self.i64toboth(i, reg, x);
-                    x
-                } else {
-                    unreachable!()
-                }
-            }
+            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(bb, slot, v),
         }
     }
 
@@ -155,90 +140,52 @@ impl AsmIr {
     /// - rdi, rax
     ///
     ///
-    pub(crate) fn fetch_float_assume_float(
+    pub(crate) fn fetch_float_for_xmm(
         &mut self,
         bb: &mut BBContext,
         slot: SlotId,
         deopt: AsmDeopt,
     ) -> Xmm {
+        fn float_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
+            let x = ir.store_new_both_float(bb, slot);
+            ir.stack2reg(slot, GP::Rdi);
+            ir.float2xmm(GP::Rdi, x, deopt);
+            x
+        }
+        bb[slot].use_as_float();
         match bb.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.store_new_both(bb, slot, Guarded::Float);
-                self.stack2reg(slot, GP::Rdi);
-                self.float2xmm(GP::Rdi, x, deopt);
-                x
-            }
+            LinkMode::Stack => float_to_both(self, bb, slot, deopt),
+            LinkMode::Alias(origin) => float_to_both(self, bb, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both(bb, slot, Guarded::Float);
+                let x = self.store_new_both_float(bb, slot);
                 self.reg2stack(GP::R15, slot);
                 self.float2xmm(GP::R15, x, deopt);
                 x
             }
-            LinkMode::Alias(origin) => {
-                // -> Both
-                let x = self.store_new_both(bb, origin, Guarded::Float);
-                self.stack2reg(origin, GP::Rdi);
-                self.float2xmm(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::ConcreteValue(v) => {
-                if let Some(f) = v.try_float() {
-                    // -> Xmm
-                    let x = self.store_new_xmm(bb, slot);
-                    self.f64toxmm(f, x);
-                    x
-                } else if let Some(i) = v.try_fixnum() {
-                    // -> Both
-                    let x = self.store_new_both(bb, slot, Guarded::Float);
-                    self.i64toboth(i, slot, x);
-                    x
-                } else {
-                    unreachable!()
-                }
-            }
+            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(bb, slot, v),
         }
     }
 
-    ///
-    /// Read from a slot *reg* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi, rax
-    ///
-    fn fetch_float_assume(
+    fn fetch_float_concrete_value_for_xmm(
         &mut self,
         bb: &mut BBContext,
-        rhs: SlotId,
-        class: ClassId,
-        deopt: AsmDeopt,
+        slot: SlotId,
+        v: Value,
     ) -> Xmm {
-        match class {
-            INTEGER_CLASS => self.fetch_float_assume_integer(bb, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_assume_float(bb, rhs, deopt),
-            _ => unreachable!(),
-        }
-    }
-
-    pub(super) fn fetch_float_binary(
-        &mut self,
-        bb: &mut BBContext,
-        lhs: SlotId,
-        rhs: SlotId,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        deopt: AsmDeopt,
-    ) -> (Xmm, Xmm) {
-        if lhs != rhs {
-            (
-                self.fetch_float_assume(bb, lhs, lhs_class, deopt),
-                self.fetch_float_assume(bb, rhs, rhs_class, deopt),
-            )
+        if let Some(f) = v.try_float() {
+            // -> Xmm
+            let x = self.store_new_xmm(bb, slot);
+            self.f64toxmm(f, x);
+            x
+        } else if let Some(i) = v.try_fixnum() {
+            // -> Both
+            let x = self.store_new_both_integer(bb, slot);
+            self.i64toboth(i, slot, x);
+            x
         } else {
-            let lhs = self.fetch_float_assume(bb, lhs, lhs_class, deopt);
-            (lhs, lhs)
+            unreachable!()
         }
     }
 }

@@ -12,7 +12,6 @@ pub(super) fn init(globals: &mut Globals) {
         "yield",
         fiber_yield,
         Box::new(fiber_yield_inline),
-        analysis::v_v_vv,
     );
     globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
 }

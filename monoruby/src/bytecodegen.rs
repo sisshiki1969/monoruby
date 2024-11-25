@@ -1462,11 +1462,12 @@ impl std::ops::Add<i32> for BcIndex {
 }
 
 impl std::iter::Step for BcIndex {
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+    fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
         if start > end {
-            None
+            (0, None)
         } else {
-            Some((end.0 - start.0) as usize)
+            let d = end.0 as usize - start.0 as usize;
+            (d, Some(d))
         }
     }
 

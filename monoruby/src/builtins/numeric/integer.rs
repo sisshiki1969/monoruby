@@ -13,14 +13,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "to_f",
-        to_f,
-        Box::new(integer_tof),
-        analysis::f_v,
-        0,
-    );
+    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, Box::new(integer_tof), 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
 
@@ -33,22 +26,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "|", bitor, 1);
     globals.define_basic_op(INTEGER_CLASS, "^", bitxor, 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        ">>",
-        shr,
-        Box::new(integer_shr),
-        analysis::v_v_v,
-        1,
-    );
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "<<",
-        shl,
-        Box::new(integer_shl),
-        analysis::v_v_v,
-        1,
-    );
+    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, Box::new(integer_shr), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, Box::new(integer_shl), 1);
     globals.define_builtin_func(INTEGER_CLASS, "==", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, "===", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);

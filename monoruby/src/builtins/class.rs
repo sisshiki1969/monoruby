@@ -17,7 +17,6 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         new,
         gen_class_new_object(),
-        analysis::v_v_vv,
         0,
         0,
         true,

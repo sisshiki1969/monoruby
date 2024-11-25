@@ -378,13 +378,11 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_func(class_id, name, address, arg_num);
         let info = inline::InlineFuncInfo {
             inline_gen,
-            inline_analysis,
             #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };
@@ -398,7 +396,6 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
         min: usize,
         max: usize,
         rest: bool,
@@ -415,7 +412,6 @@ impl Globals {
         );
         let info = inline::InlineFuncInfo {
             inline_gen,
-            inline_analysis,
             #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };
@@ -430,21 +426,12 @@ impl Globals {
         alias: &[&str],
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
         min: usize,
         max: usize,
         rest: bool,
     ) -> FuncId {
-        let fid = self.define_builtin_inline_func_with(
-            class_id,
-            name,
-            address,
-            inline_gen,
-            inline_analysis,
-            min,
-            max,
-            rest,
-        );
+        let fid = self
+            .define_builtin_inline_func_with(class_id, name, address, inline_gen, min, max, rest);
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
         }
@@ -546,22 +533,12 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
         max: usize,
         min: usize,
         rest: bool,
     ) -> FuncId {
         let class_id = self.store.classes.get_metaclass(class_id).id();
-        self.define_builtin_inline_func_with(
-            class_id,
-            name,
-            address,
-            inline_gen,
-            inline_analysis,
-            min,
-            max,
-            rest,
-        )
+        self.define_builtin_inline_func_with(class_id, name, address, inline_gen, min, max, rest)
     }
 
     pub(crate) fn define_builtin_class_inline_func_rest(
@@ -570,19 +547,9 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let class_id = self.store.classes.get_metaclass(class_id).id();
-        self.define_builtin_inline_func_with(
-            class_id,
-            name,
-            address,
-            inline_gen,
-            inline_analysis,
-            0,
-            0,
-            true,
-        )
+        self.define_builtin_inline_func_with(class_id, name, address, inline_gen, 0, 0, true)
     }
 
     pub(crate) fn define_builtin_class_inline_funcs_rest(
@@ -592,19 +559,10 @@ impl Globals {
         alias: &[&str],
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let class_id = self.store.classes.get_metaclass(class_id).id();
         self.define_builtin_inline_funcs_with(
-            class_id,
-            name,
-            alias,
-            address,
-            inline_gen,
-            inline_analysis,
-            0,
-            0,
-            true,
+            class_id, name, alias, address, inline_gen, 0, 0, true,
         )
     }
 
@@ -638,13 +596,11 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
         inline_gen: Box<InlineGen>,
-        inline_analysis: InlineAnalysis,
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
         let info = inline::InlineFuncInfo {
             inline_gen,
-            inline_analysis,
             #[cfg(feature = "dump-bc")]
             name: format!("{}#{name}", self.store.debug_class_name(class_id)),
         };

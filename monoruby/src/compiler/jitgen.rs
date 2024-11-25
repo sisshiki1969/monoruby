@@ -9,12 +9,12 @@ use self::builtins::object_send_splat;
 use self::slot::Guarded;
 
 use super::*;
-use analysis::{ExitType, SlotInfo};
+//use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use slot::SlotContext;
+use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
-pub mod analysis;
+//pub mod analysis;
 pub mod asmir;
 mod basic_block;
 mod compile;
@@ -26,38 +26,6 @@ pub mod trace_ir;
 // Just-in-time compiler module.
 //
 
-#[derive(Debug)]
-struct BackedgeInfo {
-    target_ctx: MergeContext,
-    unused: Vec<SlotId>,
-}
-
-struct ContinuationInfo {
-    from: BBContext,
-    to: MergeContext,
-    pc: BytecodePtr,
-}
-
-impl ContinuationInfo {
-    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
-        Self { from, to, pc }
-    }
-}
-
-///
-/// Compile result of the current instruction.
-///
-enum CompileResult {
-    /// continue to the next instruction.
-    Continue,
-    /// exit from the loop.
-    ExitLoop,
-    /// jump to another basic block.
-    Branch,
-    /// deoptimize and fallback to the interpreter.
-    Recompile,
-}
-
 ///
 /// Context for JIT compilation.
 ///
@@ -65,15 +33,7 @@ struct JitContext {
     ///
     /// Destination labels for each BasicBlock.
     ///
-    basic_block_labels: HashMap<BasicBlockId, DestLabel>,
-    ///
-    /// Basic block information.
-    ///
-    bb_scan: Vec<(ExitType, SlotInfo)>,
-    ///
-    /// Backedges to the loop head.
-    ///
-    loop_backedges: HashMap<BasicBlockId, SlotInfo>,
+    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
     ///
     /// Loop information.
     ///
@@ -81,9 +41,9 @@ struct JitContext {
     /// the entry basic block of the loop.
     ///
     /// ### value
-    /// (the last basic block, slot_info at the loop exit)
+    /// (the last basic block, liveness info)
     ///
-    loop_info: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
+    loop_info: HashMap<BasicBlockId, Liveness>,
     ///
     /// Nested loop count.
     ///
@@ -123,11 +83,12 @@ struct JitContext {
     ///
     /// Information for bridges.
     ///
-    bridges: Vec<(AsmIr, DestLabel, BasicBlockId)>,
+    bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
-    continuation_bridge: Option<(Option<ContinuationInfo>, DestLabel)>,
+    continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
+    labels: Vec<Option<DestLabel>>,
     ///
     /// Class version at compile time.
     ///
@@ -149,26 +110,19 @@ impl JitContext {
     ///
     /// Create new JitContext.
     ///
-    fn new(
-        func: &ISeqInfo,
-        store: &Store,
-        codegen: &mut Codegen,
-        is_loop: bool,
-        self_value: Value,
-    ) -> Self {
+    fn new(func: &ISeqInfo, codegen: &mut Codegen, is_loop: bool, self_value: Value) -> Self {
         let mut basic_block_labels = HashMap::default();
+        let mut labels = vec![];
         for i in 0..func.bb_info.len() {
             let idx = BasicBlockId(i);
-            basic_block_labels.insert(idx, codegen.jit.label());
+            basic_block_labels.insert(idx, JitLabel(labels.len()));
+            labels.push(Some(codegen.jit.label()));
         }
-        let bb_scan = func.bb_info.init_bb_scan(func, store);
 
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
             basic_block_labels,
-            bb_scan,
-            loop_backedges: HashMap::default(),
             loop_info: HashMap::default(),
             loop_count: 0,
             is_loop,
@@ -181,10 +135,66 @@ impl JitContext {
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
+            labels,
             class_version: codegen.class_version(),
             bop_redefine_flags: codegen.bop_redefine_flags(),
             #[cfg(feature = "emit-asm")]
             start_codepos: codegen.jit.get_current(),
+        }
+    }
+
+    fn from(&self) -> Self {
+        let total_reg_num = self.total_reg_num;
+        let local_num = self.local_num;
+        Self {
+            basic_block_labels: HashMap::default(),
+            loop_info: HashMap::default(),
+            loop_count: 0,
+            is_loop: true,
+            branch_map: HashMap::default(),
+            target_ctx: HashMap::default(),
+            backedge_map: HashMap::default(),
+            total_reg_num,
+            local_num,
+            self_value: Value::nil(),
+            sourcemap: vec![],
+            bridges: vec![],
+            continuation_bridge: None,
+            labels: vec![],
+            class_version: 0,
+            bop_redefine_flags: 0,
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
+        }
+    }
+
+    ///
+    /// Create a new *JitLabel*.
+    ///
+    fn label(&mut self) -> JitLabel {
+        let id = self.labels.len();
+        self.labels.push(None);
+        JitLabel(id)
+    }
+
+    ///
+    /// Resolve *JitLabel* and return *DestLabel*.
+    ///
+    fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        match self.labels[label.0] {
+            Some(l) => l,
+            None => {
+                let l = jit.label();
+                self.labels[label.0] = Some(l);
+                l
+            }
+        }
+    }
+
+    fn loop_info(&self, entry_bb: BasicBlockId) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        match self.loop_info.get(&entry_bb) {
+            Some(liveness) => (liveness.get_loop_used_as_float(), liveness.get_unused()),
+            None => (vec![], vec![]),
         }
     }
 
@@ -197,7 +207,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -219,7 +229,7 @@ impl JitContext {
         src_idx: BcIndex,
         dest: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: DestLabel,
+        branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -255,6 +265,43 @@ impl JitContext {
     }
 }
 
+#[derive(Debug)]
+struct BackedgeInfo {
+    target_ctx: MergeContext,
+    unused: Vec<SlotId>,
+}
+
+struct ContinuationInfo {
+    from: BBContext,
+    to: MergeContext,
+    pc: BytecodePtr,
+}
+
+impl ContinuationInfo {
+    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
+        Self { from, to, pc }
+    }
+}
+
+///
+/// Compile result of the current instruction.
+///
+enum CompileResult {
+    /// continue to the next instruction.
+    Continue,
+    /// exit from the loop.
+    ExitLoop,
+    /// jump to another basic block.
+    Branch,
+    /// leave the current method/block.
+    Leave,
+    /// deoptimize and fallback to the interpreter.
+    Deopt,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JitLabel(usize);
+
 ///
 /// The information for branches.
 ///
@@ -265,7 +312,7 @@ struct BranchEntry {
     /// context of the source basic block.
     bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
-    branch_dest: DestLabel,
+    branch_dest: JitLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     cont: bool,
@@ -273,6 +320,73 @@ struct BranchEntry {
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
+}
+
+///
+/// Context of an each basic block.
+///
+#[derive(Debug, Clone)]
+pub(crate) struct BBContext {
+    /// state stack slots.
+    slot_state: SlotContext,
+    /// stack top register.
+    sp: SlotId,
+    next_sp: SlotId,
+    /// *self* value
+    self_value: Value,
+}
+
+impl std::ops::Deref for BBContext {
+    type Target = SlotContext;
+    fn deref(&self) -> &Self::Target {
+        &self.slot_state
+    }
+}
+
+impl std::ops::DerefMut for BBContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot_state
+    }
+}
+
+impl BBContext {
+    fn new(cc: &JitContext) -> Self {
+        Self {
+            slot_state: SlotContext::from(cc),
+            sp: SlotId(cc.local_num as u16),
+            next_sp: SlotId(cc.local_num as u16),
+            self_value: cc.self_value,
+        }
+    }
+
+    fn union(entries: &[BranchEntry]) -> MergeContext {
+        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bbctx);
+        for BranchEntry {
+            src_idx: _src_idx,
+            bbctx,
+            ..
+        } in entries.iter()
+        {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
+            merge_ctx.merge(bbctx);
+        }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("  union_entries: {:?}", &merge_ctx);
+        merge_ctx
+    }
+
+    pub(crate) fn get_using_xmm(&self) -> UsingXmm {
+        self.slot_state.get_using_xmm(self.sp)
+    }
+
+    pub(crate) fn get_write_back(&self) -> WriteBack {
+        self.slot_state.get_write_back(self.sp)
+    }
+
+    pub(crate) fn get_register(&self) -> WriteBack {
+        self.slot_state.get_register()
+    }
 }
 
 ///
@@ -329,73 +443,6 @@ impl WriteBack {
     }
 }
 
-///
-/// Context of an each basic block.
-///
-#[derive(Debug, Clone)]
-pub(crate) struct BBContext {
-    /// state stack slots.
-    slot_state: SlotContext,
-    /// stack top register.
-    sp: SlotId,
-    next_sp: SlotId,
-    /// *self* value
-    self_value: Value,
-}
-
-impl std::ops::Deref for BBContext {
-    type Target = SlotContext;
-    fn deref(&self) -> &Self::Target {
-        &self.slot_state
-    }
-}
-
-impl std::ops::DerefMut for BBContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.slot_state
-    }
-}
-
-impl BBContext {
-    fn new(cc: &JitContext) -> Self {
-        Self {
-            slot_state: SlotContext::new(cc),
-            sp: SlotId(cc.local_num as u16),
-            next_sp: SlotId(cc.local_num as u16),
-            self_value: cc.self_value,
-        }
-    }
-
-    fn union(entries: &[BranchEntry]) -> MergeContext {
-        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bbctx);
-        for BranchEntry {
-            src_idx: _src_idx,
-            bbctx,
-            ..
-        } in entries.iter()
-        {
-            #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
-            merge_ctx.union(bbctx);
-        }
-        #[cfg(feature = "jit-debug")]
-        eprintln!("  union_entries: {:?}", &merge_ctx);
-        merge_ctx
-    }
-
-    pub(crate) fn get_using_xmm(&self) -> UsingXmm {
-        self.slot_state.get_using_xmm(self.sp)
-    }
-
-    pub(crate) fn get_write_back(&self) -> WriteBack {
-        self.slot_state.get_write_back(self.sp)
-    }
-
-    pub(crate) fn get_register(&self) -> WriteBack {
-        self.slot_state.get_register()
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct UsingXmm {
     inner: bitvec::prelude::BitArr!(for 14, in u16),
@@ -438,7 +485,7 @@ impl UsingXmm {
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(crate) enum LinkMode {
+enum LinkMode {
     ///
     /// No linkage with xmm regiter.
     ///
@@ -516,11 +563,9 @@ impl Codegen {
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
-        let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
+        let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
         for (loop_start, loop_end) in func.bb_info.loops() {
-            let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
-            ctx.loop_backedges.insert(*loop_start, backedge);
-            ctx.loop_info.insert(*loop_start, (*loop_end, exit));
+            ctx.analyse_loop(store, func, *loop_start, *loop_end);
         }
 
         let bbctx = BBContext::new(&ctx);
@@ -541,7 +586,7 @@ impl Codegen {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
         let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = self.jit.label();
+        let branch_dest = ctx.label();
         ctx.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
@@ -561,7 +606,7 @@ impl Codegen {
         };
         let bbir: Vec<_> = (bb_begin..=bb_end)
             .map(|bbid| {
-                let ir = ctx.compile_basic_block(self, store, func, position, bbid);
+                let ir = ctx.compile_basic_block(store, func, position, bbid);
                 (bbid, ir)
             })
             .collect();
@@ -580,6 +625,7 @@ impl Codegen {
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+            let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());

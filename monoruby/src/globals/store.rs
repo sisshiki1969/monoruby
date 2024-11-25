@@ -412,7 +412,7 @@ impl alloc::GC<RValue> for ConstSiteInfo {
 
 impl ConstSiteInfo {
     #[cfg(feature = "dump-bc")]
-    pub(crate) fn format(&self) -> String {
+    pub fn format(&self) -> String {
         let ConstSiteInfo {
             name,
             base,
@@ -496,7 +496,7 @@ impl CallSiteInfo {
     }
 
     #[cfg(feature = "dump-bc")]
-    pub(crate) fn format_args(&self) -> String {
+    pub fn format_args(&self) -> String {
         let CallSiteInfo {
             pos_num,
             splat_pos,

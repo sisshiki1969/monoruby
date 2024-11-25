@@ -43,11 +43,11 @@ impl AsmIr {
             let deopt = self.new_deopt(bb, pc);
             self.fetch_guard_array(bb, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {
-                self.fetch_to_reg(bb, src, GP::R15);
+                self.fetch_for_gpr(bb, src, GP::R15);
                 self.array_u16_index_assign(bb, idx, pc);
             } else {
                 self.fetch_guard_fixnum(bb, idx, GP::Rsi, deopt);
-                self.fetch_to_reg(bb, src, GP::R15);
+                self.fetch_for_gpr(bb, src, GP::R15);
                 self.array_index_assign(bb, pc);
             }
         } else {

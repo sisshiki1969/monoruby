@@ -1,44 +1,5 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum Guarded {
-    #[default]
-    Value,
-    Fixnum,
-    Float,
-    ArrayTy,
-    Class(ClassId),
-}
-
-impl Guarded {
-    pub fn from_concrete_value(v: Value) -> Self {
-        if v.is_fixnum() {
-            Guarded::Fixnum
-        } else if v.is_float() {
-            Guarded::Float
-        } else if v.is_array_ty() {
-            Guarded::ArrayTy
-        } else {
-            Guarded::Class(v.class())
-        }
-    }
-
-    pub(super) fn union(&self, other: &Self) -> Self {
-        if self == other {
-            *self
-        } else {
-            Guarded::Value
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct SlotState {
-    link: LinkMode,
-    guarded: Guarded,
-    alias: Vec<SlotId>,
-}
-
 #[derive(Clone)]
 pub(crate) struct SlotContext {
     slots: Vec<SlotState>,
@@ -67,33 +28,27 @@ impl std::fmt::Debug for SlotContext {
             .slots
             .iter()
             .enumerate()
-            .map(
-                |(
-                    i,
-                    SlotState {
-                        link,
-                        guarded,
-                        alias,
-                    },
-                )| { format!("[%{i}: {:?} {:?} {:?}] ", link, guarded, alias) },
-            )
+            .map(|(i, state)| format!("[%{i}: {:?}] ", state))
             .collect();
         write!(f, "[{s}]")
     }
 }
 
 impl SlotContext {
-    pub(in crate::compiler::jitgen) fn new(cc: &JitContext) -> Self {
-        let len = cc.total_reg_num;
+    pub(in crate::compiler::jitgen) fn new(total_reg_num: usize, local_num: usize) -> Self {
         SlotContext {
-            slots: vec![SlotState::default(); len],
+            slots: vec![SlotState::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
                 v.try_into().unwrap()
             },
             r15: None,
-            local_num: cc.local_num,
+            local_num,
         }
+    }
+
+    pub(in crate::compiler::jitgen) fn from(cc: &JitContext) -> Self {
+        Self::new(cc.total_reg_num, cc.local_num)
     }
 
     fn xmm(&self, xmm: Xmm) -> &[SlotId] {
@@ -108,9 +63,10 @@ impl SlotContext {
         &mut self[slot].alias
     }
 
-    fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
+    pub(super) fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
         self[slot].link = mode;
         self[slot].guarded = guarded;
+        self[slot].is_used.kill();
     }
 
     fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
@@ -149,10 +105,6 @@ impl SlotContext {
 
     pub(super) fn set_guard_class(&mut self, slot: SlotId, class: ClassId) {
         self.set_guarded(slot, Guarded::Class(class))
-    }
-
-    fn clear_link(&mut self, slot: SlotId) {
-        self.set_slot(slot, LinkMode::Stack, Guarded::Value)
     }
 
     pub(super) fn set_xmm(&mut self, slot: SlotId, xmm: Xmm) {
@@ -434,7 +386,7 @@ impl SlotContext {
     /// ### Panics
     /// If there is no vacant xmm register.
     ///
-    fn alloc_xmm(&mut self) -> Xmm {
+    pub(super) fn alloc_xmm(&mut self) -> Xmm {
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
                 return Xmm(flhs as u16);
@@ -444,17 +396,241 @@ impl SlotContext {
     }
 }
 
-impl AsmIr {
-    pub(super) fn write_back_with_guarded(
-        &mut self,
-        bbctx: &mut BBContext,
-        slot: SlotId,
-        guarded: Guarded,
-    ) {
-        self.write_back_slot(bbctx, slot);
-        bbctx.set_slot(slot, LinkMode::Stack, guarded);
+#[derive(Clone, Default)]
+pub(crate) struct Liveness(Vec<IsUsed>);
+
+impl std::fmt::Debug for Liveness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s: String = self
+            .0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, is_used)| match is_used {
+                IsUsed::Used(UsedAs { ty, .. }) => {
+                    Some(format!("[{:?}: {:?}] ", SlotId(i as u16), ty))
+                }
+                IsUsed::Killed => Some(format!("[{:?}: Killed] ", SlotId(i as u16))),
+                _ => None,
+            })
+            .collect();
+        write!(f, "Liveness {{{s}}}")
+    }
+}
+
+impl Liveness {
+    pub(in crate::compiler::jitgen) fn new(total_reg_num: usize) -> Self {
+        Self(vec![IsUsed::default(); total_reg_num])
     }
 
+    pub(in crate::compiler::jitgen) fn merge(&mut self, bbctx: BBContext) {
+        for (i, is_used) in &mut self.0.iter_mut().enumerate() {
+            is_used.merge(&bbctx[SlotId(i as u16)].is_used);
+        }
+    }
+
+    pub fn get_unused(&self) -> Vec<SlotId> {
+        self.0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, is_used)| {
+                if is_used == &IsUsed::Killed {
+                    Some(SlotId(i as u16))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    pub fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match b {
+                IsUsed::Used(used) => match used.ty {
+                    UseTy::Float => Some((SlotId(i as u16), true)),
+                    UseTy::Both => Some((SlotId(i as u16), false)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub(crate) struct SlotState {
+    link: LinkMode,
+    guarded: Guarded,
+    alias: Vec<SlotId>,
+    is_used: IsUsed,
+}
+
+impl SlotState {
+    pub(super) fn use_as_float(&mut self) {
+        self.is_used.use_as_float();
+    }
+
+    pub(super) fn use_as_value(&mut self) {
+        self.is_used.use_as_non_float();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Guarded {
+    #[default]
+    Value,
+    Fixnum,
+    Float,
+    ArrayTy,
+    Class(ClassId),
+}
+
+impl Guarded {
+    pub fn from_concrete_value(v: Value) -> Self {
+        if v.is_fixnum() {
+            Guarded::Fixnum
+        } else if v.is_float() {
+            Guarded::Float
+        } else if v.is_array_ty() {
+            Guarded::ArrayTy
+        } else {
+            Guarded::Class(v.class())
+        }
+    }
+
+    pub(super) fn union(&self, other: &Self) -> Self {
+        if self == other {
+            *self
+        } else {
+            Guarded::Value
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum IsUsed {
+    ///
+    /// Not be used nor be killed.
+    ///
+    #[default]
+    ND,
+    ///
+    /// Used in any of paths.
+    ///
+    Used(UsedAs),
+    ///
+    /// Guaranteed not to be used (= killed) in all paths.
+    ///
+    Killed,
+}
+
+impl IsUsed {
+    fn merge(&mut self, other: &Self) {
+        *self = match (&self, other) {
+            (IsUsed::Used(l), IsUsed::Used(r)) => IsUsed::Used(l.merge(r)),
+            (IsUsed::Used(x), _) | (_, IsUsed::Used(x)) => IsUsed::Used(*x),
+            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
+            _ => IsUsed::ND,
+        };
+    }
+
+    fn use_as_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::float()),
+        }
+    }
+
+    fn use_as_non_float(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.use_as_non_float(),
+            IsUsed::ND => *self = IsUsed::Used(UsedAs::non_float()),
+        }
+    }
+
+    fn kill(&mut self) {
+        match self {
+            IsUsed::Killed => {}
+            IsUsed::Used(used) => used.kill(),
+            IsUsed::ND => *self = IsUsed::Killed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UsedAs {
+    ty: UseTy,
+    killed: bool,
+}
+
+impl UsedAs {
+    fn float() -> Self {
+        UsedAs {
+            ty: UseTy::Float,
+            killed: false,
+        }
+    }
+
+    fn non_float() -> Self {
+        UsedAs {
+            ty: UseTy::NonFloat,
+            killed: false,
+        }
+    }
+
+    fn use_as_float(&mut self) {
+        self.use_as(UseTy::Float);
+    }
+
+    fn use_as_non_float(&mut self) {
+        self.use_as(UseTy::NonFloat);
+    }
+
+    fn use_as(&mut self, other: UseTy) {
+        if self.killed {
+            return;
+        } else {
+            self.ty = self.ty.union(&other);
+        }
+    }
+
+    fn merge(&self, other: &Self) -> Self {
+        Self {
+            ty: self.ty.union(&other.ty),
+            killed: self.killed && other.killed,
+        }
+    }
+
+    fn kill(&mut self) {
+        self.killed = true;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UseTy {
+    Float,
+    NonFloat,
+    Both,
+}
+
+impl UseTy {
+    fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (UseTy::Float, UseTy::Float) => UseTy::Float,
+            (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
+            (_, _) => UseTy::Both,
+        }
+    }
+}
+
+impl AsmIr {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
@@ -471,7 +647,7 @@ impl AsmIr {
             LinkMode::Xmm(xmm) => {
                 // Xmm -> Both
                 bbctx.set_both_float(slot, xmm);
-                self.xmm2stack(xmm, vec![slot]);
+                self.xmm2stack(xmm, slot);
             }
             LinkMode::ConcreteValue(v) => {
                 // Literal -> Stack
@@ -507,21 +683,15 @@ impl AsmIr {
                 LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
                     assert!(bbctx.xmm(xmm).contains(&slot));
                     bbctx.xmm_mut(xmm).retain(|e| *e != slot);
-                    bbctx.clear_link(slot);
                 }
                 LinkMode::Alias(origin) => {
-                    // TODO: is it Ok??
-                    //assert_eq!(bb[origin].link, LinkMode::Stack);
+                    assert_eq!(bbctx[origin].link, LinkMode::Stack);
                     assert!(bbctx[origin].alias.contains(&slot));
                     bbctx[origin].alias.retain(|e| *e != slot);
-                    bbctx.clear_link(slot);
                 }
-                LinkMode::ConcreteValue(_) => {
-                    bbctx.clear_link(slot);
-                }
+                LinkMode::ConcreteValue(_) => {}
                 LinkMode::Accumulator => {
                     bbctx.r15 = None;
-                    bbctx.clear_link(slot);
                 }
                 LinkMode::Stack => {
                     // We must write back all aliases of *reg*.
@@ -536,6 +706,7 @@ impl AsmIr {
                     }
                 }
             }
+            bbctx.set_slot(slot, LinkMode::Stack, Guarded::Value)
         }
     }
 
@@ -597,18 +768,29 @@ impl AsmIr {
         bbctx.xmm_mut(xmm).push(slot);
     }
 
+    pub(in crate::compiler::jitgen) fn store_new_both_integer(
+        &mut self,
+        bbctx: &mut BBContext,
+        slot: SlotId,
+    ) -> Xmm {
+        self.store_new_both(bbctx, slot, Guarded::Fixnum)
+    }
+
+    pub(in crate::compiler::jitgen) fn store_new_both_float(
+        &mut self,
+        bbctx: &mut BBContext,
+        slot: SlotId,
+    ) -> Xmm {
+        self.store_new_both(bbctx, slot, Guarded::Float)
+    }
+
     ///
     /// Link the slot *reg* to both of the stack and a new xmm register.
     ///
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn store_new_both(
-        &mut self,
-        bbctx: &mut BBContext,
-        slot: SlotId,
-        guarded: Guarded,
-    ) -> Xmm {
+    fn store_new_both(&mut self, bbctx: &mut BBContext, slot: SlotId, guarded: Guarded) -> Xmm {
         let x = bbctx.alloc_xmm();
         self.store_both(bbctx, slot, x, guarded);
         x
@@ -626,7 +808,6 @@ impl AsmIr {
         slot: SlotId,
         v: Value,
     ) {
-        self.unlink(bbctx, slot);
         let guarded = Guarded::from_concrete_value(v);
         bbctx.set_slot(slot, LinkMode::ConcreteValue(v), guarded);
     }
@@ -725,6 +906,7 @@ impl AsmIr {
                 self.store_alias(bbctx, origin, dst);
             }
             LinkMode::ConcreteValue(v) => {
+                self.unlink(bbctx, dst);
                 self.store_concrete_value(bbctx, dst, v);
             }
             LinkMode::Accumulator => {
@@ -772,10 +954,11 @@ impl AsmIr {
 }
 
 impl MergeContext {
-    pub(in crate::compiler::jitgen) fn union(&mut self, other: &SlotContext) {
+    pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotContext) {
         let mut ir = AsmIr::new();
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
+            self[i].is_used.merge(&other[i].is_used);
             match (self[i].link, other[i].link) {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                 | (LinkMode::Xmm(l), LinkMode::Both(_)) => {
@@ -786,7 +969,7 @@ impl MergeContext {
                     ir.store_both(&mut self.0, i, l, Guarded::Float)
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::Both(_)) if l.is_float() => {
-                    ir.store_new_both(&mut self.0, i, Guarded::Float);
+                    ir.store_new_both_float(&mut self.0, i);
                 }
                 (LinkMode::Xmm(l), LinkMode::Xmm(_)) => ir.store_xmm(&mut self.0, i, l),
                 (LinkMode::Xmm(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
@@ -796,6 +979,7 @@ impl MergeContext {
                     ir.store_new_xmm(&mut self.0, i);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {
+                    ir.unlink(&mut self.0, i);
                     ir.store_concrete_value(&mut self.0, i, l)
                 }
                 _ => ir.unlink(&mut self.0, i),

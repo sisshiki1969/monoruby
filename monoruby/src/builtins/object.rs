@@ -22,7 +22,6 @@ pub(super) fn init(globals: &mut Globals) {
         "object_id",
         object_id,
         Box::new(object_object_id),
-        analysis::v_v,
         0,
     );
     globals.define_builtin_func_with(OBJECT_CLASS, "respond_to?", respond_to, 1, 2, false);
@@ -87,7 +86,7 @@ fn object_object_id(
     _pc: BytecodePtr,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = store[callid];
-    ir.fetch_to_reg(bb, recv, GP::Rdi);
+    ir.fetch_for_gpr(bb, recv, GP::Rdi);
     let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
