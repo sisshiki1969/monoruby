@@ -381,7 +381,7 @@ fn delegate2() {
         r##"
         class C
           def g(*rest, **kw)
-            puts "#{rest} #{kw}"
+            $res << "#{rest} #{kw}"
           end
                 
           def f(a,b,...)

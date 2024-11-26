@@ -265,7 +265,7 @@ impl<T: GCBox> Allocator<T> {
             assert_eq!(self.free_list_count, self.check_free_list());
             eprintln!("free list: {}", self.free_list_count);
         }
-        #[cfg(not(feature = "gc-stress"))]
+        //#[cfg(not(feature = "gc-stress"))]
         self.unset_alloc_flag();
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         self.malloc_threshold = malloced + MALLOC_THRESHOLD;

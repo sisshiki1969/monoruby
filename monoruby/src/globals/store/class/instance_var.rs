@@ -127,7 +127,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
 
 #[test]
 fn test_ivar() {
-    let mut globals = Globals::new(0, false);
+    let mut globals = Globals::new(0, false, true);
     let obj = Value::object(OBJECT_CLASS);
     assert_eq!(None, globals.get_ivar(obj, IdentId::INITIALIZE));
     assert!(globals

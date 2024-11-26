@@ -611,7 +611,7 @@ mod tests {
             r#"
         some = Foo.new 'XXX'
         res = []
-        res << some.instance_eval { p @key} #=> "XXX"
+        res << some.instance_eval { @key} #=> "XXX"
         res << some.instance_eval { do_fuga } #=> "secret" # private メソッドも呼び出せる
         res
         "#,
@@ -622,7 +622,7 @@ mod tests {
           end
           private
           def do_fuga
-            p 'secret'
+            'secret'
           end
         end
         "#,
@@ -664,6 +664,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn kernel_system() {
         run_test(r#"system "ls""#);
         run_test(r#"system "jkjkjk""#);

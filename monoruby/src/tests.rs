@@ -16,7 +16,7 @@ pub fn run_test(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     let interp_val = run_test_main(&mut globals, &wrapped, false);
     let ruby_res = run_ruby(&mut globals, code);
 
@@ -50,7 +50,7 @@ pub fn run_test_once(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     let interp_val = run_test_main(&mut globals, &wrapped, false);
     let ruby_res = run_ruby(&mut globals, code);
 
@@ -75,7 +75,7 @@ pub fn run_tests(codes: &[String]) {
         code
     );
     eprintln!("{}", wrapped);
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     let interp_val = run_test_main(&mut globals, &wrapped, false);
     let ruby_res = run_ruby(&mut globals, &code);
 
@@ -136,7 +136,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
   "##
     );
     eprintln!("{}", wrapped);
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     let interp_val = run_test_main(&mut globals, &wrapped, false);
     let ruby_res = run_ruby(&mut globals, &format!("{prelude}\n{code}"));
 
@@ -158,7 +158,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
 }*/
 
 pub fn run_test2(code: &str) {
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     let interp_val = run_test_main(&mut globals, code, false);
     let ruby_res = run_ruby(&mut globals, code);
 
@@ -168,14 +168,14 @@ pub fn run_test2(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     eprintln!("{code}");
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     run_test_main(&mut globals, code, false)
 }
 
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{code}");
-    let mut globals = Globals::new(1, false);
+    let mut globals = Globals::new(1, false, true);
     match globals.run(code, std::path::Path::new(".")) {
         Ok(v) => {
             eprintln!("{}", v.inspect(&globals));

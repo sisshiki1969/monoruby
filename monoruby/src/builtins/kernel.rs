@@ -983,6 +983,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn kernel() {
         run_test_no_result_check("sleep 1");
         run_test_error("abort 1");

@@ -190,7 +190,7 @@ eq_values!(eq, ne);
 
 #[test]
 fn cmp_values() {
-    let mut globals = Globals::new(0, false);
+    let mut globals = Globals::new(0, false, true);
     let mut vm = Executor::default();
     let pairs = [
         (Value::nil(), Value::nil(), true),
