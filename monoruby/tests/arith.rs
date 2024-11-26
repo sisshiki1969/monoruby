@@ -142,7 +142,6 @@ fn test_multi_assign() {
 }
 
 #[test]
-#[ignore]
 fn test_exp() {
     run_test("3.78**432");
     run_test("3.78**-432");
