@@ -6,14 +6,11 @@ on:
   pull_request:
     branches: [master]
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Cinstrument-coverage
-
 jobs:
-  build:
+  coverage:
     runs-on: ubuntu-latest
-
+    env:
+      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -23,25 +20,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
-      - run: |
-          cargo install grcov cargo-nextest
-          rustup component add llvm-tools-preview
-          export RUSTFLAGS="-Cinstrument-coverage"
-      - name: Install
-        run: cargo install --all-features --path monoruby
-      - name: Run tests
-        run: |
-          cargo build
-          LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test
-          LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" monoruby test.rb
-          LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" monoruby < test.rb
-          LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" monoruby -e ""
-      - name: Run tests
-        run: |
-          LLVM_PROFILE_FILE="monoruby-tests-%p-%m.profraw" bin/test
-      - name: Run grcov
-        run: grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
-      - name: Upload to codecov.io
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate code coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
+          files: lcov.info
+          fail_ci_if_error: true
