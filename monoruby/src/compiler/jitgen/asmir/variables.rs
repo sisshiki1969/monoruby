@@ -10,7 +10,7 @@ impl AsmIr {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.unlink(bb, dst);
+        bb.unlink(self, dst);
         self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let is_object_ty = bb.self_value.ty() == Some(ObjKind::OBJECT);
@@ -22,7 +22,7 @@ impl AsmIr {
             is_self_cached,
             using_xmm,
         });
-        self.rax2acc(bb, dst);
+        bb.rax2acc(self, dst);
     }
 
     pub(in crate::compiler::jitgen) fn store_ivar(
@@ -35,7 +35,7 @@ impl AsmIr {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        self.fetch_for_gpr(bb, src, GP::Rax);
+        bb.fetch_for_gpr(self, src, GP::Rax);
         self.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);

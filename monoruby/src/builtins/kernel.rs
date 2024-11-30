@@ -103,7 +103,7 @@ fn object_nil(
             }
         });
     }
-    ir.rax2acc(bb, store[callid].dst);
+    bb.rax2acc(ir, store[callid].dst);
 }
 
 ///

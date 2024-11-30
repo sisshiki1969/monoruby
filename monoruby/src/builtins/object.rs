@@ -86,7 +86,7 @@ fn object_object_id(
     _pc: BytecodePtr,
 ) {
     let CallSiteInfo { recv, dst: ret, .. } = store[callid];
-    ir.fetch_for_gpr(bb, recv, GP::Rdi);
+    bb.fetch_for_gpr(ir, recv, GP::Rdi);
     let using = bb.get_using_xmm();
     ir.inline(move |gen, _| {
         gen.xmm_save(using);
@@ -96,7 +96,7 @@ fn object_object_id(
         }
         gen.xmm_restore(using);
     });
-    ir.rax2acc(bb, ret);
+    bb.rax2acc(ir, ret);
 }
 
 ///

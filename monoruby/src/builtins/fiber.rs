@@ -99,7 +99,7 @@ fn fiber_yield_inline(
         gen.xmm_restore(using);
         gen.handle_error(error);
     });
-    ir.rax2acc(bb, dst);
+    bb.rax2acc(ir, dst);
 }
 
 ///

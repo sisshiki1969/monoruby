@@ -18,7 +18,7 @@ impl AsmIr {
         if let Some(superclass) = superclass {
             self.write_back_slots(bbctx, &[superclass]);
         }
-        self.unlink(bbctx, dst);
+        bbctx.unlink(self, dst);
         let using_xmm = bbctx.get_using_xmm();
         let error = self.new_error(bbctx, pc);
         self.inst.push(AsmInst::ClassDef {
@@ -42,7 +42,7 @@ impl AsmIr {
         pc: BytecodePtr,
     ) {
         self.write_back_slots(bbctx, &[base]);
-        self.unlink(bbctx, dst);
+        bbctx.unlink(self, dst);
         let using_xmm = bbctx.get_using_xmm();
         let error = self.new_error(bbctx, pc);
         self.inst.push(AsmInst::SingletonClassDef {

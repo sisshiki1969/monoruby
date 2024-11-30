@@ -8,7 +8,6 @@ mod definition;
 mod index;
 mod merge;
 mod method_call;
-mod read_slot;
 pub mod slot;
 mod variables;
 
@@ -130,62 +129,6 @@ impl AsmIr {
         let error = self.new_label(SideExit::Error(pc, wb));
         (AsmDeopt(deopt), AsmError(error))
     }
-
-    pub(crate) fn rax2acc(&mut self, bb: &mut BBContext, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc(bb, GP::Rax, dst);
-    }
-
-    pub(crate) fn reg2acc(&mut self, bb: &mut BBContext, src: GP, dst: impl Into<Option<SlotId>>) {
-        self.reg2acc_guarded(bb, src, dst, slot::Guarded::Value)
-    }
-
-    pub(crate) fn reg2acc_fixnum(
-        &mut self,
-        bb: &mut BBContext,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-    ) {
-        self.reg2acc_guarded(bb, src, dst, slot::Guarded::Fixnum)
-    }
-
-    pub(crate) fn reg2acc_array_ty(
-        &mut self,
-        bb: &mut BBContext,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-    ) {
-        self.reg2acc_guarded(bb, src, dst, slot::Guarded::ArrayTy)
-    }
-
-    pub(crate) fn reg2acc_concrete_value(
-        &mut self,
-        bb: &mut BBContext,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-        v: Value,
-    ) {
-        self.reg2acc_guarded(bb, src, dst, Guarded::from_concrete_value(v))
-    }
-
-    fn reg2acc_guarded(
-        &mut self,
-        bb: &mut BBContext,
-        src: GP,
-        dst: impl Into<Option<SlotId>>,
-        guarded: slot::Guarded,
-    ) {
-        if let Some(dst) = dst.into() {
-            self.clear(bb);
-            if let Some(acc) = self.clear_r15(bb)
-                && acc < bb.sp
-                && acc != dst
-            {
-                self.acc2stack(acc);
-            }
-            self.store_r15(bb, dst, guarded);
-            self.inst.push(AsmInst::RegToAcc(src));
-        }
-    }
 }
 
 impl AsmIr {
@@ -229,7 +172,7 @@ impl AsmIr {
         self.inst.push(AsmInst::ExecGc(wb));
     }
 
-    fn reg_move(&mut self, src: GP, dst: GP) {
+    pub fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.inst.push(AsmInst::RegMove(src, dst));
         }
@@ -243,7 +186,7 @@ impl AsmIr {
         self.inst.push(AsmInst::RegSub(r, i));
     }
 
-    fn reg2rsp_offset(&mut self, r: GP, i: i32) {
+    pub fn reg2rsp_offset(&mut self, r: GP, i: i32) {
         self.inst.push(AsmInst::RegToRSPOffset(r, i));
     }
 
@@ -292,31 +235,31 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm2stack(&mut self, xmm: Xmm, reg: SlotId) {
+    pub fn xmm2stack(&mut self, xmm: Xmm, reg: SlotId) {
         self.inst.push(AsmInst::XmmToStack(xmm, reg));
     }
 
-    fn lit2reg(&mut self, v: Value, reg: GP) {
+    pub fn lit2reg(&mut self, v: Value, reg: GP) {
         self.inst.push(AsmInst::LitToReg(v, reg));
     }
 
-    fn acc2stack(&mut self, reg: SlotId) {
+    pub fn acc2stack(&mut self, reg: SlotId) {
         self.inst.push(AsmInst::AccToStack(reg));
     }
 
-    fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::IntToXmm(reg, x, deopt));
     }
 
-    fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.inst.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
-    fn f64toxmm(&mut self, f: f64, x: Xmm) {
+    pub fn f64toxmm(&mut self, f: f64, x: Xmm) {
         self.inst.push(AsmInst::F64ToXmm(f, x));
     }
 
-    fn i64toboth(&mut self, i: i64, reg: SlotId, x: Xmm) {
+    pub fn i64toboth(&mut self, i: i64, reg: SlotId, x: Xmm) {
         self.inst.push(AsmInst::I64ToBoth(i, reg, x));
     }
 
@@ -326,7 +269,7 @@ impl AsmIr {
         self.inst.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
+    pub fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardFixnum(r, deopt));
     }
 
@@ -334,7 +277,7 @@ impl AsmIr {
         self.inst.push(AsmInst::GuardFloat(r, deopt));
     }
 
-    fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
+    pub fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
         self.inst.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
@@ -437,7 +380,7 @@ impl AsmIr {
         base_class: Value,
         pc: BytecodePtr,
     ) {
-        self.fetch_for_gpr(bbctx, slot, GP::Rax);
+        bbctx.fetch_for_gpr(self, slot, GP::Rax);
         let deopt = self.new_deopt(bbctx, pc);
         self.inst
             .push(AsmInst::GuardBaseClass { base_class, deopt });
@@ -467,7 +410,7 @@ impl AsmIr {
         cached_version: usize,
         deopt: AsmDeopt,
     ) {
-        let fdst = self.store_new_both_float(bbctx, dst);
+        let fdst = bbctx.store_new_both_float(self, dst);
         self.inst.push(AsmInst::LoadFloatConstant {
             fdst,
             f,
@@ -490,7 +433,7 @@ impl AsmIr {
             cached_version,
             deopt,
         });
-        self.rax2acc(bbctx, dst);
+        bbctx.rax2acc(self, dst);
     }
 
     pub(super) fn handle_error(&mut self, error: AsmError) {
@@ -521,7 +464,7 @@ impl AsmIr {
         let CallSiteInfo { recv, dst, .. } = callsite;
         self.write_back_slot(bb, *recv);
         self.write_back_args(bb, callsite);
-        self.unlink(bb, *dst);
+        bb.unlink(self, *dst);
     }
 
     fn write_back_args(&mut self, bb: &mut BBContext, callsite: &CallSiteInfo) {
@@ -587,7 +530,7 @@ impl AsmIr {
             for i in 0..pos_num {
                 let reg = args + i;
                 let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(bb, reg, offset);
+                bb.fetch_for_callee(self, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 self.inst.push(AsmInst::I32ToReg(0, GP::Rax));
@@ -918,9 +861,9 @@ impl AsmIr {
     }
 
     pub(super) fn jit_load_gvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        self.unlink(bb, dst);
+        bb.unlink(self, dst);
         self.load_gvar(bb, name);
-        self.rax2acc(bb, dst);
+        bb.rax2acc(self, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, bb: &mut BBContext, name: IdentId, src: SlotId) {
@@ -935,15 +878,15 @@ impl AsmIr {
         name: IdentId,
         dst: SlotId,
     ) {
-        self.unlink(bb, dst);
+        bb.unlink(self, dst);
         self.load_cvar(bb, pc, name);
-        self.rax2acc(bb, dst);
+        bb.rax2acc(self, dst);
     }
 
     pub(super) fn jit_check_cvar(&mut self, bb: &mut BBContext, name: IdentId, dst: SlotId) {
-        self.unlink(bb, dst);
+        bb.unlink(self, dst);
         self.check_cvar(bb, name);
-        self.rax2acc(bb, dst);
+        bb.rax2acc(self, dst);
     }
 
     pub(super) fn jit_store_cvar(
@@ -962,16 +905,16 @@ impl AsmIr {
     pub(super) fn fetch_binary(&mut self, bb: &mut BBContext, mode: OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.fetch_for_gpr(bb, lhs, GP::Rdi);
-                self.fetch_for_gpr(bb, rhs, GP::Rsi);
+                bb.fetch_for_gpr(self, lhs, GP::Rdi);
+                bb.fetch_for_gpr(self, rhs, GP::Rsi);
             }
             OpMode::RI(lhs, rhs) => {
-                self.fetch_for_gpr(bb, lhs, GP::Rdi);
+                bb.fetch_for_gpr(self, lhs, GP::Rdi);
                 self.lit2reg(Value::i32(rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
                 self.lit2reg(Value::i32(lhs as i32), GP::Rdi);
-                self.fetch_for_gpr(bb, rhs, GP::Rsi);
+                bb.fetch_for_gpr(self, rhs, GP::Rsi);
             }
         }
     }
@@ -984,8 +927,8 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.fetch_integer_for_xmm(bb, rhs, deopt),
-            FLOAT_CLASS => self.fetch_float_for_xmm(bb, rhs, deopt),
+            INTEGER_CLASS => bb.fetch_integer_for_xmm(self, rhs, deopt),
+            FLOAT_CLASS => bb.fetch_float_for_xmm(self, rhs, deopt),
             _ => unreachable!(),
         }
     }
@@ -1013,11 +956,11 @@ impl AsmIr {
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
-                let l = self.fetch_float_for_xmm(bb, *l, deopt);
+                let l = bb.fetch_float_for_xmm(self, *l, deopt);
                 FMode::RI(l, *r)
             }
             OpMode::IR(l, r) => {
-                let r = self.fetch_float_for_xmm(bb, *r, deopt);
+                let r = bb.fetch_float_for_xmm(self, *r, deopt);
                 FMode::IR(*l, r)
             }
         }

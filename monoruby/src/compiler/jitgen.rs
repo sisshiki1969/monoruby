@@ -17,6 +17,7 @@ use trace_ir::*;
 //pub mod analysis;
 pub mod asmir;
 mod basic_block;
+mod read_slot;
 mod compile;
 mod guard;
 mod init_method;
@@ -384,8 +385,68 @@ impl BBContext {
         self.slot_state.get_write_back(self.sp)
     }
 
-    pub(crate) fn get_register(&self) -> WriteBack {
-        self.slot_state.get_register()
+    pub(crate) fn rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc(ir, GP::Rax, dst);
+    }
+
+    pub(crate) fn reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
+    }
+
+    pub(crate) fn reg2acc_fixnum(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
+    }
+
+    pub(crate) fn reg2acc_array_ty(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::ArrayTy)
+    }
+
+    pub(crate) fn reg2acc_concrete_value(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        v: Value,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
+    }
+
+    fn reg2acc_guarded(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        guarded: slot::Guarded,
+    ) {
+        if let Some(dst) = dst.into() {
+            ir.clear(self);
+            if let Some(acc) = self.clear_r15(ir)
+                && acc < self.sp
+                && acc != dst
+            {
+                ir.acc2stack(acc);
+            }
+            self.store_r15(ir, dst, guarded);
+            ir.inst.push(AsmInst::RegToAcc(src));
+        }
+    }
+
+    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
+        if let Some(slot) = self.clear_r15(ir)
+            && slot < self.sp
+        {
+            ir.acc2stack(slot);
+        }
     }
 }
 
@@ -542,7 +603,7 @@ impl MergeContext {
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
         let mut ir = AsmIr::new();
-        unused.iter().for_each(|reg| ir.unlink(&mut self.0, *reg));
+        unused.iter().for_each(|reg| self.unlink(&mut ir, *reg));
     }
 }
 

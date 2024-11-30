@@ -56,7 +56,7 @@ fn object_send_inner(
         ..
     } = *callsite;
     ir.write_back_callargs_and_dst(bb, callsite);
-    ir.writeback_acc(bb);
+    bb.writeback_acc(ir);
     let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {
@@ -65,7 +65,7 @@ fn object_send_inner(
             callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, no_splat,
         );
     });
-    ir.reg2acc(bb, GP::Rax, dst);
+    bb.reg2acc(ir, GP::Rax, dst);
 }
 
 #[cfg(test)]

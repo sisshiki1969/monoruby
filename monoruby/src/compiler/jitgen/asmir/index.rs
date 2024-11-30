@@ -13,20 +13,20 @@ impl AsmIr {
     ) {
         if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
             let deopt = self.new_deopt(bb, pc);
-            self.fetch_guard_array(bb, base, GP::Rdi, deopt);
+            bb.fetch_guard_array(self, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {
-                self.unlink(bb, dst);
+                bb.unlink(self, dst);
                 self.array_u16_index(idx);
             } else {
-                self.fetch_guard_fixnum(bb, idx, GP::Rsi, deopt);
+                bb.fetch_guard_fixnum(self, idx, GP::Rsi, deopt);
                 self.array_index();
             }
         } else {
             self.write_back_slots(bb, &[base, idx]);
-            self.unlink(bb, dst);
+            bb.unlink(self, dst);
             self.generic_index(bb, base, idx, pc);
         }
-        self.rax2acc(bb, dst);
+        bb.rax2acc(self, dst);
     }
 
     pub(in crate::compiler::jitgen) fn index_assign(
@@ -41,13 +41,13 @@ impl AsmIr {
     ) {
         if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
             let deopt = self.new_deopt(bb, pc);
-            self.fetch_guard_array(bb, base, GP::Rdi, deopt);
+            bb.fetch_guard_array(self, base, GP::Rdi, deopt);
             if let Some(idx) = bb.is_u16_literal(idx) {
-                self.fetch_for_gpr(bb, src, GP::R15);
+                bb.fetch_for_gpr(self, src, GP::R15);
                 self.array_u16_index_assign(bb, idx, pc);
             } else {
-                self.fetch_guard_fixnum(bb, idx, GP::Rsi, deopt);
-                self.fetch_for_gpr(bb, src, GP::R15);
+                bb.fetch_guard_fixnum(self, idx, GP::Rsi, deopt);
+                bb.fetch_for_gpr(self, src, GP::R15);
                 self.array_index_assign(bb, pc);
             }
         } else {

@@ -96,7 +96,7 @@ pub(super) fn gen_class_new(
             dst,
             ..
         } = *callsite;
-        ir.writeback_acc(bb);
+        bb.writeback_acc(ir);
         ir.write_back_callargs_and_dst(bb, callsite);
         ir.stack2reg(recv, GP::Rdi);
         let using = bb.get_using_xmm();
@@ -161,7 +161,7 @@ pub(super) fn gen_class_new(
             );
             gen.jit.select_page(0);
         });
-        ir.rax2acc(bb, dst);
+        bb.rax2acc(ir, dst);
     }
 }
 
