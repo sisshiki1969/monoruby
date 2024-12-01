@@ -97,7 +97,7 @@ pub(super) fn gen_class_new(
             ..
         } = *callsite;
         bb.writeback_acc(ir);
-        ir.write_back_callargs_and_dst(bb, callsite);
+        bb.write_back_callargs_and_dst(ir, callsite);
         ir.stack2reg(recv, GP::Rdi);
         let using = bb.get_using_xmm();
         let error = ir.new_error(bb, pc);

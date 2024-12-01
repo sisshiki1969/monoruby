@@ -64,7 +64,7 @@ fn fiber_yield_inline(
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
-    ir.write_back_callargs_and_dst(bb, callsite);
+    bb.write_back_callargs_and_dst(ir, callsite);
     let using = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
     ir.inline(move |gen, labels| {

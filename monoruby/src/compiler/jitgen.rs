@@ -17,10 +17,14 @@ use trace_ir::*;
 //pub mod analysis;
 pub mod asmir;
 mod basic_block;
-mod read_slot;
+mod binary_op;
 mod compile;
 mod guard;
+mod index;
 mod init_method;
+mod merge;
+mod read_slot;
+mod slot;
 pub mod trace_ir;
 
 //
@@ -429,7 +433,7 @@ impl BBContext {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            ir.clear(self);
+            self.clear(ir);
             if let Some(acc) = self.clear_r15(ir)
                 && acc < self.sp
                 && acc != dst

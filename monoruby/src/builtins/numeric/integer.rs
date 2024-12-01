@@ -235,7 +235,7 @@ fn integer_tof(
 ) {
     let CallSiteInfo { dst, .. } = store[callid];
     if let Some(ret) = dst {
-        let fret = ir.xmm_write_enc(bb, ret);
+        let fret = bb.xmm_write_enc(ir, ret);
         ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;

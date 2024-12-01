@@ -13,10 +13,10 @@ impl AsmIr {
         pc: BytecodePtr,
     ) {
         if let Some(base) = base {
-            self.write_back_slots(bbctx, &[base]);
+            bbctx.write_back_slots(self, &[base]);
         }
         if let Some(superclass) = superclass {
-            self.write_back_slots(bbctx, &[superclass]);
+            bbctx.write_back_slots(self, &[superclass]);
         }
         bbctx.unlink(self, dst);
         let using_xmm = bbctx.get_using_xmm();
@@ -41,7 +41,7 @@ impl AsmIr {
         func_id: FuncId,
         pc: BytecodePtr,
     ) {
-        self.write_back_slots(bbctx, &[base]);
+        bbctx.write_back_slots(self, &[base]);
         bbctx.unlink(self, dst);
         let using_xmm = bbctx.get_using_xmm();
         let error = self.new_error(bbctx, pc);

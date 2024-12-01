@@ -45,7 +45,7 @@ impl AsmIr {
     ) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
-        self.write_back_callargs_and_dst(bbctx, &callinfo);
+        bbctx.write_back_callargs_and_dst(self, &callinfo);
         bbctx.writeback_acc(self);
         let using_xmm = bbctx.get_using_xmm();
         let error = self.new_error(bbctx, pc);
@@ -72,15 +72,15 @@ impl AsmIr {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         if recv.is_self() && bb.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
-            self.write_back_locals(bb);
-            self.write_back_callargs_and_dst(bb, &store[callid]);
+            bb.write_back_locals(self);
+            bb.write_back_callargs_and_dst(self, &store[callid]);
             bb.writeback_acc(self);
             self.send_not_cached(bb, pc, callid);
             bb.rax2acc(self, dst);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
-                self.write_back_locals(bb);
+                bb.write_back_locals(self);
             }
             bb.fetch_for_gpr(self, recv, GP::Rdi);
             let (deopt, error) = self.new_deopt_error(bb, pc);
@@ -199,7 +199,7 @@ impl AsmIr {
         self.xmm_save(using_xmm);
         self.set_arguments(store, bb, callid, callee_fid, pc);
         bb.unlink(self, store[callid].dst);
-        self.clear(bb);
+        bb.clear(self);
         let error = self.new_error(bb, pc);
         bb.writeback_acc(self);
         self.inst.push(AsmInst::SendCached {

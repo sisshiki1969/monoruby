@@ -35,7 +35,7 @@ impl std::fmt::Debug for SlotContext {
 }
 
 impl SlotContext {
-    pub(in crate::compiler::jitgen) fn from(cc: &JitContext) -> Self {
+    pub(super) fn from(cc: &JitContext) -> Self {
         Self::new(cc.total_reg_num, cc.local_num)
     }
 
@@ -45,7 +45,7 @@ impl SlotContext {
         self[slot].is_used.kill();
     }
 
-    pub(in crate::compiler::jitgen) fn slot(&self, slot: SlotId) -> LinkMode {
+    pub(super) fn slot(&self, slot: SlotId) -> LinkMode {
         self[slot].link
     }
 
@@ -53,7 +53,7 @@ impl SlotContext {
         self[slot].guarded
     }
 
-    pub fn set_guard_fixnum(&mut self, slot: SlotId) {
+    pub(super) fn set_guard_fixnum(&mut self, slot: SlotId) {
         self.set_guarded(slot, Guarded::Fixnum)
     }
 
@@ -61,7 +61,7 @@ impl SlotContext {
         self.set_guarded(slot, Guarded::Float)
     }
 
-    pub fn set_guard_array_ty(&mut self, slot: SlotId) {
+    pub(super) fn set_guard_array_ty(&mut self, slot: SlotId) {
         self.set_guarded(slot, Guarded::ArrayTy)
     }
 
@@ -73,7 +73,7 @@ impl SlotContext {
         self.set_slot(slot, LinkMode::Xmm(xmm), Guarded::Float)
     }
 
-    pub fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_both(slot, xmm, Guarded::Float)
     }
 
@@ -213,7 +213,7 @@ impl SlotContext {
     /// ### destroy
     /// - r8
     ///
-    pub fn clear_r15(&mut self, ir: &mut AsmIr) -> Option<SlotId> {
+    pub(super) fn clear_r15(&mut self, ir: &mut AsmIr) -> Option<SlotId> {
         let res = self.r15;
         if let Some(r) = res {
             self.unlink(ir, r);
@@ -259,7 +259,7 @@ impl SlotContext {
     /// ### destroy
     /// - r8
     ///
-    pub fn store_new_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(super) fn store_new_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
         let xmm = self.alloc_xmm();
         self.store_xmm(ir, slot, xmm);
         xmm
@@ -277,19 +277,11 @@ impl SlotContext {
         self.xmm_mut(xmm).push(slot);
     }
 
-    pub(in crate::compiler::jitgen) fn store_new_both_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-    ) -> Xmm {
+    pub(super) fn store_new_both_integer(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
         self.store_new_both(ir, slot, Guarded::Fixnum)
     }
 
-    pub(in crate::compiler::jitgen) fn store_new_both_float(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-    ) -> Xmm {
+    pub(super) fn store_new_both_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
         self.store_new_both(ir, slot, Guarded::Float)
     }
 
@@ -311,7 +303,7 @@ impl SlotContext {
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn store_concrete_value(&mut self, slot: SlotId, v: Value) {
+    pub(super) fn store_concrete_value(&mut self, slot: SlotId, v: Value) {
         let guarded = Guarded::from_concrete_value(v);
         self.set_slot(slot, LinkMode::ConcreteValue(v), guarded);
     }
@@ -452,11 +444,11 @@ impl SlotContext {
             .collect()
     }
 
-    pub(in crate::compiler::jitgen) fn get_register(&self) -> WriteBack {
+    pub(super) fn get_register(&self) -> WriteBack {
         WriteBack::new(vec![], vec![], vec![], self.r15)
     }
 
-    pub(in crate::compiler::jitgen) fn get_write_back(&self, sp: SlotId) -> WriteBack {
+    pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
         let f = |reg: SlotId| reg < sp;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
@@ -468,7 +460,7 @@ impl SlotContext {
         WriteBack::new(xmm, literal, alias, r15)
     }
 
-    pub(super) fn get_locals_write_back(&self) -> WriteBack {
+    fn get_locals_write_back(&self) -> WriteBack {
         let local_num = self.local_num;
         let f = |reg: SlotId| reg.0 as usize <= local_num;
         let xmm = self.wb_xmm(f);
@@ -481,7 +473,7 @@ impl SlotContext {
         WriteBack::new(xmm, literal, alias, r15)
     }
 
-    pub(in crate::compiler::jitgen) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
+    pub(super) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
         let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
             if v.iter().any(|slot| slot < &sp) {
@@ -553,7 +545,7 @@ impl SlotContext {
     /// ### destroy
     /// - r8
     ///
-    pub(crate) fn store_r15(
+    pub(super) fn store_r15(
         &mut self,
         ir: &mut AsmIr,
         slot: impl Into<Option<SlotId>>,
@@ -802,7 +794,7 @@ impl UseTy {
     }
 }
 
-impl AsmIr {
+impl BBContext {
     ///
     /// Write back the value of the *slot* to the corresponding stack slot.
     ///
@@ -810,49 +802,49 @@ impl AsmIr {
     ///
     /// ### destroy
     /// - rax, rcx
-    pub(super) fn write_back_slot(&mut self, bbctx: &mut BBContext, slot: SlotId) {
-        if slot >= bbctx.sp {
-            unreachable!("{:?} >= {:?} in write_back_slot()", slot, bbctx.sp);
+    pub(super) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        if slot >= self.sp {
+            unreachable!("{:?} >= {:?} in write_back_slot()", slot, self.sp);
         };
-        let guarded = bbctx.guarded(slot);
-        match bbctx.slot(slot) {
+        let guarded = self.guarded(slot);
+        match self.slot(slot) {
             LinkMode::Xmm(xmm) => {
                 // Xmm -> Both
-                bbctx.set_both_float(slot, xmm);
-                self.xmm2stack(xmm, slot);
+                self.set_both_float(slot, xmm);
+                ir.xmm2stack(xmm, slot);
             }
             LinkMode::ConcreteValue(v) => {
                 // Literal -> Stack
-                self.lit2stack(bbctx, v, slot);
+                self.lit2stack(ir, v, slot);
             }
             LinkMode::Accumulator => {
                 // R15 -> Stack
-                self.acc2stack(slot);
-                bbctx.unlink(self, slot);
-                bbctx.set_guarded(slot, guarded);
+                ir.acc2stack(slot);
+                self.unlink(ir, slot);
+                self.set_guarded(slot, guarded);
             }
             LinkMode::Alias(origin) => {
-                self.stack2reg(origin, GP::Rax);
-                self.reg2stack(GP::Rax, slot);
-                bbctx.unlink(self, slot);
-                bbctx.set_guarded(slot, guarded);
+                ir.stack2reg(origin, GP::Rax);
+                ir.reg2stack(GP::Rax, slot);
+                self.unlink(ir, slot);
+                self.set_guarded(slot, guarded);
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
     }
 
-    pub(super) fn xmm_swap(&mut self, bbctx: &mut BBContext, l: Xmm, r: Xmm) {
-        bbctx.xmm_swap(l, r);
-        self.inst.push(AsmInst::XmmSwap(l, r));
+    pub(super) fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+        self.slot_state.xmm_swap(l, r);
+        ir.inst.push(AsmInst::XmmSwap(l, r));
     }
 
     ///
     /// ### destroy
     /// - rax
     ///
-    fn lit2stack(&mut self, bbctx: &mut BBContext, v: Value, slot: SlotId) {
-        bbctx.set_slot(slot, LinkMode::Stack, Guarded::from_concrete_value(v));
-        self.inst.push(AsmInst::LitToStack(v, slot));
+    fn lit2stack(&mut self, ir: &mut AsmIr, v: Value, slot: SlotId) {
+        self.set_slot(slot, LinkMode::Stack, Guarded::from_concrete_value(v));
+        ir.inst.push(AsmInst::LitToStack(v, slot));
     }
 
     ///
@@ -861,10 +853,10 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn clear(&mut self, bbctx: &mut BBContext) {
-        let sp = bbctx.next_sp;
-        for i in sp..SlotId(bbctx.slots.len() as u16) {
-            bbctx.unlink(self, i)
+    pub(in crate::compiler::jitgen) fn clear(&mut self, ir: &mut AsmIr) {
+        let sp = self.next_sp;
+        for i in sp..SlotId(self.slots.len() as u16) {
+            self.unlink(ir, i)
         }
     }
 
@@ -876,34 +868,34 @@ impl AsmIr {
     ///
     pub(in crate::compiler::jitgen) fn copy_slot(
         &mut self,
-        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
         src: SlotId,
         dst: SlotId,
     ) {
-        let guarded = bbctx.guarded(src);
-        match bbctx[src].link {
+        let guarded = self.guarded(src);
+        match self[src].link {
             LinkMode::Xmm(x) => {
-                bbctx.store_xmm(self, dst, x);
+                self.store_xmm(ir, dst, x);
             }
             LinkMode::Both(x) => {
-                self.stack2reg(src, GP::Rax);
-                self.reg2stack(GP::Rax, dst);
-                bbctx.store_both(self, dst, x, guarded);
+                ir.stack2reg(src, GP::Rax);
+                ir.reg2stack(GP::Rax, dst);
+                self.store_both(ir, dst, x, guarded);
             }
             LinkMode::Stack => {
-                bbctx.store_alias(self, src, dst);
+                self.store_alias(ir, src, dst);
             }
             LinkMode::Alias(origin) => {
-                bbctx.store_alias(self, origin, dst);
+                self.store_alias(ir, origin, dst);
             }
             LinkMode::ConcreteValue(v) => {
-                bbctx.unlink(self, dst);
-                bbctx.store_concrete_value(dst, v);
+                self.unlink(ir, dst);
+                self.store_concrete_value(dst, v);
             }
             LinkMode::Accumulator => {
-                self.reg2stack(GP::R15, src);
-                bbctx.unlink(self, src);
-                bbctx.store_r15(self, dst, guarded)
+                ir.reg2stack(GP::R15, src);
+                self.unlink(ir, src);
+                self.store_r15(ir, dst, guarded)
             }
         }
     }
@@ -914,14 +906,10 @@ impl AsmIr {
     /// ### destroy
     /// - r8
     ///
-    pub(in crate::compiler::jitgen) fn xmm_write(
-        &mut self,
-        bbctx: &mut BBContext,
-        slot: SlotId,
-    ) -> Xmm {
-        match bbctx[slot].link {
-            LinkMode::Xmm(x) if bbctx.xmm(x).len() == 1 => {
-                assert_eq!(slot, bbctx.xmm(x)[0]);
+    pub(in crate::compiler::jitgen) fn xmm_write(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+        match self[slot].link {
+            LinkMode::Xmm(x) if self.xmm(x).len() == 1 => {
+                assert_eq!(slot, self.xmm(x)[0]);
                 x
             }
             LinkMode::Xmm(_)
@@ -929,18 +917,62 @@ impl AsmIr {
             | LinkMode::Stack
             | LinkMode::Alias(_)
             | LinkMode::ConcreteValue(_)
-            | LinkMode::Accumulator => bbctx.store_new_xmm(self, slot),
+            | LinkMode::Accumulator => self.store_new_xmm(ir, slot),
         }
     }
 
-    pub(crate) fn xmm_write_enc(&mut self, bbctx: &mut BBContext, slot: SlotId) -> u64 {
-        self.xmm_write(bbctx, slot).enc()
+    pub(crate) fn xmm_write_enc(&mut self, ir: &mut AsmIr, slot: SlotId) -> u64 {
+        self.xmm_write(ir, slot).enc()
     }
 
-    pub(super) fn release_locals(&mut self, bbctx: &mut BBContext) {
-        for i in 1..1 + bbctx.local_num as u16 {
-            bbctx.unlink(self, SlotId(i));
+    fn release_locals(&mut self, ir: &mut AsmIr) {
+        for i in 1..1 + self.local_num as u16 {
+            self.unlink(ir, SlotId(i));
         }
+    }
+}
+
+// write back operations
+impl BBContext {
+    pub(super) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
+        slot.iter().for_each(|r| self.write_back_slot(ir, *r));
+    }
+
+    ///
+    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
+    ///
+    pub(super) fn write_back_range(&mut self, ir: &mut AsmIr, args: SlotId, len: u16) {
+        for reg in args.0..args.0 + len {
+            self.write_back_slot(ir, SlotId::new(reg))
+        }
+    }
+
+    pub(crate) fn write_back_callargs_and_dst(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
+        let CallSiteInfo { recv, dst, .. } = callsite;
+        self.write_back_slot(ir, *recv);
+        self.write_back_args(ir, callsite);
+        self.unlink(ir, *dst);
+    }
+
+    pub(super) fn write_back_args(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
+        let CallSiteInfo {
+            args,
+            pos_num,
+            kw_pos,
+            block_arg,
+            ..
+        } = callsite;
+        self.write_back_range(ir, *args, *pos_num as u16);
+        self.write_back_range(ir, *kw_pos, callsite.kw_len() as u16);
+        if let Some(block_arg) = block_arg {
+            self.write_back_slot(ir, *block_arg);
+        }
+    }
+
+    pub(super) fn write_back_locals(&mut self, ir: &mut AsmIr) {
+        let wb = self.get_locals_write_back();
+        ir.inst.push(AsmInst::WriteBack(wb));
+        self.release_locals(ir);
     }
 }
 

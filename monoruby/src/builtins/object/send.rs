@@ -55,7 +55,7 @@ fn object_send_inner(
         block_arg,
         ..
     } = *callsite;
-    ir.write_back_callargs_and_dst(bb, callsite);
+    bb.write_back_callargs_and_dst(ir, callsite);
     bb.writeback_acc(ir);
     let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
