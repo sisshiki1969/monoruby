@@ -395,7 +395,7 @@ fn integer_shr(
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
-        bb.fetch_guard_fixnum(ir, args, GP::Rsi, deopt);
+        bb.fetch_fixnum(ir, args, GP::Rsi, deopt);
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -426,7 +426,7 @@ fn integer_shl(
     {
         ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
     } else {
-        bb.fetch_guard_fixnum(ir, args, GP::Rsi, deopt);
+        bb.fetch_fixnum(ir, args, GP::Rsi, deopt);
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);

@@ -30,27 +30,36 @@ impl std::ops::IndexMut<ClassId> for ClassInfoTable {
 }
 
 impl ClassInfoTable {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             table: vec![ClassInfo::new(); 40],
         }
     }
 
-    pub(super) fn add_class(&mut self) -> ClassId {
+    fn add_class(&mut self) -> ClassId {
         let id = self.table.len();
         self.table.push(ClassInfo::new());
         ClassId::new(id as u32)
     }
 
-    pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
         let id = self.table.len();
         let info = self[original_class].copy();
         self.table.push(info);
         ClassId::new(id as u32)
     }
 
-    pub(super) fn def_builtin_class(&mut self, class: ClassId) {
+    fn def_builtin_class(&mut self, class: ClassId) {
         self[class] = ClassInfo::new();
+    }
+
+    pub(crate) fn search_method_by_class_id(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let module = self[class_id].get_module();
+        self.search_method(module, name)
     }
 }
 
@@ -67,6 +76,14 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+    /// global method cache.
+    global_method_cache: GlobalMethodCache,
+    /// stats for inline method cache miss
+    #[cfg(feature = "profile")]
+    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    /// stats for method cache miss
+    #[cfg(feature = "profile")]
+    method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -138,6 +155,11 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
+            global_method_cache: GlobalMethodCache::default(),
+            #[cfg(feature = "profile")]
+            global_method_cache_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            method_exploration_stats: HashMap::default(),
         }
     }
 }
@@ -332,6 +354,42 @@ impl Store {
         let regs = info.total_reg_num();
         let pc = info.get_top_pc();
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(crate) fn check_method_for_class(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<MethodTableEntry> {
+        #[cfg(feature = "profile")]
+        {
+            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.global_method_cache_stats.insert((class_id, name), 1);
+                }
+            };
+        }
+        if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
+            return entry.cloned();
+        };
+        #[cfg(feature = "profile")]
+        {
+            match self.method_exploration_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.method_exploration_stats.insert((class_id, name), 1);
+                }
+            };
+        }
+        let entry = self.classes.search_method_by_class_id(class_id, name);
+        self.global_method_cache
+            .insert((name, class_id), class_version, entry.clone());
+        entry
     }
 }
 

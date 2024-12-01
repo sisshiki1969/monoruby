@@ -26,11 +26,11 @@ impl BBContext {
                 let deopt = ir.new_deopt(self, pc);
                 match mode {
                     OpMode::RR(lhs, rhs) => {
-                        self.fetch_guard_fixnum(ir, lhs, GP::Rdi, deopt);
-                        self.fetch_guard_fixnum(ir, rhs, GP::Rsi, deopt);
+                        self.fetch_fixnum(ir, lhs, GP::Rdi, deopt);
+                        self.fetch_fixnum(ir, rhs, GP::Rsi, deopt);
                     }
                     OpMode::RI(slot, _) | OpMode::IR(_, slot) => {
-                        self.fetch_guard_fixnum(ir, slot, GP::Rdi, deopt);
+                        self.fetch_fixnum(ir, slot, GP::Rdi, deopt);
                     }
                 }
                 self.integer_binop(ir, pc, kind, mode);
@@ -56,7 +56,7 @@ impl BBContext {
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     let deopt = ir.new_deopt(self, pc);
-                    self.fetch_guard_fixnum(ir, lhs, GP::Rdi, deopt);
+                    self.fetch_fixnum(ir, lhs, GP::Rdi, deopt);
                     self.unlink(ir, dst);
                     self.integer_binop(ir, pc, kind, mode);
                     self.reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -150,14 +150,14 @@ impl BBContext {
         let deopt = ir.new_deopt(self, pc);
         match mode {
             OpMode::RR(l, r) => {
-                self.fetch_guard_fixnum(ir, *l, GP::Rdi, deopt);
-                self.fetch_guard_fixnum(ir, *r, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, *l, GP::Rdi, deopt);
+                self.fetch_fixnum(ir, *r, GP::Rsi, deopt);
             }
             OpMode::RI(l, _) => {
-                self.fetch_guard_fixnum(ir, *l, GP::Rdi, deopt);
+                self.fetch_fixnum(ir, *l, GP::Rdi, deopt);
             }
             OpMode::IR(_, r) => {
-                self.fetch_guard_fixnum(ir, *r, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, *r, GP::Rsi, deopt);
             }
         }
     }
@@ -166,16 +166,16 @@ impl BBContext {
         let deopt = ir.new_deopt(self, pc);
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.fetch_guard_fixnum(ir, *lhs, GP::Rdi, deopt);
-                self.fetch_guard_fixnum(ir, *rhs, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, *lhs, GP::Rdi, deopt);
+                self.fetch_fixnum(ir, *rhs, GP::Rsi, deopt);
             }
             OpMode::RI(lhs, rhs) => {
-                self.fetch_guard_fixnum(ir, *lhs, GP::Rdi, deopt);
+                self.fetch_fixnum(ir, *lhs, GP::Rdi, deopt);
                 ir.lit2reg(Value::i32(*rhs as i32), GP::Rsi);
             }
             OpMode::IR(lhs, rhs) => {
                 ir.lit2reg(Value::i32(*lhs as i32), GP::Rdi);
-                self.fetch_guard_fixnum(ir, *rhs, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, *rhs, GP::Rsi, deopt);
             }
         }
     }
@@ -295,7 +295,14 @@ impl BBContext {
         ir.float_cmp_br(mode, kind, brkind, branch_dest);
     }
 
-    fn fetch_binary(&mut self, ir: &mut AsmIr, mode: OpMode) {
+    ///
+    /// Fetch operands for binary operation according to *mode*.
+    ///
+    /// #### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    pub(super) fn fetch_binary(&mut self, ir: &mut AsmIr, mode: OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
                 self.fetch_for_gpr(ir, lhs, GP::Rdi);

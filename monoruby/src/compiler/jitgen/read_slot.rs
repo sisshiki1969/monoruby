@@ -61,7 +61,7 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn fetch_guard_array(
+    pub(crate) fn fetch_array_ty(
         &mut self,
         ir: &mut AsmIr,
         slot: SlotId,
@@ -76,13 +76,7 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn fetch_guard_fixnum(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        dst: GP,
-        deopt: AsmDeopt,
-    ) {
+    pub(crate) fn fetch_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP, deopt: AsmDeopt) {
         let is_fixnum = self.is_fixnum(slot);
         self.fetch_for_gpr(ir, slot, dst);
         if !is_fixnum {

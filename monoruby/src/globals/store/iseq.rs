@@ -417,14 +417,20 @@ impl ISeqInfo {
                 },
                 15 => TraceIr::LoopEnd,
                 16 => {
-                    let class = pc.cached_class0();
-                    let ivar = pc.cached_ivarid();
-                    TraceIr::LoadIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                    if let Some(class) = pc.cached_class0() {
+                        let ivar = pc.cached_ivarid();
+                        TraceIr::LoadIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                    } else {
+                        TraceIr::Deoptimize
+                    }
                 }
                 17 => {
-                    let class = pc.cached_class0();
-                    let ivar = pc.cached_ivarid();
-                    TraceIr::StoreIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                    if let Some(class) = pc.cached_class0() {
+                        let ivar = pc.cached_ivarid();
+                        TraceIr::StoreIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                    } else {
+                        TraceIr::Deoptimize
+                    }
                 }
                 20 => {
                     let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
@@ -565,20 +571,28 @@ impl ISeqInfo {
                         TraceIr::IUnOp { kind, dst, src }
                     } else if pc.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
-                    } else {
+                    } else if let Some(src_class) = pc.classid1() {
                         TraceIr::UnOp {
                             kind,
                             dst,
                             src,
-                            src_class: pc.classid1(),
+                            src_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
-                127 => TraceIr::BitNot {
-                    dst: SlotId::new(op1_w1),
-                    src: SlotId::new(op2_w2),
-                    src_class: pc.classid1(),
-                },
+                127 => {
+                    if let Some(src_class) = pc.classid1() {
+                        TraceIr::BitNot {
+                            dst: SlotId::new(op1_w1),
+                            src: SlotId::new(op2_w2),
+                            src_class,
+                        }
+                    } else {
+                        TraceIr::Deoptimize
+                    }
+                }
                 128 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
@@ -591,38 +605,46 @@ impl ISeqInfo {
                         TraceIr::IUnOp { kind, dst, src }
                     } else if pc.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
-                    } else {
+                    } else if let Some(src_class) = pc.classid1() {
                         TraceIr::UnOp {
                             kind,
                             dst,
                             src,
-                            src_class: pc.classid1(),
+                            src_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 130 => TraceIr::InlineCache,
                 132 => {
-                    let base_class = pc.classid1();
-                    let idx_class = pc.classid2();
-
-                    TraceIr::Index {
-                        dst: SlotId::new(op1_w1),
-                        base: SlotId::new(op2_w2),
-                        idx: SlotId::new(op3_w3),
-                        base_class,
-                        idx_class,
+                    if let Some(base_class) = pc.classid1()
+                        && let Some(idx_class) = pc.classid2()
+                    {
+                        TraceIr::Index {
+                            dst: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                            base_class,
+                            idx_class,
+                        }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 133 => {
-                    let base_class = pc.classid1();
-                    let idx_class = pc.classid2();
-
-                    TraceIr::IndexAssign {
-                        src: SlotId::new(op1_w1),
-                        base: SlotId::new(op2_w2),
-                        idx: SlotId::new(op3_w3),
-                        base_class,
-                        idx_class,
+                    if let Some(base_class) = pc.classid1()
+                        && let Some(idx_class) = pc.classid2()
+                    {
+                        TraceIr::IndexAssign {
+                            src: SlotId::new(op1_w1),
+                            base: SlotId::new(op2_w2),
+                            idx: SlotId::new(op3_w3),
+                            base_class,
+                            idx_class,
+                        }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 134..=141 => {
@@ -641,7 +663,9 @@ impl ISeqInfo {
                         }
                     } else if pc.is_integer_binop() {
                         TraceIr::ICmp { kind, dst, mode }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::Cmp {
                             kind,
                             dst,
@@ -649,6 +673,8 @@ impl ISeqInfo {
                             lhs_class,
                             rhs_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 142..=149 => {
@@ -667,7 +693,9 @@ impl ISeqInfo {
                         }
                     } else if pc.is_integer1() {
                         TraceIr::ICmp { kind, dst, mode }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::Cmp {
                             kind,
                             dst,
@@ -675,6 +703,8 @@ impl ISeqInfo {
                             lhs_class,
                             rhs_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 150 => TraceIr::LoadDynVar(
@@ -719,7 +749,9 @@ impl ISeqInfo {
                             dest,
                             brkind,
                         }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::CmpBr {
                             kind,
                             dst,
@@ -729,6 +761,8 @@ impl ISeqInfo {
                             dest,
                             brkind,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 162..=169 => {
@@ -759,7 +793,9 @@ impl ISeqInfo {
                             dest,
                             brkind,
                         }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::CmpBr {
                             kind,
                             dst,
@@ -769,6 +805,8 @@ impl ISeqInfo {
                             dest,
                             brkind,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 170 => TraceIr::InitMethod(FnInitInfo {
@@ -817,7 +855,9 @@ impl ISeqInfo {
                             lhs_class: lhs_class.unwrap(),
                             rhs_class: rhs_class.unwrap(),
                         }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::BinOp {
                             kind,
                             dst,
@@ -825,6 +865,8 @@ impl ISeqInfo {
                             lhs_class,
                             rhs_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 190..=199 => {
@@ -843,7 +885,9 @@ impl ISeqInfo {
                             lhs_class: lhs_class.unwrap(),
                             rhs_class: rhs_class.unwrap(),
                         }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::BinOp {
                             kind,
                             dst,
@@ -851,6 +895,8 @@ impl ISeqInfo {
                             lhs_class,
                             rhs_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 200..=209 => {
@@ -869,7 +915,9 @@ impl ISeqInfo {
                             lhs_class: lhs_class.unwrap(),
                             rhs_class: rhs_class.unwrap(),
                         }
-                    } else {
+                    } else if let Some(lhs_class) = lhs_class
+                        && let Some(rhs_class) = rhs_class
+                    {
                         TraceIr::BinOp {
                             kind,
                             dst,
@@ -877,6 +925,8 @@ impl ISeqInfo {
                             lhs_class,
                             rhs_class,
                         }
+                    } else {
+                        TraceIr::Deoptimize
                     }
                 }
                 _ => unreachable!("{:016x}", op1),

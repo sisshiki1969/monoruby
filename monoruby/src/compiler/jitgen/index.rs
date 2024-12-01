@@ -7,18 +7,18 @@ impl BBContext {
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
-        base_class: Option<ClassId>,
-        idx_class: Option<ClassId>,
+        base_class: ClassId,
+        idx_class: ClassId,
         pc: BytecodePtr,
     ) {
-        if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+        if base_class == ARRAY_CLASS && idx_class == INTEGER_CLASS {
             let deopt = ir.new_deopt(self, pc);
-            self.fetch_guard_array(ir, base, GP::Rdi, deopt);
+            self.fetch_array_ty(ir, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
                 self.unlink(ir, dst);
                 ir.array_u16_index(idx);
             } else {
-                self.fetch_guard_fixnum(ir, idx, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
                 ir.array_index();
             }
         } else {
@@ -35,18 +35,18 @@ impl BBContext {
         src: SlotId,
         base: SlotId,
         idx: SlotId,
-        base_class: Option<ClassId>,
-        idx_class: Option<ClassId>,
+        base_class: ClassId,
+        idx_class: ClassId,
         pc: BytecodePtr,
     ) {
-        if base_class == Some(ARRAY_CLASS) && idx_class == Some(INTEGER_CLASS) {
+        if base_class == ARRAY_CLASS && idx_class == INTEGER_CLASS {
             let deopt = ir.new_deopt(self, pc);
-            self.fetch_guard_array(ir, base, GP::Rdi, deopt);
+            self.fetch_array_ty(ir, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
                 self.fetch_for_gpr(ir, src, GP::R15);
                 ir.array_u16_index_assign(self, idx, pc);
             } else {
-                self.fetch_guard_fixnum(ir, idx, GP::Rsi, deopt);
+                self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
                 self.fetch_for_gpr(ir, src, GP::R15);
                 ir.array_index_assign(self, pc);
             }

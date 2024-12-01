@@ -1556,6 +1556,20 @@ impl BinOpK {
             BinOpK::Exp => pow_values,
         }
     }
+
+    pub(crate) fn to_id(&self) -> IdentId {
+        match self {
+            BinOpK::Add => IdentId::_ADD,
+            BinOpK::Sub => IdentId::_SUB,
+            BinOpK::Mul => IdentId::_MUL,
+            BinOpK::Div => IdentId::_DIV,
+            BinOpK::BitOr => IdentId::_BOR,
+            BinOpK::BitAnd => IdentId::_BAND,
+            BinOpK::BitXor => IdentId::_BXOR,
+            BinOpK::Rem => IdentId::_REM,
+            BinOpK::Exp => IdentId::_POW,
+        }
+    }
 }
 
 ///

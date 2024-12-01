@@ -361,7 +361,11 @@ impl ClassInfoTable {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    fn search_method(&self, mut module: Module, name: IdentId) -> Option<MethodTableEntry> {
+    pub(super) fn search_method(
+        &self,
+        mut module: Module,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
         let mut visi = None;
         loop {
             if !module.has_origin()
@@ -768,35 +772,9 @@ impl Globals {
         class_id: ClassId,
         name: IdentId,
     ) -> Option<MethodTableEntry> {
-        #[cfg(feature = "profile")]
-        {
-            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c += 1,
-                None => {
-                    self.global_method_cache_stats.insert((class_id, name), 1);
-                }
-            };
-        }
         let class_version = self.class_version();
-        if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
-            return entry.cloned();
-        };
-        #[cfg(feature = "profile")]
-        {
-            match self.method_exploration_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c += 1,
-                None => {
-                    self.method_exploration_stats.insert((class_id, name), 1);
-                }
-            };
-        }
-        let entry = self
-            .store
-            .classes
-            .search_method(self.store.classes.get_module(class_id), name);
-        self.global_method_cache
-            .insert((name, class_id), class_version, entry.clone());
-        entry
+        self.store
+            .check_method_for_class(class_id, name, class_version)
     }
 
     pub(crate) fn change_method_visibility_for_class(
@@ -864,7 +842,7 @@ pub(in crate::globals) struct GlobalMethodCache {
 }
 
 impl GlobalMethodCache {
-    fn get(
+    pub(super) fn get(
         &mut self,
         class_id: ClassId,
         name: IdentId,
@@ -878,7 +856,7 @@ impl GlobalMethodCache {
         self.cache.get(&(name, class_id)).map(|e| e.as_ref())
     }
 
-    fn insert(
+    pub(super) fn insert(
         &mut self,
         key: (IdentId, ClassId),
         class_version: u32,

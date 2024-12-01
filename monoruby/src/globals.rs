@@ -101,8 +101,7 @@ pub struct Globals {
     pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
-    /// global method cache.
-    global_method_cache: GlobalMethodCache,
+
     /// suppress jit compilation.
     no_jit: bool,
     /// suppress loading gem.
@@ -119,12 +118,6 @@ pub struct Globals {
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
-    /// stats for inline method cache miss
-    #[cfg(feature = "profile")]
-    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
-    /// stats for method cache miss
-    #[cfg(feature = "profile")]
-    method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
@@ -166,7 +159,6 @@ impl Globals {
             codegen: Codegen::new(no_jit),
             store: Store::new(),
             global_vars: HashMap::default(),
-            global_method_cache: GlobalMethodCache::default(),
             no_jit,
             no_gems,
             stdout: BufWriter::new(stdout()),
@@ -176,10 +168,6 @@ impl Globals {
             startup_flag: false,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            global_method_cache_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            method_exploration_stats: HashMap::default(),
             #[cfg(feature = "profile")]
             jit_class_unmatched_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]

@@ -282,6 +282,20 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
+        let return_addr = self.do_call(callee, codeptr, recv_class, pc);
+
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
+        return_addr
+    }
+
+    fn do_call(
+        &mut self,
+        callee: &FuncInfo,
+        codeptr: CodePtr,
+        recv_class: ClassId,
+        pc: Option<BytecodePtr>,
+    ) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 
@@ -306,8 +320,6 @@ impl Codegen {
         let return_addr = self.jit.get_current_address();
 
         self.pop_frame();
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
         return_addr
     }
 
