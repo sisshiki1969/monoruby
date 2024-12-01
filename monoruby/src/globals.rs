@@ -251,6 +251,10 @@ impl Globals {
         globals
     }
 
+    pub fn new_test() -> Self {
+        Globals::new(1, false, true)
+    }
+
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
         let code = code.into();
         let mut executor = Executor::init(self);
