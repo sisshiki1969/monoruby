@@ -93,7 +93,7 @@ impl BBContext {
         dst: Option<SlotId>,
     ) {
         self.fetch_fixnum_binary(ir, pc, &mode);
-        ir.inst.push(AsmInst::IntegerCmp { kind, mode });
+        ir.push(AsmInst::IntegerCmp { kind, mode });
         self.rax2acc(ir, dst);
     }
 
@@ -140,7 +140,7 @@ impl BBContext {
         self.unlink(ir, dst);
         self.clear(ir);
         self.generic_cmp(ir, pc, kind);
-        ir.inst.push(AsmInst::GenericCondBr {
+        ir.push(AsmInst::GenericCondBr {
             brkind,
             branch_dest,
         });
@@ -197,7 +197,7 @@ impl BBContext {
     fn integer_binop(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: BinOpK, mode: OpMode) {
         let using_xmm = self.get_using_xmm();
         let (deopt, error) = ir.new_deopt_error(self, pc);
-        ir.inst.push(AsmInst::IntegerBinOp {
+        ir.push(AsmInst::IntegerBinOp {
             kind,
             mode,
             using_xmm,
@@ -223,14 +223,14 @@ impl BBContext {
     fn generic_binop(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: BinOpK) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
-        ir.inst.push(AsmInst::GenericBinOp { kind, using_xmm });
+        ir.push(AsmInst::GenericBinOp { kind, using_xmm });
         ir.handle_error(error);
     }
 
     fn generic_cmp(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: CmpKind) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
-        ir.inst.push(AsmInst::GenericCmp { kind, using_xmm });
+        ir.push(AsmInst::GenericCmp { kind, using_xmm });
         ir.handle_error(error);
     }
 }
@@ -268,7 +268,7 @@ impl BBContext {
             let mode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
             self.unlink(ir, dst);
             self.clear(ir);
-            ir.inst.push(AsmInst::FloatCmp { kind, mode });
+            ir.push(AsmInst::FloatCmp { kind, mode });
         } else {
             self.fetch_binary(ir, mode);
             self.unlink(ir, dst);

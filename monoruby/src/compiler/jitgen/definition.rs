@@ -1,9 +1,9 @@
 use super::*;
 
-impl AsmIr {
-    pub(in crate::compiler::jitgen) fn class_def(
+impl BBContext {
+    pub(super) fn class_def(
         &mut self,
-        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
         dst: Option<SlotId>,
         base: Option<SlotId>,
         superclass: Option<SlotId>,
@@ -13,15 +13,15 @@ impl AsmIr {
         pc: BytecodePtr,
     ) {
         if let Some(base) = base {
-            bbctx.write_back_slots(self, &[base]);
+            self.write_back_slots(ir, &[base]);
         }
         if let Some(superclass) = superclass {
-            bbctx.write_back_slots(self, &[superclass]);
+            self.write_back_slots(ir, &[superclass]);
         }
-        bbctx.unlink(self, dst);
-        let using_xmm = bbctx.get_using_xmm();
-        let error = self.new_error(bbctx, pc);
-        self.inst.push(AsmInst::ClassDef {
+        self.unlink(ir, dst);
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        ir.push(AsmInst::ClassDef {
             base,
             superclass,
             dst,
@@ -33,19 +33,19 @@ impl AsmIr {
         });
     }
 
-    pub(in crate::compiler::jitgen) fn singleton_class_def(
+    pub(super) fn singleton_class_def(
         &mut self,
-        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
         dst: Option<SlotId>,
         base: SlotId,
         func_id: FuncId,
         pc: BytecodePtr,
     ) {
-        bbctx.write_back_slots(self, &[base]);
-        bbctx.unlink(self, dst);
-        let using_xmm = bbctx.get_using_xmm();
-        let error = self.new_error(bbctx, pc);
-        self.inst.push(AsmInst::SingletonClassDef {
+        self.write_back_slots(ir, &[base]);
+        self.unlink(ir, dst);
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        ir.push(AsmInst::SingletonClassDef {
             base,
             dst,
             func_id,

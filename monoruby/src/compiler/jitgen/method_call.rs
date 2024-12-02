@@ -50,7 +50,7 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
-        ir.inst.push(AsmInst::Yield {
+        ir.push(AsmInst::Yield {
             callid,
             using_xmm,
             error,
@@ -94,7 +94,7 @@ impl BBContext {
             if let Some(evict) = self.call_cached(ir, store, callid, fid, recv_class, pc) {
                 self.rax2acc(ir, dst);
                 if let Some(evict) = evict {
-                    ir.inst.push(AsmInst::ImmediateEvict { evict });
+                    ir.push(AsmInst::ImmediateEvict { evict });
                     ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
                 }
             } else {
@@ -158,7 +158,7 @@ impl BBContext {
                     }
                 } else {
                     let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                    ir.inst.push(AsmInst::AttrReader { ivar_id });
+                    ir.push(AsmInst::AttrReader { ivar_id });
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -202,7 +202,7 @@ impl BBContext {
         self.clear(ir);
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
-        ir.inst.push(AsmInst::SendCached {
+        ir.push(AsmInst::SendCached {
             callid,
             callee_fid,
             recv_class,
@@ -217,7 +217,7 @@ impl BBContext {
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
         let self_class = self.self_value.class();
-        ir.inst.push(AsmInst::SendNotCached {
+        ir.push(AsmInst::SendNotCached {
             self_class,
             callid,
             pc,
@@ -237,7 +237,7 @@ impl BBContext {
     fn attr_writer(&self, ir: &mut AsmIr, pc: BytecodePtr, ivar_id: IvarId) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
-        ir.inst.push(AsmInst::AttrWriter {
+        ir.push(AsmInst::AttrWriter {
             using_xmm,
             error,
             ivar_id,

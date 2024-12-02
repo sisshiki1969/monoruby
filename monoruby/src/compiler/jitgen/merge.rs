@@ -57,7 +57,7 @@ impl JitContext {
 
     pub(super) fn gen_continuation(&mut self, ir: &mut AsmIr) {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
-            ir.inst.push(AsmInst::Label(entry));
+            ir.push(AsmInst::Label(entry));
             if let Some(ContinuationInfo { from, to, pc }) = data {
                 from.gen_bridge_for_target(ir, &to, pc);
             }
@@ -261,7 +261,7 @@ impl BBContext {
                 (LinkMode::Stack, LinkMode::Both(r)) => {
                     let deopt = ir.new_deopt(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
-                    ir.inst.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
+                    ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                     self.store_both(ir, slot, r, guarded);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}

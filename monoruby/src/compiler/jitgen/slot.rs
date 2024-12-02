@@ -835,7 +835,7 @@ impl BBContext {
 
     pub(super) fn xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
         self.slot_state.xmm_swap(l, r);
-        ir.inst.push(AsmInst::XmmSwap(l, r));
+        ir.push(AsmInst::XmmSwap(l, r));
     }
 
     ///
@@ -844,7 +844,7 @@ impl BBContext {
     ///
     fn lit2stack(&mut self, ir: &mut AsmIr, v: Value, slot: SlotId) {
         self.set_slot(slot, LinkMode::Stack, Guarded::from_concrete_value(v));
-        ir.inst.push(AsmInst::LitToStack(v, slot));
+        ir.push(AsmInst::LitToStack(v, slot));
     }
 
     ///
@@ -971,7 +971,7 @@ impl BBContext {
 
     pub(super) fn write_back_locals(&mut self, ir: &mut AsmIr) {
         let wb = self.get_locals_write_back();
-        ir.inst.push(AsmInst::WriteBack(wb));
+        ir.push(AsmInst::WriteBack(wb));
         self.release_locals(ir);
     }
 }

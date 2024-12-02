@@ -19,6 +19,7 @@ pub mod asmir;
 mod basic_block;
 mod binary_op;
 mod compile;
+mod definition;
 mod guard;
 mod index;
 mod init_method;
@@ -27,6 +28,7 @@ mod method_call;
 mod read_slot;
 mod slot;
 pub mod trace_ir;
+mod variables;
 
 //
 // Just-in-time compiler module.
@@ -442,7 +444,7 @@ impl BBContext {
                 ir.acc2stack(acc);
             }
             self.store_r15(ir, dst, guarded);
-            ir.inst.push(AsmInst::RegToAcc(src));
+            ir.push(AsmInst::RegToAcc(src));
         }
     }
 

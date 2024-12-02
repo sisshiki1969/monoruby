@@ -3,6 +3,7 @@ use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
 use super::*;
+use std::cell::RefCell;
 use std::pin::Pin;
 
 mod class;
@@ -11,6 +12,16 @@ mod iseq;
 pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
+
+#[cfg(feature = "profile")]
+thread_local! {
+/// Stats for global method cache miss.
+static GLOBAL_METHOD_CACHE_STATS: RefCell<HashMap<(ClassId, IdentId), usize>> =
+    RefCell::new(HashMap::default());
+/// Stats for method cache miss.
+static METHOD_EXPLORATION_STATS: RefCell<HashMap<(ClassId, IdentId), usize>> =
+    RefCell::new(HashMap::default());
+}
 
 pub(crate) struct ClassInfoTable {
     table: Vec<ClassInfo>,
@@ -78,12 +89,12 @@ pub struct Store {
     pub(crate) inline_info: InlineTable,
     /// global method cache.
     global_method_cache: GlobalMethodCache,
-    /// stats for inline method cache miss
-    #[cfg(feature = "profile")]
-    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
-    /// stats for method cache miss
-    #[cfg(feature = "profile")]
-    method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
+    ///// stats for inline method cache miss
+    //#[cfg(feature = "profile")]
+    //global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    ///// stats for method cache miss
+    //#[cfg(feature = "profile")]
+    //method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -156,10 +167,6 @@ impl Store {
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
             global_method_cache: GlobalMethodCache::default(),
-            #[cfg(feature = "profile")]
-            global_method_cache_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            method_exploration_stats: HashMap::default(),
         }
     }
 }
@@ -167,8 +174,8 @@ impl Store {
 impl Store {
     #[cfg(feature = "profile")]
     pub(super) fn clear_stats(&mut self) {
-        self.global_method_cache_stats.clear();
-        self.method_exploration_stats.clear();
+        GLOBAL_METHOD_CACHE_STATS.with(|c| c.borrow_mut().clear());
+        METHOD_EXPLORATION_STATS.with(|c| c.borrow_mut().clear());
     }
 
     #[cfg(feature = "emit-bc")]
@@ -373,24 +380,30 @@ impl Store {
     ) -> Option<MethodTableEntry> {
         #[cfg(feature = "profile")]
         {
-            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c += 1,
-                None => {
-                    self.global_method_cache_stats.insert((class_id, name), 1);
+            GLOBAL_METHOD_CACHE_STATS.with(|c| {
+                let mut map = c.borrow_mut();
+                match map.get_mut(&(class_id, name)) {
+                    Some(c) => *c += 1,
+                    None => {
+                        map.insert((class_id, name), 1);
+                    }
                 }
-            };
+            });
         }
         if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
             return entry.cloned();
         };
         #[cfg(feature = "profile")]
         {
-            match self.method_exploration_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c += 1,
-                None => {
-                    self.method_exploration_stats.insert((class_id, name), 1);
+            METHOD_EXPLORATION_STATS.with(|c| {
+                let mut map = c.borrow_mut();
+                match map.get_mut(&(class_id, name)) {
+                    Some(c) => *c += 1,
+                    None => {
+                        map.insert((class_id, name), 1);
+                    }
                 }
-            };
+            });
         }
         let entry = self.classes.search_method_by_class_id(class_id, name);
         self.global_method_cache
@@ -430,30 +443,36 @@ impl Store {
         eprintln!("global method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.debug_class_name(*class_id),
-                count
-            );
-        }
+        GLOBAL_METHOD_CACHE_STATS.with(|c| {
+            let map = c.borrow();
+            let mut v: Vec<_> = map.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.debug_class_name(*class_id),
-                count
-            );
-        }
+        METHOD_EXPLORATION_STATS.with(|c| {
+            let map = c.borrow();
+            let mut v: Vec<_> = map.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
     }
 }
 
