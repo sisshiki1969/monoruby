@@ -4,7 +4,6 @@ use super::*;
 
 mod compile;
 mod definition;
-mod method_call;
 mod variables;
 
 // ~~~text
@@ -441,7 +440,7 @@ impl AsmIr {
     ///
     /// Set positional arguments for callee.
     ///
-    fn set_arguments(
+    pub(super) fn set_arguments(
         &mut self,
         store: &Store,
         bb: &mut BBContext,
@@ -501,24 +500,6 @@ impl AsmIr {
             self.inst.push(AsmInst::SetArguments { callid, callee_fid });
             self.handle_error(error);
         }
-    }
-
-    ///
-    /// Set positional arguments for callee.
-    ///
-    fn set_binop_arguments(&mut self, bb: &mut BBContext, rhs: SlotId) {
-        let ofs = if matches!(bb.slot(rhs), LinkMode::Xmm(_)) {
-            (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * 1) as i32 + 8) & !0xf
-        } else {
-            0
-        };
-
-        self.reg_sub(GP::Rsp, ofs);
-
-        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + 8 as i32);
-        bb.fetch_for_callee(self, rhs, offset);
-
-        self.reg_add(GP::Rsp, ofs);
     }
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BytecodePtr, func: UnaryOpFn) {

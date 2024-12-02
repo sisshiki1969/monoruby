@@ -493,9 +493,9 @@ impl JitContext {
                 recv_class,
                 fid,
                 version,
-            } => return ir.compile_call(store, bbctx, pc, callid, recv_class, fid, version),
+            } => return bbctx.compile_call(ir, store, pc, callid, recv_class, fid, version),
             TraceIr::Yield { callid } => {
-                ir.compile_yield(store, bbctx, pc, callid);
+                bbctx.compile_yield(ir, store, pc, callid);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
