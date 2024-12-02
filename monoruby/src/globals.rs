@@ -546,8 +546,7 @@ impl Globals {
     #[cfg(feature = "profile")]
     pub fn clear_stats(&mut self) {
         self.deopt_stats.clear();
-        self.global_method_cache_stats.clear();
-        self.method_exploration_stats.clear();
+        self.store.clear_stats();
         self.jit_class_unmatched_stats.clear();
     }
 }

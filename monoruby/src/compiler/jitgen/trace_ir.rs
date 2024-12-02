@@ -365,7 +365,7 @@ impl TraceIr {
                 ),
                 _ => unreachable!(),
             };
-            fmt(store, s, Some(lhs_class), Some(rhs_class))
+            fmt(store, s, lhs_class, rhs_class)
         }
 
         fn binop_fmt(
@@ -512,21 +512,13 @@ impl TraceIr {
                 format!(
                     "{:?} = {id}: {}",
                     reg,
-                    if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
-                    } else {
-                        format!("-")
-                    }
+                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id)
                 )
             }
             TraceIr::StoreIvar(reg, id, class_id, ivar_id) => {
                 format!(
                     "{id}: {} = {:?}",
-                    if let Some(id) = class_id {
-                        format!("{}[{:?}]", store.debug_class_name(*id), ivar_id)
-                    } else {
-                        format!("-")
-                    },
+                    format!("{}[{:?}]", store.debug_class_name(*class_id), ivar_id),
                     reg
                 )
             }

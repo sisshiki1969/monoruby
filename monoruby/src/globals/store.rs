@@ -165,6 +165,12 @@ impl Store {
 }
 
 impl Store {
+    #[cfg(feature = "profile")]
+    pub(super) fn clear_stats(&mut self) {
+        self.global_method_cache_stats.clear();
+        self.method_exploration_stats.clear();
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()
@@ -416,6 +422,37 @@ impl Store {
             }
         } else {
             "<INVALID>".to_string()
+        }
+    }
+
+    #[cfg(feature = "profile")]
+    pub(crate) fn show_stats(&self) {
+        eprintln!("global method cache stats (top 20)");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:30} {:30} {:10}",
+                name.to_string(),
+                self.debug_class_name(*class_id),
+                count
+            );
+        }
+        eprintln!();
+        eprintln!("full method exploration stats (top 20)");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:30} {:30} {:10}",
+                name.to_string(),
+                self.debug_class_name(*class_id),
+                count
+            );
         }
     }
 }

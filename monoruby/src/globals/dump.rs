@@ -145,33 +145,7 @@ impl Globals {
                 );
             }
             eprintln!();
-            eprintln!("global method cache stats (top 20)");
-            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-            eprintln!("------------------------------------------------------------------------");
-            let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.store.debug_class_name(*class_id),
-                    count
-                );
-            }
-            eprintln!();
-            eprintln!("full method exploration stats (top 20)");
-            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-            eprintln!("------------------------------------------------------------------------");
-            let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.store.debug_class_name(*class_id),
-                    count
-                );
-            }
+            self.store.show_stats();
             eprintln!();
             eprintln!("jit class guard failed stats (top 20)");
             eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
