@@ -834,35 +834,3 @@ impl Globals {
         }
     }
 }
-
-#[derive(Default)]
-pub(in crate::globals) struct GlobalMethodCache {
-    version: u32,
-    cache: HashMap<(IdentId, ClassId), Option<MethodTableEntry>>,
-}
-
-impl GlobalMethodCache {
-    pub(super) fn get(
-        &mut self,
-        class_id: ClassId,
-        name: IdentId,
-        class_version: u32,
-    ) -> Option<Option<&MethodTableEntry>> {
-        if self.version != class_version {
-            self.cache.clear();
-            self.version = class_version;
-            return None;
-        }
-        self.cache.get(&(name, class_id)).map(|e| e.as_ref())
-    }
-
-    pub(super) fn insert(
-        &mut self,
-        key: (IdentId, ClassId),
-        class_version: u32,
-        entry: Option<MethodTableEntry>,
-    ) {
-        self.version = class_version;
-        self.cache.insert(key, entry);
-    }
-}

@@ -3,7 +3,6 @@ use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
 use super::*;
-use std::cell::RefCell;
 use std::pin::Pin;
 
 mod class;
@@ -12,67 +11,6 @@ mod iseq;
 pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
-
-#[cfg(feature = "profile")]
-thread_local! {
-/// Stats for global method cache miss.
-static GLOBAL_METHOD_CACHE_STATS: RefCell<HashMap<(ClassId, IdentId), usize>> =
-    RefCell::new(HashMap::default());
-/// Stats for method cache miss.
-static METHOD_EXPLORATION_STATS: RefCell<HashMap<(ClassId, IdentId), usize>> =
-    RefCell::new(HashMap::default());
-}
-
-pub(crate) struct ClassInfoTable {
-    table: Vec<ClassInfo>,
-}
-
-impl std::ops::Index<ClassId> for ClassInfoTable {
-    type Output = ClassInfo;
-    fn index(&self, index: ClassId) -> &Self::Output {
-        &self.table[index.u32() as usize]
-    }
-}
-
-impl std::ops::IndexMut<ClassId> for ClassInfoTable {
-    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.table[index.u32() as usize]
-    }
-}
-
-impl ClassInfoTable {
-    fn new() -> Self {
-        Self {
-            table: vec![ClassInfo::new(); 40],
-        }
-    }
-
-    fn add_class(&mut self) -> ClassId {
-        let id = self.table.len();
-        self.table.push(ClassInfo::new());
-        ClassId::new(id as u32)
-    }
-
-    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
-        let id = self.table.len();
-        let info = self[original_class].copy();
-        self.table.push(info);
-        ClassId::new(id as u32)
-    }
-
-    fn def_builtin_class(&mut self, class: ClassId) {
-        self[class] = ClassInfo::new();
-    }
-
-    pub(crate) fn search_method_by_class_id(
-        &self,
-        class_id: ClassId,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
-        let module = self[class_id].get_module();
-        self.search_method(module, name)
-    }
-}
 
 pub struct Store {
     /// function info.
@@ -89,12 +27,6 @@ pub struct Store {
     pub(crate) inline_info: InlineTable,
     /// global method cache.
     global_method_cache: GlobalMethodCache,
-    ///// stats for inline method cache miss
-    //#[cfg(feature = "profile")]
-    //global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
-    ///// stats for method cache miss
-    //#[cfg(feature = "profile")]
-    //method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -174,8 +106,8 @@ impl Store {
 impl Store {
     #[cfg(feature = "profile")]
     pub(super) fn clear_stats(&mut self) {
-        GLOBAL_METHOD_CACHE_STATS.with(|c| c.borrow_mut().clear());
-        METHOD_EXPLORATION_STATS.with(|c| c.borrow_mut().clear());
+        self.global_method_cache.global_method_cache_stats.clear();
+        self.global_method_cache.method_exprolation_stats.clear();
     }
 
     #[cfg(feature = "emit-bc")]
@@ -378,33 +310,9 @@ impl Store {
         name: IdentId,
         class_version: u32,
     ) -> Option<MethodTableEntry> {
-        #[cfg(feature = "profile")]
-        {
-            GLOBAL_METHOD_CACHE_STATS.with(|c| {
-                let mut map = c.borrow_mut();
-                match map.get_mut(&(class_id, name)) {
-                    Some(c) => *c += 1,
-                    None => {
-                        map.insert((class_id, name), 1);
-                    }
-                }
-            });
-        }
         if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
             return entry.cloned();
         };
-        #[cfg(feature = "profile")]
-        {
-            METHOD_EXPLORATION_STATS.with(|c| {
-                let mut map = c.borrow_mut();
-                match map.get_mut(&(class_id, name)) {
-                    Some(c) => *c += 1,
-                    None => {
-                        map.insert((class_id, name), 1);
-                    }
-                }
-            });
-        }
         let entry = self.classes.search_method_by_class_id(class_id, name);
         self.global_method_cache
             .insert((name, class_id), class_version, entry.clone());
@@ -443,36 +351,89 @@ impl Store {
         eprintln!("global method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        GLOBAL_METHOD_CACHE_STATS.with(|c| {
-            let map = c.borrow();
-            let mut v: Vec<_> = map.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.debug_class_name(*class_id),
-                    count
-                );
-            }
-        });
+        let mut v: Vec<_> = self
+            .global_method_cache
+            .global_method_cache_stats
+            .iter()
+            .collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:30} {:30} {:10}",
+                name.to_string(),
+                self.debug_class_name(*class_id),
+                count
+            );
+        }
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        METHOD_EXPLORATION_STATS.with(|c| {
-            let map = c.borrow();
-            let mut v: Vec<_> = map.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.debug_class_name(*class_id),
-                    count
-                );
-            }
-        });
+        let mut v: Vec<_> = self
+            .global_method_cache
+            .method_exprolation_stats
+            .iter()
+            .collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v.into_iter().take(20) {
+            eprintln!(
+                "{:30} {:30} {:10}",
+                name.to_string(),
+                self.debug_class_name(*class_id),
+                count
+            );
+        }
+    }
+}
+
+pub(crate) struct ClassInfoTable {
+    table: Vec<ClassInfo>,
+}
+
+impl std::ops::Index<ClassId> for ClassInfoTable {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &Self::Output {
+        &self.table[index.u32() as usize]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for ClassInfoTable {
+    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
+        &mut self.table[index.u32() as usize]
+    }
+}
+
+impl ClassInfoTable {
+    fn new() -> Self {
+        Self {
+            table: vec![ClassInfo::new(); 40],
+        }
+    }
+
+    fn add_class(&mut self) -> ClassId {
+        let id = self.table.len();
+        self.table.push(ClassInfo::new());
+        ClassId::new(id as u32)
+    }
+
+    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+        let id = self.table.len();
+        let info = self[original_class].copy();
+        self.table.push(info);
+        ClassId::new(id as u32)
+    }
+
+    fn def_builtin_class(&mut self, class: ClassId) {
+        self[class] = ClassInfo::new();
+    }
+
+    pub(crate) fn search_method_by_class_id(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let module = self[class_id].get_module();
+        self.search_method(module, name)
     }
 }
 
@@ -710,5 +671,61 @@ impl std::convert::From<u32> for OptCaseId {
 impl OptCaseId {
     pub fn get(&self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Default)]
+struct GlobalMethodCache {
+    version: u32,
+    cache: HashMap<(IdentId, ClassId), Option<MethodTableEntry>>,
+    #[cfg(feature = "profile")]
+    /// Stats for global method cache access.
+    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    #[cfg(feature = "profile")]
+    /// Stats for method cache miss.
+    method_exprolation_stats: HashMap<(ClassId, IdentId), usize>,
+}
+
+impl GlobalMethodCache {
+    fn get(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<Option<&MethodTableEntry>> {
+        #[cfg(feature = "profile")]
+        {
+            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.global_method_cache_stats.insert((class_id, name), 1);
+                }
+            }
+        }
+        if self.version != class_version {
+            self.cache.clear();
+            self.version = class_version;
+            return None;
+        }
+        self.cache.get(&(name, class_id)).map(|e| e.as_ref())
+    }
+
+    fn insert(
+        &mut self,
+        key: (IdentId, ClassId),
+        class_version: u32,
+        entry: Option<MethodTableEntry>,
+    ) {
+        #[cfg(feature = "profile")]
+        {
+            match self.method_exprolation_stats.get_mut(&(key.1, key.0)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.method_exprolation_stats.insert((key.1, key.0), 1);
+                }
+            }
+        }
+        self.version = class_version;
+        self.cache.insert(key, entry);
     }
 }
