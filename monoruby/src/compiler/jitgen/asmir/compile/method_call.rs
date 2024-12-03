@@ -54,7 +54,6 @@ impl Codegen {
         callid: CallSiteId,
         self_class: ClassId,
         pc: BytecodePtr,
-        using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
         let callsite = &store[callid];
@@ -62,7 +61,6 @@ impl Codegen {
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
 
-        self.xmm_save(using_xmm);
         // r15 <- recv's class
         if callsite.recv.is_self() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -117,8 +115,6 @@ impl Codegen {
         );
 
         let return_addr = self.generic_call(callid, callsite.args, error);
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
 
         // slow path
         // r15: receiver's ClassId
@@ -269,7 +265,6 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
@@ -282,11 +277,7 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
-        let return_addr = self.do_call(callee, codeptr, recv_class, pc);
-
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        return_addr
+        self.do_call(callee, codeptr, recv_class, pc)
     }
 
     fn do_call(

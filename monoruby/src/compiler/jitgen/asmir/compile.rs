@@ -195,6 +195,7 @@ impl Codegen {
             }
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
+            AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
             AsmInst::SetArguments { callid, callee_fid } => {
                 let meta = store[callee_fid].meta();
@@ -315,26 +316,22 @@ impl Codegen {
                 callid,
                 callee_fid,
                 recv_class,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr =
-                    self.send_cached(store, callid, callee_fid, recv_class, using_xmm, error);
+                let return_addr = self.send_cached(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendNotCached {
                 self_class,
                 callid,
                 pc,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr =
-                    self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
+                let return_addr = self.send_not_cached(store, callid, self_class, pc, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::Yield {

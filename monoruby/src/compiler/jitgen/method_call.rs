@@ -206,10 +206,11 @@ impl BBContext {
             callid,
             callee_fid,
             recv_class,
-            using_xmm,
             error,
             evict,
         });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
     }
 
     fn send_not_cached(&self, ir: &mut AsmIr, pc: BytecodePtr, callid: CallSiteId) {
@@ -217,14 +218,16 @@ impl BBContext {
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
         let self_class = self.self_value.class();
+        ir.xmm_save(using_xmm);
         ir.push(AsmInst::SendNotCached {
             self_class,
             callid,
             pc,
-            using_xmm,
             error,
             evict,
         });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
     }
 
     ///

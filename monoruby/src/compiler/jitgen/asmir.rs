@@ -165,6 +165,11 @@ impl AsmIr {
     pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         self.push(AsmInst::XmmSave(using_xmm));
     }
+
+    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmRestore(using_xmm));
+    }
+
     pub(super) fn exec_gc(&mut self, wb: WriteBack) {
         self.push(AsmInst::ExecGc(wb));
     }
@@ -841,6 +846,7 @@ pub(super) enum AsmInst {
     WriteBack(WriteBack),
     HandleError(AsmError),
     XmmSave(UsingXmm),
+    XmmRestore(UsingXmm),
     ExecGc(WriteBack),
     ///
     /// Set arguments.
@@ -891,7 +897,6 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         recv_class: ClassId,
         callee_fid: FuncId,
-        using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },
@@ -906,7 +911,6 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         self_class: ClassId,
         pc: BytecodePtr,
-        using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },
@@ -1294,6 +1298,7 @@ impl AsmInst {
             Self::WriteBack(wb) => format!("write_back {:?}", wb),
             Self::HandleError(error) => format!("handle_error {:?}", error),
             Self::XmmSave(using_xmm) => format!("xmm_save {:?}", using_xmm),
+            Self::XmmRestore(using_xmm) => format!("xmm_restore {:?}", using_xmm),
             Self::ExecGc(wb) => format!("exec_gc {:?}", wb),
             Self::LoadGenericConstant {
                 cached_val,
