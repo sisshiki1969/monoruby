@@ -3,7 +3,7 @@ use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
 use super::*;
-use std::pin::Pin;
+use std::{cell::RefCell, pin::Pin};
 
 mod class;
 mod function;
@@ -11,6 +11,10 @@ mod iseq;
 pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
+
+thread_local! {
+    pub static GLOBAL_METHOD_CACHE: RefCell<GlobalMethodCache> = RefCell::new(GlobalMethodCache::default());
+}
 
 pub struct Store {
     /// function info.
@@ -25,8 +29,6 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
-    /// global method cache.
-    global_method_cache: GlobalMethodCache,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -98,18 +100,11 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
-            global_method_cache: GlobalMethodCache::default(),
         }
     }
 }
 
 impl Store {
-    #[cfg(feature = "profile")]
-    pub(super) fn clear_stats(&mut self) {
-        self.global_method_cache.global_method_cache_stats.clear();
-        self.global_method_cache.method_exprolation_stats.clear();
-    }
-
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()
@@ -305,18 +300,20 @@ impl Store {
     /// Check whether a method *name* of class *class_id* exists.
     ///
     pub(crate) fn check_method_for_class(
-        &mut self,
+        &self,
         class_id: ClassId,
         name: IdentId,
         class_version: u32,
     ) -> Option<MethodTableEntry> {
-        if let Some(entry) = self.global_method_cache.get(class_id, name, class_version) {
-            return entry.cloned();
-        };
-        let entry = self.classes.search_method_by_class_id(class_id, name);
-        self.global_method_cache
-            .insert((name, class_id), class_version, entry.clone());
-        entry
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let mut c = cache.borrow_mut();
+            if let Some(entry) = c.get(class_id, name, class_version) {
+                return entry.cloned();
+            };
+            let entry = self.classes.search_method_by_class_id(class_id, name);
+            c.insert((name, class_id), class_version, entry.clone());
+            entry
+        })
     }
 }
 
@@ -347,42 +344,48 @@ impl Store {
     }
 
     #[cfg(feature = "profile")]
+    pub fn clear_stats(&mut self) {
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            cache.borrow_mut().clear_stats();
+        });
+    }
+
+    #[cfg(feature = "profile")]
     pub(crate) fn show_stats(&self) {
         eprintln!("global method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self
-            .global_method_cache
-            .global_method_cache_stats
-            .iter()
-            .collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.debug_class_name(*class_id),
-                count
-            );
-        }
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let c = cache.borrow();
+            let mut v = c.global_method_cache_stats();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
+
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        let mut v: Vec<_> = self
-            .global_method_cache
-            .method_exprolation_stats
-            .iter()
-            .collect();
-        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-        for ((class_id, name), count) in v.into_iter().take(20) {
-            eprintln!(
-                "{:30} {:30} {:10}",
-                name.to_string(),
-                self.debug_class_name(*class_id),
-                count
-            );
-        }
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let c = cache.borrow();
+            let mut v = c.method_exprolation_stats();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
     }
 }
 
@@ -727,5 +730,21 @@ impl GlobalMethodCache {
         }
         self.version = class_version;
         self.cache.insert(key, entry);
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn clear_stats(&mut self) {
+        self.global_method_cache_stats.clear();
+        self.method_exprolation_stats.clear();
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn global_method_cache_stats(&self) -> Vec<(&(ClassId, IdentId), &usize)> {
+        self.global_method_cache_stats.iter().collect()
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn method_exprolation_stats(&self) -> Vec<(&(ClassId, IdentId), &usize)> {
+        self.method_exprolation_stats.iter().collect()
     }
 }
