@@ -180,16 +180,20 @@ impl AsmIr {
         }
     }
 
-    fn reg_add(&mut self, r: GP, i: i32) {
+    pub(super) fn reg_add(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegAdd(r, i));
     }
 
-    fn reg_sub(&mut self, r: GP, i: i32) {
+    pub(super) fn reg_sub(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegSub(r, i));
     }
 
     pub fn reg2rsp_offset(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegToRSPOffset(r, i));
+    }
+
+    pub fn i32torsp_offset(&mut self, val: i32, i: i32) {
+        self.push(AsmInst::I32ToRSPOffset(val, i));
     }
 
     pub(crate) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
@@ -358,6 +362,25 @@ impl AsmIr {
             }
         }
         self.push(AsmInst::GuardClass(r, class, deopt));
+    }
+
+    pub(crate) fn guard_lhs_class_for_mode(
+        &mut self,
+        bb: &mut BBContext,
+        mode: OpMode,
+        lhs_class: ClassId,
+        deopt: AsmDeopt,
+    ) {
+        match mode {
+            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
+                self.guard_class(bb, lhs, GP::Rdi, lhs_class, deopt);
+            }
+            OpMode::IR(_, _) => {
+                if lhs_class != INTEGER_CLASS {
+                    self.push(AsmInst::Deopt(deopt));
+                }
+            }
+        }
     }
 
     pub(super) fn opt_case(
@@ -735,6 +758,7 @@ pub(super) enum AsmInst {
     RegAdd(GP, i32),
     RegSub(GP, i32),
     RegToRSPOffset(GP, i32),
+    I32ToRSPOffset(i32, i32),
 
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),
@@ -797,6 +821,7 @@ pub(super) enum AsmInst {
     /// - stack
     ///
     GuardClassVersion(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
+    GuardClassVersion2(u32, AsmDeopt),
     ///
     /// Type guard.
     ///
@@ -898,6 +923,11 @@ pub(super) enum AsmInst {
         recv_class: ClassId,
         callee_fid: FuncId,
         error: AsmError,
+        evict: AsmEvict,
+    },
+    BinopCached {
+        recv_class: ClassId,
+        callee_fid: FuncId,
         evict: AsmEvict,
     },
     ///
@@ -1242,6 +1272,7 @@ impl AsmInst {
             Self::RegAdd(gpr, i) => format!("{:?} += {i}", gpr),
             Self::RegSub(gpr, i) => format!("{:?} -= {i}", gpr,),
             Self::RegToRSPOffset(gpr, offset) => format!("RSP[{offset}] = {:?}", gpr),
+            Self::I32ToRSPOffset(i, offset) => format!("RSP[{offset}] = {i}"),
             Self::XmmMove(src, dst) => format!("{:?} = {:?}", dst, src),
             Self::XmmSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
             Self::XmmBinOp {

@@ -61,6 +61,25 @@ impl BBContext {
         }
     }
 
+    pub(crate) fn fetch_rhs_for_callee(&mut self, ir: &mut AsmIr, mode: OpMode, offset: i32) {
+        match mode {
+            OpMode::IR(_, slot) | OpMode::RR(_, slot) => match self.slot(slot) {
+                LinkMode::Accumulator => {
+                    if slot >= self.sp {
+                        unreachable!("{:?} >= {:?} in fetch_for_callee()", slot, self.sp);
+                    };
+                    self[slot].use_as_value();
+                    ir.reg2rsp_offset(GP::R15, offset);
+                }
+                _ => {
+                    self.fetch_for_gpr(ir, slot, GP::Rax);
+                    ir.reg2rsp_offset(GP::Rax, offset);
+                }
+            },
+            OpMode::RI(_, i) => ir.i32torsp_offset(i as i32, offset),
+        }
+    }
+
     pub(crate) fn fetch_array_ty(
         &mut self,
         ir: &mut AsmIr,

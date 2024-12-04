@@ -87,6 +87,11 @@ impl Codegen {
                     movq [rsp + (ofs)], R(r);
                 );
             }
+            AsmInst::I32ToRSPOffset(i, ofs) => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (ofs)], (Value::i32(i).id());
+                );
+            }
 
             AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
             AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
@@ -156,6 +161,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 let error = labels[error];
                 self.guard_class_version(fid, cached_version, callid, using_xmm, deopt, error);
+            }
+            AsmInst::GuardClassVersion2(cached_version, deopt) => {
+                let deopt = labels[deopt];
+                self.guard_class_version2(cached_version, deopt);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -311,6 +320,14 @@ impl Codegen {
             }
             AsmInst::AttrReader { ivar_id } => {
                 self.attr_reader(ivar_id);
+            }
+            AsmInst::BinopCached {
+                callee_fid,
+                recv_class,
+                evict,
+            } => {
+                let return_addr = self.binop_cached(store, callee_fid, recv_class);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendCached {
                 callid,
@@ -754,6 +771,41 @@ impl Codegen {
             movl rax, [rip + global_version];
             movl [rip + cached_version], rax;
             jmp  exit;
+        fail:
+            movq rdi, (Value::symbol_from_str("__version_guard").id());
+            jmp  deopt;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
+    /// Class version guard for JIT.
+    ///
+    /// Check the cached class version.
+    /// If different, jump to `deopt`.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn guard_class_version2(&mut self, cached_version: u32, deopt: DestLabel) {
+        assert_eq!(0, self.jit.get_page());
+        let global_version = self.class_version;
+        let fail = self.jit.label();
+        let cached_version = self.jit.data_i32(cached_version as i32);
+        monoasm! { &mut self.jit,
+            movl rax, [rip + cached_version];
+            cmpl [rip + global_version], rax;
+            jne  fail;
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
         fail:
             movq rdi, (Value::symbol_from_str("__version_guard").id());
             jmp  deopt;

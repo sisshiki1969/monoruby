@@ -349,64 +349,39 @@ impl JitContext {
             } => {
                 bbctx.gen_binop_integer(ir, pc, kind, dst, mode);
             }
-            TraceIr::FBinOp {
-                kind,
-                dst,
-                mode,
-                lhs_class,
-                rhs_class,
-            } => {
-                bbctx.gen_binop_float(ir, pc, kind, mode, lhs_class, rhs_class, dst);
+            TraceIr::FBinOp { kind, info } => {
+                bbctx.gen_binop_float(ir, pc, kind, info);
             }
-            TraceIr::BinOp {
-                kind,
-                dst,
-                mode,
-                lhs_class: recv_class,
-                ..
-            } => {
-                /*let class_version = self.class_version;
+            TraceIr::BinOp { kind, info } => {
+                let recv_class = info.lhs_class;
+                let class_version = self.class_version;
                 if let Some(entry) =
                     store.check_method_for_class(recv_class, kind.to_id(), class_version)
                     && let Some(fid) = entry.func_id()
                 {
-                    return ir.compile_binop_call(
-                        store,
-                        bbctx,
-                        pc,
-                        recv_class,
-                        fid,
-                        mode,
-                        dst,
-                        class_version,
-                    );
-                } else {*/
-                bbctx.gen_binop_generic(ir, pc, kind, mode, dst);
-                //}
+                    return bbctx.compile_binop_call(ir, store, fid, class_version, info, pc);
+                } else {
+                    bbctx.gen_binop_generic(ir, pc, kind, info);
+                }
             }
-            TraceIr::FCmp {
-                kind,
-                dst,
-                mode,
-                lhs_class,
-                rhs_class,
-            } => {
-                bbctx.gen_cmp_float(ir, pc, kind, mode, lhs_class, rhs_class, dst);
+            TraceIr::FCmp { kind, info } => {
+                bbctx.gen_cmp_float(ir, pc, kind, info);
             }
             TraceIr::ICmp { kind, dst, mode } => {
                 bbctx.gen_cmp_integer(ir, pc, kind, mode, dst);
             }
-            TraceIr::Cmp {
-                kind, dst, mode, ..
-            } => {
-                bbctx.gen_cmp_generic(ir, pc, kind, mode, dst);
+            TraceIr::Cmp { kind, info } => {
+                bbctx.gen_cmp_generic(ir, pc, kind, info.mode, info.dst);
             }
             TraceIr::FCmpBr {
                 kind,
-                dst,
-                mode,
-                lhs_class,
-                rhs_class,
+                info:
+                    BinOpInfo {
+                        dst,
+                        mode,
+                        lhs_class,
+                        rhs_class,
+                    },
                 dest,
                 brkind,
             } => {
@@ -439,15 +414,14 @@ impl JitContext {
             }
             TraceIr::CmpBr {
                 kind,
-                dst,
-                mode,
+                info,
                 dest,
                 brkind,
                 ..
             } => {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
-                bbctx.gen_cmpbr_generic(ir, pc, kind, mode, dst, brkind, branch_dest);
+                bbctx.gen_cmpbr_generic(ir, pc, kind, info.mode, info.dst, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
             TraceIr::Mov(dst, src) => {

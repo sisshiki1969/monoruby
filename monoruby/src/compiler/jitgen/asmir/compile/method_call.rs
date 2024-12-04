@@ -280,6 +280,36 @@ impl Codegen {
         self.do_call(callee, codeptr, recv_class, pc)
     }
 
+    ///
+    /// ### in
+    /// rdi: numer of args.
+    ///
+    pub(super) fn binop_cached(
+        &mut self,
+        store: &Store,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+    ) -> CodePtr {
+        let callee = &store[callee_fid];
+        let (meta, codeptr, pc) = callee.get_data();
+        monoasm! { &mut self.jit,
+            subq rsp, 32;
+            // set outer
+            xorq rax, rax;
+            pushq rax;
+            // set meta.
+            movq rax, (meta.get());
+            pushq rax;
+            // set block
+            xorq rax, rax;
+            pushq rax;
+            // set self
+            pushq r13;
+            addq rsp, 64;
+        }
+        self.do_call(callee, codeptr, recv_class, pc)
+    }
+
     fn do_call(
         &mut self,
         callee: &FuncInfo,

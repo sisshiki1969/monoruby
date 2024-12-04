@@ -2,7 +2,7 @@ use bytecodegen::{
     inst::{BrKind, DynVar, FnInitInfo},
     BinOpK, UnOpK,
 };
-use jitgen::trace_ir::{OpMode, TraceIr};
+use jitgen::trace_ir::{BinOpInfo, OpMode, TraceIr};
 use ruruby_parse::CmpKind;
 
 use super::*;
@@ -656,10 +656,12 @@ impl ISeqInfo {
                     if pc.is_float_binop() {
                         TraceIr::FCmp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                         }
                     } else if pc.is_integer_binop() {
                         TraceIr::ICmp { kind, dst, mode }
@@ -668,10 +670,12 @@ impl ISeqInfo {
                     {
                         TraceIr::Cmp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                         }
                     } else {
                         TraceIr::Deoptimize
@@ -686,10 +690,12 @@ impl ISeqInfo {
                     if pc.is_float1() {
                         TraceIr::FCmp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                         }
                     } else if pc.is_integer1() {
                         TraceIr::ICmp { kind, dst, mode }
@@ -698,10 +704,12 @@ impl ISeqInfo {
                     {
                         TraceIr::Cmp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                         }
                     } else {
                         TraceIr::Deoptimize
@@ -734,10 +742,12 @@ impl ISeqInfo {
                     if pc.is_float_binop() {
                         TraceIr::FCmpBr {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                             dest,
                             brkind,
                         }
@@ -754,10 +764,12 @@ impl ISeqInfo {
                     {
                         TraceIr::CmpBr {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                             dest,
                             brkind,
                         }
@@ -778,10 +790,12 @@ impl ISeqInfo {
                     if pc.is_float1() {
                         TraceIr::FCmpBr {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                             dest,
                             brkind,
                         }
@@ -798,10 +812,12 @@ impl ISeqInfo {
                     {
                         TraceIr::CmpBr {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                             dest,
                             brkind,
                         }
@@ -850,20 +866,24 @@ impl ISeqInfo {
                     } else if pc.is_float2() {
                         TraceIr::FBinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                         }
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
                         TraceIr::BinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                         }
                     } else {
                         TraceIr::Deoptimize
@@ -880,20 +900,24 @@ impl ISeqInfo {
                     } else if pc.is_float1() {
                         TraceIr::FBinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                         }
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
                         TraceIr::BinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                         }
                     } else {
                         TraceIr::Deoptimize
@@ -910,20 +934,24 @@ impl ISeqInfo {
                     } else if pc.is_float_binop() {
                         TraceIr::FBinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class: lhs_class.unwrap(),
-                            rhs_class: rhs_class.unwrap(),
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class: lhs_class.unwrap(),
+                                rhs_class: rhs_class.unwrap(),
+                            },
                         }
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
                         TraceIr::BinOp {
                             kind,
-                            dst,
-                            mode,
-                            lhs_class,
-                            rhs_class,
+                            info: BinOpInfo {
+                                dst,
+                                mode,
+                                lhs_class,
+                                rhs_class,
+                            },
                         }
                     } else {
                         TraceIr::Deoptimize

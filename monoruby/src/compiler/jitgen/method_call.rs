@@ -36,6 +36,58 @@ impl BBContext {
         }
     }
 
+    pub(super) fn compile_binop_call(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        fid: FuncId,
+        version: u32,
+        info: BinOpInfo,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        assert!(matches!(
+            store[fid].kind,
+            FuncKind::Builtin { .. } | FuncKind::ISeq(_)
+        ));
+        let BinOpInfo {
+            dst,
+            mode,
+            lhs_class: recv_class,
+            ..
+        } = info;
+        let deopt = ir.new_deopt(self, pc);
+        self.fetch_lhs(ir, mode);
+        ir.guard_lhs_class_for_mode(self, mode, recv_class, deopt);
+        ir.push(AsmInst::GuardClassVersion2(version, deopt));
+
+        let evict = ir.new_evict();
+        ir.reg_move(GP::Rdi, GP::R13);
+        let using_xmm = self.get_using_xmm();
+        ir.xmm_save(using_xmm);
+
+        let ofs = (RSP_LOCAL_FRAME + LFP_ARG0 + 8 as i32 + 8) & !0xf;
+        ir.reg_sub(GP::Rsp, ofs);
+        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
+        self.fetch_rhs_for_callee(ir, mode, offset);
+        ir.reg_add(GP::Rsp, ofs);
+
+        self.unlink(ir, dst);
+        self.clear(ir);
+        let error = ir.new_error(self, pc);
+        self.writeback_acc(ir);
+        ir.push(AsmInst::BinopCached {
+            callee_fid: fid,
+            recv_class,
+            evict,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        self.rax2acc(ir, dst);
+        ir.push(AsmInst::ImmediateEvict { evict });
+        ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
+        CompileResult::Continue
+    }
+
     pub(in crate::compiler::jitgen) fn compile_yield(
         &mut self,
         ir: &mut AsmIr,

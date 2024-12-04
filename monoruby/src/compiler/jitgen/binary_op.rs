@@ -76,12 +76,11 @@ impl BBContext {
         ir: &mut AsmIr,
         pc: BytecodePtr,
         kind: BinOpK,
-        mode: OpMode,
-        dst: Option<SlotId>,
+        info: BinOpInfo,
     ) {
-        self.fetch_binary(ir, mode);
+        self.fetch_binary(ir, info.mode);
         self.generic_binop(ir, pc, kind);
-        self.rax2acc(ir, dst);
+        self.rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmp_integer(
@@ -241,11 +240,14 @@ impl BBContext {
         ir: &mut AsmIr,
         pc: BytecodePtr,
         kind: BinOpK,
-        mode: OpMode,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        dst: Option<SlotId>,
+        info: BinOpInfo,
     ) {
+        let BinOpInfo {
+            dst,
+            mode,
+            lhs_class,
+            rhs_class,
+        } = info;
         let fmode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
         if let Some(dst) = dst {
             let dst = self.xmm_write(ir, dst);
@@ -259,11 +261,14 @@ impl BBContext {
         ir: &mut AsmIr,
         pc: BytecodePtr,
         kind: CmpKind,
-        mode: OpMode,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        dst: Option<SlotId>,
+        info: BinOpInfo,
     ) {
+        let BinOpInfo {
+            dst,
+            mode,
+            lhs_class,
+            rhs_class,
+        } = info;
         if kind != CmpKind::Cmp {
             let mode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
             self.unlink(ir, dst);
@@ -315,6 +320,23 @@ impl BBContext {
             OpMode::IR(lhs, rhs) => {
                 ir.lit2reg(Value::i32(lhs as i32), GP::Rdi);
                 self.fetch_for_gpr(ir, rhs, GP::Rsi);
+            }
+        }
+    }
+
+    ///
+    /// Fetch lhs operands for binary operation according to *mode*.
+    ///
+    /// #### in
+    /// - rdi: lhs
+    ///
+    pub(super) fn fetch_lhs(&mut self, ir: &mut AsmIr, mode: OpMode) {
+        match mode {
+            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
+                self.fetch_for_gpr(ir, lhs, GP::Rdi);
+            }
+            OpMode::IR(lhs, _) => {
+                ir.lit2reg(Value::i32(lhs as i32), GP::Rdi);
             }
         }
     }
