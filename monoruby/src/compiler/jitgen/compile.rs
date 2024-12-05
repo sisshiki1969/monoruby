@@ -371,33 +371,28 @@ impl JitContext {
                 bbctx.gen_cmp_integer(ir, pc, kind, mode, dst);
             }
             TraceIr::Cmp { kind, info } => {
-                bbctx.gen_cmp_generic(ir, pc, kind, info.mode, info.dst);
+                let recv_class = info.lhs_class;
+                let class_version = self.class_version;
+                if let Some(entry) = store.check_method_for_class(
+                    recv_class,
+                    Self::cmpkind_to_id(kind),
+                    class_version,
+                ) && let Some(fid) = entry.func_id()
+                {
+                    return bbctx.compile_binop_call(ir, store, fid, class_version, info, pc);
+                } else {
+                    bbctx.gen_cmp_generic(ir, pc, kind, info);
+                }
             }
             TraceIr::FCmpBr {
                 kind,
-                info:
-                    BinOpInfo {
-                        dst,
-                        mode,
-                        lhs_class,
-                        rhs_class,
-                    },
+                info,
                 dest,
                 brkind,
             } => {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
-                bbctx.gen_cmpbr_float(
-                    ir,
-                    pc,
-                    kind,
-                    mode,
-                    lhs_class,
-                    rhs_class,
-                    dst,
-                    brkind,
-                    branch_dest,
-                );
+                bbctx.gen_cmpbr_float(ir, pc, kind, info, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
             TraceIr::ICmpBr {
@@ -637,6 +632,19 @@ impl JitContext {
             }
         }
         CompileResult::Continue
+    }
+
+    fn cmpkind_to_id(kind: CmpKind) -> IdentId {
+        match kind {
+            CmpKind::Eq => IdentId::_EQ,
+            CmpKind::Ne => IdentId::_NEQ,
+            CmpKind::Lt => IdentId::_LT,
+            CmpKind::Le => IdentId::_LE,
+            CmpKind::Gt => IdentId::_GT,
+            CmpKind::Ge => IdentId::_GE,
+            CmpKind::TEq => IdentId::_TEQ,
+            CmpKind::Cmp => IdentId::_CMP,
+        }
     }
 
     fn compile_branch(

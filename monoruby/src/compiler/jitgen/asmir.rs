@@ -532,6 +532,44 @@ impl AsmIr {
         }
     }
 
+    pub(super) fn set_binop_arguments(
+        &mut self,
+        store: &Store,
+        bb: &mut BBContext,
+        callee_fid: FuncId,
+        mode: OpMode,
+    ) {
+        let callee = &store[callee_fid];
+        // callee.req_num() <= 1 at this point.
+        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
+        let xmm_flag = match mode {
+            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
+                matches!(bb.slot(rhs), LinkMode::Xmm(_))
+            }
+            OpMode::RI(_, _) => false,
+        };
+        let ofs = if xmm_flag || callee.is_rest() {
+            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
+        } else {
+            0
+        };
+
+        self.reg_sub(GP::Rsp, ofs);
+        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
+        bb.fetch_rhs_for_callee(self, mode, offset);
+        if 1 < callee.max_positional_args() {
+            self.push(AsmInst::I32ToReg(0, GP::Rax));
+            for i in 1..callee.max_positional_args() {
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+                self.reg2rsp_offset(GP::Rax, offset);
+            }
+        }
+        if callee.is_rest() {
+            self.push(AsmInst::RSPOffsetToArray(offset));
+        }
+        self.reg_add(GP::Rsp, ofs);
+    }
+
     pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BytecodePtr, func: UnaryOpFn) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
@@ -759,6 +797,7 @@ pub(super) enum AsmInst {
     RegSub(GP, i32),
     RegToRSPOffset(GP, i32),
     I32ToRSPOffset(i32, i32),
+    RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),

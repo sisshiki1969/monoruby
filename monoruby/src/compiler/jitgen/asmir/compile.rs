@@ -87,6 +87,14 @@ impl Codegen {
                     movq [rsp + (ofs)], R(r);
                 );
             }
+            AsmInst::RSPOffsetToArray(ofs) => {
+                monoasm!( &mut self.jit,
+                    movq rdi, [rsp + (ofs)];
+                    movq rax, (to_array);
+                    call rax;
+                    movq [rsp + (ofs)], rax;
+                );
+            }
             AsmInst::I32ToRSPOffset(i, ofs) => {
                 monoasm!( &mut self.jit,
                     movq [rsp + (ofs)], (Value::i32(i).id());
@@ -948,4 +956,8 @@ impl Codegen {
         };
         self.xmm_restore(using_xmm);
     }
+}
+
+extern "C" fn to_array(val: Value) -> Value {
+    Value::array1(val)
 }

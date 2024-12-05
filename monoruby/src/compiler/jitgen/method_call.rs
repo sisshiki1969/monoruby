@@ -49,15 +49,20 @@ impl BBContext {
             store[fid].kind,
             FuncKind::Builtin { .. } | FuncKind::ISeq(_)
         ));
+        let callee = &store[fid];
+        if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
+            ir.deopt(self, pc);
+            return CompileResult::Deopt;
+        }
         let BinOpInfo {
             dst,
             mode,
-            lhs_class: recv_class,
+            lhs_class,
             ..
         } = info;
         let deopt = ir.new_deopt(self, pc);
         self.fetch_lhs(ir, mode);
-        ir.guard_lhs_class_for_mode(self, mode, recv_class, deopt);
+        ir.guard_lhs_class_for_mode(self, mode, lhs_class, deopt);
         ir.push(AsmInst::GuardClassVersion2(version, deopt));
 
         let evict = ir.new_evict();
@@ -65,11 +70,7 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
 
-        let ofs = (RSP_LOCAL_FRAME + LFP_ARG0 + 8 as i32 + 8) & !0xf;
-        ir.reg_sub(GP::Rsp, ofs);
-        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
-        self.fetch_rhs_for_callee(ir, mode, offset);
-        ir.reg_add(GP::Rsp, ofs);
+        ir.set_binop_arguments(store, self, fid, mode);
 
         self.unlink(ir, dst);
         self.clear(ir);
@@ -77,7 +78,7 @@ impl BBContext {
         self.writeback_acc(ir);
         ir.push(AsmInst::BinopCached {
             callee_fid: fid,
-            recv_class,
+            recv_class: lhs_class,
             evict,
         });
         ir.xmm_restore(using_xmm);

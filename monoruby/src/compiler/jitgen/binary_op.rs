@@ -117,12 +117,11 @@ impl BBContext {
         ir: &mut AsmIr,
         pc: BytecodePtr,
         kind: CmpKind,
-        mode: OpMode,
-        dst: Option<SlotId>,
+        info: BinOpInfo,
     ) {
-        self.fetch_binary(ir, mode);
+        self.fetch_binary(ir, info.mode);
         self.generic_cmp(ir, pc, kind);
-        self.rax2acc(ir, dst);
+        self.rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmpbr_generic(
@@ -242,14 +241,8 @@ impl BBContext {
         kind: BinOpK,
         info: BinOpInfo,
     ) {
-        let BinOpInfo {
-            dst,
-            mode,
-            lhs_class,
-            rhs_class,
-        } = info;
-        let fmode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
-        if let Some(dst) = dst {
+        let fmode = self.fmode(ir, info, pc);
+        if let Some(dst) = info.dst {
             let dst = self.xmm_write(ir, dst);
             let using_xmm = self.get_using_xmm();
             ir.xmm_binop(kind, fmode, dst, using_xmm);
@@ -263,23 +256,17 @@ impl BBContext {
         kind: CmpKind,
         info: BinOpInfo,
     ) {
-        let BinOpInfo {
-            dst,
-            mode,
-            lhs_class,
-            rhs_class,
-        } = info;
         if kind != CmpKind::Cmp {
-            let mode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
-            self.unlink(ir, dst);
+            let mode = self.fmode(ir, info, pc);
+            self.unlink(ir, info.dst);
             self.clear(ir);
             ir.push(AsmInst::FloatCmp { kind, mode });
         } else {
-            self.fetch_binary(ir, mode);
-            self.unlink(ir, dst);
+            self.fetch_binary(ir, info.mode);
+            self.unlink(ir, info.dst);
             self.generic_cmp(ir, pc, kind);
         }
-        self.rax2acc(ir, dst);
+        self.rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmpbr_float(
@@ -287,15 +274,12 @@ impl BBContext {
         ir: &mut AsmIr,
         pc: BytecodePtr,
         kind: CmpKind,
-        mode: OpMode,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        dst: Option<SlotId>,
+        info: BinOpInfo,
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        let mode = self.fmode(&mode, ir, lhs_class, rhs_class, pc);
-        self.unlink(ir, dst);
+        let mode = self.fmode(ir, info, pc);
+        self.unlink(ir, info.dst);
         self.clear(ir);
         ir.float_cmp_br(mode, kind, brkind, branch_dest);
     }
@@ -355,35 +339,34 @@ impl BBContext {
         }
     }
 
-    fn fmode(
-        &mut self,
-        mode: &OpMode,
-        ir: &mut AsmIr,
-        lhs_class: ClassId,
-        rhs_class: ClassId,
-        pc: BytecodePtr,
-    ) -> FMode {
+    fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo, pc: BytecodePtr) -> FMode {
         let deopt = ir.new_deopt(self, pc);
+        let BinOpInfo {
+            mode,
+            lhs_class,
+            rhs_class,
+            ..
+        } = info;
         match mode {
             OpMode::RR(l, r) => {
                 let (flhs, frhs) = if l != r {
                     (
-                        self.fetch_float_assume(ir, *l, lhs_class, deopt),
-                        self.fetch_float_assume(ir, *r, rhs_class, deopt),
+                        self.fetch_float_assume(ir, l, lhs_class, deopt),
+                        self.fetch_float_assume(ir, r, rhs_class, deopt),
                     )
                 } else {
-                    let lhs = self.fetch_float_assume(ir, *l, lhs_class, deopt);
+                    let lhs = self.fetch_float_assume(ir, l, lhs_class, deopt);
                     (lhs, lhs)
                 };
                 FMode::RR(flhs, frhs)
             }
             OpMode::RI(l, r) => {
-                let l = self.fetch_float_for_xmm(ir, *l, deopt);
-                FMode::RI(l, *r)
+                let l = self.fetch_float_for_xmm(ir, l, deopt);
+                FMode::RI(l, r)
             }
             OpMode::IR(l, r) => {
-                let r = self.fetch_float_for_xmm(ir, *r, deopt);
-                FMode::IR(*l, r)
+                let r = self.fetch_float_for_xmm(ir, r, deopt);
+                FMode::IR(l, r)
             }
         }
     }

@@ -859,7 +859,7 @@ impl ISeqInfo {
                     let kind = BinOpK::from(opcode - 180);
                     let dst = SlotId::from(op1_w1);
                     let mode = OpMode::IR(op2_w2 as i16, SlotId::new(op3_w3));
-                    let lhs_class = Some(INTEGER_CLASS);
+                    let lhs_class = INTEGER_CLASS;
                     let rhs_class = pc.classid2();
                     if pc.is_integer2() {
                         TraceIr::IBinOp { kind, dst, mode }
@@ -869,13 +869,11 @@ impl ISeqInfo {
                             info: BinOpInfo {
                                 dst,
                                 mode,
-                                lhs_class: lhs_class.unwrap(),
+                                lhs_class,
                                 rhs_class: rhs_class.unwrap(),
                             },
                         }
-                    } else if let Some(lhs_class) = lhs_class
-                        && let Some(rhs_class) = rhs_class
-                    {
+                    } else if let Some(rhs_class) = rhs_class {
                         TraceIr::BinOp {
                             kind,
                             info: BinOpInfo {
@@ -894,7 +892,7 @@ impl ISeqInfo {
                     let dst = SlotId::from(op1_w1);
                     let mode = OpMode::RI(SlotId::new(op2_w2), op3_w3 as i16);
                     let lhs_class = pc.classid1();
-                    let rhs_class = Some(INTEGER_CLASS);
+                    let rhs_class = INTEGER_CLASS;
                     if pc.is_integer1() {
                         TraceIr::IBinOp { kind, dst, mode }
                     } else if pc.is_float1() {
@@ -904,12 +902,10 @@ impl ISeqInfo {
                                 dst,
                                 mode,
                                 lhs_class: lhs_class.unwrap(),
-                                rhs_class: rhs_class.unwrap(),
+                                rhs_class,
                             },
                         }
-                    } else if let Some(lhs_class) = lhs_class
-                        && let Some(rhs_class) = rhs_class
-                    {
+                    } else if let Some(lhs_class) = lhs_class {
                         TraceIr::BinOp {
                             kind,
                             info: BinOpInfo {
