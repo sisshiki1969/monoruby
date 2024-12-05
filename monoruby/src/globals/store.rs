@@ -19,6 +19,8 @@ thread_local! {
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
+    /// ISEQ info.
+    pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
     pub(crate) classes: ClassInfoTable,
     /// call site info.
@@ -41,6 +43,19 @@ impl std::ops::Index<FuncId> for Store {
 impl std::ops::IndexMut<FuncId> for Store {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.functions[index]
+    }
+}
+
+impl std::ops::Index<ISeqId> for Store {
+    type Output = ISeqInfo;
+    fn index(&self, index: ISeqId) -> &ISeqInfo {
+        &self.iseqs[index.get()]
+    }
+}
+
+impl std::ops::IndexMut<ISeqId> for Store {
+    fn index_mut(&mut self, index: ISeqId) -> &mut ISeqInfo {
+        &mut self.iseqs[index.get()]
     }
 }
 
@@ -85,7 +100,7 @@ impl std::ops::Index<OptCaseId> for Store {
 
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.functions.mark(alloc);
+        self.iseqs.iter().for_each(|info| info.mark(alloc));
         self.constsite_info.iter().for_each(|info| info.mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));
     }
@@ -95,12 +110,23 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
+            iseqs: vec![],
             constsite_info: vec![],
             callsite_info: vec![],
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
         }
+    }
+
+    pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
+        let iseq = self[func_id].as_iseq();
+        &self[iseq]
+    }
+
+    pub fn iseq_mut(&mut self, func_id: FuncId) -> &mut ISeqInfo {
+        let iseq = self[func_id].as_iseq();
+        &mut self[iseq]
     }
 }
 
@@ -114,8 +140,14 @@ impl Store {
         self.functions.function_len()
     }
 
+    fn add_iseq(&mut self, info: ISeqInfo) -> ISeqId {
+        let id = self.iseqs.len();
+        self.iseqs.push(info);
+        ISeqId::new(id)
+    }
+
     pub(crate) fn add_main(&mut self, result: ParseResult) -> Result<FuncId> {
-        self.functions.add_method(
+        self.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],
@@ -135,7 +167,27 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_classdef(name, info, loc, sourceinfo)
+        let func_id = self.functions.add_classdef(info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
+        self.functions.info.push(info);
+        Ok(func_id)
+    }
+
+    pub fn add_method(
+        &mut self,
+        name: Option<IdentId>,
+        info: BlockInfo,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let (func_id, params) = self.functions.add_method(info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
+        self.functions.info.push(info);
+        Ok(func_id)
     }
 
     pub(crate) fn add_block(
@@ -148,15 +200,14 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_block(
-            mother,
-            outer,
-            optional_params,
-            is_block_style,
-            info,
-            loc,
-            sourceinfo,
-        )
+        let (func_id, params) =
+            self.functions
+                .add_block(optional_params, info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);
+        self.functions.info.push(info);
+        Ok(func_id)
     }
 
     pub(crate) fn add_eval(
@@ -172,8 +223,7 @@ impl Store {
             lvar: LvarCollector::new(),
             loc,
         };
-        self.functions
-            .add_block(mother, outer, vec![], false, info, loc, result.source_info)
+        self.add_block(mother, outer, vec![], false, info, loc, result.source_info)
     }
 
     pub(super) fn add_builtin_func(
@@ -290,7 +340,7 @@ impl Store {
     }
 
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
-        let info = self[func_id].as_ruby_func();
+        let info = self.iseq(func_id);
         let regs = info.total_reg_num();
         let pc = info.get_top_pc();
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());

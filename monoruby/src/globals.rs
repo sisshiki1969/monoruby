@@ -243,6 +243,13 @@ impl Globals {
         Globals::new(1, false, true)
     }
 
+    pub fn locals_len(&self, func_id: FuncId) -> usize {
+        match self[func_id].kind {
+            FuncKind::ISeq(info) => self.store[info].locals.len(),
+            _ => 0,
+        }
+    }
+
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
         let code = code.into();
         let mut executor = Executor::init(self);
@@ -276,11 +283,11 @@ impl Globals {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
         let mut ex_scope = IndexMap::default();
-        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+        for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
         let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(res) => {
@@ -310,15 +317,15 @@ impl Globals {
         let (lfp, outer) = binding.outer_lfp().outermost_lfp_depth();
         let mother = (lfp.meta().func_id(), outer);
         let mut ex_scope = IndexMap::default();
-        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+        for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
         let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
 
         let context = if let Some(fid) = binding.func_id() {
             let mut lvar = LvarCollector::new();
-            for (name, _) in &self[fid].as_ruby_func().locals {
+            for (name, _) in &self.store.iseq(fid).locals {
                 lvar.insert(&name.get_name());
             }
             Some(lvar)
@@ -409,7 +416,7 @@ impl Globals {
         let mut lfp = Lfp::heap_frame(self_val, meta);
         lfp.set_outer(Some(binding.outer_lfp()));
         if let Some(binding_lfp) = binding.binding() {
-            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            let locals_len = self.locals_len(binding_lfp.meta().func_id());
             for i in 1..1 + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
@@ -433,7 +440,7 @@ impl Globals {
         let mut lfp = Lfp::heap_frame(self_val, meta);
         if let Some(binding_lfp) = binding_lfp {
             lfp.set_outer(binding_lfp.outer());
-            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            let locals_len = self.locals_len(binding_lfp.meta().func_id());
             for i in 1..1 + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
@@ -462,19 +469,20 @@ impl Globals {
 
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
         let source_func_id = executor.cfp().get_source_pos();
-        &self[source_func_id].as_ruby_func().sourceinfo.path
+        &self.store.iseq(source_func_id).sourceinfo.path
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
-        if let Some(func) = info.is_ruby_func() {
-            let mother = func.mother.0;
+        if let Some(iseq) = info.is_iseq() {
+            let iseq = &self.store[iseq];
+            let mother = iseq.mother.0;
             if mother != func_id {
                 format!("block in {}", self.func_description(mother))
             } else {
                 match info.owner_class() {
-                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), func.name()),
-                    None => func.name().to_string(),
+                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), iseq.name()),
+                    None => iseq.name().to_string(),
                 }
             }
         } else {

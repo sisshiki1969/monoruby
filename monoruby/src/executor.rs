@@ -525,7 +525,7 @@ impl Executor {
     ///
     fn get_parent(&self, globals: &Globals) -> Result<Module> {
         let fid = self.cfp().method_func_id();
-        let parent = globals.store[fid].as_ruby_func().lexical_context.last();
+        let parent = globals.store.iseq(fid).lexical_context.last();
         match parent {
             Some(parent) => Ok(*parent),
             None => Err(MonorubyErr::runtimeerr(
@@ -548,9 +548,9 @@ impl Executor {
             visibility,
         } = self.get_class_context();
         let current_func = self.method_func_id();
-        if globals[func].is_ruby_func().is_some() {
-            globals[func].as_ruby_func_mut().lexical_context =
-                globals[current_func].as_ruby_func().lexical_context.clone();
+        if let Some(iseq) = globals[func].is_iseq() {
+            globals.store[iseq].lexical_context =
+                globals.store.iseq(current_func).lexical_context.clone();
             globals.add_method(class_id, name, func, visibility);
             if module_function {
                 globals.add_singleton_method(class_id, name, func, visibility);

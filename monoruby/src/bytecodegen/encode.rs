@@ -44,7 +44,7 @@ impl BytecodeGen {
             } in src
             {
                 if dst_sp != src_sp {
-                    let name = store[self.id].as_ruby_func().name();
+                    let name = store.iseq(self.id).name();
                     eprintln!(
                         "warning: sp mismatch: {name} {:?}:{:?} <- {:?}:{:?}",
                         dst_idx, dst_sp, src_idx, src_sp
@@ -55,7 +55,7 @@ impl BytecodeGen {
         }
 
         let (ops, sourcemap, bbinfo) = self.ir_to_bc(store)?;
-        let info = store[func_id].as_ruby_func_mut();
+        let info = store.iseq_mut(func_id);
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
@@ -697,9 +697,7 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method { name, info } => {
-                store.functions.add_method(name, info, loc, sourceinfo)
-            }
+            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
             Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,

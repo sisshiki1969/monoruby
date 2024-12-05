@@ -65,9 +65,9 @@ fn bytecode_compile_func(
         optional_info,
         loc,
     } = store.functions.get_compile_info();
-    let info = store[func_id].as_ruby_func();
+    let info = store.iseq(func_id);
     let (fid, outer) = info.mother;
-    let params = store[fid].as_ruby_func().args.clone();
+    let params = store.iseq(fid).args.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {

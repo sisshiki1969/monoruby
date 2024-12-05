@@ -35,6 +35,29 @@ impl ExceptionMapEntry {
 }
 
 ///
+/// ID of ISEQ.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct ISeqId(usize);
+
+impl From<ISeqId> for usize {
+    fn from(id: ISeqId) -> usize {
+        id.0
+    }
+}
+
+impl ISeqId {
+    pub const fn new(id: usize) -> Self {
+        Self(id)
+    }
+
+    pub fn get(&self) -> usize {
+        self.0
+    }
+}
+
+///
 /// Information of instruction sequences.
 ///
 #[derive(Clone)]

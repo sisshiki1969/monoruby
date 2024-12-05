@@ -628,7 +628,7 @@ impl Codegen {
 
         self.jit.bind_label(entry_label);
 
-        let func = store[func_id].as_ruby_func();
+        let func = store.iseq(func_id);
         let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
