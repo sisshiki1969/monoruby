@@ -333,12 +333,6 @@ fn yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     vm.yield_fiber(globals, lfp.arg(0))
 }
 
-impl alloc::GC<RValue> for Funcs {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.info.iter().for_each(|info| info.mark(alloc))
-    }
-}
-
 impl Funcs {
     pub(super) fn functions(&self) -> &[FuncInfo] {
         &self.info
@@ -352,56 +346,37 @@ impl Funcs {
         self.compile_info.remove(0)
     }
 
-    pub fn add_method(
+    pub(super) fn add_method(
         &mut self,
-        name: Option<IdentId>,
         info: BlockInfo,
-        loc: Loc,
         sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, ParamsInfo)> {
         let (params_info, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
-        Ok(self.add_method_iseq(name, params_info, loc, sourceinfo))
+        let func_id = self.next_func_id();
+        Ok((func_id, params_info))
     }
 
     pub(super) fn add_block(
         &mut self,
-        mother: (FuncId, usize),
-        outer: (FuncId, ExternalContext),
         for_params: Vec<(usize, BcLocal, IdentId)>,
-        is_block_style: bool,
         info: BlockInfo,
-        loc: Loc,
         sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, ParamsInfo)> {
         let (params_info, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_block_iseq(
-            func_id,
-            mother,
-            outer,
-            params_info,
-            is_block_style,
-            loc,
-            sourceinfo,
-        );
-        self.info.push(info);
-        Ok(func_id)
+        Ok((func_id, params_info))
     }
 
     pub(super) fn add_classdef(
         &mut self,
-        name: Option<IdentId>,
         info: BlockInfo,
-        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let (_, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_classdef_iseq(name, func_id, loc, sourceinfo);
-        self.info.push(info);
         Ok(func_id)
     }
 
@@ -462,19 +437,6 @@ impl Funcs {
         let info = FuncInfo::new_attr_writer(id, name, ivar_name);
         self.info.push(info);
         id
-    }
-
-    fn add_method_iseq(
-        &mut self,
-        name: Option<IdentId>,
-        params_info: ParamsInfo,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> FuncId {
-        let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, func_id, params_info, loc, sourceinfo);
-        self.info.push(info);
-        func_id
     }
 
     fn next_func_id(&self) -> FuncId {
@@ -604,18 +566,10 @@ impl Funcs {
 
 #[derive(Debug, Clone)]
 pub(crate) enum FuncKind {
-    ISeq(Box<ISeqInfo>),
+    ISeq(ISeqId),
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
-}
-
-impl alloc::GC<RValue> for FuncKind {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let FuncKind::ISeq(info) = self {
-            info.mark(alloc)
-        }
-    }
 }
 
 impl std::default::Default for FuncKind {
@@ -648,12 +602,6 @@ pub struct FuncInfo {
     data: FuncData,
     pub(crate) kind: FuncKind,
     ext: Box<FuncExt>,
-}
-
-impl alloc::GC<RValue> for FuncInfo {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.kind.mark(alloc);
-    }
 }
 
 impl FuncInfo {
@@ -691,51 +639,39 @@ impl FuncInfo {
         }
     }
 
-    fn new_method_iseq(
+    pub(super) fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
         func_id: FuncId,
+        iseq: ISeqId,
         params: ParamsInfo,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
         Self::new(
             name,
-            FuncKind::ISeq(Box::new(info)),
+            FuncKind::ISeq(iseq),
             Meta::vm_method(func_id, 0, false, params.is_simple()),
             params,
         )
     }
 
-    fn new_block_iseq(
+    pub(super) fn new_block_iseq(
         func_id: FuncId,
-        mother: (FuncId, usize),
-        outer: (FuncId, ExternalContext),
+        iseq: ISeqId,
         params: ParamsInfo,
         is_block_style: bool,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
         Self::new(
             None,
-            FuncKind::ISeq(Box::new(info)),
+            FuncKind::ISeq(iseq),
             Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
             params,
         )
     }
 
-    fn new_classdef_iseq(
-        name: Option<IdentId>,
-        func_id: FuncId,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> Self {
-        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+    pub(super) fn new_classdef_iseq(name: Option<IdentId>, func_id: FuncId, iseq: ISeqId) -> Self {
         Self::new(
             name,
-            FuncKind::ISeq(Box::new(info)),
+            FuncKind::ISeq(iseq),
             Meta::vm_classdef(func_id, 0),
             ParamsInfo::default(),
         )
@@ -902,13 +838,6 @@ impl FuncInfo {
         self.ext.params.total_args()
     }
 
-    pub fn locals_len(&self) -> usize {
-        match self.kind {
-            FuncKind::ISeq(ref info) => info.locals.len(),
-            _ => 0,
-        }
-    }
-
     pub(crate) fn is_native(&self) -> bool {
         self.meta().is_native()
     }
@@ -974,23 +903,16 @@ impl FuncInfo {
         (meta, codeptr, pc)
     }
 
-    pub fn as_ruby_func(&self) -> &ISeqInfo {
+    pub fn as_iseq(&self) -> ISeqId {
         match &self.kind {
-            FuncKind::ISeq(info) => info,
+            FuncKind::ISeq(info) => *info,
             _ => unreachable!(),
         }
     }
 
-    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
-        match &mut self.kind {
-            FuncKind::ISeq(info) => info,
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn is_ruby_func(&self) -> Option<&ISeqInfo> {
+    pub(crate) fn is_iseq(&self) -> Option<ISeqId> {
         match &self.kind {
-            FuncKind::ISeq(info) => Some(info),
+            FuncKind::ISeq(info) => Some(*info),
             _ => None,
         }
     }
@@ -1009,41 +931,5 @@ impl FuncInfo {
 
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.ext.jit_entry.clear();
-    }
-}
-
-impl FuncInfo {
-    #[cfg(feature = "emit-bc")]
-    pub(crate) fn dump_bc(&self, globals: &Globals) {
-        use bytecodegen::BcIndex;
-
-        let func = self.as_ruby_func();
-        eprintln!("------------------------------------");
-        let loc = func.loc;
-        let line = func.sourceinfo.get_line(&loc);
-        let file_name = func.sourceinfo.file_name();
-        eprintln!(
-            "<{}> {file_name}:{line}",
-            globals.func_description(func.id()),
-        );
-        eprintln!(
-            "{:?} local_vars:{} temp:{}",
-            self.data.meta,
-            func.local_num(),
-            func.temp_num
-        );
-        eprintln!("{:?}", func.args);
-        eprintln!("{:?}", func.get_exception_map());
-        for i in 0..func.bytecode().len() {
-            let bc_pos = BcIndex::from(i);
-            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
-                eprintln!("{:?}", bbid);
-            };
-            let trace_ir = func.trace_ir(&globals.store, bc_pos);
-            if let Some(fmt) = trace_ir.format(&globals.store) {
-                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
-            };
-        }
-        eprintln!("------------------------------------");
     }
 }

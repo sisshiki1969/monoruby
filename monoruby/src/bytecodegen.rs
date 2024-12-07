@@ -65,9 +65,9 @@ fn bytecode_compile_func(
         optional_info,
         loc,
     } = store.functions.get_compile_info();
-    let info = store[func_id].as_ruby_func();
-    let (fid, outer) = info.mother;
-    let params = store[fid].as_ruby_func().args.clone();
+    let info = store.iseq(func_id);
+    let (fid, outer) = info.mother();
+    let params = store.iseq(fid).args.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
@@ -535,7 +535,7 @@ impl BytecodeGen {
         binding: Option<LvarCollector>,
     ) -> Self {
         let mut ir = Self {
-            id: info.id(),
+            id: info.func_id(),
             mother,
             ir: vec![],
             sp: vec![],
@@ -1554,6 +1554,20 @@ impl BinOpK {
             BinOpK::BitXor => bitxor_values,
             BinOpK::Rem => rem_values,
             BinOpK::Exp => pow_values,
+        }
+    }
+
+    pub(crate) fn to_id(&self) -> IdentId {
+        match self {
+            BinOpK::Add => IdentId::_ADD,
+            BinOpK::Sub => IdentId::_SUB,
+            BinOpK::Mul => IdentId::_MUL,
+            BinOpK::Div => IdentId::_DIV,
+            BinOpK::BitOr => IdentId::_BOR,
+            BinOpK::BitAnd => IdentId::_BAND,
+            BinOpK::BitXor => IdentId::_BXOR,
+            BinOpK::Rem => IdentId::_REM,
+            BinOpK::Exp => IdentId::_POW,
         }
     }
 }

@@ -49,11 +49,45 @@ impl Globals {
             self.store.functions()[dumped_bc..]
                 .iter()
                 .for_each(|info| match &info.kind {
-                    FuncKind::ISeq(_) => info.dump_bc(self),
+                    FuncKind::ISeq(iseq) => self.dump_iseq(*iseq),
                     _ => {}
                 });
         }
         self.dumped_bc = self.store.func_len();
+    }
+
+    #[cfg(feature = "emit-bc")]
+    fn dump_iseq(&self, iseq: ISeqId) {
+        use bytecodegen::BcIndex;
+
+        let func = &self.store[iseq];
+        eprintln!("------------------------------------");
+        let loc = func.loc;
+        let line = func.sourceinfo.get_line(&loc);
+        let file_name = func.sourceinfo.file_name();
+        eprintln!(
+            "<{}> {file_name}:{line}",
+            self.func_description(func.func_id()),
+        );
+        eprintln!(
+            "{:?} local_vars:{} temp:{}",
+            self[func.func_id()].meta(),
+            func.local_num(),
+            func.temp_num
+        );
+        eprintln!("{:?}", func.args);
+        eprintln!("{:?}", func.get_exception_map());
+        for i in 0..func.bytecode().len() {
+            let bc_pos = BcIndex::from(i);
+            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
+                eprintln!("{:?}", bbid);
+            };
+            let trace_ir = func.trace_ir(&self.store, bc_pos);
+            if let Some(fmt) = trace_ir.format(&self.store) {
+                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
+            };
+        }
+        eprintln!("------------------------------------");
     }
 
     #[cfg(feature = "emit-asm")]
@@ -87,7 +121,7 @@ impl Globals {
                 )
             })
             .collect();
-        let func = self[func_id].as_ruby_func();
+        let func = self.store.iseq(func_id);
         for (i, text) in dump {
             sourcemap
                 .iter()
@@ -128,7 +162,7 @@ impl Globals {
             let mut v: Vec<_> = self.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, bc_pos), count) in v.into_iter().take(20) {
-                let func = self.store[*func_id].as_ruby_func();
+                let func = self.store.iseq(*func_id);
                 let fmt = if let Some(fmt) = func.trace_ir(&self.store, *bc_pos).format(&self.store)
                 {
                     fmt
@@ -145,33 +179,7 @@ impl Globals {
                 );
             }
             eprintln!();
-            eprintln!("global method cache stats (top 20)");
-            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-            eprintln!("------------------------------------------------------------------------");
-            let mut v: Vec<_> = self.global_method_cache_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.store.debug_class_name(*class_id),
-                    count
-                );
-            }
-            eprintln!();
-            eprintln!("full method exploration stats (top 20)");
-            eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
-            eprintln!("------------------------------------------------------------------------");
-            let mut v: Vec<_> = self.method_exploration_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v.into_iter().take(20) {
-                eprintln!(
-                    "{:30} {:30} {:10}",
-                    name.to_string(),
-                    self.store.debug_class_name(*class_id),
-                    count
-                );
-            }
+            self.store.show_stats();
             eprintln!();
             eprintln!("jit class guard failed stats (top 20)");
             eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
@@ -207,7 +215,7 @@ pub(crate) extern "C" fn log_deoptimize(
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
-    let func = globals[func_id].as_ruby_func();
+    let func = globals.store.iseq(func_id);
     let bc_pos = func.get_pc_index(Some(pc));
     let trace_ir = func.trace_ir(&globals.store, bc_pos);
 

@@ -87,6 +87,19 @@ impl Codegen {
                     movq [rsp + (ofs)], R(r);
                 );
             }
+            AsmInst::RSPOffsetToArray(ofs) => {
+                monoasm!( &mut self.jit,
+                    movq rdi, [rsp + (ofs)];
+                    movq rax, (to_array);
+                    call rax;
+                    movq [rsp + (ofs)], rax;
+                );
+            }
+            AsmInst::I32ToRSPOffset(i, ofs) => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (ofs)], (Value::i32(i).id());
+                );
+            }
 
             AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
             AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
@@ -157,6 +170,10 @@ impl Codegen {
                 let error = labels[error];
                 self.guard_class_version(fid, cached_version, callid, using_xmm, deopt, error);
             }
+            AsmInst::GuardClassVersion2(cached_version, deopt) => {
+                let deopt = labels[deopt];
+                self.guard_class_version2(cached_version, deopt);
+            }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
                 self.guard_class(r, class, deopt);
@@ -195,6 +212,7 @@ impl Codegen {
             }
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
+            AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
             AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
             AsmInst::SetArguments { callid, callee_fid } => {
                 let meta = store[callee_fid].meta();
@@ -311,30 +329,34 @@ impl Codegen {
             AsmInst::AttrReader { ivar_id } => {
                 self.attr_reader(ivar_id);
             }
+            AsmInst::BinopCached {
+                callee_fid,
+                recv_class,
+                evict,
+            } => {
+                let return_addr = self.binop_cached(store, callee_fid, recv_class);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+            }
             AsmInst::SendCached {
                 callid,
                 callee_fid,
                 recv_class,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr =
-                    self.send_cached(store, callid, callee_fid, recv_class, using_xmm, error);
+                let return_addr = self.send_cached(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendNotCached {
                 self_class,
                 callid,
                 pc,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr =
-                    self.send_not_cached(store, callid, self_class, pc, using_xmm, error);
+                let return_addr = self.send_not_cached(store, callid, self_class, pc, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::Yield {
@@ -765,6 +787,41 @@ impl Codegen {
     }
 
     ///
+    /// Class version guard for JIT.
+    ///
+    /// Check the cached class version.
+    /// If different, jump to `deopt`.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    ///
+    /// ### out
+    /// - rdi: receiver: Value
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn guard_class_version2(&mut self, cached_version: u32, deopt: DestLabel) {
+        assert_eq!(0, self.jit.get_page());
+        let global_version = self.class_version;
+        let fail = self.jit.label();
+        let cached_version = self.jit.data_i32(cached_version as i32);
+        monoasm! { &mut self.jit,
+            movl rax, [rip + cached_version];
+            cmpl [rip + global_version], rax;
+            jne  fail;
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        fail:
+            movq rdi, (Value::symbol_from_str("__version_guard").id());
+            jmp  deopt;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
     /// Get method lfp.
     ///
     /// ### in
@@ -899,4 +956,8 @@ impl Codegen {
         };
         self.xmm_restore(using_xmm);
     }
+}
+
+extern "C" fn to_array(val: Value) -> Value {
+    Value::array1(val)
 }

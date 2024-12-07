@@ -421,19 +421,23 @@ fn array_shl(
     bb: &mut BBContext,
     callid: CallSiteId,
     _pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { dst, args, .. } = store[callid];
-    ir.fetch_for_gpr(bb, args, GP::Rsi);
+    bb.fetch_for_gpr(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |gen, _| {
-        gen.xmm_save(using_xmm);
         monoasm!( &mut gen.jit,
             movq rax, (ary_shl);
             call rax;
         );
-        gen.xmm_restore(using_xmm);
     });
-    ir.reg2acc_array_ty(bb, GP::Rax, dst);
+    ir.xmm_restore(using_xmm);
+    bb.reg2acc_array_ty(ir, GP::Rax, dst);
+    true
 }
 
 ///

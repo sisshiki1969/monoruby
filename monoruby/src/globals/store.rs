@@ -3,7 +3,7 @@ use monoasm::DestLabel;
 use ruruby_parse::{LvarCollector, ParseResult};
 
 use super::*;
-use std::pin::Pin;
+use std::{cell::RefCell, pin::Pin};
 
 mod class;
 mod function;
@@ -12,51 +12,15 @@ pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
 
-pub(crate) struct ClassInfoTable {
-    table: Vec<ClassInfo>,
-}
-
-impl std::ops::Index<ClassId> for ClassInfoTable {
-    type Output = ClassInfo;
-    fn index(&self, index: ClassId) -> &Self::Output {
-        &self.table[index.u32() as usize]
-    }
-}
-
-impl std::ops::IndexMut<ClassId> for ClassInfoTable {
-    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.table[index.u32() as usize]
-    }
-}
-
-impl ClassInfoTable {
-    pub(crate) fn new() -> Self {
-        Self {
-            table: vec![ClassInfo::new(); 40],
-        }
-    }
-
-    pub(super) fn add_class(&mut self) -> ClassId {
-        let id = self.table.len();
-        self.table.push(ClassInfo::new());
-        ClassId::new(id as u32)
-    }
-
-    pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
-        let id = self.table.len();
-        let info = self[original_class].copy();
-        self.table.push(info);
-        ClassId::new(id as u32)
-    }
-
-    pub(super) fn def_builtin_class(&mut self, class: ClassId) {
-        self[class] = ClassInfo::new();
-    }
+thread_local! {
+    pub static GLOBAL_METHOD_CACHE: RefCell<GlobalMethodCache> = RefCell::new(GlobalMethodCache::default());
 }
 
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
+    /// ISEQ info.
+    pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
     pub(crate) classes: ClassInfoTable,
     /// call site info.
@@ -79,6 +43,19 @@ impl std::ops::Index<FuncId> for Store {
 impl std::ops::IndexMut<FuncId> for Store {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.functions[index]
+    }
+}
+
+impl std::ops::Index<ISeqId> for Store {
+    type Output = ISeqInfo;
+    fn index(&self, index: ISeqId) -> &ISeqInfo {
+        &self.iseqs[index.get()]
+    }
+}
+
+impl std::ops::IndexMut<ISeqId> for Store {
+    fn index_mut(&mut self, index: ISeqId) -> &mut ISeqInfo {
+        &mut self.iseqs[index.get()]
     }
 }
 
@@ -123,7 +100,7 @@ impl std::ops::Index<OptCaseId> for Store {
 
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.functions.mark(alloc);
+        self.iseqs.iter().for_each(|info| info.mark(alloc));
         self.constsite_info.iter().for_each(|info| info.mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));
     }
@@ -133,12 +110,23 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
+            iseqs: vec![],
             constsite_info: vec![],
             callsite_info: vec![],
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
         }
+    }
+
+    pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
+        let iseq = self[func_id].as_iseq();
+        &self[iseq]
+    }
+
+    pub fn iseq_mut(&mut self, func_id: FuncId) -> &mut ISeqInfo {
+        let iseq = self[func_id].as_iseq();
+        &mut self[iseq]
     }
 }
 
@@ -152,8 +140,14 @@ impl Store {
         self.functions.function_len()
     }
 
+    fn add_iseq(&mut self, info: ISeqInfo) -> ISeqId {
+        let id = self.iseqs.len();
+        self.iseqs.push(info);
+        ISeqId::new(id)
+    }
+
     pub(crate) fn add_main(&mut self, result: ParseResult) -> Result<FuncId> {
-        self.functions.add_method(
+        self.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],
@@ -173,7 +167,27 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_classdef(name, info, loc, sourceinfo)
+        let func_id = self.functions.add_classdef(info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
+        self.functions.info.push(info);
+        Ok(func_id)
+    }
+
+    pub fn add_method(
+        &mut self,
+        name: Option<IdentId>,
+        info: BlockInfo,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let (func_id, params) = self.functions.add_method(info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
+        self.functions.info.push(info);
+        Ok(func_id)
     }
 
     pub(crate) fn add_block(
@@ -186,15 +200,14 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_block(
-            mother,
-            outer,
-            optional_params,
-            is_block_style,
-            info,
-            loc,
-            sourceinfo,
-        )
+        let (func_id, params) =
+            self.functions
+                .add_block(optional_params, info, sourceinfo.clone())?;
+        let iseq = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(iseq);
+        let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);
+        self.functions.info.push(info);
+        Ok(func_id)
     }
 
     pub(crate) fn add_eval(
@@ -210,8 +223,7 @@ impl Store {
             lvar: LvarCollector::new(),
             loc,
         };
-        self.functions
-            .add_block(mother, outer, vec![], false, info, loc, result.source_info)
+        self.add_block(mother, outer, vec![], false, info, loc, result.source_info)
     }
 
     pub(super) fn add_builtin_func(
@@ -328,10 +340,30 @@ impl Store {
     }
 
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
-        let info = self[func_id].as_ruby_func();
+        let info = self.iseq(func_id);
         let regs = info.total_reg_num();
         let pc = info.get_top_pc();
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(crate) fn check_method_for_class(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<MethodTableEntry> {
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let mut c = cache.borrow_mut();
+            if let Some(entry) = c.get(class_id, name, class_version) {
+                return entry.cloned();
+            };
+            let entry = self.classes.search_method_by_class_id(class_id, name);
+            c.insert((name, class_id), class_version, entry.clone());
+            entry
+        })
     }
 }
 
@@ -359,6 +391,102 @@ impl Store {
         } else {
             "<INVALID>".to_string()
         }
+    }
+
+    #[cfg(feature = "profile")]
+    pub fn clear_stats(&mut self) {
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            cache.borrow_mut().clear_stats();
+        });
+    }
+
+    #[cfg(feature = "profile")]
+    pub(crate) fn show_stats(&self) {
+        eprintln!("global method cache stats (top 20)");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let c = cache.borrow();
+            let mut v = c.global_method_cache_stats();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
+
+        eprintln!();
+        eprintln!("full method exploration stats (top 20)");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("------------------------------------------------------------------------");
+        GLOBAL_METHOD_CACHE.with(|cache| {
+            let c = cache.borrow();
+            let mut v = c.method_exprolation_stats();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "{:30} {:30} {:10}",
+                    name.to_string(),
+                    self.debug_class_name(*class_id),
+                    count
+                );
+            }
+        });
+    }
+}
+
+pub(crate) struct ClassInfoTable {
+    table: Vec<ClassInfo>,
+}
+
+impl std::ops::Index<ClassId> for ClassInfoTable {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &Self::Output {
+        &self.table[index.u32() as usize]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for ClassInfoTable {
+    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
+        &mut self.table[index.u32() as usize]
+    }
+}
+
+impl ClassInfoTable {
+    fn new() -> Self {
+        Self {
+            table: vec![ClassInfo::new(); 40],
+        }
+    }
+
+    fn add_class(&mut self) -> ClassId {
+        let id = self.table.len();
+        self.table.push(ClassInfo::new());
+        ClassId::new(id as u32)
+    }
+
+    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+        let id = self.table.len();
+        let info = self[original_class].copy();
+        self.table.push(info);
+        ClassId::new(id as u32)
+    }
+
+    fn def_builtin_class(&mut self, class: ClassId) {
+        self[class] = ClassInfo::new();
+    }
+
+    pub(crate) fn search_method_by_class_id(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let module = self[class_id].get_module();
+        self.search_method(module, name)
     }
 }
 
@@ -491,7 +619,7 @@ impl CallSiteInfo {
         self.kw_len() == 0 && !self.has_splat() && self.block_arg.is_none()
     }
 
-    pub fn object_send_single_splat(&self) -> bool {
+    pub(crate) fn object_send_single_splat(&self) -> bool {
         self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 
@@ -596,5 +724,77 @@ impl std::convert::From<u32> for OptCaseId {
 impl OptCaseId {
     pub fn get(&self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Default)]
+struct GlobalMethodCache {
+    version: u32,
+    cache: HashMap<(IdentId, ClassId), Option<MethodTableEntry>>,
+    #[cfg(feature = "profile")]
+    /// Stats for global method cache access.
+    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    #[cfg(feature = "profile")]
+    /// Stats for method cache miss.
+    method_exprolation_stats: HashMap<(ClassId, IdentId), usize>,
+}
+
+impl GlobalMethodCache {
+    fn get(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        class_version: u32,
+    ) -> Option<Option<&MethodTableEntry>> {
+        #[cfg(feature = "profile")]
+        {
+            match self.global_method_cache_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.global_method_cache_stats.insert((class_id, name), 1);
+                }
+            }
+        }
+        if self.version != class_version {
+            self.cache.clear();
+            self.version = class_version;
+            return None;
+        }
+        self.cache.get(&(name, class_id)).map(|e| e.as_ref())
+    }
+
+    fn insert(
+        &mut self,
+        key: (IdentId, ClassId),
+        class_version: u32,
+        entry: Option<MethodTableEntry>,
+    ) {
+        #[cfg(feature = "profile")]
+        {
+            match self.method_exprolation_stats.get_mut(&(key.1, key.0)) {
+                Some(c) => *c += 1,
+                None => {
+                    self.method_exprolation_stats.insert((key.1, key.0), 1);
+                }
+            }
+        }
+        self.version = class_version;
+        self.cache.insert(key, entry);
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn clear_stats(&mut self) {
+        self.global_method_cache_stats.clear();
+        self.method_exprolation_stats.clear();
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn global_method_cache_stats(&self) -> Vec<(&(ClassId, IdentId), &usize)> {
+        self.global_method_cache_stats.iter().collect()
+    }
+
+    #[cfg(feature = "profile")]
+    pub(super) fn method_exprolation_stats(&self) -> Vec<(&(ClassId, IdentId), &usize)> {
+        self.method_exprolation_stats.iter().collect()
     }
 }

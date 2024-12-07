@@ -13,13 +13,12 @@ pub(super) fn init(globals: &mut Globals) {
 fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let binding = self_val.as_binding_inner();
-    let v = if let Some(fid) = binding.func_id() {
-        globals[fid].as_ruby_func().local_variables()
+    let fid = if let Some(fid) = binding.func_id() {
+        fid
     } else {
-        globals[binding.outer_lfp().meta().func_id()]
-            .as_ruby_func()
-            .local_variables()
+        binding.outer_lfp().meta().func_id()
     };
+    let v = globals.store.iseq(fid).local_variables();
     Ok(Value::array_from_vec(v))
 }
 

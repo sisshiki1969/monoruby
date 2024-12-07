@@ -59,16 +59,19 @@ fn fiber_yield_inline(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let callsite = &store[callid];
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
-    ir.write_back_callargs_and_dst(bb, callsite);
-    let using = bb.get_using_xmm();
+    bb.write_back_callargs_and_dst(ir, callsite);
+    let using_xmm = bb.get_using_xmm();
     let error = ir.new_error(bb, pc);
-    ir.inline(move |gen, labels| {
-        let error = labels[error];
+    ir.xmm_save(using_xmm);
+    ir.inline(move |gen, _| {
         let fiber_yield = gen.yield_fiber;
         // TODO: we must check if the parent fiber exits.
 
@@ -90,16 +93,16 @@ fn fiber_yield_inline(
             }
         }
 
-        gen.xmm_save(using);
         monoasm! { &mut gen.jit,
             movq rdi, rbx;
             movq rax, (fiber_yield);
             call rax;
         }
-        gen.xmm_restore(using);
-        gen.handle_error(error);
     });
-    ir.rax2acc(bb, dst);
+    ir.xmm_restore(using_xmm);
+    ir.handle_error(error);
+    bb.rax2acc(ir, dst);
+    true
 }
 
 ///

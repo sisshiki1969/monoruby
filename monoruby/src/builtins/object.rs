@@ -1,6 +1,4 @@
 use super::*;
-mod send;
-pub(crate) use send::{object_send, object_send_splat, send};
 
 //
 // Object class
@@ -35,16 +33,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variables", iv, 0);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    /*globals.define_builtin_inline_func_with(
+    globals.define_builtin_inline_funcs_with(
         OBJECT_CLASS,
-        &["send", "__send__"],
-        send,
-        Box::new(object_send),
-        analysis::v_v_vv,
+        "send",
+        &["__send__"],
+        crate::builtins::send,
+        Box::new(crate::builtins::object_send),
         0,
         0,
         true,
-    );*/
+    );
     globals.define_builtin_funcs_eval_with(
         OBJECT_CLASS,
         "instance_eval",
@@ -84,19 +82,75 @@ fn object_object_id(
     bb: &mut BBContext,
     callid: CallSiteId,
     _pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { recv, dst: ret, .. } = store[callid];
-    ir.fetch_for_gpr(bb, recv, GP::Rdi);
-    let using = bb.get_using_xmm();
+    bb.fetch_for_gpr(ir, recv, GP::Rdi);
+    let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |gen, _| {
-        gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
         }
-        gen.xmm_restore(using);
     });
-    ir.rax2acc(bb, ret);
+    ir.xmm_restore(using_xmm);
+    bb.rax2acc(ir, ret);
+    true
+}
+
+///
+/// Object#send
+///
+/// - send(name, *args) -> object
+/// - send(name, *args) { .... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/send.html]
+#[monoruby_builtin]
+pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = lfp.arg(0).as_array();
+    if ary.len() < 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    }
+    let method = ary[0].expect_symbol_or_string()?;
+    vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
+}
+
+pub fn object_send(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) -> bool {
+    let callsite = &store[callid];
+    let no_splat = !callsite.object_send_single_splat();
+    if !callsite.is_simple() && !callsite.object_send_single_splat() {
+        return false;
+    }
+    let CallSiteInfo {
+        recv,
+        dst,
+        args,
+        pos_num,
+        block_fid,
+        block_arg,
+        ..
+    } = *callsite;
+    bb.write_back_callargs_and_dst(ir, callsite);
+    bb.writeback_acc(ir);
+    let using_xmm = bb.get_using_xmm();
+    let error = ir.new_error(bb, pc);
+    ir.inline(move |gen, labels| {
+        let error = labels[error];
+        gen.object_send_inline(
+            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, no_splat,
+        );
+    });
+    bb.reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 ///
@@ -715,6 +769,83 @@ mod tests {
             end
             o = C.new
             "#,
+        );
+    }
+
+    #[test]
+    fn object_send() {
+        run_test_with_prelude(
+            r##"
+        o = C.new
+        [o.send(:foo), o.send("foo"), o.send(:bar, 20), o.send(*[:foo]), o.send(*["bar", 100])]
+        "##,
+            r##"
+        class C
+            def foo
+                1
+            end
+            def bar(x)
+                x
+            end
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(200, 100)
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(:foo, 100)
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def foo
+                1
+            end
+        end
+        C.new.send(*[])
+        "##,
+        );
+        run_test_error(
+            r##"
+          class C
+            def b(x, y, z)
+              puts "x=#{[x, y, z]}"
+            end
+          end
+          
+          o = C.new
+          30.times do |x|
+            if x == 28 then
+              eval('class C; def b(x); puts "x=#{x}" ;end; end')
+            end
+            o.send(:b, x, 2, 3)
+          end 
+            "##,
         );
     }
 }

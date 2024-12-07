@@ -94,9 +94,9 @@ pub(super) extern "C" fn enter_classdef<'a>(
     self_value: Module,
 ) -> &'a FuncData {
     let current_func = vm.method_func_id();
-    let mut lexical_context = globals[current_func].as_ruby_func().lexical_context.clone();
+    let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
     lexical_context.push(self_value);
-    globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
+    globals.store.iseq_mut(func_id).lexical_context = lexical_context;
     globals.get_func_data(func_id)
 }
 
@@ -670,8 +670,8 @@ pub(super) extern "C" fn singleton_define_method(
     obj: Value,
 ) {
     let current_func = vm.method_func_id();
-    globals[func].as_ruby_func_mut().lexical_context =
-        globals[current_func].as_ruby_func().lexical_context.clone();
+    globals.store.iseq_mut(func).lexical_context =
+        globals.store.iseq(current_func).lexical_context.clone();
     let class_id = globals.store.classes.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
     globals.class_version_inc();
@@ -836,6 +836,7 @@ pub(super) extern "C" fn handle_error(
             // check exception table.
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
+            let info = &globals.store[*info];
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(ensure)

@@ -86,8 +86,11 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) {
+) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool {
     move |ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr| {
+        if !store[callid].is_simple() {
+            return false;
+        }
         let callsite = &store[callid];
         let CallSiteInfo {
             recv,
@@ -96,12 +99,13 @@ pub(super) fn gen_class_new(
             dst,
             ..
         } = *callsite;
-        ir.writeback_acc(bb);
-        ir.write_back_callargs_and_dst(bb, callsite);
+        bb.writeback_acc(ir);
+        bb.write_back_callargs_and_dst(ir, callsite);
         ir.stack2reg(recv, GP::Rdi);
-        let using = bb.get_using_xmm();
+        let using_xmm = bb.get_using_xmm();
         let error = ir.new_error(bb, pc);
-        ir.inline(move |gen, labels| {
+        ir.xmm_save(using_xmm);
+        ir.inline(move |gen, _| {
             let cached_version = gen.jit.data_i32(-1);
             let cached_funcid = gen.jit.data_i32(-1);
             let class_version = gen.class_version_label();
@@ -109,8 +113,6 @@ pub(super) fn gen_class_new(
             let checked = gen.jit.label();
             let initialize = gen.jit.label();
             let exit = gen.jit.label();
-            let error = labels[error];
-            gen.xmm_save(using);
             monoasm!( &mut gen.jit,
                 movq rax, (f);
                 call rax;
@@ -125,9 +127,6 @@ pub(super) fn gen_class_new(
             exit:
                 movq rax, r15;
             );
-
-            gen.xmm_restore(using);
-            gen.handle_error(error);
 
             gen.jit.select_page(1);
             monoasm!( &mut gen.jit,
@@ -161,7 +160,10 @@ pub(super) fn gen_class_new(
             );
             gen.jit.select_page(0);
         });
-        ir.rax2acc(bb, dst);
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        bb.rax2acc(ir, dst);
+        true
     }
 }
 
