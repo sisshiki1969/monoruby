@@ -17,13 +17,9 @@ impl BBContext {
                 && let Some(info) = store.inline_info.get_inline(fid)
             {
                 let is_simple = store[callid].is_simple();
-                if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
-                    let f = object_send_splat;
-                    self.inline_call(ir, store, f, fid, callid, recv_class, version, pc);
-                    CompileResult::Continue
-                } else if is_simple {
-                    let f = &info.inline_gen;
-                    self.inline_call(ir, store, f, fid, callid, recv_class, version, pc);
+                let f = &info.inline_gen;
+                if is_simple && self.inline_call(ir, store, f, fid, callid, recv_class, version, pc)
+                {
                     CompileResult::Continue
                 } else {
                     self.call(ir, store, fid, recv_class, version, callid, pc)
@@ -162,13 +158,15 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
+        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool,
         fid: FuncId,
         callid: CallSiteId,
         recv_class: ClassId,
         version: u32,
         pc: BytecodePtr,
-    ) {
+    ) -> bool {
+        let mut ctx_save = self.clone();
+        let ir_save = ir.save();
         let recv = store[callid].recv;
         self.fetch_for_gpr(ir, recv, GP::Rdi);
         let (deopt, error) = ir.new_deopt_error(self, pc);
@@ -177,7 +175,13 @@ impl BBContext {
         if !recv.is_self() && !self.is_class(recv, recv_class) {
             ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
         }
-        f(ir, store, self, callid, pc);
+        if f(ir, store, self, callid, pc) {
+            true
+        } else {
+            std::mem::swap(self, &mut ctx_save);
+            ir.restore(ir_save);
+            false
+        }
     }
 
     ///

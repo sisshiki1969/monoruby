@@ -101,6 +101,15 @@ impl AsmIr {
         self.inst.push(inst);
     }
 
+    pub(super) fn save(&mut self) -> (usize, usize) {
+        (self.inst.len(), self.side_exit.len())
+    }
+
+    pub(super) fn restore(&mut self, (inst, side_exit): (usize, usize)) {
+        self.inst.truncate(inst);
+        self.side_exit.truncate(side_exit);
+    }
+
     pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
         AsmDeopt(i)

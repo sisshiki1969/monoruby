@@ -232,7 +232,10 @@ fn integer_tof(
     bb: &mut BBContext,
     callid: CallSiteId,
     _pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { dst, .. } = store[callid];
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ir, ret);
@@ -243,6 +246,7 @@ fn integer_tof(
             }
         });
     }
+    true
 }
 
 ///
@@ -389,7 +393,10 @@ fn integer_shr(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { dst, args, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     if let Some(rhs) = bb.is_u8_literal(args) {
@@ -399,6 +406,7 @@ fn integer_shr(
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
 }
 
 ///
@@ -418,7 +426,10 @@ fn integer_shl(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { dst, args, .. } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     if let Some(rhs) = bb.is_u8_literal(args)
@@ -430,6 +441,7 @@ fn integer_shl(
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
 }
 
 ///

@@ -381,11 +381,7 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_func(class_id, name, address, arg_num);
-        let info = inline::InlineFuncInfo {
-            inline_gen,
-            #[cfg(feature = "dump-bc")]
-            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
-        };
+        let info = inline::InlineFuncInfo { inline_gen };
         self.store.inline_info.add_inline(fid, info);
         fid
     }
@@ -410,11 +406,7 @@ impl Globals {
             rest,
             &[],
         );
-        let info = inline::InlineFuncInfo {
-            inline_gen,
-            #[cfg(feature = "dump-bc")]
-            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
-        };
+        let info = inline::InlineFuncInfo { inline_gen };
         self.store.inline_info.add_inline(fid, info);
         fid
     }
@@ -599,11 +591,7 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_builtin_module_func(class_id, name, address, arg_num);
-        let info = inline::InlineFuncInfo {
-            inline_gen,
-            #[cfg(feature = "dump-bc")]
-            name: format!("{}#{name}", self.store.debug_class_name(class_id)),
-        };
+        let info = inline::InlineFuncInfo { inline_gen };
         self.store.inline_info.add_inline(fid, info);
         fid
     }

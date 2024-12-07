@@ -80,7 +80,10 @@ fn math_sqrt(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
@@ -93,6 +96,7 @@ fn math_sqrt(
             );
         });
     }
+    true
 }
 
 fn math_cos(
@@ -101,7 +105,10 @@ fn math_cos(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
@@ -122,6 +129,7 @@ fn math_cos(
             );
         });
     }
+    true
 }
 
 fn math_sin(
@@ -130,7 +138,10 @@ fn math_sin(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst: ret, .. } = *callsite;
     let deopt = ir.new_deopt(bb, pc);
@@ -151,6 +162,7 @@ fn math_sin(
             }
         });
     }
+    true
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {

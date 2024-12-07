@@ -421,7 +421,10 @@ fn array_shl(
     bb: &mut BBContext,
     callid: CallSiteId,
     _pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let CallSiteInfo { dst, args, .. } = store[callid];
     bb.fetch_for_gpr(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
@@ -434,6 +437,7 @@ fn array_shl(
         gen.xmm_restore(using_xmm);
     });
     bb.reg2acc_array_ty(ir, GP::Rax, dst);
+    true
 }
 
 ///

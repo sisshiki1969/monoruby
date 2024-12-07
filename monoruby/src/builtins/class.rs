@@ -86,8 +86,11 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) {
+) -> impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool {
     move |ir: &mut AsmIr, store: &Store, bb: &mut BBContext, callid: CallSiteId, pc: BytecodePtr| {
+        if !store[callid].is_simple() {
+            return false;
+        }
         let callsite = &store[callid];
         let CallSiteInfo {
             recv,
@@ -162,6 +165,7 @@ pub(super) fn gen_class_new(
             gen.jit.select_page(0);
         });
         bb.rax2acc(ir, dst);
+        true
     }
 }
 

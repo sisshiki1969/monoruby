@@ -59,7 +59,10 @@ fn fiber_yield_inline(
     bb: &mut BBContext,
     callid: CallSiteId,
     pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     let callsite = &store[callid];
     let CallSiteInfo {
         args, pos_num, dst, ..
@@ -100,6 +103,7 @@ fn fiber_yield_inline(
         gen.handle_error(error);
     });
     bb.rax2acc(ir, dst);
+    true
 }
 
 ///

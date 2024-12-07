@@ -619,7 +619,7 @@ impl CallSiteInfo {
         self.kw_len() == 0 && !self.has_splat() && self.block_arg.is_none()
     }
 
-    pub fn object_send_single_splat(&self) -> bool {
+    pub(crate) fn object_send_single_splat(&self) -> bool {
         self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 

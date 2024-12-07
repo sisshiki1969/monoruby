@@ -5,7 +5,6 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
-use self::builtins::object_send_splat;
 use self::slot::Guarded;
 
 use super::*;

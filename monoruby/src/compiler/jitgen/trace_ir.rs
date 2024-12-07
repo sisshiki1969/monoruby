@@ -644,28 +644,24 @@ impl TraceIr {
                 ..
             } => {
                 let callsite = &store[*callid];
-                if callsite.block_fid.is_none()
-                    && let Some(fid) = fid
-                    && let Some(inline_info) = store.inline_info.get_inline(*fid)
-                    && (*fid == OBJECT_SEND_FUNCID && callsite.object_send_single_splat()
-                        || callsite.is_simple())
-                {
-                    let CallSiteInfo { recv, dst, .. } = *callsite;
-                    let name = &inline_info.name;
-                    let s = callsite.format_args();
-                    let op1 = format!("{} = {:?}.inline {name}{s}", ret_str(dst), recv,);
-                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class))
+                let name = if let Some(name) = callsite.name {
+                    name.to_string()
                 } else {
-                    let name = if let Some(name) = callsite.name {
-                        name.to_string()
+                    "super".to_string()
+                };
+                let CallSiteInfo { recv, dst, .. } = callsite;
+                let s = callsite.format_args();
+                let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
+                format!(
+                    "{:36} [{}] {}",
+                    op1,
+                    store.debug_class_name(*recv_class),
+                    if let Some(fid) = fid {
+                        format!("{:?}", fid)
                     } else {
-                        "super".to_string()
-                    };
-                    let CallSiteInfo { recv, dst, .. } = callsite;
-                    let s = callsite.format_args();
-                    let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
-                    format!("{:36} [{}]", op1, store.debug_class_name(*recv_class),)
-                }
+                        "-".to_string()
+                    }
+                )
             }
             TraceIr::Yield { callid } => {
                 let dst = store[*callid].dst;
