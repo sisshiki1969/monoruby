@@ -10,10 +10,10 @@ struct CommandLineArgs {
     #[arg(short)]
     verbose: bool,
     /// switch just-in-time compilation.
-    #[arg(short, long)]
+    #[arg(long)]
     no_jit: bool,
     /// switch loading gems.
-    #[arg(short, long)]
+    #[arg(long)]
     no_gems: bool,
     #[arg(short = 'I')]
     import: Vec<String>,

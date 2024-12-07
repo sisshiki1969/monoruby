@@ -490,7 +490,7 @@ impl RValue {
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
             self.id(),
-            store[func_id].as_ruby_func().get_location(),
+            store.iseq(func_id).get_location(),
         )
     }
 

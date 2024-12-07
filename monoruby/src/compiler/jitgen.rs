@@ -5,7 +5,6 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
-use self::builtins::object_send_splat;
 use self::slot::Guarded;
 
 use super::*;
@@ -17,10 +16,18 @@ use trace_ir::*;
 //pub mod analysis;
 pub mod asmir;
 mod basic_block;
+mod binary_op;
 mod compile;
+mod definition;
 mod guard;
+mod index;
 mod init_method;
+mod merge;
+mod method_call;
+mod read_slot;
+mod slot;
 pub mod trace_ir;
+mod variables;
 
 //
 // Just-in-time compiler module.
@@ -384,8 +391,68 @@ impl BBContext {
         self.slot_state.get_write_back(self.sp)
     }
 
-    pub(crate) fn get_register(&self) -> WriteBack {
-        self.slot_state.get_register()
+    pub(crate) fn rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc(ir, GP::Rax, dst);
+    }
+
+    pub(crate) fn reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
+    }
+
+    pub(crate) fn reg2acc_fixnum(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
+    }
+
+    pub(crate) fn reg2acc_array_ty(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::ArrayTy)
+    }
+
+    pub(crate) fn reg2acc_concrete_value(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        v: Value,
+    ) {
+        self.reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
+    }
+
+    fn reg2acc_guarded(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        guarded: slot::Guarded,
+    ) {
+        if let Some(dst) = dst.into() {
+            self.clear(ir);
+            if let Some(acc) = self.clear_r15(ir)
+                && acc < self.sp
+                && acc != dst
+            {
+                ir.acc2stack(acc);
+            }
+            self.store_r15(ir, dst, guarded);
+            ir.push(AsmInst::RegToAcc(src));
+        }
+    }
+
+    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
+        if let Some(slot) = self.clear_r15(ir)
+            && slot < self.sp
+        {
+            ir.acc2stack(slot);
+        }
     }
 }
 
@@ -542,7 +609,7 @@ impl MergeContext {
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
         let mut ir = AsmIr::new();
-        unused.iter().for_each(|reg| ir.unlink(&mut self.0, *reg));
+        unused.iter().for_each(|reg| self.unlink(&mut ir, *reg));
     }
 }
 
@@ -560,7 +627,7 @@ impl Codegen {
 
         self.jit.bind_label(entry_label);
 
-        let func = store[func_id].as_ruby_func();
+        let func = store.iseq(func_id);
         let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
@@ -718,7 +785,7 @@ impl Codegen {
         }
 
         s += "}\n";
-        std::fs::write(format!("func_id-{}.dot", func.id().get()), s).unwrap();
+        std::fs::write(format!("func_id-{}.dot", func.func_id().get()), s).unwrap();
     }
 }
 

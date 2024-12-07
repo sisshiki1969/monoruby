@@ -20,8 +20,13 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
-pub(crate) type InlineGen =
-    dyn Fn(&mut jitgen::asmir::AsmIr, &Store, &mut jitgen::BBContext, CallSiteId, BytecodePtr);
+pub(crate) type InlineGen = dyn Fn(
+    &mut jitgen::asmir::AsmIr,
+    &Store,
+    &mut jitgen::BBContext,
+    CallSiteId,
+    BytecodePtr,
+) -> bool;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
@@ -43,7 +48,6 @@ impl MethodTableEntry {
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
-pub(crate) const OBJECT_SEND_FUNCID: FuncId = FuncId::new(3);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
@@ -101,8 +105,7 @@ pub struct Globals {
     pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
-    /// global method cache.
-    global_method_cache: GlobalMethodCache,
+
     /// suppress jit compilation.
     no_jit: bool,
     /// suppress loading gem.
@@ -119,12 +122,6 @@ pub struct Globals {
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
-    /// stats for inline method cache miss
-    #[cfg(feature = "profile")]
-    global_method_cache_stats: HashMap<(ClassId, IdentId), usize>,
-    /// stats for method cache miss
-    #[cfg(feature = "profile")]
-    method_exploration_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
@@ -166,7 +163,6 @@ impl Globals {
             codegen: Codegen::new(no_jit),
             store: Store::new(),
             global_vars: HashMap::default(),
-            global_method_cache: GlobalMethodCache::default(),
             no_jit,
             no_gems,
             stdout: BufWriter::new(stdout()),
@@ -176,10 +172,6 @@ impl Globals {
             startup_flag: false,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            global_method_cache_stats: HashMap::default(),
-            #[cfg(feature = "profile")]
-            method_exploration_stats: HashMap::default(),
             #[cfg(feature = "profile")]
             jit_class_unmatched_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
@@ -202,19 +194,6 @@ impl Globals {
         assert_eq!(
             FuncId::new(2),
             globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
-        );
-        assert_eq!(
-            OBJECT_SEND_FUNCID,
-            globals.define_builtin_inline_funcs_with(
-                OBJECT_CLASS,
-                "send",
-                &["__send__"],
-                crate::builtins::send,
-                Box::new(crate::builtins::object_send),
-                0,
-                0,
-                true,
-            )
         );
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
@@ -255,6 +234,13 @@ impl Globals {
         Globals::new(1, false, true)
     }
 
+    pub fn locals_len(&self, func_id: FuncId) -> usize {
+        match self[func_id].kind {
+            FuncKind::ISeq(info) => self.store[info].locals.len(),
+            _ => 0,
+        }
+    }
+
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
         let code = code.into();
         let mut executor = Executor::init(self);
@@ -288,11 +274,11 @@ impl Globals {
         let outer_fid = caller_cfp.lfp().meta().func_id();
         let mother = caller_cfp.method_func_id_depth();
         let mut ex_scope = IndexMap::default();
-        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+        for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
         let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
 
         match Parser::parse_program_eval(code, path.into(), Some(&external_context)) {
             Ok(res) => {
@@ -322,15 +308,15 @@ impl Globals {
         let (lfp, outer) = binding.outer_lfp().outermost_lfp_depth();
         let mother = (lfp.meta().func_id(), outer);
         let mut ex_scope = IndexMap::default();
-        for (name, idx) in &self[outer_fid].as_ruby_func().locals {
+        for (name, idx) in &self.store.iseq(outer_fid).locals {
             ex_scope.insert(*name, *idx);
         }
         let mut external_context = ExternalContext::one(ex_scope, None);
-        external_context.extend_from_slice(&self[outer_fid].as_ruby_func().outer_locals);
+        external_context.extend_from_slice(&self.store.iseq(outer_fid).outer_locals);
 
         let context = if let Some(fid) = binding.func_id() {
             let mut lvar = LvarCollector::new();
-            for (name, _) in &self[fid].as_ruby_func().locals {
+            for (name, _) in &self.store.iseq(fid).locals {
                 lvar.insert(&name.get_name());
             }
             Some(lvar)
@@ -421,7 +407,7 @@ impl Globals {
         let mut lfp = Lfp::heap_frame(self_val, meta);
         lfp.set_outer(Some(binding.outer_lfp()));
         if let Some(binding_lfp) = binding.binding() {
-            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            let locals_len = self.locals_len(binding_lfp.meta().func_id());
             for i in 1..1 + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
@@ -445,7 +431,7 @@ impl Globals {
         let mut lfp = Lfp::heap_frame(self_val, meta);
         if let Some(binding_lfp) = binding_lfp {
             lfp.set_outer(binding_lfp.outer());
-            let locals_len = self[binding_lfp.meta().func_id()].locals_len();
+            let locals_len = self.locals_len(binding_lfp.meta().func_id());
             for i in 1..1 + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
@@ -474,19 +460,20 @@ impl Globals {
 
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
         let source_func_id = executor.cfp().get_source_pos();
-        &self[source_func_id].as_ruby_func().sourceinfo.path
+        &self.store.iseq(source_func_id).sourceinfo.path
     }
 
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
-        if let Some(func) = info.is_ruby_func() {
-            let mother = func.mother.0;
+        if let Some(iseq) = info.is_iseq() {
+            let iseq = &self.store[iseq];
+            let mother = iseq.mother().0;
             if mother != func_id {
                 format!("block in {}", self.func_description(mother))
             } else {
                 match info.owner_class() {
-                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), func.name()),
-                    None => func.name().to_string(),
+                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), iseq.name()),
+                    None => iseq.name().to_string(),
                 }
             }
         } else {
@@ -558,9 +545,8 @@ impl Globals {
     #[cfg(feature = "profile")]
     pub fn clear_stats(&mut self) {
         self.deopt_stats.clear();
-        self.global_method_cache_stats.clear();
-        self.method_exploration_stats.clear();
         self.jit_class_unmatched_stats.clear();
+        self.store.clear_stats();
     }
 }
 

@@ -2,8 +2,6 @@ use super::*;
 
 pub(crate) struct InlineFuncInfo {
     pub(crate) inline_gen: Box<InlineGen>,
-    #[cfg(feature = "dump-bc")]
-    pub name: String,
 }
 
 #[derive(Default)]

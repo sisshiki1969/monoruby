@@ -80,7 +80,10 @@ fn object_nil(
     bb: &mut BBContext,
     callid: CallSiteId,
     _pc: BytecodePtr,
-) {
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
     if bb.is_nil(store[callid].recv) {
         ir.inline(|gen, _| {
             monoasm! { &mut gen.jit,
@@ -103,7 +106,8 @@ fn object_nil(
             }
         });
     }
-    ir.rax2acc(bb, store[callid].dst);
+    bb.rax2acc(ir, store[callid].dst);
+    true
 }
 
 ///

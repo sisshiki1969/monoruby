@@ -100,8 +100,9 @@ impl Executor {
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
             return Ok(v);
         }
-        let module = globals[current_func]
-            .as_ruby_func()
+        let module = globals
+            .store
+            .iseq(current_func)
             .lexical_context
             .last()
             .cloned()
@@ -116,8 +117,9 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Option<Value>> {
-        let stack = globals.store[current_func]
-            .as_ruby_func()
+        let stack = globals
+            .store
+            .iseq(current_func)
             .lexical_context
             .iter()
             .rev();

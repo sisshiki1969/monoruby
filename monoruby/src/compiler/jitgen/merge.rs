@@ -4,7 +4,7 @@ impl JitContext {
     ///
     /// Generate bridge AsmIr for backedge branches.
     ///
-    pub(in crate::compiler::jitgen) fn backedge_branches(&mut self, func: &ISeqInfo) {
+    pub(super) fn backedge_branches(&mut self, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
             let BackedgeInfo {
@@ -23,8 +23,8 @@ impl JitContext {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{:?}", bbid);
                 let mut ir = AsmIr::new();
-                ir.remove_unused(&mut bbctx, &unused);
-                ir.gen_bridge_for_target(bbctx, &target_ctx, pc);
+                bbctx.remove_unused(&mut ir, &unused);
+                bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 self.bridges.push((ir, branch_dest, bbid));
             }
         }
@@ -33,7 +33,7 @@ impl JitContext {
     ///
     /// Merge incoming contexts for *bbid*.
     ///
-    pub(in crate::compiler::jitgen) fn incoming_context(
+    pub(super) fn incoming_context(
         &mut self,
         ir: &mut AsmIr,
         func: &ISeqInfo,
@@ -55,11 +55,11 @@ impl JitContext {
         res
     }
 
-    pub(in crate::compiler::jitgen) fn gen_continuation(&mut self, ir: &mut AsmIr) {
+    pub(super) fn gen_continuation(&mut self, ir: &mut AsmIr) {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
-            ir.inst.push(AsmInst::Label(entry));
+            ir.push(AsmInst::Label(entry));
             if let Some(ContinuationInfo { from, to, pc }) = data {
-                ir.gen_bridge_for_target(from, &to, pc);
+                from.gen_bridge_for_target(ir, &to, pc);
             }
         }
     }
@@ -108,14 +108,14 @@ impl JitContext {
                 LinkMode::Stack => {}
                 LinkMode::ConcreteValue(v) => {
                     if v.is_float() {
-                        ir.store_new_xmm(&mut bbctx, slot);
+                        bbctx.store_new_xmm(ir, slot);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    ir.store_xmm(&mut bbctx, slot, r);
+                    bbctx.store_xmm(ir, slot, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    ir.store_both(&mut bbctx, slot, r, Guarded::Value);
+                    bbctx.store_both(ir, slot, r, Guarded::Value);
                 }
                 LinkMode::Accumulator | LinkMode::Alias(_) => unreachable!(),
             };
@@ -184,8 +184,8 @@ impl JitContext {
                 ));
             } else {
                 let mut ir = AsmIr::new();
-                ir.remove_unused(&mut bbctx, unused);
-                ir.gen_bridge_for_target(bbctx, &target_ctx, pc);
+                bbctx.remove_unused(&mut ir, unused);
+                bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 self.bridges.push((ir, branch_dest, bbid));
             }
             #[cfg(feature = "jit-debug")]
@@ -194,86 +194,81 @@ impl JitContext {
     }
 }
 
-impl AsmIr {
+impl BBContext {
     ///
     /// Clear slots that are not to be used.
     ///
-    fn remove_unused(&mut self, bb: &mut BBContext, unused: &[SlotId]) {
+    fn remove_unused(&mut self, ir: &mut AsmIr, unused: &[SlotId]) {
         for r in unused {
-            self.unlink(bb, *r);
+            self.unlink(ir, *r);
         }
     }
 
     ///
     /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
     ///
-    fn gen_bridge_for_target(
-        &mut self,
-        mut bbctx: BBContext,
-        target: &MergeContext,
-        pc: BytecodePtr,
-    ) {
+    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &MergeContext, pc: BytecodePtr) {
         #[cfg(feature = "jit-debug")]
         {
-            eprintln!("    src:    {:?}", bbctx.slot_state);
+            eprintln!("    src:    {:?}", self.slot_state);
             eprintln!("    target: {:?}", target);
         }
-        let len = bbctx.sp.0 as usize;
+        let len = self.sp.0 as usize;
 
         for i in 0..len {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
             if target.slot(slot) == LinkMode::Stack {
-                self.write_back_slot(&mut bbctx, slot);
-                bbctx.set_slot(slot, LinkMode::Stack, guarded);
+                self.write_back_slot(ir, slot);
+                self.set_slot(slot, LinkMode::Stack, guarded);
             };
         }
 
         for i in 0..len {
             let slot = SlotId(i as u16);
             let guarded = target.guarded(slot);
-            match (bbctx.slot(slot), target.slot(slot)) {
+            match (self.slot(slot), target.slot(slot)) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l != r {
-                        self.to_xmm(&mut bbctx, slot, l, r);
+                        self.to_xmm(ir, slot, l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
-                    let deopt = self.new_deopt(&bbctx, pc + 1);
-                    self.stack2reg(slot, GP::Rax);
-                    self.guard_float(GP::Rax, deopt);
+                    let deopt = ir.new_deopt(&self, pc + 1);
+                    ir.stack2reg(slot, GP::Rax);
+                    ir.guard_float(GP::Rax, deopt);
                     if l == r {
                         // Both(l) -> Xmm(l)
-                        bbctx.set_xmm(slot, l);
+                        self.set_xmm(slot, l);
                     } else {
-                        self.to_xmm(&mut bbctx, slot, l, r);
+                        self.to_xmm(ir, slot, l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.xmm2stack(l, slot);
+                    ir.xmm2stack(l, slot);
                     if l == r {
-                        bbctx.set_both_float(slot, l);
+                        self.set_both_float(slot, l);
                     } else {
-                        self.to_both(&mut bbctx, slot, l, r, guarded);
+                        self.to_both(ir, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l != r {
-                        self.to_both(&mut bbctx, slot, l, r, guarded);
+                        self.to_both(ir, slot, l, r, guarded);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
-                    let deopt = self.new_deopt(&bbctx, pc + 1);
-                    self.stack2reg(slot, GP::Rax);
-                    self.inst.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
-                    self.store_both(&mut bbctx, slot, r, guarded);
+                    let deopt = ir.new_deopt(&self, pc + 1);
+                    ir.stack2reg(slot, GP::Rax);
+                    ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
+                    self.store_both(ir, slot, r, guarded);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
                 (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        self.store_xmm(&mut bbctx, slot, r);
-                        self.f64toxmm(f, r);
+                        self.store_xmm(ir, slot, r);
+                        ir.f64toxmm(f, r);
                     } else {
                         unreachable!()
                     }
@@ -284,22 +279,22 @@ impl AsmIr {
     }
 
     /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Xmm.
-    fn to_xmm(&mut self, bbctx: &mut BBContext, slot: SlotId, l: Xmm, r: Xmm) {
-        if bbctx.is_xmm_vacant(r) {
-            self.store_xmm(bbctx, slot, r);
-            self.xmm_move(l, r);
+    fn to_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm) {
+        if self.is_xmm_vacant(r) {
+            self.store_xmm(ir, slot, r);
+            ir.xmm_move(l, r);
         } else {
-            self.xmm_swap(bbctx, l, r);
+            self.xmm_swap(ir, l, r);
         }
     }
 
     /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Both.
-    fn to_both(&mut self, bbctx: &mut BBContext, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
-        if bbctx.is_xmm_vacant(r) {
-            self.store_both(bbctx, slot, r, guarded);
-            self.xmm_move(l, r);
+    fn to_both(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
+        if self.is_xmm_vacant(r) {
+            self.store_both(ir, slot, r, guarded);
+            ir.xmm_move(l, r);
         } else {
-            self.xmm_swap(bbctx, l, r);
+            self.xmm_swap(ir, l, r);
         }
     }
 }

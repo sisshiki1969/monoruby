@@ -684,7 +684,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn flag_to_bool(&mut self, kind: CmpKind) {
+    fn flag_to_bool(&mut self, kind: CmpKind) {
         match kind {
             CmpKind::Eq => self.set_eq(),
             CmpKind::Ne => self.set_ne(),

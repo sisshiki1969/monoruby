@@ -1,10 +1,10 @@
 use super::*;
 
-impl AsmIr {
-    pub(in crate::compiler::jitgen) fn compile_call(
+impl BBContext {
+    pub(super) fn compile_call(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bbctx: &mut BBContext,
         pc: BytecodePtr,
         callid: CallSiteId,
         recv_class: Option<ClassId>,
@@ -16,53 +16,97 @@ impl AsmIr {
             if store[callid].block_fid.is_none()
                 && let Some(info) = store.inline_info.get_inline(fid)
             {
-                let is_simple = store[callid].is_simple();
-                if fid == OBJECT_SEND_FUNCID && store[callid].object_send_single_splat() {
-                    let f = object_send_splat;
-                    self.inline_call(store, bbctx, f, fid, callid, recv_class, version, pc);
-                    CompileResult::Continue
-                } else if is_simple {
-                    let f = &info.inline_gen;
-                    self.inline_call(store, bbctx, f, fid, callid, recv_class, version, pc);
-                    CompileResult::Continue
-                } else {
-                    self.call(store, bbctx, fid, recv_class, version, callid, pc)
+                let f = &info.inline_gen;
+                if self.inline_call(ir, store, f, fid, callid, recv_class, version, pc) {
+                    return CompileResult::Continue;
                 }
-            } else {
-                self.call(store, bbctx, fid, recv_class, version, callid, pc)
             }
+            self.call(ir, store, fid, recv_class, version, callid, pc)
         } else {
             CompileResult::Deopt
         }
     }
 
+    pub(super) fn compile_binop_call(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        fid: FuncId,
+        version: u32,
+        info: BinOpInfo,
+        pc: BytecodePtr,
+    ) -> CompileResult {
+        assert!(matches!(
+            store[fid].kind,
+            FuncKind::Builtin { .. } | FuncKind::ISeq(_)
+        ));
+        let callee = &store[fid];
+        if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
+            ir.deopt(self, pc);
+            return CompileResult::Deopt;
+        }
+        let BinOpInfo {
+            dst,
+            mode,
+            lhs_class,
+            ..
+        } = info;
+        let deopt = ir.new_deopt(self, pc);
+        self.fetch_lhs(ir, mode);
+        ir.guard_lhs_class_for_mode(self, mode, lhs_class, deopt);
+        ir.push(AsmInst::GuardClassVersion2(version, deopt));
+
+        let evict = ir.new_evict();
+        ir.reg_move(GP::Rdi, GP::R13);
+        let using_xmm = self.get_using_xmm();
+        ir.xmm_save(using_xmm);
+
+        ir.set_binop_arguments(store, self, fid, mode);
+
+        self.unlink(ir, dst);
+        self.clear(ir);
+        let error = ir.new_error(self, pc);
+        self.writeback_acc(ir);
+        ir.push(AsmInst::BinopCached {
+            callee_fid: fid,
+            recv_class: lhs_class,
+            evict,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        self.rax2acc(ir, dst);
+        ir.push(AsmInst::ImmediateEvict { evict });
+        ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
+        CompileResult::Continue
+    }
+
     pub(in crate::compiler::jitgen) fn compile_yield(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bbctx: &mut BBContext,
         pc: BytecodePtr,
         callid: CallSiteId,
     ) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
-        self.write_back_callargs_and_dst(bbctx, &callinfo);
-        self.writeback_acc(bbctx);
-        let using_xmm = bbctx.get_using_xmm();
-        let error = self.new_error(bbctx, pc);
-        let evict = self.new_evict();
-        self.inst.push(AsmInst::Yield {
+        self.write_back_callargs_and_dst(ir, &callinfo);
+        self.writeback_acc(ir);
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        let evict = ir.new_evict();
+        ir.push(AsmInst::Yield {
             callid,
             using_xmm,
             error,
             evict,
         });
-        self.rax2acc(bbctx, dst);
+        self.rax2acc(ir, dst);
     }
 
     fn call(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bb: &mut BBContext,
         fid: FuncId,
         recv_class: ClassId,
         version: u32,
@@ -70,32 +114,32 @@ impl AsmIr {
         pc: BytecodePtr,
     ) -> CompileResult {
         let CallSiteInfo { dst, recv, .. } = store[callid];
-        if recv.is_self() && bb.self_value.class() != recv_class {
+        if recv.is_self() && self.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
-            self.write_back_locals(bb);
-            self.write_back_callargs_and_dst(bb, &store[callid]);
-            self.writeback_acc(bb);
-            self.send_not_cached(bb, pc, callid);
-            self.rax2acc(bb, dst);
+            self.write_back_locals(ir);
+            self.write_back_callargs_and_dst(ir, &store[callid]);
+            self.writeback_acc(ir);
+            self.send_not_cached(ir, pc, callid);
+            self.rax2acc(ir, dst);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
             if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
-                self.write_back_locals(bb);
+                self.write_back_locals(ir);
             }
-            self.fetch_for_gpr(bb, recv, GP::Rdi);
-            let (deopt, error) = self.new_deopt_error(bb, pc);
-            let using_xmm = bb.get_using_xmm();
-            self.guard_version(fid, version, callid, using_xmm, deopt, error);
+            self.fetch_for_gpr(ir, recv, GP::Rdi);
+            let (deopt, error) = ir.new_deopt_error(self, pc);
+            let using_xmm = self.get_using_xmm();
+            ir.guard_version(fid, version, callid, using_xmm, deopt, error);
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.
-            if !recv.is_self() && !bb.is_class(recv, recv_class) {
-                self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+            if !recv.is_self() && !self.is_class(recv, recv_class) {
+                ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
             }
-            if let Some(evict) = self.call_cached(store, bb, callid, fid, recv_class, pc) {
-                self.rax2acc(bb, dst);
+            if let Some(evict) = self.call_cached(ir, store, callid, fid, recv_class, pc) {
+                self.rax2acc(ir, dst);
                 if let Some(evict) = evict {
-                    self.inst.push(AsmInst::ImmediateEvict { evict });
-                    self[evict] = SideExit::Evict(Some((pc + 2, bb.get_write_back())));
+                    ir.push(AsmInst::ImmediateEvict { evict });
+                    ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
                 }
             } else {
                 return CompileResult::Deopt;
@@ -107,24 +151,32 @@ impl AsmIr {
 
     fn inline_call(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bb: &mut BBContext,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr),
+        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool,
         fid: FuncId,
         callid: CallSiteId,
         recv_class: ClassId,
         version: u32,
         pc: BytecodePtr,
-    ) {
+    ) -> bool {
+        let mut ctx_save = self.clone();
+        let ir_save = ir.save();
         let recv = store[callid].recv;
-        self.fetch_for_gpr(bb, recv, GP::Rdi);
-        let (deopt, error) = self.new_deopt_error(bb, pc);
-        let using_xmm = bb.get_using_xmm();
-        self.guard_version(fid, version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !bb.is_class(recv, recv_class) {
-            self.guard_class(bb, recv, GP::Rdi, recv_class, deopt);
+        self.fetch_for_gpr(ir, recv, GP::Rdi);
+        let (deopt, error) = ir.new_deopt_error(self, pc);
+        let using_xmm = self.get_using_xmm();
+        ir.guard_version(fid, version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !self.is_class(recv, recv_class) {
+            ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
         }
-        f(self, store, bb, callid, pc);
+        if f(ir, store, self, callid, pc) {
+            true
+        } else {
+            std::mem::swap(self, &mut ctx_save);
+            ir.restore(ir_save);
+            false
+        }
     }
 
     ///
@@ -135,8 +187,8 @@ impl AsmIr {
     ///
     fn call_cached(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bb: &mut BBContext,
         callid: CallSiteId,
         fid: FuncId,
         recv_class: ClassId,
@@ -154,11 +206,11 @@ impl AsmIr {
                 assert!(store[callid].block_arg.is_none());
                 if recv_class.is_always_frozen() {
                     if dst.is_some() {
-                        self.lit2reg(Value::nil(), GP::Rax);
+                        ir.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
                     let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                    self.attr_reader(ivar_id);
+                    ir.push(AsmInst::AttrReader { ivar_id });
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -167,12 +219,12 @@ impl AsmIr {
                 assert!(store[callid].block_fid.is_none());
                 assert!(store[callid].block_arg.is_none());
                 let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                self.fetch_for_gpr(bb, args, GP::Rdx);
-                self.attr_writer(bb, pc, ivar_id);
+                self.fetch_for_gpr(ir, args, GP::Rdx);
+                self.attr_writer(ir, pc, ivar_id);
             }
             FuncKind::Builtin { .. } | FuncKind::ISeq(_) => {
-                let evict = self.new_evict();
-                self.send_cached(store, bb, pc, callid, fid, recv_class, evict);
+                let evict = ir.new_evict();
+                self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
             }
         };
@@ -185,46 +237,49 @@ impl AsmIr {
     ///
     fn send_cached(
         &mut self,
+        ir: &mut AsmIr,
         store: &Store,
-        bb: &mut BBContext,
         pc: BytecodePtr,
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
         evict: AsmEvict,
     ) {
-        self.reg_move(GP::Rdi, GP::R13);
-        self.exec_gc(bb.get_register());
-        let using_xmm = bb.get_using_xmm();
-        self.xmm_save(using_xmm);
-        self.set_arguments(store, bb, callid, callee_fid, pc);
-        self.unlink(bb, store[callid].dst);
-        self.clear(bb);
-        let error = self.new_error(bb, pc);
-        self.writeback_acc(bb);
-        self.inst.push(AsmInst::SendCached {
+        ir.reg_move(GP::Rdi, GP::R13);
+        ir.exec_gc(self.get_register());
+        let using_xmm = self.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        ir.set_arguments(store, self, callid, callee_fid, pc);
+        self.unlink(ir, store[callid].dst);
+        self.clear(ir);
+        let error = ir.new_error(self, pc);
+        self.writeback_acc(ir);
+        ir.push(AsmInst::SendCached {
             callid,
             callee_fid,
             recv_class,
-            using_xmm,
             error,
             evict,
         });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
     }
 
-    fn send_not_cached(&mut self, bb: &BBContext, pc: BytecodePtr, callid: CallSiteId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        let evict = self.new_evict();
-        let self_class = bb.self_value.class();
-        self.inst.push(AsmInst::SendNotCached {
+    fn send_not_cached(&self, ir: &mut AsmIr, pc: BytecodePtr, callid: CallSiteId) {
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        let evict = ir.new_evict();
+        let self_class = self.self_value.class();
+        ir.xmm_save(using_xmm);
+        ir.push(AsmInst::SendNotCached {
             self_class,
             callid,
             pc,
-            using_xmm,
             error,
             evict,
         });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
     }
 
     ///
@@ -234,22 +289,14 @@ impl AsmIr {
     /// - rdi: receiver: Value
     /// - rdx: value: Value
     ///
-    fn attr_writer(&mut self, bb: &BBContext, pc: BytecodePtr, ivar_id: IvarId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
-        self.inst.push(AsmInst::AttrWriter {
+    fn attr_writer(&self, ir: &mut AsmIr, pc: BytecodePtr, ivar_id: IvarId) {
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        ir.push(AsmInst::AttrWriter {
             using_xmm,
             error,
             ivar_id,
         });
-    }
-
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    fn attr_reader(&mut self, ivar_id: IvarId) {
-        self.inst.push(AsmInst::AttrReader { ivar_id });
     }
 }
 

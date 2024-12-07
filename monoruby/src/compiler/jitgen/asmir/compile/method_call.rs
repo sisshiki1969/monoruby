@@ -54,7 +54,6 @@ impl Codegen {
         callid: CallSiteId,
         self_class: ClassId,
         pc: BytecodePtr,
-        using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
         let callsite = &store[callid];
@@ -62,7 +61,6 @@ impl Codegen {
         let slow_path = self.jit.label();
         let global_class_version = self.class_version;
 
-        self.xmm_save(using_xmm);
         // r15 <- recv's class
         if callsite.recv.is_self() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -117,8 +115,6 @@ impl Codegen {
         );
 
         let return_addr = self.generic_call(callid, callsite.args, error);
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
 
         // slow path
         // r15: receiver's ClassId
@@ -269,7 +265,6 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
@@ -282,6 +277,46 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
+        self.do_call(callee, codeptr, recv_class, pc)
+    }
+
+    ///
+    /// ### in
+    /// rdi: numer of args.
+    ///
+    pub(super) fn binop_cached(
+        &mut self,
+        store: &Store,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+    ) -> CodePtr {
+        let callee = &store[callee_fid];
+        let (meta, codeptr, pc) = callee.get_data();
+        monoasm! { &mut self.jit,
+            subq rsp, 32;
+            // set outer
+            xorq rax, rax;
+            pushq rax;
+            // set meta.
+            movq rax, (meta.get());
+            pushq rax;
+            // set block
+            xorq rax, rax;
+            pushq rax;
+            // set self
+            pushq r13;
+            addq rsp, 64;
+        }
+        self.do_call(callee, codeptr, recv_class, pc)
+    }
+
+    fn do_call(
+        &mut self,
+        callee: &FuncInfo,
+        codeptr: CodePtr,
+        recv_class: ClassId,
+        pc: Option<BytecodePtr>,
+    ) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 
@@ -306,8 +341,6 @@ impl Codegen {
         let return_addr = self.jit.get_current_address();
 
         self.pop_frame();
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
         return_addr
     }
 
