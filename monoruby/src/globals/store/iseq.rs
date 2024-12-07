@@ -65,11 +65,11 @@ pub struct ISeqInfo {
     ///
     /// *FuncId* of this function.
     ///
-    id: FuncId,
+    func_id: FuncId,
     ///
     /// Mother method.
     ///
-    pub mother: (FuncId, usize),
+    mother: (FuncId, usize),
     ///
     /// Name of this function.
     ///
@@ -125,6 +125,7 @@ pub struct ISeqInfo {
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
+    
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -132,7 +133,7 @@ impl std::fmt::Debug for ISeqInfo {
         write!(
             f,
             "RubyFuncInfo {{ id:{} name:{} method:{:?} args: {} non_temp: {} temp: {}}}",
-            self.id().get(),
+            self.func_id().get(),
             self.name(),
             self.mother,
             self.args.args_names.len(),
@@ -161,7 +162,7 @@ impl ISeqInfo {
         is_block_style: bool,
     ) -> Self {
         ISeqInfo {
-            id,
+            func_id: id,
             mother,
             name,
             bytecode: None,
@@ -216,8 +217,12 @@ impl ISeqInfo {
         )
     }
 
-    pub(crate) fn id(&self) -> FuncId {
-        self.id
+    pub(crate) fn func_id(&self) -> FuncId {
+        self.func_id
+    }
+
+    pub(crate) fn mother(&self) -> (FuncId, usize) {
+        self.mother
     }
 
     ///
@@ -373,7 +378,7 @@ impl ISeqInfo {
     }
 
     #[cfg(feature = "emit-bc")]
-    pub(super) fn get_exception_map(
+    pub(crate) fn get_exception_map(
         &self,
     ) -> Vec<(
         std::ops::Range<BcIndex>,

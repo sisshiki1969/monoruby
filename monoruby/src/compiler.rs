@@ -1065,7 +1065,7 @@ impl Globals {
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         {
-            let func = self[func_id].as_ruby_func();
+            let func = self.store.iseq(func_id);
             let start_pos = func.get_pc_index(position);
             let name = self.func_description(func_id);
             eprintln!(
@@ -1075,7 +1075,7 @@ impl Globals {
                 } else {
                     "whole"
                 },
-                func.id(),
+                func.func_id(),
                 name,
                 if position.is_some() {
                     format!("start:[{}] ", start_pos)

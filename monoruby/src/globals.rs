@@ -476,7 +476,7 @@ impl Globals {
         let info = &self[func_id];
         if let Some(iseq) = info.is_iseq() {
             let iseq = &self.store[iseq];
-            let mother = iseq.mother.0;
+            let mother = iseq.mother().0;
             if mother != func_id {
                 format!("block in {}", self.func_description(mother))
             } else {

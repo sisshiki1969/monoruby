@@ -66,7 +66,7 @@ fn bytecode_compile_func(
         loc,
     } = store.functions.get_compile_info();
     let info = store.iseq(func_id);
-    let (fid, outer) = info.mother;
+    let (fid, outer) = info.mother();
     let params = store.iseq(fid).args.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
@@ -535,7 +535,7 @@ impl BytecodeGen {
         binding: Option<LvarCollector>,
     ) -> Self {
         let mut ir = Self {
-            id: info.id(),
+            id: info.func_id(),
             mother,
             ir: vec![],
             sp: vec![],

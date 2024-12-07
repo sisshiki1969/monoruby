@@ -786,7 +786,7 @@ impl Codegen {
         }
 
         s += "}\n";
-        std::fs::write(format!("func_id-{}.dot", func.id().get()), s).unwrap();
+        std::fs::write(format!("func_id-{}.dot", func.func_id().get()), s).unwrap();
     }
 }
 
