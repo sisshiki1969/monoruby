@@ -428,14 +428,14 @@ fn array_shl(
     let CallSiteInfo { dst, args, .. } = store[callid];
     bb.fetch_for_gpr(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |gen, _| {
-        gen.xmm_save(using_xmm);
         monoasm!( &mut gen.jit,
             movq rax, (ary_shl);
             call rax;
         );
-        gen.xmm_restore(using_xmm);
     });
+    ir.xmm_restore(using_xmm);
     bb.reg2acc_array_ty(ir, GP::Rax, dst);
     true
 }

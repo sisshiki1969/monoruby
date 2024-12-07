@@ -171,11 +171,11 @@ impl AsmIr {
         self.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
-    pub(super) fn xmm_save(&mut self, using_xmm: UsingXmm) {
+    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         self.push(AsmInst::XmmSave(using_xmm));
     }
 
-    pub(super) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
+    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
         self.push(AsmInst::XmmRestore(using_xmm));
     }
 
@@ -470,7 +470,7 @@ impl AsmIr {
         bbctx.rax2acc(self, dst);
     }
 
-    pub(super) fn handle_error(&mut self, error: AsmError) {
+    pub(crate) fn handle_error(&mut self, error: AsmError) {
         self.push(AsmInst::HandleError(error));
     }
 }

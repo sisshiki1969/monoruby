@@ -16,17 +16,12 @@ impl BBContext {
             if store[callid].block_fid.is_none()
                 && let Some(info) = store.inline_info.get_inline(fid)
             {
-                let is_simple = store[callid].is_simple();
                 let f = &info.inline_gen;
-                if is_simple && self.inline_call(ir, store, f, fid, callid, recv_class, version, pc)
-                {
-                    CompileResult::Continue
-                } else {
-                    self.call(ir, store, fid, recv_class, version, callid, pc)
+                if self.inline_call(ir, store, f, fid, callid, recv_class, version, pc) {
+                    return CompileResult::Continue;
                 }
-            } else {
-                self.call(ir, store, fid, recv_class, version, callid, pc)
             }
+            self.call(ir, store, fid, recv_class, version, callid, pc)
         } else {
             CompileResult::Deopt
         }

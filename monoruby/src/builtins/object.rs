@@ -88,15 +88,15 @@ fn object_object_id(
     }
     let CallSiteInfo { recv, dst: ret, .. } = store[callid];
     bb.fetch_for_gpr(ir, recv, GP::Rdi);
-    let using = bb.get_using_xmm();
+    let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
     ir.inline(move |gen, _| {
-        gen.xmm_save(using);
         monoasm! {&mut gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
         }
-        gen.xmm_restore(using);
     });
+    ir.xmm_restore(using_xmm);
     bb.rax2acc(ir, ret);
     true
 }
