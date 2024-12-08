@@ -125,7 +125,6 @@ pub struct ISeqInfo {
     /// Basic block information.
     ///
     pub(crate) bb_info: BasicBlockInfo,
-    
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -696,7 +695,7 @@ impl ISeqInfo {
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
-                        TraceIr::Cmp {
+                        TraceIr::GCmp {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -706,7 +705,14 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GCmpNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 142..=149 => {
@@ -730,7 +736,7 @@ impl ISeqInfo {
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
-                        TraceIr::Cmp {
+                        TraceIr::GCmp {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -740,7 +746,14 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GCmpNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 150 => TraceIr::LoadDynVar(
@@ -790,7 +803,7 @@ impl ISeqInfo {
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
-                        TraceIr::CmpBr {
+                        TraceIr::GCmpBr {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -802,7 +815,14 @@ impl ISeqInfo {
                             brkind,
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GCmpBrNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 162..=169 => {
@@ -838,7 +858,7 @@ impl ISeqInfo {
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
-                        TraceIr::CmpBr {
+                        TraceIr::GCmpBr {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -850,7 +870,14 @@ impl ISeqInfo {
                             brkind,
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GCmpBrNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 170 => TraceIr::InitMethod(FnInitInfo {
@@ -902,7 +929,7 @@ impl ISeqInfo {
                             },
                         }
                     } else if let Some(rhs_class) = rhs_class {
-                        TraceIr::BinOp {
+                        TraceIr::GBinOp {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -912,7 +939,14 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GBinOpNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 190..=199 => {
@@ -934,7 +968,7 @@ impl ISeqInfo {
                             },
                         }
                     } else if let Some(lhs_class) = lhs_class {
-                        TraceIr::BinOp {
+                        TraceIr::GBinOp {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -944,7 +978,14 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GBinOpNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 200..=209 => {
@@ -968,7 +1009,7 @@ impl ISeqInfo {
                     } else if let Some(lhs_class) = lhs_class
                         && let Some(rhs_class) = rhs_class
                     {
-                        TraceIr::BinOp {
+                        TraceIr::GBinOp {
                             kind,
                             info: BinOpInfo {
                                 dst,
@@ -978,7 +1019,14 @@ impl ISeqInfo {
                             },
                         }
                     } else {
-                        TraceIr::Deoptimize
+                        TraceIr::GBinOpNotrace {
+                            #[cfg(feature = "dump-bc")]
+                            kind,
+                            #[cfg(feature = "dump-bc")]
+                            dst,
+                            #[cfg(feature = "dump-bc")]
+                            mode,
+                        }
                     }
                 }
                 _ => unreachable!("{:016x}", op1),

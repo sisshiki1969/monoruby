@@ -352,7 +352,7 @@ impl JitContext {
             TraceIr::FBinOp { kind, info } => {
                 bbctx.gen_binop_float(ir, pc, kind, info);
             }
-            TraceIr::BinOp { kind, info } => {
+            TraceIr::GBinOp { kind, info } => {
                 let recv_class = info.lhs_class;
                 let class_version = self.class_version;
                 if let Some(entry) =
@@ -364,13 +364,14 @@ impl JitContext {
                     bbctx.gen_binop_generic(ir, pc, kind, info);
                 }
             }
+            TraceIr::GBinOpNotrace { .. } => return CompileResult::Deopt,
             TraceIr::FCmp { kind, info } => {
                 bbctx.gen_cmp_float(ir, pc, kind, info);
             }
             TraceIr::ICmp { kind, dst, mode } => {
                 bbctx.gen_cmp_integer(ir, pc, kind, mode, dst);
             }
-            TraceIr::Cmp { kind, info } => {
+            TraceIr::GCmp { kind, info } => {
                 let recv_class = info.lhs_class;
                 let class_version = self.class_version;
                 if let Some(entry) = store.check_method_for_class(
@@ -384,6 +385,7 @@ impl JitContext {
                     bbctx.gen_cmp_generic(ir, pc, kind, info);
                 }
             }
+            TraceIr::GCmpNotrace { .. } => return CompileResult::Deopt,
             TraceIr::FCmpBr {
                 kind,
                 info,
@@ -407,7 +409,7 @@ impl JitContext {
                 bbctx.gen_cmpbr_integer(ir, pc, kind, mode, dst, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
-            TraceIr::CmpBr {
+            TraceIr::GCmpBr {
                 kind,
                 info,
                 dest,
@@ -419,6 +421,7 @@ impl JitContext {
                 bbctx.gen_cmpbr_generic(ir, pc, kind, info.mode, info.dst, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
+            TraceIr::GCmpBrNotrace { .. } => return CompileResult::Deopt,
             TraceIr::Mov(dst, src) => {
                 bbctx.copy_slot(ir, src, dst);
             }

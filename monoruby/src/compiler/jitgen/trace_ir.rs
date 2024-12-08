@@ -135,9 +135,17 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         src: SlotId,
     },
-    BinOp {
+    GBinOp {
         kind: BinOpK,
         info: BinOpInfo,
+    },
+    GBinOpNotrace {
+        #[cfg(feature = "dump-bc")]
+        kind: BinOpK,
+        #[cfg(feature = "dump-bc")]
+        dst: Option<SlotId>,
+        #[cfg(feature = "dump-bc")]
+        mode: OpMode,
     },
     IBinOp {
         kind: BinOpK,
@@ -149,9 +157,17 @@ pub(crate) enum TraceIr {
         info: BinOpInfo,
     },
 
-    Cmp {
+    GCmp {
         kind: ruruby_parse::CmpKind,
         info: BinOpInfo,
+    },
+    GCmpNotrace {
+        #[cfg(feature = "dump-bc")]
+        kind: ruruby_parse::CmpKind,
+        #[cfg(feature = "dump-bc")]
+        dst: Option<SlotId>,
+        #[cfg(feature = "dump-bc")]
+        mode: OpMode,
     },
     ICmp {
         kind: ruruby_parse::CmpKind,
@@ -163,11 +179,19 @@ pub(crate) enum TraceIr {
         info: BinOpInfo,
     },
 
-    CmpBr {
+    GCmpBr {
         kind: ruruby_parse::CmpKind,
         info: BinOpInfo,
         dest: BasicBlockId,
         brkind: BrKind,
+    },
+    GCmpBrNotrace {
+        #[cfg(feature = "dump-bc")]
+        kind: ruruby_parse::CmpKind,
+        #[cfg(feature = "dump-bc")]
+        dst: Option<SlotId>,
+        #[cfg(feature = "dump-bc")]
+        mode: OpMode,
     },
     ICmpBr {
         kind: ruruby_parse::CmpKind,
@@ -316,7 +340,12 @@ impl TraceIr {
             }
         }
 
-        fn fmt(store: &Store, s: String, lhs_class: ClassId, rhs_class: ClassId) -> String {
+        fn fmt(
+            store: &Store,
+            s: String,
+            lhs_class: Option<ClassId>,
+            rhs_class: Option<ClassId>,
+        ) -> String {
             format!(
                 "{:36} [{}][{}]",
                 s,
@@ -345,10 +374,12 @@ impl TraceIr {
             kind: ruruby_parse::CmpKind,
             dst: Option<SlotId>,
             mode: &OpMode,
-            lhs_class: ClassId,
-            rhs_class: ClassId,
+            lhs_class: impl Into<Option<ClassId>>,
+            rhs_class: impl Into<Option<ClassId>>,
             optimizable: bool,
         ) -> String {
+            let lhs_class: Option<_> = lhs_class.into();
+            let rhs_class: Option<_> = rhs_class.into();
             let s = match mode {
                 OpMode::RR(lhs, rhs) => {
                     format!(
@@ -388,9 +419,11 @@ impl TraceIr {
             kind: BinOpK,
             dst: Option<SlotId>,
             mode: &OpMode,
-            lhs_class: ClassId,
-            rhs_class: ClassId,
+            lhs_class: impl Into<Option<ClassId>>,
+            rhs_class: impl Into<Option<ClassId>>,
         ) -> String {
+            let lhs_class: Option<_> = lhs_class.into();
+            let rhs_class: Option<_> = rhs_class.into();
             let (op1, lhs_class, rhs_class) = match mode {
                 OpMode::RR(lhs, rhs) => (
                     format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs),
@@ -400,11 +433,11 @@ impl TraceIr {
                 OpMode::RI(lhs, rhs) => (
                     format!("{} = {:?} {} {}: i16", ret_str(dst), lhs, kind, rhs),
                     lhs_class,
-                    INTEGER_CLASS,
+                    Some(INTEGER_CLASS),
                 ),
                 OpMode::IR(lhs, rhs) => (
                     format!("{} = {}: i16 {} {:?}", ret_str(dst), lhs, kind, rhs),
-                    INTEGER_CLASS,
+                    Some(INTEGER_CLASS),
                     rhs_class,
                 ),
             };
@@ -483,7 +516,7 @@ impl TraceIr {
                 idx_class,
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
-                fmt(store, op1, *base_class, *idx_class)
+                fmt(store, op1, Some(*base_class), Some(*idx_class))
             }
             TraceIr::IndexAssign {
                 src,
@@ -493,7 +526,7 @@ impl TraceIr {
                 idx_class,
             } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
-                fmt(store, op1, *base_class, *idx_class)
+                fmt(store, op1, Some(*base_class), Some(*idx_class))
             }
             TraceIr::LoadConst(reg, id) => {
                 let op = store[*id].format();
@@ -600,14 +633,23 @@ impl TraceIr {
                 format!("{:36}", op1)
             }
 
-            TraceIr::BinOp { kind, info } => binop_fmt_info(store, *kind, info),
+            TraceIr::GBinOp { kind, info } => binop_fmt_info(store, *kind, info),
+            TraceIr::GBinOpNotrace { kind, dst, mode } => {
+                binop_fmt(store, *kind, *dst, mode, None, None)
+            }
             TraceIr::FBinOp { kind, info } => binop_fmt_info(store, *kind, info),
             TraceIr::IBinOp { kind, dst, mode } => {
                 binop_fmt(store, *kind, *dst, mode, INTEGER_CLASS, INTEGER_CLASS)
             }
 
-            TraceIr::Cmp { kind, info } => cmp_fmt_info(store, *kind, info, false),
-            TraceIr::CmpBr { kind, info, .. } => cmp_fmt_info(store, *kind, info, true),
+            TraceIr::GCmp { kind, info } => cmp_fmt_info(store, *kind, info, false),
+            TraceIr::GCmpNotrace { kind, dst, mode } => {
+                cmp_fmt(store, *kind, *dst, mode, None, None, false)
+            }
+            TraceIr::GCmpBr { kind, info, .. } => cmp_fmt_info(store, *kind, info, true),
+            TraceIr::GCmpBrNotrace {
+                kind, dst, mode, ..
+            } => cmp_fmt(store, *kind, *dst, mode, None, None, true),
 
             TraceIr::FCmp { kind, info } => cmp_fmt_info(store, *kind, info, false),
             TraceIr::FCmpBr { kind, info, .. } => cmp_fmt_info(store, *kind, info, true),
