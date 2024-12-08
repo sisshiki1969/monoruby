@@ -225,7 +225,7 @@ impl BBContext {
         ir.handle_error(error);
     }
 
-    fn generic_cmp(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: CmpKind) {
+    pub(super) fn generic_cmp(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: CmpKind) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         ir.push(AsmInst::GenericCmp { kind, using_xmm });
@@ -234,56 +234,6 @@ impl BBContext {
 }
 
 impl BBContext {
-    pub(super) fn gen_binop_float(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        kind: BinOpK,
-        info: BinOpInfo,
-    ) {
-        let fmode = self.fmode(ir, info, pc);
-        if let Some(dst) = info.dst {
-            let dst = self.xmm_write(ir, dst);
-            let using_xmm = self.get_using_xmm();
-            ir.xmm_binop(kind, fmode, dst, using_xmm);
-        }
-    }
-
-    pub(super) fn gen_cmp_float(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        kind: CmpKind,
-        info: BinOpInfo,
-    ) {
-        if kind != CmpKind::Cmp {
-            let mode = self.fmode(ir, info, pc);
-            self.unlink(ir, info.dst);
-            self.clear(ir);
-            ir.push(AsmInst::FloatCmp { kind, mode });
-        } else {
-            self.fetch_binary(ir, info.mode);
-            self.unlink(ir, info.dst);
-            self.generic_cmp(ir, pc, kind);
-        }
-        self.rax2acc(ir, info.dst);
-    }
-
-    pub(super) fn gen_cmpbr_float(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        kind: CmpKind,
-        info: BinOpInfo,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
-        let mode = self.fmode(ir, info, pc);
-        self.unlink(ir, info.dst);
-        self.clear(ir);
-        ir.float_cmp_br(mode, kind, brkind, branch_dest);
-    }
-
     ///
     /// Fetch operands for binary operation according to *mode*.
     ///
@@ -339,7 +289,7 @@ impl BBContext {
         }
     }
 
-    fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo, pc: BytecodePtr) -> FMode {
+    pub(super) fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo, pc: BytecodePtr) -> FMode {
         let deopt = ir.new_deopt(self, pc);
         let BinOpInfo {
             mode,

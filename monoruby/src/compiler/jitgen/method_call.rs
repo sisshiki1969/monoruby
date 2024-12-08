@@ -7,24 +7,19 @@ impl BBContext {
         store: &Store,
         pc: BytecodePtr,
         callid: CallSiteId,
-        recv_class: Option<ClassId>,
-        fid: Option<FuncId>,
+        recv_class: ClassId,
+        fid: FuncId,
         version: u32,
     ) -> CompileResult {
-        if let Some(fid) = fid {
-            let recv_class = recv_class.unwrap();
-            if store[callid].block_fid.is_none()
-                && let Some(info) = store.inline_info.get_inline(fid)
-            {
-                let f = &info.inline_gen;
-                if self.inline_call(ir, store, f, fid, callid, recv_class, version, pc) {
-                    return CompileResult::Continue;
-                }
+        if store[callid].block_fid.is_none()
+            && let Some(info) = store.inline_info.get_inline(fid)
+        {
+            let f = &info.inline_gen;
+            if self.inline_call(ir, store, f, fid, callid, recv_class, version, pc) {
+                return CompileResult::Continue;
             }
-            self.call(ir, store, fid, recv_class, version, callid, pc)
-        } else {
-            CompileResult::Deopt
         }
+        self.call(ir, store, fid, recv_class, version, callid, pc)
     }
 
     pub(super) fn compile_binop_call(
@@ -42,7 +37,6 @@ impl BBContext {
         ));
         let callee = &store[fid];
         if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
-            ir.deopt(self, pc);
             return CompileResult::Deopt;
         }
         let BinOpInfo {

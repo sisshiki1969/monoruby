@@ -121,7 +121,7 @@ impl Globals {
                 )
             })
             .collect();
-        let func = self.store.iseq(func_id);
+        let iseq = self.store.iseq(func_id);
         for (i, text) in dump {
             sourcemap
                 .iter()
@@ -135,9 +135,12 @@ impl Globals {
                     },
                 )
                 .for_each(|bc_pos| {
+                    if iseq.bb_info.is_bb_head(bc_pos).is_some() {
+                        eprintln!("{:?}", iseq.bb_info.get_bb_id(bc_pos));
+                    }
                     eprintln!(
                         "{bc_pos} {}",
-                        match func.trace_ir(&self.store, bc_pos).format(&self.store) {
+                        match iseq.trace_ir(&self.store, bc_pos).format(&self.store) {
                             Some(s) => s,
                             None => "".to_string(),
                         }

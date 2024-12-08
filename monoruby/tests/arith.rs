@@ -296,9 +296,11 @@ fn test_call() {
 
 #[test]
 fn test_int_bigint() {
-    run_test("4611686018427387903"); // max number of 63bit signed int.
-    run_test("4611686018427387903 + 1");
-    run_test("4611686018400000000 + 27387904");
+    run_test("9223372036854775807"); // max number of 63bit signed int.
+    run_test("9223372036854775808"); // max number of 63bit signed int.
+    run_test("9223372036854775807 + 1");
+    run_test("9223372036854775000 + 27387904");
+    run_test("-(-9223372036854775808)");
     run_test("-4611686018427387904"); // min number of 63bit signed int.
     run_test("-4611686018427387904 - 1");
     run_test("-4611686018400000001 - 27387904");

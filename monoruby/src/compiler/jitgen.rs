@@ -621,6 +621,7 @@ impl Codegen {
         self_value: Value,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
+        startup_flag: bool,
     ) -> Vec<(BcIndex, usize)> {
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
@@ -685,8 +686,6 @@ impl Codegen {
 
         // generate machine code for a main context
         for (_bbid, ir) in bbir.into_iter() {
-            #[cfg(feature = "emit-asm")]
-            eprintln!("{:?}", _bbid);
             self.gen_asm(ir, store, &mut ctx, None, None);
         }
 
@@ -699,23 +698,24 @@ impl Codegen {
 
         self.jit.finalize();
 
-        #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-        {
-            self.jit.select_page(0);
-            eprintln!("    total bytes(0):{:?}", self.jit.get_current());
-            self.jit.select_page(1);
-            eprintln!("    total bytes(1):{:?}", self.jit.get_current());
-            self.jit.select_page(0);
+        if startup_flag {
+            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
+            {
+                self.jit.select_page(0);
+                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
+                self.jit.select_page(1);
+                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
+                self.jit.select_page(0);
+            }
+            #[cfg(feature = "jit-log")]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                self.jit_compile_time += elapsed;
+            }
+            #[cfg(feature = "emit-asm")]
+            eprintln!("<== finished compile.");
         }
-        #[cfg(feature = "jit-log")]
-        {
-            let elapsed = now.elapsed();
-            eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-            self.jit_compile_time += elapsed;
-        }
-        #[cfg(feature = "emit-asm")]
-        eprintln!("<== finished compile.");
-
         ctx.sourcemap
     }
 
