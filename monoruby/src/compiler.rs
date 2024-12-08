@@ -1064,7 +1064,7 @@ impl Globals {
         entry_label: DestLabel,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
-        {
+        if self.startup_flag {
             let func = self.store.iseq(func_id);
             let start_pos = func.get_pc_index(position);
             let name = self.func_description(func_id);
@@ -1091,9 +1091,14 @@ impl Globals {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
 
-        let _sourcemap =
-            self.codegen
-                .jit_compile(&self.store, func_id, self_value, position, entry_label);
+        let _sourcemap = self.codegen.jit_compile(
+            &self.store,
+            func_id,
+            self_value,
+            position,
+            entry_label,
+            self.startup_flag,
+        );
         #[cfg(feature = "perf")]
         {
             let desc = format!("JIT:<{}>", self.func_description(func_id));

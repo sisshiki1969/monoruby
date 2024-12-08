@@ -443,22 +443,26 @@ impl ISeqInfo {
                     jit_addr: pc.into_jit_addr(),
                 },
                 15 => TraceIr::LoopEnd,
-                16 => {
+                16 => TraceIr::LoadIvar(
+                    SlotId::new(op1_w),
+                    IdentId::from(op1_l),
                     if let Some(class) = pc.cached_class0() {
                         let ivar = pc.cached_ivarid();
-                        TraceIr::LoadIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                        Some((class, ivar))
                     } else {
-                        TraceIr::Deoptimize
-                    }
-                }
-                17 => {
+                        None
+                    },
+                ),
+                17 => TraceIr::StoreIvar(
+                    SlotId::new(op1_w),
+                    IdentId::from(op1_l),
                     if let Some(class) = pc.cached_class0() {
                         let ivar = pc.cached_ivarid();
-                        TraceIr::StoreIvar(SlotId::new(op1_w), IdentId::from(op1_l), class, ivar)
+                        Some((class, ivar))
                     } else {
-                        TraceIr::Deoptimize
-                    }
-                }
+                        None
+                    },
+                ),
                 20 => {
                     let dest = self.get_bb(bc_pos + 1 + op1_l as i32);
                     TraceIr::CheckLocal(SlotId::new(op1_w), dest)
@@ -494,18 +498,24 @@ impl ISeqInfo {
                     src: SlotId::new(op1_w),
                     name: IdentId::from(op1_l),
                 },
-                30..=31 => TraceIr::MethodCall {
-                    callid: op1_l.into(),
-                    recv_class: pc.cached_class1(),
-                    fid: pc.cached_fid(),
-                    version: (pc + 1).cached_version(),
-                },
-                32..=33 => TraceIr::MethodCallWithBlock {
-                    callid: op1_l.into(),
-                    recv_class: pc.cached_class1(),
-                    fid: pc.cached_fid(),
-                    version: (pc + 1).cached_version(),
-                },
+                30..=33 => {
+                    let callid = op1_l.into();
+                    if let Some(fid) = pc.cached_fid() {
+                        TraceIr::MethodCall {
+                            callid,
+                            cache: Some((
+                                pc.cached_class1().unwrap(),
+                                fid,
+                                (pc + 1).cached_version(),
+                            )),
+                        }
+                    } else {
+                        TraceIr::MethodCall {
+                            callid,
+                            cache: None,
+                        }
+                    }
+                }
                 34..=35 => TraceIr::Yield {
                     callid: op1_l.into(),
                 },
@@ -598,28 +608,20 @@ impl ISeqInfo {
                         TraceIr::IUnOp { kind, dst, src }
                     } else if pc.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
-                    } else if let Some(src_class) = pc.classid1() {
+                    } else {
                         TraceIr::UnOp {
                             kind,
                             dst,
                             src,
-                            src_class,
+                            src_class: pc.classid1(),
                         }
-                    } else {
-                        TraceIr::Deoptimize
                     }
                 }
-                127 => {
-                    if let Some(src_class) = pc.classid1() {
-                        TraceIr::BitNot {
-                            dst: SlotId::new(op1_w1),
-                            src: SlotId::new(op2_w2),
-                            src_class,
-                        }
-                    } else {
-                        TraceIr::Deoptimize
-                    }
-                }
+                127 => TraceIr::BitNot {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                    src_class: pc.classid1(),
+                },
                 128 => TraceIr::Not {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
@@ -632,48 +634,40 @@ impl ISeqInfo {
                         TraceIr::IUnOp { kind, dst, src }
                     } else if pc.is_float1() {
                         TraceIr::FUnOp { kind, dst, src }
-                    } else if let Some(src_class) = pc.classid1() {
+                    } else {
                         TraceIr::UnOp {
                             kind,
                             dst,
                             src,
-                            src_class,
+                            src_class: pc.classid1(),
                         }
-                    } else {
-                        TraceIr::Deoptimize
                     }
                 }
                 130 => TraceIr::InlineCache,
-                132 => {
-                    if let Some(base_class) = pc.classid1()
+                132 => TraceIr::Index {
+                    dst: SlotId::new(op1_w1),
+                    base: SlotId::new(op2_w2),
+                    idx: SlotId::new(op3_w3),
+                    class: if let Some(base_class) = pc.classid1()
                         && let Some(idx_class) = pc.classid2()
                     {
-                        TraceIr::Index {
-                            dst: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                            base_class,
-                            idx_class,
-                        }
+                        Some((base_class, idx_class))
                     } else {
-                        TraceIr::Deoptimize
-                    }
-                }
-                133 => {
-                    if let Some(base_class) = pc.classid1()
+                        None
+                    },
+                },
+                133 => TraceIr::IndexAssign {
+                    src: SlotId::new(op1_w1),
+                    base: SlotId::new(op2_w2),
+                    idx: SlotId::new(op3_w3),
+                    class: if let Some(base_class) = pc.classid1()
                         && let Some(idx_class) = pc.classid2()
                     {
-                        TraceIr::IndexAssign {
-                            src: SlotId::new(op1_w1),
-                            base: SlotId::new(op2_w2),
-                            idx: SlotId::new(op3_w3),
-                            base_class,
-                            idx_class,
-                        }
+                        Some((base_class, idx_class))
                     } else {
-                        TraceIr::Deoptimize
-                    }
-                }
+                        None
+                    },
+                },
                 134..=141 => {
                     let kind = CmpKind::from(opcode - 134);
                     let dst = SlotId::from(op1_w1);

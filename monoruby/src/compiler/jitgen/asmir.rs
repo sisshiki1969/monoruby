@@ -1007,6 +1007,10 @@ pub(super) enum AsmInst {
     },
 
     Not,
+    Neg {
+        reg: GP,
+        deopt: AsmDeopt,
+    },
     GenericUnOp {
         func: UnaryOpFn,
         using_xmm: UsingXmm,
@@ -1307,8 +1311,7 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
-    #[cfg(feature = "emit-asm")]
-    pub(crate) fn dump(&self, store: &Store) -> String {
+    /*pub fn dump(&self, store: &Store) -> String {
         match self {
             Self::AccToStack(slot) => format!("{:?} = R15", slot),
             Self::RegToAcc(gpr) => format!("R15 = {:?}", gpr),
@@ -1390,7 +1393,7 @@ impl AsmInst {
             ),
             _ => format!("{:?}", self),
         }
-    }
+    }*/
 }
 
 #[derive(Clone, Debug)]
@@ -1418,10 +1421,6 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
     ) {
-        #[cfg(feature = "emit-asm")]
-        for ir in &ir.inst {
-            eprintln!("    {}", ir.dump(store));
-        }
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();

@@ -168,7 +168,7 @@ impl BasicBlockInfo {
         }
     }
 
-    pub(super) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
+    pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
         self.bb_map[i.0 as usize]
     }
 
