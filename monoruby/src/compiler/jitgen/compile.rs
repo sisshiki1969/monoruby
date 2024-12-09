@@ -307,10 +307,21 @@ impl JitContext {
                     bbctx.rax2acc(ir, dst);
                 }
             }
-            TraceIr::BitNot { dst, src, .. } => {
-                bbctx.fetch_for_gpr(ir, src, GP::Rdi);
-                ir.generic_unop(bbctx, pc, bitnot_value);
-                bbctx.rax2acc(ir, dst);
+            TraceIr::BitNot {
+                dst,
+                src,
+                src_class,
+            } => {
+                if let Some(INTEGER_CLASS) = src_class {
+                    let deopt = ir.new_deopt(bbctx, pc);
+                    bbctx.fetch_fixnum(ir, src, GP::Rdi, deopt);
+                    ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
+                    bbctx.reg2acc_fixnum(ir, GP::Rdi, dst);
+                } else {
+                    bbctx.fetch_for_gpr(ir, src, GP::Rdi);
+                    ir.generic_unop(bbctx, pc, bitnot_value);
+                    bbctx.rax2acc(ir, dst);
+                }
             }
             TraceIr::FUnOp { kind, dst, src } => {
                 let deopt = ir.new_deopt(bbctx, pc);
@@ -323,7 +334,7 @@ impl JitContext {
                 let deopt = ir.new_deopt(bbctx, pc);
                 bbctx.fetch_fixnum(ir, src, GP::Rdi, deopt);
                 match kind {
-                    UnOpK::Neg => ir.push(AsmInst::Neg {
+                    UnOpK::Neg => ir.push(AsmInst::FixnumNeg {
                         reg: GP::Rdi,
                         deopt,
                     }),
@@ -358,7 +369,9 @@ impl JitContext {
                 {
                     return bbctx.compile_binop_call(ir, store, fid, class_version, info, pc);
                 } else {
-                    bbctx.gen_binop_generic(ir, pc, kind, info);
+                    bbctx.fetch_binary(ir, info.mode);
+                    bbctx.generic_binop(ir, pc, kind);
+                    bbctx.rax2acc(ir, info.dst);
                 }
             }
             TraceIr::GBinOpNotrace { .. } => return CompileResult::Deopt,
@@ -376,7 +389,9 @@ impl JitContext {
                 bbctx.rax2acc(ir, info.dst);
             }
             TraceIr::ICmp { kind, dst, mode } => {
-                bbctx.gen_cmp_integer(ir, pc, kind, mode, dst);
+                bbctx.fetch_fixnum_binary(ir, pc, &mode);
+                ir.push(AsmInst::IntegerCmp { kind, mode });
+                bbctx.rax2acc(ir, dst);
             }
             TraceIr::GCmp { kind, info } => {
                 let recv_class = info.lhs_class;
@@ -416,7 +431,10 @@ impl JitContext {
             } => {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
-                bbctx.gen_cmpbr_integer(ir, pc, kind, mode, dst, brkind, branch_dest);
+                bbctx.fetch_fixnum_binary(ir, pc, &mode);
+                bbctx.unlink(ir, dst);
+                bbctx.clear(ir);
+                ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
             TraceIr::GCmpBr {
