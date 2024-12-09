@@ -1007,9 +1007,12 @@ pub(super) enum AsmInst {
     },
 
     Not,
-    Neg {
+    FixnumNeg {
         reg: GP,
         deopt: AsmDeopt,
+    },
+    FixnumBitNot {
+        reg: GP,
     },
     GenericUnOp {
         func: UnaryOpFn,

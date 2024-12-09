@@ -373,13 +373,22 @@ impl Codegen {
             AsmInst::Not => {
                 self.not_rdi_to_rax();
             }
-            AsmInst::Neg { reg, deopt } => {
+            AsmInst::FixnumNeg { reg, deopt } => {
                 let deopt = labels[deopt];
                 let r = reg as u64;
                 monoasm! { &mut self.jit,
                     sarq  R(r), 1;
                     negq  R(r);
                     jo    deopt;
+                    salq  R(r), 1;
+                    orq   R(r), 1;
+                }
+            }
+            AsmInst::FixnumBitNot { reg } => {
+                let r = reg as u64;
+                monoasm! { &mut self.jit,
+                    sarq  R(r), 1;
+                    notq  R(r);
                     salq  R(r), 1;
                     orq   R(r), 1;
                 }
