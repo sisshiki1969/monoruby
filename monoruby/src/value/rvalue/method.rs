@@ -33,11 +33,11 @@ impl MethodInner {
         )
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
+    pub fn to_s(&self, store: &Store) -> String {
         format!(
             "#<Method: {}#{}()>",
-            globals.get_class_name(self.receiver.class()),
-            globals[self.func_id()].name().unwrap()
+            store.get_class_name(self.receiver.class()),
+            store[self.func_id()].name().unwrap()
         )
     }
 }
@@ -66,11 +66,11 @@ impl UMethodInner {
         )
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
+    pub fn to_s(&self, store: &Store) -> String {
         format!(
             "#<UnboundMethod: {}#{}()>",
-            globals.get_class_name(self.owner),
-            globals[self.func_id()].name().unwrap()
+            store.get_class_name(self.owner),
+            store[self.func_id()].name().unwrap()
         )
     }
 }

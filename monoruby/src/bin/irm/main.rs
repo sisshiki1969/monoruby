@@ -83,7 +83,7 @@ fn main() {
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
                 match executor.invoke_binding(&mut globals, binding.binding().unwrap()) {
-                    Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
+                    Ok(val) => eprintln!("=> {}", val.inspect(&globals.store)),
                     Err(err) => err.show_error_message_and_all_loc(&globals),
                 };
                 script_line += 1;

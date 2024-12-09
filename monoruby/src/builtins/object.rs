@@ -200,7 +200,7 @@ fn object_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/is_a=3f.html]
 #[monoruby_builtin]
 fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class = lfp.arg(0).expect_class_or_module(globals)?.id();
+    let class = lfp.arg(0).expect_class_or_module(&globals.store)?.id();
     Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
 
@@ -248,7 +248,7 @@ fn dup(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().to_s(globals);
+    let s = lfp.self_val().to_s(&globals.store);
     Ok(Value::string(s))
 }
 
@@ -281,7 +281,7 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().inspect(globals);
+    let s = lfp.self_val().inspect(&globals.store);
     Ok(Value::string(s))
 }
 
@@ -304,8 +304,8 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
 #[monoruby_builtin]
 fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let b =
-        lfp.self_val().real_class(globals).id() == lfp.arg(0).expect_class_or_module(globals)?.id();
+    let b = lfp.self_val().real_class(globals).id()
+        == lfp.arg(0).expect_class_or_module(&globals.store)?.id();
     Ok(Value::bool(b))
 }
 

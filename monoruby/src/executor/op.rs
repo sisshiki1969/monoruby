@@ -373,7 +373,7 @@ impl Executor {
         self.compare_values_inner(globals, lhs, rhs)?
             .ok_or_else(|| {
                 let lhs = lhs.get_real_class_name(globals);
-                let rhs = rhs.to_s(globals);
+                let rhs = rhs.to_s(&globals.store);
                 MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
             })
     }
@@ -388,7 +388,7 @@ impl Executor {
         self.compare_values_no_opt_inner(globals, lhs, rhs)?
             .ok_or_else(|| {
                 let lhs = lhs.get_real_class_name(globals);
-                let rhs = rhs.to_s(globals);
+                let rhs = rhs.to_s(&globals.store);
                 MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
             })
     }

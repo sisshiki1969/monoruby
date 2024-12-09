@@ -123,7 +123,7 @@ impl Value {
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        globals.get_class_name(self.real_class(globals).id())
+        globals.store.get_class_name(self.real_class(globals).id())
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
@@ -491,18 +491,18 @@ impl Value {
         s
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
+    pub fn to_s(&self, store: &Store) -> String {
         let s = match self.unpack() {
-            RV::Object(rvalue) => rvalue.to_s(globals),
-            _ => self.debug_tos(&globals.store),
+            RV::Object(rvalue) => rvalue.to_s(store),
+            _ => self.debug_tos(store),
         };
         s
     }
 
-    pub fn inspect(&self, globals: &Globals) -> String {
+    pub fn inspect(&self, store: &Store) -> String {
         let s = match self.unpack() {
-            RV::Object(rvalue) => rvalue.inspect(globals),
-            _ => self.debug(&globals.store),
+            RV::Object(rvalue) => rvalue.inspect(store),
+            _ => self.debug(store),
         };
         s
     }
@@ -881,11 +881,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_class_or_module(&self, globals: &Globals) -> Result<Module> {
+    pub(crate) fn expect_class_or_module(&self, store: &Store) -> Result<Module> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = self.inspect(globals);
+                let name = self.inspect(store);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
@@ -902,7 +902,7 @@ impl Value {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
-                let name = self.to_s(globals);
+                let name = self.to_s(&globals.store);
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -912,7 +912,7 @@ impl Value {
         match self.is_module() {
             Some(module) => Ok(module),
             None => {
-                let name = self.to_s(globals);
+                let name = self.to_s(&globals.store);
                 Err(MonorubyErr::is_not_class(name))
             }
         }

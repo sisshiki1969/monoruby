@@ -261,7 +261,7 @@ impl MonorubyErr {
     pub(crate) fn char_out_of_range(globals: &Globals, val: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::Range,
-            format!("{} out of char range", val.to_s(globals)),
+            format!("{} out of char range", val.to_s(&globals.store)),
         )
     }
 
@@ -396,7 +396,7 @@ impl MonorubyErr {
         MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
             val.get_real_class_name(globals),
-            val.to_s(globals),
+            val.to_s(&globals.store),
         ))
     }
 
@@ -482,16 +482,16 @@ impl NoMethodErrKind {
         match self {
             NoMethodErrKind::MethodNotFound { name, obj } => format!(
                 "undefined method `{name}' for {}:{}",
-                obj.inspect(globals),
+                obj.inspect(&globals.store),
                 obj.get_real_class_name(globals)
             ),
             NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
                 "undefined method `{name}' for {}",
-                globals.get_class_name(*class)
+                globals.store.get_class_name(*class)
             ),
             NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
                 "private method `{name}' called for {}:{}",
-                obj.inspect(globals),
+                obj.inspect(&globals.store),
                 obj.get_real_class_name(globals)
             ),
         }
@@ -531,13 +531,13 @@ impl TypeErrKind {
             TypeErrKind::NoImpricitConversion { val, target_class } => format!(
                 "no implicit conversion of {} into {}",
                 val.get_real_class_name(globals),
-                globals.get_class_name(*target_class)
+                globals.store.get_class_name(*target_class)
             ),
             TypeErrKind::NotSymbolNorString { val } => {
-                format!("{} is not a symbol nor a string", val.to_s(globals))
+                format!("{} is not a symbol nor a string", val.to_s(&globals.store))
             }
             TypeErrKind::NotRegexpNorString { val } => {
-                format!("{} is not a regexp nor a string", val.to_s(globals))
+                format!("{} is not a regexp nor a string", val.to_s(&globals.store))
             }
             TypeErrKind::CantConverFloat { val } => {
                 format!(

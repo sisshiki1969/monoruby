@@ -431,7 +431,7 @@ impl Executor {
             ..
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
-            base.expect_class_or_module(globals)?.id()
+            base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -440,13 +440,13 @@ impl Executor {
         } else {
             let parent = prefix.remove(0);
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id();
         }
         let v = self.get_constant_checked(globals, parent, name)?;
@@ -468,7 +468,7 @@ impl Executor {
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
             let base = unsafe { self.get_slot(base) }.unwrap();
-            base.expect_class_or_module(globals)?.id()
+            base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -477,13 +477,13 @@ impl Executor {
             let parent = prefix.remove(0);
             let current_func = self.method_func_id();
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id();
         }
         globals.store.classes.set_constant(parent, name, val);
@@ -637,7 +637,7 @@ impl Executor {
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Value {
         match receiver.unpack() {
             RV::Object(_) => {}
-            _ => return Value::string(receiver.to_s(globals)),
+            _ => return Value::string(receiver.to_s(&globals.store)),
         }
         let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
         self.invoke_func(globals, func_id, receiver, &[], None)
@@ -902,12 +902,12 @@ impl Executor {
         is_module: u32,
     ) -> Result<Value> {
         let parent = match base {
-            Some(base) => base.expect_class_or_module(globals)?.id(),
+            Some(base) => base.expect_class_or_module(&globals.store)?.id(),
             None => self.context_class_id(),
         };
         let self_val = match self.get_constant(globals, parent, name)? {
             Some(val) => {
-                let val = val.expect_class_or_module(globals)?;
+                let val = val.expect_class_or_module(&globals.store)?;
                 if let Some(superclass) = superclass {
                     assert!(is_module != 1);
                     let superclass_id = superclass.expect_class(globals)?.id();

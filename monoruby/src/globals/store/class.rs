@@ -114,13 +114,13 @@ impl ClassId {
     }
 
     /// Get class name(IdentId) of *ClassId*.
-    pub(crate) fn get_name_id(self, globals: &Globals) -> IdentId {
-        let class = globals.store.classes.get_module(self);
-        match globals.store.classes[self].name {
+    pub(crate) fn get_name_id(self, store: &Store) -> IdentId {
+        let class = store.classes.get_module(self);
+        match store.classes[self].name {
             Some(id) => id,
             None => IdentId::get_id_from_string(match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
-                Some(base) => format!("#<Class:{}>", base.to_s(globals)),
+                Some(base) => format!("#<Class:{}>", base.to_s(store)),
             }),
         }
     }
@@ -600,7 +600,7 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let info = self.store[func_id].get_wrapper_info();
-            let desc = self.func_description(func_id);
+            let desc = self.store.func_description(func_id);
             self.codegen.perf_write(info, &desc);
         }
     }
@@ -636,7 +636,7 @@ impl Globals {
         #[cfg(feature = "perf")]
         {
             let info = self.store[func_id].get_wrapper_info();
-            let desc = self.func_description(func_id);
+            let desc = self.store.func_description(func_id);
             self.codegen.perf_write(info, &desc);
         }
         let singleton = self.store.classes.get_metaclass(class_id).id();

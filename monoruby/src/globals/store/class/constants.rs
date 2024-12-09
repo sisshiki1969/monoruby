@@ -111,8 +111,8 @@ impl Globals {
                     Some((under, _)) => {
                         return Err(MonorubyErr::runtimeerr(format!(
                             "class variable {name} of {} is overtaken by {}",
-                            under.id().get_name_id(self),
-                            module.id().get_name_id(self),
+                            under.id().get_name_id(&self.store),
+                            module.id().get_name_id(&self.store),
                         )));
                     }
                     None => {
@@ -129,7 +129,7 @@ impl Globals {
             Some(res) => Ok(res),
             None => Err(MonorubyErr::uninitialized_cvar(
                 name,
-                parent.id().get_name_id(self),
+                parent.id().get_name_id(&self.store),
             )),
         }
     }

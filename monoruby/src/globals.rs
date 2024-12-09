@@ -100,7 +100,7 @@ pub struct Globals {
     /// main object (`self`` of toplevel).
     pub main_object: Value,
     /// function and class info.
-    pub(crate) store: Store,
+    pub store: Store,
     /// code generator.
     pub codegen: Codegen,
     /// globals variables.
@@ -381,7 +381,7 @@ impl Globals {
         if let Some(s) = val.is_bytes() {
             self.stdout.write_all(s)
         } else {
-            let v = val.to_s(self).into_bytes();
+            let v = val.to_s(&self.store).into_bytes();
             self.stdout.write_all(&v)
         }
         .unwrap();
@@ -463,32 +463,6 @@ impl Globals {
         &self.store.iseq(source_func_id).sourceinfo.path
     }
 
-    pub(crate) fn func_description(&self, func_id: FuncId) -> String {
-        let info = &self[func_id];
-        if let Some(iseq) = info.is_iseq() {
-            let iseq = &self.store[iseq];
-            let mother = iseq.mother().0;
-            if mother != func_id {
-                format!("block in {}", self.func_description(mother))
-            } else {
-                match info.owner_class() {
-                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), iseq.name()),
-                    None => iseq.name().to_string(),
-                }
-            }
-        } else {
-            let name = if let Some(name) = info.name() {
-                format!("{:?}", name)
-            } else {
-                String::new()
-            };
-            match info.owner_class() {
-                Some(owner) => format!("{:?}#{name}", owner.get_name_id(self)),
-                None => name.to_string(),
-            }
-        }
-    }
-
     /// ## ABI of JIT-compiled code.
     ///
     /// ### argument registers:
@@ -551,32 +525,6 @@ impl Globals {
 }
 
 impl Globals {
-    /// Get class name of *ClassId*.
-    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
-        if let Some(class) = class.into() {
-            let class_obj = self.store.classes[class].get_module();
-            match self.store.classes[class].get_name_id() {
-                Some(_) => {
-                    let v: Vec<_> = self
-                        .store
-                        .classes
-                        .get_parents(class)
-                        .into_iter()
-                        .rev()
-                        .map(|name| name.to_string())
-                        .collect();
-                    v.join("::")
-                }
-                None => match class_obj.is_singleton() {
-                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.to_s(self)),
-                },
-            }
-        } else {
-            "<INVALID>".to_string()
-        }
-    }
-
     pub(crate) fn generate_range(
         &mut self,
         start: Value,
