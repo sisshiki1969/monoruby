@@ -20,7 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
+    globals.define_builtin_inline_func(ARRAY_CLASS, "length", size, Box::new(array_size), 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
@@ -194,6 +194,29 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.self_val().as_array().len();
     Ok(Value::integer(len as i64))
+}
+
+fn array_size(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    _pc: BytecodePtr,
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
+    let dst = store[callid].dst;
+    ir.inline(move |gen, _| {
+        gen.get_array_length();
+        monoasm! { &mut gen.jit,
+            salq  rax, 1;
+            orq   rax, 1;
+        }
+    });
+
+    bb.reg2acc_fixnum(ir, GP::Rax, dst);
+    true
 }
 
 ///
