@@ -76,9 +76,9 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     let msg = if let Some(msg) = lfp.try_arg(0) {
         msg.expect_string()?
     } else {
-        globals.get_class_name(class_id)
+        globals.store.get_class_name(class_id)
     };
-    let kind = class_id.get_name_id(globals);
+    let kind = class_id.get_name_id(&globals.store);
     Ok(Value::new_exception(kind, msg, vec![], class_id))
 }
 
@@ -106,6 +106,7 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
+        .store
         .get_ivar(self_, IdentId::get_id("/path"))
         .unwrap_or_default())
 }
@@ -119,7 +120,7 @@ fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 #[monoruby_builtin]
 fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
-    let name = class_id.get_name_id(globals);
+    let name = class_id.get_name_id(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
         let status = arg0.expect_integer()?;
         if let Some(arg1) = lfp.try_arg(1) {
@@ -131,7 +132,7 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         (0, format!("{}", name))
     };
     let mut ex = Value::new_exception(name, msg, vec![], class_id);
-    ex.set_instance_var(globals, "@status", Value::integer(status))?;
+    ex.set_instance_var(&mut globals.store, "@status", Value::integer(status))?;
 
     Ok(ex)
 }

@@ -81,22 +81,22 @@ impl MonorubyErr {
         }
     }
 
-    pub fn show_error_message_and_all_loc(&self, globals: &Globals) {
-        eprintln!("{}", self.get_error_message(globals));
+    pub fn show_error_message_and_all_loc(&self, store: &Store) {
+        eprintln!("{}", self.get_error_message(store));
         self.show_all_loc();
     }
 
-    pub fn show_error_message_and_loc(&self, globals: &Globals) {
-        eprintln!("{}", self.get_error_message(globals));
+    pub fn show_error_message_and_loc(&self, store: &Store) {
+        eprintln!("{}", self.get_error_message(store));
         self.show_loc();
     }
 
-    pub fn get_error_message(&self, globals: &Globals) -> String {
-        format!("{} ({})", self.show(globals), self.get_class_name())
+    pub fn get_error_message(&self, store: &Store) -> String {
+        format!("{} ({})", self.show(store), self.get_class_name())
     }
 
-    pub fn show(&self, globals: &Globals) -> String {
-        format!("{}{}", self.msg, self.kind.show(globals),)
+    pub fn show(&self, store: &Store) -> String {
+        format!("{}{}", self.msg, self.kind.show(store),)
     }
 
     pub fn get_class_name(&self) -> &str {
@@ -258,10 +258,10 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Fiber, msg)
     }
 
-    pub(crate) fn char_out_of_range(globals: &Globals, val: Value) -> MonorubyErr {
+    pub(crate) fn char_out_of_range(store: &Store, val: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::Range,
-            format!("{} out of char range", val.to_s(globals)),
+            format!("{} out of char range", val.to_s(store)),
         )
     }
 
@@ -392,11 +392,11 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Frozen, msg)
     }
 
-    pub(crate) fn cant_modify_frozen(globals: &Globals, val: Value) -> MonorubyErr {
+    pub(crate) fn cant_modify_frozen(store: &Store, val: Value) -> MonorubyErr {
         MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
-            val.get_real_class_name(globals),
-            val.to_s(globals),
+            val.get_real_class_name(store),
+            val.to_s(store),
         ))
     }
 
@@ -461,10 +461,10 @@ pub enum MonorubyErrKind {
 }
 
 impl MonorubyErrKind {
-    pub fn show(&self, globals: &Globals) -> String {
+    pub fn show(&self, store: &Store) -> String {
         match self {
-            MonorubyErrKind::Type(kind) => kind.show(globals),
-            MonorubyErrKind::NotMethod(kind) => kind.show(globals),
+            MonorubyErrKind::Type(kind) => kind.show(store),
+            MonorubyErrKind::NotMethod(kind) => kind.show(store),
             _ => String::new(),
         }
     }
@@ -478,21 +478,21 @@ pub enum NoMethodErrKind {
 }
 
 impl NoMethodErrKind {
-    pub fn show(&self, globals: &Globals) -> String {
+    pub fn show(&self, store: &Store) -> String {
         match self {
             NoMethodErrKind::MethodNotFound { name, obj } => format!(
                 "undefined method `{name}' for {}:{}",
-                obj.inspect(globals),
-                obj.get_real_class_name(globals)
+                obj.inspect(store),
+                obj.get_real_class_name(store)
             ),
             NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
                 "undefined method `{name}' for {}",
-                globals.get_class_name(*class)
+                store.get_class_name(*class)
             ),
             NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
                 "private method `{name}' called for {}:{}",
-                obj.inspect(globals),
-                obj.get_real_class_name(globals)
+                obj.inspect(store),
+                obj.get_real_class_name(store)
             ),
         }
     }
@@ -526,35 +526,35 @@ pub enum TypeErrKind {
 }
 
 impl TypeErrKind {
-    pub fn show(&self, globals: &Globals) -> String {
+    pub fn show(&self, store: &Store) -> String {
         match self {
             TypeErrKind::NoImpricitConversion { val, target_class } => format!(
                 "no implicit conversion of {} into {}",
-                val.get_real_class_name(globals),
-                globals.get_class_name(*target_class)
+                val.get_real_class_name(store),
+                store.get_class_name(*target_class)
             ),
             TypeErrKind::NotSymbolNorString { val } => {
-                format!("{} is not a symbol nor a string", val.to_s(globals))
+                format!("{} is not a symbol nor a string", val.to_s(store))
             }
             TypeErrKind::NotRegexpNorString { val } => {
-                format!("{} is not a regexp nor a string", val.to_s(globals))
+                format!("{} is not a regexp nor a string", val.to_s(store))
             }
             TypeErrKind::CantConverFloat { val } => {
                 format!(
                     "can't convert {} into Float",
-                    val.get_real_class_name(globals)
+                    val.get_real_class_name(store)
                 )
             }
             TypeErrKind::CantCoerced { op, val, msg } => {
                 format!(
                     "{op}: {} can't be coerced into {msg}",
-                    val.get_real_class_name(globals)
+                    val.get_real_class_name(store)
                 )
             }
             TypeErrKind::WrongArgumentType { val, expected } => {
                 format!(
                     "wrong argument type {} (expected {expected})",
-                    val.get_real_class_name(globals)
+                    val.get_real_class_name(store)
                 )
             }
             TypeErrKind::Other => "".to_string(),

@@ -212,9 +212,9 @@ impl ObjKind {
         }
     }
 
-    fn exception_from(mut err: MonorubyErr, globals: &Globals) -> Self {
+    fn exception_from(mut err: MonorubyErr, store: &Store) -> Self {
         let class_name = IdentId::get_id(err.get_class_name());
-        let msg = err.show(globals);
+        let msg = err.show(store);
         Self::exception(class_name, msg, err.take_trace())
     }
 
@@ -408,34 +408,34 @@ impl RValue {
         }
     }
 
-    pub(crate) fn to_s(&self, globals: &Globals) -> String {
+    pub(crate) fn to_s(&self, store: &Store) -> String {
         unsafe {
             match self.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => globals.get_class_name(self.as_class_id()),
-                ObjKind::ARRAY => self.as_array().to_s(globals),
-                ObjKind::OBJECT => self.object_tos(globals),
-                ObjKind::RANGE => self.range_tos(globals),
+                ObjKind::CLASS | ObjKind::MODULE => store.get_class_name(self.as_class_id()),
+                ObjKind::ARRAY => self.as_array().to_s(store),
+                ObjKind::OBJECT => self.object_tos(store),
+                ObjKind::RANGE => self.range_tos(store),
                 ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.as_hashmap().to_s(globals),
-                ObjKind::METHOD => self.as_method().to_s(globals),
-                ObjKind::ENUMERATOR => self.enumerator_tos(globals),
-                ObjKind::GENERATOR => self.object_tos(globals),
-                ObjKind::BINDING => self.object_tos(globals),
-                ObjKind::UMETHOD => self.as_umethod().to_s(globals),
-                _ => self.debug(&globals.store),
+                ObjKind::HASH => self.as_hashmap().to_s(store),
+                ObjKind::METHOD => self.as_method().to_s(store),
+                ObjKind::ENUMERATOR => self.enumerator_tos(store),
+                ObjKind::GENERATOR => self.object_tos(store),
+                ObjKind::BINDING => self.object_tos(store),
+                ObjKind::UMETHOD => self.as_umethod().to_s(store),
+                _ => self.debug(store),
             }
         }
     }
 
-    pub(crate) fn inspect(&self, globals: &Globals) -> String {
+    pub(crate) fn inspect(&self, store: &Store) -> String {
         match self.ty() {
-            ObjKind::OBJECT => self.object_inspect(globals),
+            ObjKind::OBJECT => self.object_inspect(store),
             ObjKind::EXCEPTION => {
-                let class_name = globals.get_class_name(self.class());
+                let class_name = store.get_class_name(self.class());
                 let msg = self.as_exception().msg();
                 format!("#<{class_name}: {msg}>")
             }
-            _ => self.to_s(globals),
+            _ => self.to_s(store),
         }
     }
 
@@ -451,29 +451,29 @@ impl RValue {
         }
     }
 
-    fn object_tos(&self, globals: &Globals) -> String {
-        if let Some(name) = self.get_ivar(&globals.store, IdentId::_NAME) {
-            name.to_s(globals)
+    fn object_tos(&self, store: &Store) -> String {
+        if let Some(name) = self.get_ivar(store, IdentId::_NAME) {
+            name.to_s(store)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                globals.get_class_name(self.real_class(&globals.store).id()),
+                store.get_class_name(self.real_class(store).id()),
                 self.id()
             )
         }
     }
 
-    fn object_inspect(&self, globals: &Globals) -> String {
-        if let Some(name) = self.get_ivar(&globals.store, IdentId::_NAME) {
-            name.to_s(globals)
+    fn object_inspect(&self, store: &Store) -> String {
+        if let Some(name) = self.get_ivar(store, IdentId::_NAME) {
+            name.to_s(store)
         } else {
             let mut s = String::new();
-            for (id, v) in self.get_ivars(globals).into_iter() {
-                s += &format!(" {id}={}", v.inspect(globals));
+            for (id, v) in self.get_ivars(store).into_iter() {
+                s += &format!(" {id}={}", v.inspect(store));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
-                globals.get_class_name(self.class()),
+                store.get_class_name(self.class()),
                 self.id()
             )
         }
@@ -499,9 +499,9 @@ impl RValue {
         format!("#<Enumerator: {} {}>", e.obj.debug(store), e.method)
     }
 
-    fn enumerator_tos(&self, globals: &Globals) -> String {
+    fn enumerator_tos(&self, store: &Store) -> String {
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {} {}>", e.obj.to_s(globals), e.method)
+        format!("#<Enumerator: {} {}>", e.obj.to_s(store), e.method)
     }
 
     fn proc_tos(&self) -> String {
@@ -522,13 +522,13 @@ impl RValue {
         )
     }
 
-    fn range_tos(&self, globals: &Globals) -> String {
+    fn range_tos(&self, store: &Store) -> String {
         let range = self.as_range();
         format!(
             "{}{}{}",
-            range.start.inspect(globals),
+            range.start.inspect(store),
             if range.exclude_end() { "..." } else { ".." },
-            range.end.inspect(globals),
+            range.end.inspect(store),
         )
     }
 }
@@ -729,9 +729,9 @@ impl RValue {
         self.get_var(id)
     }
 
-    pub(crate) fn get_ivars(&self, globals: &Globals) -> Vec<(IdentId, Value)> {
+    pub(crate) fn get_ivars(&self, store: &Store) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
-        globals.store.classes[class_id]
+        store.classes[class_id]
             .ivar_names()
             .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
             .collect()
@@ -1120,13 +1120,13 @@ impl RValue {
     }
 
     pub(super) fn new_exception_from_err(
-        globals: &Globals,
+        store: &Store,
         err: MonorubyErr,
         class_id: ClassId,
     ) -> Self {
         RValue {
             header: Header::new(class_id, ObjKind::EXCEPTION),
-            kind: ObjKind::exception_from(err, globals),
+            kind: ObjKind::exception_from(err, store),
             var_table: None,
         }
     }

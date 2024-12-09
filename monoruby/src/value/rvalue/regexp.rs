@@ -58,7 +58,7 @@ impl RegexpInner {
     /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
     /// between fancy_regex crate and Regexp class of Ruby.
     pub fn from_string(reg_str: impl Into<String>) -> Result<Self> {
-        let mut reg_str = reg_str.into();
+        let mut reg_str: String = reg_str.into();
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
@@ -197,7 +197,7 @@ impl RegexpInner {
             let mut res = given.to_string();
             let matched = Value::string_from_str(matched_str);
             let result = vm.invoke_block_once(globals, bh, &[matched])?;
-            let s = result.to_s(globals);
+            let s = result.to_s(&globals.store);
             res.replace_range(start..end, &s);
             Ok((res, true))
         }
@@ -263,7 +263,7 @@ impl RegexpInner {
                 };
                 let matched = Value::string_from_str(matched_str);
                 let result = vm.invoke_block(globals, &data, &[matched])?;
-                let replace = result.to_s(globals);
+                let replace = result.to_s(&globals.store);
                 range.push((start, end, replace));
             }
 

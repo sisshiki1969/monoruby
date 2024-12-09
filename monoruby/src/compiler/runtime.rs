@@ -274,7 +274,7 @@ pub(super) extern "C" fn concatenate_regexp(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += &v.to_s(globals);
+        res += &v.to_s(&globals.store);
     }
     let inner = match RegexpInner::from_string(res) {
         Ok(inner) => inner,
@@ -728,7 +728,7 @@ pub(super) extern "C" fn defined_ivar(
     name: IdentId,
 ) {
     let self_val = vm.cfp().lfp().self_val();
-    if globals.get_ivar(self_val, name).is_none() {
+    if globals.store.get_ivar(self_val, name).is_none() {
         unsafe { *reg = Value::nil() }
     }
 }

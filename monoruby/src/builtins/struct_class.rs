@@ -53,7 +53,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }
-    new_struct.set_instance_var(globals, "/members", Value::array(members))?;
+    new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
         vm.push_class_context(class_id);
@@ -67,6 +67,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 #[monoruby_builtin]
 fn struct_members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let members = globals
+        .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/members"))
         .unwrap();
     Ok(members)
@@ -85,6 +86,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
         .get_module()
         .as_val();
     let members = globals
+        .store
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap()
         .as_array();
@@ -94,7 +96,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     for (i, val) in lfp.arg(0).as_array().iter().enumerate() {
         let id = members[i].try_symbol().unwrap();
         let ivar_name = IdentId::add_ivar_prefix(id);
-        globals.set_ivar(self_val, ivar_name, *val)?;
+        globals.store.set_ivar(self_val, ivar_name, *val)?;
     }
     Ok(Value::nil())
 }
@@ -109,6 +111,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         inspect += &format!("{name}");
     };
     let name = globals
+        .store
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap()
         .as_array();
@@ -117,8 +120,8 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         for x in name.iter() {
             let name = x.try_symbol().unwrap();
             let ivar_name = IdentId::add_ivar_prefix(name);
-            let val = match globals.get_ivar(self_val, ivar_name) {
-                Some(v) => v.inspect(globals),
+            let val = match globals.store.get_ivar(self_val, ivar_name) {
+                Some(v) => v.inspect(&globals.store),
                 None => "nil".to_string(),
             };
             inspect += &format!(" {:?}={},", name, val);
@@ -136,6 +139,7 @@ fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         .get_module()
         .as_val();
     let members = globals
+        .store
         .get_ivar(class_obj, IdentId::get_id("/members"))
         .unwrap();
     Ok(members)

@@ -146,7 +146,7 @@ impl HashmapInner {
         }
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
+    pub fn to_s(&self, store: &Store) -> String {
         match self.len() {
             0 => "{}".to_string(),
             _ => {
@@ -158,14 +158,14 @@ impl HashmapInner {
                     {
                         "{...}".to_string()
                     } else {
-                        k.inspect(globals)
+                        k.inspect(store)
                     };
                     let v_inspect = if let Some(h) = v.is_hash()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()
                     } else {
-                        v.inspect(globals)
+                        v.inspect(store)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")

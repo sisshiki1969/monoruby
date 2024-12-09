@@ -98,7 +98,7 @@ fn less_than(lhs: Module, rhs: Module) -> Value {
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3c.html]
 #[monoruby_builtin]
 fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let rhs = lfp.arg(0).expect_class_or_module(globals)?;
+    let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let lhs = lfp.self_val().as_class();
     Ok(less_than(lhs, rhs))
 }
@@ -111,7 +111,7 @@ fn lt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3e.html]
 #[monoruby_builtin]
 fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let rhs = lfp.arg(0).expect_class_or_module(globals)?;
+    let rhs = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let lhs = lfp.self_val().as_class();
     Ok(less_than(rhs, lhs))
 }
@@ -125,7 +125,7 @@ fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    Ok(Value::bool(lfp.arg(0).is_kind_of(globals, class)))
+    Ok(Value::bool(lfp.arg(0).is_kind_of(&globals.store, class)))
 }
 
 ///
@@ -312,7 +312,7 @@ fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
 fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class = lfp.self_val().expect_class_or_module(globals)?;
+    let class = lfp.self_val().expect_class_or_module(&globals.store)?;
     let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
         globals.store.classes.get_constant_names_inherit(class)
     } else {
@@ -437,7 +437,7 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/prepend_features.html]
 #[monoruby_builtin]
 fn prepend_features(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let base = lfp.arg(0).expect_class_or_module(globals)?;
+    let base = lfp.arg(0).expect_class_or_module(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
     globals.prepend_module(base, prepend_module)?;
     Ok(lfp.self_val())
@@ -458,7 +458,7 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         None => {
             return Err(MonorubyErr::undefined_method(
                 method_name,
-                klass.id().get_name_id(globals),
+                klass.id().get_name_id(&globals.store),
             ))
         }
     };
@@ -467,7 +467,7 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         None => {
             return Err(MonorubyErr::undefined_method(
                 method_name,
-                klass.id().get_name_id(globals),
+                klass.id().get_name_id(&globals.store),
             ))
         }
     };
@@ -489,7 +489,7 @@ fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         None => Err(MonorubyErr::nameerr(format!(
             "method `{}' not defined in {}",
             func_name,
-            globals.get_class_name(class_id)
+            globals.store.get_class_name(class_id)
         ))),
     }
 }
@@ -559,7 +559,7 @@ fn private_class_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_name = globals.get_class_name(lfp.self_val().as_class_id());
+    let class_name = globals.store.get_class_name(lfp.self_val().as_class_id());
     let res = Value::string(class_name);
     Ok(res)
 }

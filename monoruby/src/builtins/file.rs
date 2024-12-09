@@ -56,7 +56,7 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         };
         s.len()
     } else {
-        let v = val.to_s(globals).into_bytes();
+        let v = val.to_s(&globals.store).into_bytes();
         if let Err(err) = file.write_all(&v) {
             return Err(MonorubyErr::runtimeerr(err));
         };

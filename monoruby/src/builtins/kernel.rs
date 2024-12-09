@@ -289,7 +289,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let mut buf = String::new();
     for v in lfp.arg(0).as_array().iter() {
-        buf += &v.inspect(globals);
+        buf += &v.inspect(&globals.store);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
@@ -306,8 +306,8 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let actual = lfp.arg(1);
     eprintln!(
         "expected:{} actual:{}",
-        expected.inspect(globals),
-        actual.inspect(globals)
+        expected.inspect(&globals.store),
+        actual.inspect(&globals.store)
     );
     assert!(Value::eq(expected, actual));
     Ok(Value::nil())
@@ -358,7 +358,7 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         RV::String(b) => match b.check_utf8()?.parse::<i64>() {
             Ok(num) => return Ok(Value::integer(num)),
             Err(_) => {
-                let s = arg0.to_s(globals);
+                let s = arg0.to_s(&globals.store);
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid value for Integer(): {}",
                     s
@@ -650,13 +650,13 @@ fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             if let Some(s) = m.is_str() {
                 eprintln!("{}", s);
             } else {
-                eprintln!("{}", m.to_s(globals));
+                eprintln!("{}", m.to_s(&globals.store));
             }
         }
     } else if let Some(s) = message.is_str() {
         eprintln!("{}", s);
     } else {
-        eprintln!("{}", message.to_s(globals));
+        eprintln!("{}", message.to_s(&globals.store));
     }
 
     Ok(Value::nil())

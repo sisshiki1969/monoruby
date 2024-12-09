@@ -108,7 +108,7 @@ impl Executor {
             .join(".monoruby")
             .join("startup.rb");
         if let Err(err) = executor.require(globals, &path, false) {
-            err.show_error_message_and_all_loc(globals);
+            err.show_error_message_and_all_loc(&globals.store);
             panic!("error occurred in startup.");
         }
         if !globals.no_gems {
@@ -353,11 +353,14 @@ impl Executor {
 
         if let MonorubyErrKind::Load(path) = &err.kind() {
             let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
-            let v = Value::new_exception_from_err(globals, err, class_id);
-            globals.set_ivar(v, IdentId::get_id("/path"), path).unwrap();
+            let v = Value::new_exception_from_err(&globals.store, err, class_id);
+            globals
+                .store
+                .set_ivar(v, IdentId::get_id("/path"), path)
+                .unwrap();
             v
         } else {
-            Value::new_exception_from_err(globals, err, class_id)
+            Value::new_exception_from_err(&globals.store, err, class_id)
         }
     }
 
@@ -368,8 +371,8 @@ impl Executor {
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
+    pub(crate) fn err_cant_modify_frozen(&mut self, store: &Store, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(store, val));
     }
 
     pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
@@ -431,7 +434,7 @@ impl Executor {
             ..
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
-            base.expect_class_or_module(globals)?.id()
+            base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -440,13 +443,13 @@ impl Executor {
         } else {
             let parent = prefix.remove(0);
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id();
         }
         let v = self.get_constant_checked(globals, parent, name)?;
@@ -468,7 +471,7 @@ impl Executor {
         } = globals.store[site_id].clone();
         let mut parent = if let Some(base) = base {
             let base = unsafe { self.get_slot(base) }.unwrap();
-            base.expect_class_or_module(globals)?.id()
+            base.expect_class_or_module(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -477,13 +480,13 @@ impl Executor {
             let parent = prefix.remove(0);
             let current_func = self.method_func_id();
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(globals)?
+                .expect_class_or_module(&globals.store)?
                 .id();
         }
         globals.store.classes.set_constant(parent, name, val);
@@ -637,7 +640,7 @@ impl Executor {
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Value {
         match receiver.unpack() {
             RV::Object(_) => {}
-            _ => return Value::string(receiver.to_s(globals)),
+            _ => return Value::string(receiver.to_s(&globals.store)),
         }
         let func_id = globals.find_method(receiver, IdentId::TO_S, true).unwrap();
         self.invoke_func(globals, func_id, receiver, &[], None)
@@ -902,12 +905,12 @@ impl Executor {
         is_module: u32,
     ) -> Result<Value> {
         let parent = match base {
-            Some(base) => base.expect_class_or_module(globals)?.id(),
+            Some(base) => base.expect_class_or_module(&globals.store)?.id(),
             None => self.context_class_id(),
         };
         let self_val = match self.get_constant(globals, parent, name)? {
             Some(val) => {
-                let val = val.expect_class_or_module(globals)?;
+                let val = val.expect_class_or_module(&globals.store)?;
                 if let Some(superclass) = superclass {
                     assert!(is_module != 1);
                     let superclass_id = superclass.expect_class(globals)?.id();

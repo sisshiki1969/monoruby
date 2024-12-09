@@ -355,7 +355,7 @@ fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let s = lfp.self_val().as_hashmap_inner().to_s(globals);
+    let s = lfp.self_val().as_hashmap_inner().to_s(&globals.store);
     Ok(Value::string(s))
 }
 
@@ -525,7 +525,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => {
                 return Err(MonorubyErr::keyerr(format!(
                     "key not found: {}",
-                    lfp.arg(0).to_s(globals)
+                    lfp.arg(0).to_s(&globals.store)
                 )))
             }
         }

@@ -34,24 +34,24 @@ fn times(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let mut self_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Self_, &mut self_rusage);
     val.set_instance_var(
-        globals,
+        &mut globals.store,
         "@utime",
         Value::float(self_rusage.ru_utime.get_f64()),
     )?;
     val.set_instance_var(
-        globals,
+        &mut globals.store,
         "@stime",
         Value::float(self_rusage.ru_stime.get_f64()),
     )?;
     let mut child_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Children, &mut child_rusage);
     val.set_instance_var(
-        globals,
+        &mut globals.store,
         "@cutime",
         Value::float(child_rusage.ru_utime.get_f64()),
     )?;
     val.set_instance_var(
-        globals,
+        &mut globals.store,
         "@cstime",
         Value::float(child_rusage.ru_stime.get_f64()),
     )?;
@@ -83,7 +83,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             None => {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unexpected unit: {}",
-                    arg1.to_s(globals)
+                    arg1.to_s(&globals.store)
                 )))
             }
         }
@@ -104,7 +104,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         _ => {
             return Err(MonorubyErr::argumenterr(format!(
                 "unexpected unit: {}",
-                lfp.arg(1).to_s(globals)
+                lfp.arg(1).to_s(&globals.store)
             )))
         }
     })

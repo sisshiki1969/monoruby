@@ -140,6 +140,63 @@ impl Store {
         self.functions.function_len()
     }
 
+    /// Get class name of *ClassId*.
+    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
+        if let Some(class) = class.into() {
+            let class_obj = self.classes[class].get_module();
+            match self.classes[class].get_name_id() {
+                Some(_) => {
+                    let v: Vec<_> = self
+                        .classes
+                        .get_parents(class)
+                        .into_iter()
+                        .rev()
+                        .map(|name| name.to_string())
+                        .collect();
+                    v.join("::")
+                }
+                None => match class_obj.is_singleton() {
+                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                    Some(base) => format!("#<Class:{}>", base.to_s(self)),
+                },
+            }
+        } else {
+            "<INVALID>".to_string()
+        }
+    }
+
+    ///
+    /// Get the description of the function *func_id*.
+    ///
+    /// If the function is a method, the description is "*class_name*#*method_name*".
+    /// if the function is a block, the description is "block in *method_name*".
+    ///
+    pub(crate) fn func_description(&self, func_id: FuncId) -> String {
+        let info = &self[func_id];
+        if let Some(iseq) = info.is_iseq() {
+            let iseq = &self[iseq];
+            let mother = iseq.mother().0;
+            if mother != func_id {
+                format!("block in {}", self.func_description(mother))
+            } else {
+                match info.owner_class() {
+                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), iseq.name()),
+                    None => iseq.name().to_string(),
+                }
+            }
+        } else {
+            let name = if let Some(name) = info.name() {
+                format!("{:?}", name)
+            } else {
+                String::new()
+            };
+            match info.owner_class() {
+                Some(owner) => format!("{:?}#{name}", owner.get_name_id(self)),
+                None => name.to_string(),
+            }
+        }
+    }
+
     fn add_iseq(&mut self, info: ISeqInfo) -> ISeqId {
         let id = self.iseqs.len();
         self.iseqs.push(info);

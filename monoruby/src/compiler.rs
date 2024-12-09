@@ -1067,7 +1067,7 @@ impl Globals {
         if self.startup_flag {
             let func = self.store.iseq(func_id);
             let start_pos = func.get_pc_index(position);
-            let name = self.func_description(func_id);
+            let name = self.store.func_description(func_id);
             eprintln!(
                 "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
@@ -1101,7 +1101,7 @@ impl Globals {
         );
         #[cfg(feature = "perf")]
         {
-            let desc = format!("JIT:<{}>", self.func_description(func_id));
+            let desc = format!("JIT:<{}>", self.store.func_description(func_id));
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]

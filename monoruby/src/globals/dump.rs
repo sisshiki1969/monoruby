@@ -8,7 +8,7 @@ impl Globals {
         let block = lfp.block();
         eprintln!(
             "    <{}> block:{} outer:{} {:?}",
-            self.func_description(func_id),
+            self.store.func_description(func_id),
             match block {
                 Some(block) => {
                     match block.try_proxy() {
@@ -67,7 +67,7 @@ impl Globals {
         let file_name = func.sourceinfo.file_name();
         eprintln!(
             "<{}> {file_name}:{line}",
-            self.func_description(func.func_id()),
+            self.store.func_description(func.func_id()),
         );
         eprintln!(
             "{:?} local_vars:{} temp:{}",
@@ -172,7 +172,7 @@ impl Globals {
                 } else {
                     "<INVALID>".to_string()
                 };
-                let name = self.func_description(*func_id);
+                let name = self.store.func_description(*func_id);
                 eprintln!(
                     "{:60}  {:5} [{:05}]  {:10}   {fmt}",
                     name,
@@ -192,7 +192,7 @@ impl Globals {
             for ((func_id, class_id), count) in v.into_iter().take(20) {
                 eprintln!(
                     "{:40} {:30} {:10}",
-                    self.func_description(*func_id),
+                    self.store.func_description(*func_id),
                     self.store.debug_class_name(*class_id),
                     count
                 );
@@ -226,7 +226,7 @@ pub(crate) extern "C" fn log_deoptimize(
         // normal exit from jit'ed loop
         #[cfg(feature = "deopt")]
         {
-            let name = globals.func_description(func_id);
+            let name = globals.store.func_description(func_id);
             let fmt = trace_ir.format(&globals.store).unwrap_or_default();
             eprint!("<-- exited from JIT code in <{}> {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", bc_pos);
@@ -243,7 +243,7 @@ pub(crate) extern "C" fn log_deoptimize(
         }
         #[cfg(feature = "deopt")]
         {
-            let name = globals.func_description(func_id);
+            let name = globals.store.func_description(func_id);
             let fmt = trace_ir.format(&globals.store).unwrap_or_default();
             match trace_ir {
                 TraceIr::LoadConst(..)          // inline constant cache miss

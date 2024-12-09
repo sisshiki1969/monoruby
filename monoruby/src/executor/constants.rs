@@ -26,7 +26,7 @@ impl Executor {
             let name = IdentId::get_id(name);
             class = self
                 .get_constant_checked(globals, class.id(), name)?
-                .expect_class_or_module(globals)?;
+                .expect_class_or_module(&globals.store)?;
         }
         Ok(class.as_val())
     }

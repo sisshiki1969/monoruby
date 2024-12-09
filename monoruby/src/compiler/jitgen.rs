@@ -759,7 +759,7 @@ impl Codegen {
     labeldistance = 2.5,
     labelangle = 70
   ];"###,
-            func.name()
+            store.func_description(func.func_id())
         );
         s += "\n";
         for bbid in bb_begin..=bb_end {
@@ -785,7 +785,16 @@ impl Codegen {
         }
 
         s += "}\n";
-        std::fs::write(format!("func_id-{}.dot", func.func_id().get()), s).unwrap();
+        let path = std::path::PathBuf::from(".cfg");
+        match path.try_exists() {
+            Ok(true) => {}
+            _ => std::fs::create_dir(&path).unwrap(),
+        }
+        std::fs::write(
+            path.join(format!("fid-{}.dot", func.func_id().get())),
+            s,
+        )
+        .unwrap();
     }
 }
 

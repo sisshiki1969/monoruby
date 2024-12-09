@@ -299,7 +299,7 @@ impl Codegen {
 /// rax <= the value of instance variable. <Value>
 ///
 extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
-    globals.get_ivar(base, name).unwrap_or_default()
+    globals.store.get_ivar(base, name).unwrap_or_default()
 }
 
 ///
@@ -314,7 +314,7 @@ extern "C" fn set_instance_var(
     name: IdentId,
     val: Value,
 ) -> Option<Value> {
-    if let Err(err) = globals.set_ivar(base, name, val) {
+    if let Err(err) = globals.store.set_ivar(base, name, val) {
         vm.set_error(err);
         return None;
     };
