@@ -102,11 +102,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
+    pub(crate) fn get_singleton(self, store: &mut Store) -> Value {
         if let Some(class) = self.is_class_or_module() {
-            globals.store.classes.get_metaclass(class.id())
+            store.classes.get_metaclass(class.id())
         } else {
-            globals.store.classes.get_singleton(self)
+            store.classes.get_singleton(self)
         }
         .as_val()
     }
@@ -114,20 +114,20 @@ impl Value {
     ///
     /// Get class object of *self.
     ///
-    pub(crate) fn get_class_obj(self, globals: &Globals) -> Module {
-        globals.store.classes[self.class()].get_module()
+    pub(crate) fn get_class_obj(self, store: &Store) -> Module {
+        store.classes[self.class()].get_module()
     }
 
-    pub(crate) fn real_class(self, globals: &Globals) -> Module {
-        self.get_class_obj(globals).get_real_class()
+    pub(crate) fn real_class(self, store: &Store) -> Module {
+        self.get_class_obj(store).get_real_class()
     }
 
-    pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        globals.store.get_class_name(self.real_class(globals).id())
+    pub(crate) fn get_real_class_name(self, store: &Store) -> String {
+        store.get_class_name(self.real_class(store).id())
     }
 
-    pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
-        let mut obj_class = Some(self.get_class_obj(globals));
+    pub(crate) fn is_kind_of(self, store: &Store, class: ClassId) -> bool {
+        let mut obj_class = Some(self.get_class_obj(store));
         while let Some(obj_class_inner) = obj_class {
             if obj_class_inner.id() == class {
                 return true;
@@ -169,13 +169,8 @@ impl Value {
         self.id() & !0x10 != NIL_VALUE
     }
 
-    pub fn set_instance_var(
-        &mut self,
-        globals: &mut Globals,
-        name: &str,
-        val: Value,
-    ) -> Result<()> {
-        globals.set_ivar(*self, IdentId::get_id(name), val)
+    pub fn set_instance_var(&mut self, store: &mut Store, name: &str, val: Value) -> Result<()> {
+        store.set_ivar(*self, IdentId::get_id(name), val)
     }
 }
 
@@ -397,8 +392,8 @@ impl Value {
         RValue::new_exception(kind, msg, trace, class_id).pack()
     }
 
-    pub fn new_exception_from_err(globals: &Globals, err: MonorubyErr, class_id: ClassId) -> Self {
-        RValue::new_exception_from_err(globals, err, class_id).pack()
+    pub fn new_exception_from_err(store: &Store, err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue::new_exception_from_err(store, err, class_id).pack()
     }
 
     pub fn new_time(time: TimeInner) -> Self {

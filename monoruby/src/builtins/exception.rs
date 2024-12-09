@@ -106,6 +106,7 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn loaderror_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     Ok(globals
+        .store
         .get_ivar(self_, IdentId::get_id("/path"))
         .unwrap_or_default())
 }
@@ -131,7 +132,7 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         (0, format!("{}", name))
     };
     let mut ex = Value::new_exception(name, msg, vec![], class_id);
-    ex.set_instance_var(globals, "@status", Value::integer(status))?;
+    ex.set_instance_var(&mut globals.store, "@status", Value::integer(status))?;
 
     Ok(ex)
 }

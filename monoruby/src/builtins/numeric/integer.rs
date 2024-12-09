@@ -213,7 +213,10 @@ fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             return Ok(Value::bytes_from_slice(&[b]));
         }
     };
-    Err(MonorubyErr::char_out_of_range(globals, lfp.self_val()))
+    Err(MonorubyErr::char_out_of_range(
+        &globals.store,
+        lfp.self_val(),
+    ))
 }
 
 #[monoruby_builtin]

@@ -728,7 +728,7 @@ pub(super) extern "C" fn defined_ivar(
     name: IdentId,
 ) {
     let self_val = vm.cfp().lfp().self_val();
-    if globals.get_ivar(self_val, name).is_none() {
+    if globals.store.get_ivar(self_val, name).is_none() {
         unsafe { *reg = Value::nil() }
     }
 }

@@ -146,7 +146,7 @@ pub fn run_test_error(code: &str) {
             eprintln!("{}", v.inspect(&globals.store));
             panic!()
         }
-        Err(err) => err.show_error_message_and_all_loc(&globals),
+        Err(err) => err.show_error_message_and_all_loc(&globals.store),
     }
 }
 
@@ -154,7 +154,7 @@ fn run_test_main(globals: &mut Globals, code: &str) -> Value {
     let res = match globals.run(code, std::path::Path::new(".")) {
         Ok(res) => res,
         Err(err) => {
-            err.show_error_message_and_all_loc(&globals);
+            err.show_error_message_and_all_loc(&globals.store);
             panic!();
         }
     };

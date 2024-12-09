@@ -66,7 +66,7 @@ fn main() {
                     }
                     Err(err) => {
                         let err = MonorubyErr::parse(err);
-                        err.show_error_message_and_all_loc(&globals);
+                        err.show_error_message_and_all_loc(&globals.store);
                         std::process::exit(1);
                     }
                 }
@@ -79,7 +79,7 @@ fn main() {
                         eprintln!("=> {:?}", _val)
                     }
                     Err(err) => {
-                        err.show_error_message_and_all_loc(&globals);
+                        err.show_error_message_and_all_loc(&globals.store);
                         std::process::exit(1);
                     }
                 }
@@ -110,11 +110,11 @@ fn main() {
     if args.ast {
         if let Err(err) = ruruby_parse::Parser::parse_program(code, path) {
             let err = MonorubyErr::parse(err);
-            err.show_error_message_and_all_loc(&globals);
+            err.show_error_message_and_all_loc(&globals.store);
             std::process::exit(1);
         }
     } else if let Err(err) = globals.run(code, &path) {
-        err.show_error_message_and_all_loc(&globals);
+        err.show_error_message_and_all_loc(&globals.store);
         std::process::exit(1);
     }
 }

@@ -18,13 +18,13 @@ impl IvarId {
     }
 }
 
-impl Globals {
+impl Store {
     ///
     /// Get the value of a instance variable with *name* which belongs to *val*.
     ///
     pub(crate) fn get_ivar(&self, val: Value, name: IdentId) -> Option<Value> {
         let rval = val.try_rvalue()?;
-        rval.get_ivar(&self.store, name)
+        rval.get_ivar(self, name)
     }
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
@@ -33,7 +33,7 @@ impl Globals {
             Some(rval) => rval,
             None => return vec![],
         };
-        self.store.classes[class_id]
+        self.classes[class_id]
             .ivar_names
             .iter()
             .filter_map(|(name, id)| rval.get_var(*id).map(|v| (*name, v)))
@@ -57,7 +57,7 @@ impl Globals {
     }
 
     fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
-        let table = &mut self.store.classes[class_id].ivar_names;
+        let table = &mut self.classes[class_id].ivar_names;
         match table.get(&ivar_name) {
             Some(id) => *id,
             None => {
@@ -110,7 +110,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => {
-            vm.err_cant_modify_frozen(globals, base);
+            vm.err_cant_modify_frozen(&globals.store, base);
             return None;
         }
     };
@@ -118,7 +118,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
         rval.set_var(cache.ivar_id, val);
         return Some(Value::nil());
     }
-    let ivar_id = globals.get_ivar_id(class_id, name);
+    let ivar_id = globals.store.get_ivar_id(class_id, name);
     let new_cache = InstanceVarCache { class_id, ivar_id };
     *cache = new_cache;
     rval.set_var(ivar_id, val);
@@ -129,12 +129,13 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
 fn test_ivar() {
     let mut globals = Globals::new(0, false, true);
     let obj = Value::object(OBJECT_CLASS);
-    assert_eq!(None, globals.get_ivar(obj, IdentId::INITIALIZE));
+    assert_eq!(None, globals.store.get_ivar(obj, IdentId::INITIALIZE));
     assert!(globals
+        .store
         .set_ivar(obj, IdentId::INITIALIZE, Value::fixnum(42))
         .is_ok());
     assert_eq!(
         Some(Value::fixnum(42)),
-        globals.get_ivar(obj, IdentId::INITIALIZE)
+        globals.store.get_ivar(obj, IdentId::INITIALIZE)
     );
 }

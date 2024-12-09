@@ -76,6 +76,7 @@ pub(super) fn init(globals: &mut Globals) {
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
     globals
+        .store
         .set_ivar(
             val,
             IdentId::_NAME,
@@ -83,6 +84,7 @@ pub(super) fn init(globals: &mut Globals) {
         )
         .unwrap();
     globals
+        .store
         .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
         .unwrap();
     globals
@@ -91,6 +93,7 @@ pub(super) fn init(globals: &mut Globals) {
         .set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
+        .store
         .set_ivar(
             val,
             IdentId::_NAME,
@@ -98,6 +101,7 @@ pub(super) fn init(globals: &mut Globals) {
         )
         .unwrap();
     globals
+        .store
         .set_ivar(
             val,
             IdentId::_ENCODING,
@@ -277,7 +281,7 @@ fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
-            Err(_) => return Err(MonorubyErr::char_out_of_range(globals, lfp.arg(0))),
+            Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
         };
         let bytes = self_.as_bytes_mut();
         if let Ok(ch) = u8::try_from(ch) {
@@ -2115,7 +2119,7 @@ fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     let enc = if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)?
     } else if arg0.class() == encoding_class(globals) {
-        let s = globals.get_ivar(arg0, IdentId::_ENCODING).unwrap();
+        let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
         Encoding::try_from_str(s.as_str())?
     } else {
         return Err(MonorubyErr::argumenterr("1st arg must be String."));

@@ -165,6 +165,12 @@ impl Store {
         }
     }
 
+    ///
+    /// Get the description of the function *func_id*.
+    ///
+    /// If the function is a method, the description is "*class_name*#*method_name*".
+    /// if the function is a block, the description is "block in *method_name*".
+    ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
         if let Some(iseq) = info.is_iseq() {

@@ -108,7 +108,7 @@ impl Executor {
             .join(".monoruby")
             .join("startup.rb");
         if let Err(err) = executor.require(globals, &path, false) {
-            err.show_error_message_and_all_loc(globals);
+            err.show_error_message_and_all_loc(&globals.store);
             panic!("error occurred in startup.");
         }
         if !globals.no_gems {
@@ -353,11 +353,14 @@ impl Executor {
 
         if let MonorubyErrKind::Load(path) = &err.kind() {
             let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
-            let v = Value::new_exception_from_err(globals, err, class_id);
-            globals.set_ivar(v, IdentId::get_id("/path"), path).unwrap();
+            let v = Value::new_exception_from_err(&globals.store, err, class_id);
+            globals
+                .store
+                .set_ivar(v, IdentId::get_id("/path"), path)
+                .unwrap();
             v
         } else {
-            Value::new_exception_from_err(globals, err, class_id)
+            Value::new_exception_from_err(&globals.store, err, class_id)
         }
     }
 
@@ -368,8 +371,8 @@ impl Executor {
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
+    pub(crate) fn err_cant_modify_frozen(&mut self, store: &Store, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(store, val));
     }
 
     pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {

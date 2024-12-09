@@ -198,6 +198,7 @@ impl Globals {
         globals.random.init_with_seed(None);
         crate::builtins::init_builtins(&mut globals);
         globals
+            .store
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
 
@@ -531,7 +532,7 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Result<Value> {
-        if start.real_class(self).id() != end.real_class(self).id() {
+        if start.real_class(&self.store).id() != end.real_class(&self.store).id() {
             return Err(MonorubyErr::bad_range(start, end));
         }
         Ok(Value::range(start, end, exclude_end))

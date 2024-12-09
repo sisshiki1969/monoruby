@@ -125,7 +125,7 @@ fn gt(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    Ok(Value::bool(lfp.arg(0).is_kind_of(globals, class)))
+    Ok(Value::bool(lfp.arg(0).is_kind_of(&globals.store, class)))
 }
 
 ///

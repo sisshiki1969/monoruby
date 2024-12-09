@@ -324,7 +324,7 @@ fn mul(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
     } else if let Some(sep) = lfp.arg(0).is_str() {
-        let res = array_join(globals, lhs, sep);
+        let res = array_join(&globals.store, lhs, sep);
         Ok(Value::string(res))
     } else {
         Err(MonorubyErr::no_implicit_conversion(
@@ -706,13 +706,13 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         ""
     };
     let ary = lfp.self_val().as_array();
-    let res = array_join(globals, ary, sep);
+    let res = array_join(&globals.store, ary, sep);
     Ok(Value::string(res))
 }
 
-fn array_join(globals: &Globals, ary: Array, sep: &str) -> String {
+fn array_join(store: &Store, ary: Array, sep: &str) -> String {
     ary.iter()
-        .map(|v| v.to_s(&globals.store))
+        .map(|v| v.to_s(store))
         .collect::<Vec<_>>()
         .join(sep)
 }
