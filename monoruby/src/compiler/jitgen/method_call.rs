@@ -7,19 +7,17 @@ impl BBContext {
         store: &Store,
         pc: BytecodePtr,
         callid: CallSiteId,
-        recv_class: ClassId,
-        fid: FuncId,
-        version: u32,
+        cache: MethodCacheEntry,
     ) -> CompileResult {
         if store[callid].block_fid.is_none()
-            && let Some(info) = store.inline_info.get_inline(fid)
+            && let Some(info) = store.inline_info.get_inline(cache.func_id)
         {
             let f = &info.inline_gen;
-            if self.inline_call(ir, store, f, fid, callid, recv_class, version, pc) {
+            if self.inline_call(ir, store, f, callid, &cache, pc) {
                 return CompileResult::Continue;
             }
         }
-        self.call(ir, store, fid, recv_class, version, callid, pc)
+        self.call(ir, store, cache, callid, pc)
     }
 
     pub(super) fn compile_binop_call(
@@ -37,7 +35,7 @@ impl BBContext {
         ));
         let callee = &store[fid];
         if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
-            return CompileResult::Deopt;
+            return CompileResult::Recompile;
         }
         let BinOpInfo {
             dst,
@@ -101,13 +99,16 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
-        fid: FuncId,
-        recv_class: ClassId,
-        version: u32,
+        cache: MethodCacheEntry,
         callid: CallSiteId,
         pc: BytecodePtr,
     ) -> CompileResult {
         let CallSiteInfo { dst, recv, .. } = store[callid];
+        let MethodCacheEntry {
+            recv_class,
+            func_id,
+            version,
+        } = cache;
         if recv.is_self() && self.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
             self.write_back_locals(ir);
@@ -117,26 +118,26 @@ impl BBContext {
             self.rax2acc(ir, dst);
         } else {
             // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
-            if store[callid].block_fid.is_some() || store[fid].meta().is_eval() {
+            if store[callid].block_fid.is_some() || store[func_id].meta().is_eval() {
                 self.write_back_locals(ir);
             }
             self.fetch_for_gpr(ir, recv, GP::Rdi);
             let (deopt, error) = ir.new_deopt_error(self, pc);
             let using_xmm = self.get_using_xmm();
-            ir.guard_version(fid, version, callid, using_xmm, deopt, error);
+            ir.guard_version(func_id, version, callid, using_xmm, deopt, error);
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             // Thus, we can omit a class guard.
             if !recv.is_self() && !self.is_class(recv, recv_class) {
                 ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
             }
-            if let Some(evict) = self.call_cached(ir, store, callid, fid, recv_class, pc) {
+            if let Some(evict) = self.call_cached(ir, store, callid, func_id, recv_class, pc) {
                 self.rax2acc(ir, dst);
                 if let Some(evict) = evict {
                     ir.push(AsmInst::ImmediateEvict { evict });
                     ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
                 }
             } else {
-                return CompileResult::Deopt;
+                return CompileResult::Recompile;
             }
         }
 
@@ -148,10 +149,8 @@ impl BBContext {
         ir: &mut AsmIr,
         store: &Store,
         f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool,
-        fid: FuncId,
         callid: CallSiteId,
-        recv_class: ClassId,
-        version: u32,
+        cache: &MethodCacheEntry,
         pc: BytecodePtr,
     ) -> bool {
         let mut ctx_save = self.clone();
@@ -160,9 +159,14 @@ impl BBContext {
         self.fetch_for_gpr(ir, recv, GP::Rdi);
         let (deopt, error) = ir.new_deopt_error(self, pc);
         let using_xmm = self.get_using_xmm();
-        ir.guard_version(fid, version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !self.is_class(recv, recv_class) {
-            ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
+        let MethodCacheEntry {
+            recv_class,
+            func_id,
+            version,
+        } = cache;
+        ir.guard_version(*func_id, *version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !self.is_class(recv, *recv_class) {
+            ir.guard_class(self, recv, GP::Rdi, *recv_class, deopt);
         }
         if f(ir, store, self, callid, pc) {
             true

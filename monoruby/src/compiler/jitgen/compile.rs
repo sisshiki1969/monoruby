@@ -28,7 +28,7 @@ impl JitContext {
             match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
-                CompileResult::Deopt => {
+                CompileResult::Recompile => {
                     let pc = func.get_pc(bc_pos);
                     ir.recompile_and_deopt(&mut bbctx, pc, position);
                     return ir;
@@ -102,7 +102,7 @@ impl JitContext {
             match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
-                CompileResult::Leave | CompileResult::Deopt | CompileResult::ExitLoop => {
+                CompileResult::Leave | CompileResult::Recompile | CompileResult::ExitLoop => {
                     liveness.merge(bbctx);
                     return;
                 }
@@ -222,23 +222,18 @@ impl JitContext {
             TraceIr::LoadConst(dst, id) => {
                 bbctx.unlink(ir, dst);
 
-                if let ConstCache {
-                    cached_version,
-                    cached_base_class,
-                    cached_value: Some(cached_val),
-                } = store[id].cache
-                {
+                if let Some(cache) = &store[id].cache {
                     let base_slot = store[id].base;
                     if let Some(slot) = base_slot {
-                        if let Some(base_class) = cached_base_class {
+                        if let Some(base_class) = cache.base_class {
                             ir.guard_base_class(bbctx, slot, base_class, pc);
                         } else {
-                            return CompileResult::Deopt;
+                            return CompileResult::Recompile;
                         }
                     }
-                    ir.load_constant(bbctx, dst, cached_version, cached_val, pc);
+                    ir.load_constant(bbctx, dst, cache, pc);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::StoreConst(src, id) => {
@@ -264,7 +259,7 @@ impl JitContext {
                     }
                     bbctx.load_ivar(ir, dst, self_class, ivarid);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::StoreIvar(src, name, cache) => {
@@ -277,7 +272,7 @@ impl JitContext {
                     }
                     bbctx.store_ivar(ir, src, self_class, ivarid);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::LoadCvar { dst, name } => {
@@ -392,7 +387,7 @@ impl JitContext {
                     bbctx.rax2acc(ir, info.dst);
                 }
             }
-            TraceIr::GBinOpNotrace { .. } => return CompileResult::Deopt,
+            TraceIr::GBinOpNotrace { .. } => return CompileResult::Recompile,
             TraceIr::FCmp { kind, info } => {
                 if kind != CmpKind::Cmp {
                     let mode = bbctx.fmode(ir, info, pc);
@@ -425,7 +420,7 @@ impl JitContext {
                     bbctx.gen_cmp_generic(ir, pc, kind, info);
                 }
             }
-            TraceIr::GCmpNotrace { .. } => return CompileResult::Deopt,
+            TraceIr::GCmpNotrace { .. } => return CompileResult::Recompile,
             TraceIr::FCmpBr {
                 kind,
                 info,
@@ -467,7 +462,7 @@ impl JitContext {
                 bbctx.gen_cmpbr_generic(ir, pc, kind, info.mode, info.dst, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
-            TraceIr::GCmpBrNotrace { .. } => return CompileResult::Deopt,
+            TraceIr::GCmpBrNotrace { .. } => return CompileResult::Recompile,
             TraceIr::Index {
                 dst,
                 base,
@@ -477,7 +472,7 @@ impl JitContext {
                 if let Some((base_class, idx_class)) = class {
                     bbctx.index(ir, dst, base, idx, base_class, idx_class, pc);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::IndexAssign {
@@ -489,7 +484,7 @@ impl JitContext {
                 if let Some((base_class, idx_class)) = class {
                     bbctx.index_assign(ir, src, base, idx, base_class, idx_class, pc);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::Mov(dst, src) => {
@@ -525,10 +520,10 @@ impl JitContext {
                 ir.alias_method(bbctx, pc, new, old);
             }
             TraceIr::MethodCall { callid, cache } => {
-                if let Some((recv_class, fid, version)) = cache {
-                    return bbctx.compile_call(ir, store, pc, callid, recv_class, fid, version);
+                if let Some(cache) = cache {
+                    return bbctx.compile_call(ir, store, pc, callid, cache);
                 } else {
-                    return CompileResult::Deopt;
+                    return CompileResult::Recompile;
                 }
             }
             TraceIr::Yield { callid } => {

@@ -263,7 +263,7 @@ impl Codegen {
     /// - rdi: Array.
     /// - rax: length of the Array.
     ///
-    fn get_array_length(&mut self) {
+    pub(crate) fn get_array_length(&mut self) {
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);

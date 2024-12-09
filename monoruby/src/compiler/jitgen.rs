@@ -302,8 +302,8 @@ enum CompileResult {
     Branch,
     /// leave the current method/block.
     Leave,
-    /// deoptimize and fallback to the interpreter.
-    Deopt,
+    /// deoptimize and recompile.
+    Recompile,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -790,11 +790,7 @@ impl Codegen {
             Ok(true) => {}
             _ => std::fs::create_dir(&path).unwrap(),
         }
-        std::fs::write(
-            path.join(format!("fid-{}.dot", func.func_id().get())),
-            s,
-        )
-        .unwrap();
+        std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
     }
 }
 

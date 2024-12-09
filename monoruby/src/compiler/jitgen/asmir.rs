@@ -424,15 +424,15 @@ impl AsmIr {
         &mut self,
         bbctx: &mut BBContext,
         dst: SlotId,
-        cached_version: usize,
-        cached_val: Value,
+        cache: &ConstCache,
         pc: BytecodePtr,
     ) {
+        let ConstCache { version, value, .. } = cache;
         let deopt = self.new_deopt(bbctx, pc);
-        if let Some(f) = cached_val.try_float() {
-            self.load_float_constant(bbctx, f, dst, cached_version, deopt);
+        if let Some(f) = value.try_float() {
+            self.load_float_constant(bbctx, f, dst, *version, deopt);
         } else {
-            self.load_generic_constant(bbctx, cached_val, dst, cached_version, deopt);
+            self.load_generic_constant(bbctx, *value, dst, *version, deopt);
         }
     }
 
