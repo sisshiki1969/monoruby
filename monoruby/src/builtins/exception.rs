@@ -43,9 +43,11 @@ pub(super) fn init(globals: &mut Globals) {
     let nameerr = globals.define_class_by_str("NameError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("NoMethodError", nameerr, OBJECT_CLASS);
 
+    let runtimeerr = globals.define_class_by_str("RuntimeError", standarderr, OBJECT_CLASS);
+    globals.define_class_by_str("FrozenError", runtimeerr, OBJECT_CLASS);
+
     globals.define_class_by_str("RangeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("RegexpError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("RuntimeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SystemCallError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("TypeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("ZeroDivisionError", standarderr, OBJECT_CLASS);

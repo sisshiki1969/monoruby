@@ -552,27 +552,14 @@ impl Codegen {
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
 
             AsmInst::LoadIVar {
-                name,
-                cached_ivarid,
+                ivarid,
                 is_object_ty,
-                is_self_cached,
-                using_xmm,
-            } => self.load_ivar(name, cached_ivarid, is_object_ty, is_self_cached, using_xmm),
+            } => self.load_ivar(ivarid, is_object_ty),
             AsmInst::StoreIVar {
-                name,
-                cached_ivarid,
+                ivarid: cached_ivarid,
                 is_object_ty,
-                is_self_cached,
                 using_xmm,
-                error,
-            } => self.store_ivar(
-                name,
-                cached_ivarid,
-                is_object_ty,
-                is_self_cached,
-                using_xmm,
-                labels[error],
-            ),
+            } => self.store_ivar(cached_ivarid, is_object_ty, using_xmm),
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
