@@ -16,6 +16,13 @@ pub(crate) struct BinOpInfo {
     pub rhs_class: ClassId,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MethodCacheEntry {
+    pub recv_class: ClassId,
+    pub func_id: FuncId,
+    pub version: u32,
+}
+
 ///
 /// IR for JIT compiler.
 ///
@@ -205,7 +212,7 @@ pub(crate) enum TraceIr {
     },
     MethodCall {
         callid: CallSiteId,
-        cache: Option<(ClassId, FuncId, u32)>, // (recv_class, func_id, version)
+        cache: Option<MethodCacheEntry>,
     },
 
     /// return(%src)
@@ -520,9 +527,9 @@ impl TraceIr {
                 format!(
                     "{:36} [{}]",
                     op1,
-                    match store[*id].cache.cached_value {
+                    match &store[*id].cache {
                         None => "<INVALID>".to_string(),
-                        Some(val) => val.debug(store),
+                        Some(cache) => cache.value.debug(store),
                     }
                 )
             }
@@ -682,13 +689,13 @@ impl TraceIr {
                 format!(
                     "{:36} [{}] {}",
                     op1,
-                    store.debug_class_name(if let Some((recv_class, ..)) = cache {
-                        Some(*recv_class)
+                    store.debug_class_name(if let Some(entry) = cache {
+                        Some(entry.recv_class)
                     } else {
                         None
                     }),
-                    if let Some((_, fid, _)) = cache {
-                        format!("{:?}", fid)
+                    if let Some(entry) = cache {
+                        format!("{:?}", entry.func_id)
                     } else {
                         "-".to_string()
                     }

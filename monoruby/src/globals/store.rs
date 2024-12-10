@@ -371,7 +371,7 @@ impl Store {
             base,
             prefix,
             toplevel,
-            cache: ConstCache::default(),
+            cache: None,
         };
         let id = self.constsite_info.len();
         self.constsite_info.push(info);
@@ -549,29 +549,17 @@ impl ClassInfoTable {
 
 #[derive(Debug, Clone)]
 pub struct ConstCache {
-    pub cached_version: usize,
-    pub cached_base_class: Option<Value>,
-    pub cached_value: Option<Value>,
-}
-
-impl std::default::Default for ConstCache {
-    fn default() -> Self {
-        Self {
-            cached_version: usize::MAX,
-            cached_base_class: None,
-            cached_value: None,
-        }
-    }
+    pub version: usize,
+    pub base_class: Option<Value>,
+    pub value: Value,
 }
 
 impl alloc::GC<RValue> for ConstCache {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(v) = &self.cached_base_class {
+        if let Some(v) = &self.base_class {
             v.mark(alloc)
         }
-        if let Some(v) = &self.cached_value {
-            v.mark(alloc)
-        }
+        self.value.mark(alloc);
     }
 }
 
@@ -586,12 +574,14 @@ pub struct ConstSiteInfo {
     /// Is toplevel?. (e.g. ::Foo)
     pub toplevel: bool,
     /// Inline constant cache.
-    pub cache: ConstCache, //(version, base_class, value)
+    pub cache: Option<ConstCache>, //(version, base_class, value)
 }
 
 impl alloc::GC<RValue> for ConstSiteInfo {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.cache.mark(alloc);
+        if let Some(cache) = &self.cache {
+            cache.mark(alloc);
+        }
     }
 }
 
@@ -641,6 +631,7 @@ pub struct CallSiteInfo {
     pub splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
     pub block_fid: Option<FuncId>,
+    /// Position of block argument.
     pub(crate) block_arg: Option<SlotId>,
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,

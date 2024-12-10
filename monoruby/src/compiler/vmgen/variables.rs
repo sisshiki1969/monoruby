@@ -6,25 +6,22 @@ extern "C" fn vm_get_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
-    let ConstCache {
-        cached_version,
-        cached_base_class,
-        cached_value,
-    } = &globals.store[site_id].cache;
-    let base_class = globals.store[site_id]
-        .base
-        .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-    if *cached_version == const_version && *cached_base_class == base_class {
-        return *cached_value;
-    };
+    if let Some(cache) = &globals.store[site_id].cache {
+        let base_class = globals.store[site_id]
+            .base
+            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+        if cache.version == const_version && cache.base_class == base_class {
+            return Some(cache.value);
+        };
+    }
     match vm.find_constant(globals, site_id) {
-        Ok((val, base_class)) => {
-            globals.store[site_id].cache = ConstCache {
-                cached_version: const_version,
-                cached_base_class: base_class,
-                cached_value: Some(val),
-            };
-            Some(val)
+        Ok((value, base_class)) => {
+            globals.store[site_id].cache = Some(ConstCache {
+                version: const_version,
+                base_class,
+                value,
+            });
+            Some(value)
         }
         Err(err) => {
             vm.set_error(err);
@@ -39,25 +36,22 @@ extern "C" fn vm_check_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Value {
-    let ConstCache {
-        cached_version,
-        cached_base_class,
-        cached_value,
-    } = &globals.store[site_id].cache;
-    let base_class = globals.store[site_id]
-        .base
-        .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-    if *cached_version == const_version && *cached_base_class == base_class {
-        return cached_value.unwrap_or_default();
-    };
+    if let Some(cache) = &globals.store[site_id].cache {
+        let base_class = globals.store[site_id]
+            .base
+            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+        if cache.version == const_version && cache.base_class == base_class {
+            return cache.value;
+        };
+    }
     match vm.find_constant(globals, site_id) {
-        Ok((val, base_class)) => {
-            globals.store[site_id].cache = ConstCache {
-                cached_version: const_version,
-                cached_base_class: base_class,
-                cached_value: Some(val),
-            };
-            val
+        Ok((value, base_class)) => {
+            globals.store[site_id].cache = Some(ConstCache {
+                version: const_version,
+                base_class,
+                value,
+            });
+            value
         }
         Err(_) => Value::nil(),
     }
