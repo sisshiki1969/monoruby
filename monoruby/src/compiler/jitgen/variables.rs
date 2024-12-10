@@ -4,23 +4,17 @@ impl BBContext {
     pub(in crate::compiler::jitgen) fn load_ivar(
         &mut self,
         ir: &mut AsmIr,
-        name: IdentId,
         dst: SlotId,
-        cached_class: ClassId,
-        cached_ivarid: IvarId,
+        self_class: ClassId,
+        ivarid: IvarId,
     ) {
-        assert!(!cached_class.is_always_frozen());
+        assert!(!self_class.is_always_frozen());
         self.unlink(ir, dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
-        let using_xmm = self.get_using_xmm();
         let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
-        let is_self_cached = self.self_value.class() == cached_class;
         ir.push(AsmInst::LoadIVar {
-            name,
-            cached_ivarid,
+            ivarid,
             is_object_ty,
-            is_self_cached,
-            using_xmm,
         });
         self.rax2acc(ir, dst);
     }
@@ -28,26 +22,19 @@ impl BBContext {
     pub(in crate::compiler::jitgen) fn store_ivar(
         &mut self,
         ir: &mut AsmIr,
-        name: IdentId,
         src: SlotId,
-        pc: BytecodePtr,
-        cached_class: ClassId,
-        cached_ivarid: IvarId,
+        self_class: ClassId,
+        ivarid: IvarId,
     ) {
-        assert!(!cached_class.is_always_frozen());
+        assert!(!self_class.is_always_frozen());
         self.fetch_for_gpr(ir, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
         let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
-        let is_self_cached = self.self_value.class() == cached_class;
         ir.push(AsmInst::StoreIVar {
-            name,
-            cached_ivarid,
+            ivarid,
             is_object_ty,
-            is_self_cached,
             using_xmm,
-            error,
         });
     }
 }

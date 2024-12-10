@@ -254,14 +254,32 @@ impl JitContext {
                 bbctx.unlink(ir, ret);
                 ir.block_arg(bbctx, pc, ret, outer);
             }
-            TraceIr::LoadIvar(ret, id, Some((cached_class, cached_ivarid))) => {
-                bbctx.load_ivar(ir, id, ret, cached_class, cached_ivarid);
+            TraceIr::LoadIvar(dst, name, cache) => {
+                let self_class = self.self_value.class();
+                if let Some(ivarid) = store.classes[self_class].get_ivarid(name) {
+                    if let Some((cached_class, cached_ivarid)) = cache
+                        && cached_class == self_class
+                    {
+                        assert_eq!(ivarid, cached_ivarid);
+                    }
+                    bbctx.load_ivar(ir, dst, self_class, ivarid);
+                } else {
+                    return CompileResult::Deopt;
+                }
             }
-            TraceIr::LoadIvar(_, _, None) => return CompileResult::Deopt,
-            TraceIr::StoreIvar(src, id, Some((cached_class, cached_ivarid))) => {
-                bbctx.store_ivar(ir, id, src, pc, cached_class, cached_ivarid);
+            TraceIr::StoreIvar(src, name, cache) => {
+                let self_class = self.self_value.class();
+                if let Some(ivarid) = store.classes[self_class].get_ivarid(name) {
+                    if let Some((cached_class, cached_ivarid)) = cache
+                        && cached_class == self_class
+                    {
+                        assert_eq!(ivarid, cached_ivarid);
+                    }
+                    bbctx.store_ivar(ir, src, self_class, ivarid);
+                } else {
+                    return CompileResult::Deopt;
+                }
             }
-            TraceIr::StoreIvar(_, _, None) => return CompileResult::Deopt,
             TraceIr::LoadCvar { dst, name } => {
                 bbctx.jit_load_cvar(ir, pc, name, dst);
             }

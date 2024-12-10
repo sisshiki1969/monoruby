@@ -1,30 +1,34 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn load_ivar(
-        &mut self,
-        name: IdentId,
-        cached_ivarid: IvarId,
-        is_object_ty: bool,
-        is_self_cached: bool,
-        using_xmm: UsingXmm,
-    ) {
-        if is_object_ty && is_self_cached {
-            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!( &mut self.jit,
-                    movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)];
-                    // We must check whether the ivar slot is None.
-                    movq rdi, (NIL_VALUE);
-                    testq rax, rax;
-                    cmoveqq rax, rdi;
-                );
-            } else {
-                self.load_ivar_heap(cached_ivarid, is_object_ty);
-            }
+    pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool) {
+        if is_object_ty && ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+            self.load_ivar_inline(ivarid);
         } else {
-            // ctx.self_class != cached_class merely happens, but possible.
-            self.get_instance_var(name, using_xmm)
+            self.load_ivar_heap(ivarid, is_object_ty);
         }
+    }
+
+    ///
+    /// Load ivar embedded to RValue. (only for object type)
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi
+    ///
+    fn load_ivar_inline(&mut self, ivarid: IvarId) {
+        monoasm!( &mut self.jit,
+            movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
+            // We must check whether the ivar slot is None.
+            movq rdi, (NIL_VALUE);
+            testq rax, rax;
+            cmoveqq rax, rdi;
+        );
     }
 
     ///
@@ -49,56 +53,43 @@ impl Codegen {
         };
         monoasm!( &mut self.jit,
             movq rax, (NIL_VALUE);
+            // ensure var_table is not None
             movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
             testq rsi, rsi;
             jz   exit;
+            // ensure capa is not 0
             movq rdi, [rsi + (MONOVEC_CAPA)]; // capa
             testq rdi, rdi;
             jz   exit;
             movq rdi, [rsi + (MONOVEC_LEN)]; // len
             cmpq rdi, (idx);
             movq rdi, [rsi + (MONOVEC_PTR)]; // ptr
+            // rax = if len > idx { rdi[idx] } else { nil }
             cmovgtq rax, [rdi + (idx * 8)];
         exit:
         );
     }
-
-    fn get_instance_var(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm!( &mut self.jit,
-            movq rsi, (name.get());  // id: IdentId
-            movq rdx, r12; // &mut Globals
-            movq rax, (variables::get_instance_var);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-    }
 }
 
 impl Codegen {
-    pub(super) fn store_ivar(
-        &mut self,
-        name: IdentId,
-        cached_ivarid: IvarId,
-        is_object_ty: bool,
-        is_self_cached: bool,
-        using_xmm: UsingXmm,
-        error: DestLabel,
-    ) {
-        let exit = self.jit.label();
-        if is_self_cached {
-            if is_object_ty && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!( &mut self.jit,
-                    movq [rdi + (RVALUE_OFFSET_KIND as i32 + (cached_ivarid.get() as i32) * 8)], rax;
-                );
-            } else {
-                self.store_ivar_heap(cached_ivarid, is_object_ty, using_xmm);
-            }
+    pub(super) fn store_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, using_xmm: UsingXmm) {
+        if is_object_ty && ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+            self.store_ivar_inline(ivarid);
         } else {
-            self.set_instance_ivar(name, using_xmm);
-            self.handle_error(error);
+            self.store_ivar_heap(ivarid, is_object_ty, using_xmm);
         }
-        self.jit.bind_label(exit);
+    }
+
+    ///
+    /// Store ivar embedded to RValue. (only for object type)
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    fn store_ivar_inline(&mut self, ivarid: IvarId) {
+        monoasm!( &mut self.jit,
+            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], rax;
+        );
     }
 
     ///
@@ -121,9 +112,11 @@ impl Codegen {
             ivar
         };
         monoasm! { &mut self.jit,
+            // check var_table is not None
             movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
             testq rsi, rsi;
             jz   generic;
+            // check capa is not 0
             movq rdi, [rsi + (MONOVEC_CAPA)]; // capa
             testq rdi, rdi;
             jz   generic;
@@ -149,20 +142,6 @@ impl Codegen {
             jmp  exit;
         );
         self.jit.select_page(0);
-    }
-
-    fn set_instance_ivar(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        monoasm!( &mut self.jit,
-            movq rdx, rdi;  // base: Value
-            movq rcx, (name.get());  // id: IdentId
-            movq r8, rax;   // val: Value
-            movq rdi, rbx; //&mut Executor
-            movq rsi, r12; //&mut Globals
-            movq rax, (variables::set_instance_var);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
     }
 }
 
@@ -291,34 +270,6 @@ impl Codegen {
         );
         self.xmm_restore(using);
     }
-}
-
-///
-/// Get instance variable.
-///
-/// rax <= the value of instance variable. <Value>
-///
-extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
-    globals.store.get_ivar(base, name).unwrap_or_default()
-}
-
-///
-/// Set instance variable.
-///
-/// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
-///
-extern "C" fn set_instance_var(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    base: Value,
-    name: IdentId,
-    val: Value,
-) -> Option<Value> {
-    if let Err(err) = globals.store.set_ivar(base, name, val) {
-        vm.set_error(err);
-        return None;
-    };
-    Some(val)
 }
 
 #[cfg(test)]

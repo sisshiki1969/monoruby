@@ -1191,19 +1191,13 @@ pub(super) enum AsmInst {
     },
 
     LoadIVar {
-        name: IdentId,
-        cached_ivarid: IvarId,
+        ivarid: IvarId,
         is_object_ty: bool,
-        is_self_cached: bool,
-        using_xmm: UsingXmm,
     },
     StoreIVar {
-        name: IdentId,
-        cached_ivarid: IvarId,
+        ivarid: IvarId,
         is_object_ty: bool,
-        is_self_cached: bool,
         using_xmm: UsingXmm,
-        error: AsmError,
     },
 
     /// rax = DynVar(src)
