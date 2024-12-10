@@ -16,6 +16,10 @@ impl IvarId {
     pub(crate) fn get(&self) -> u32 {
         self.0
     }
+
+    pub(crate) fn is_inline(&self) -> bool {
+        self.into_usize() < OBJECT_INLINE_IVAR
+    }
 }
 
 impl Store {

@@ -19,8 +19,14 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(ARRAY_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
-    globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
-    globals.define_builtin_inline_func(ARRAY_CLASS, "length", size, Box::new(array_size), 0);
+    globals.define_builtin_inline_funcs(
+        ARRAY_CLASS,
+        "size",
+        &["length"],
+        size,
+        Box::new(array_size),
+        0,
+    );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
