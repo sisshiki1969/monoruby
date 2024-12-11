@@ -149,8 +149,8 @@ impl Codegen {
     /// rdi: receiver: Value
     ///
     pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
-        let exit = self.jit.label();
-        if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
+        if ivar_id.is_inline() {
+            let exit = self.jit.label();
             let not_object = self.jit.label();
             monoasm!( &mut self.jit,
                 // we don't know ty of the receiver in a compile time.
@@ -165,24 +165,14 @@ impl Codegen {
             self.jit.select_page(1);
             monoasm!( &mut self.jit,
             not_object:
-                movl rsi, (ivar_id.get());
             );
-            self.load_ivar_heap_index();
+            self.load_ivar_heap(ivar_id, false);
             monoasm!( &mut self.jit,
                 jmp  exit;
             );
             self.jit.select_page(0);
         } else {
-            monoasm!( &mut self.jit,
-                movl rsi, (ivar_id.get());
-                xorq rax, rax;
-                movl rdx, (OBJECT_INLINE_IVAR);
-                // we don't know ty of the receiver in a compile time.
-                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                cmoveqq rax, rdx;
-                subl rsi, rax;
-            );
-            self.load_ivar_heap_index();
+            self.load_ivar_heap_index(ivar_id);
         }
     }
 
@@ -191,15 +181,23 @@ impl Codegen {
     ///
     /// #### in
     /// - rdi: &RValue
-    /// - rsi: index
     ///
     /// #### out
     /// - rax: Value
     ///
     /// #### destroy
-    /// - rdi, rdx
+    /// - rdi, rsi, rdx
     ///
-    fn load_ivar_heap_index(&mut self) {
+    fn load_ivar_heap_index(&mut self, ivar_id: IvarId) {
+        monoasm!( &mut self.jit,
+            movl rsi, (ivar_id.get());
+            xorq rax, rax;
+            movl rdx, (OBJECT_INLINE_IVAR);
+            // we don't know ty of the receiver in a compile time.
+            cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+            cmoveqq rax, rdx;
+            subl rsi, rax;
+        );
         let exit = self.jit.label();
         monoasm!( &mut self.jit,
             movq rax, (NIL_VALUE);

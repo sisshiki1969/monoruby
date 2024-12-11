@@ -2,7 +2,7 @@ use super::*;
 
 impl Codegen {
     pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool) {
-        if is_object_ty && ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+        if is_object_ty && ivarid.is_inline() {
             self.load_ivar_inline(ivarid);
         } else {
             self.load_ivar_heap(ivarid, is_object_ty);
@@ -43,7 +43,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
@@ -73,7 +73,7 @@ impl Codegen {
 
 impl Codegen {
     pub(super) fn store_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, using_xmm: UsingXmm) {
-        if is_object_ty && ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+        if is_object_ty && ivarid.is_inline() {
             self.store_ivar_inline(ivarid);
         } else {
             self.store_ivar_heap(ivarid, is_object_ty, using_xmm);
