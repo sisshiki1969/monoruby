@@ -386,6 +386,21 @@ impl Globals {
         fid
     }
 
+    pub(crate) fn define_builtin_inline_funcs(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        inline_gen: Box<InlineGen>,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.define_builtin_funcs(class_id, name, alias, address, arg_num);
+        let info = inline::InlineFuncInfo { inline_gen };
+        self.store.inline_info.add_inline(fid, info);
+        fid
+    }
+
     pub(crate) fn define_builtin_inline_func_with(
         &mut self,
         class_id: ClassId,
