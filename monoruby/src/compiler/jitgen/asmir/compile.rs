@@ -348,7 +348,7 @@ impl Codegen {
                 let return_addr = self.send_cached(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
-            AsmInst::SendNotCached {
+            /*AsmInst::SendNotCached {
                 self_class,
                 callid,
                 pc,
@@ -358,7 +358,7 @@ impl Codegen {
                 let error = labels[error];
                 let return_addr = self.send_not_cached(store, callid, self_class, pc, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
-            }
+            }*/
             AsmInst::Yield {
                 callid,
                 using_xmm,

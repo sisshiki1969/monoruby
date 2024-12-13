@@ -341,6 +341,8 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     /// *self* value
     self_value: Value,
+    /// the class version at compile time.
+    class_version: u32,
 }
 
 impl std::ops::Deref for BBContext {
@@ -363,7 +365,12 @@ impl BBContext {
             sp: SlotId(cc.local_num as u16),
             next_sp: SlotId(cc.local_num as u16),
             self_value: cc.self_value,
+            class_version: cc.class_version,
         }
+    }
+
+    fn class_version(&self) -> u32 {
+        self.class_version
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {

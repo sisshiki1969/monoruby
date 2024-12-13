@@ -105,40 +105,46 @@ impl BBContext {
     ) -> CompileResult {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         let MethodCacheEntry {
-            recv_class,
-            func_id,
-            version,
+            mut recv_class,
+            mut func_id,
+            mut version,
         } = cache;
         if recv.is_self() && self.self_value.class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
-            self.write_back_locals(ir);
-            self.write_back_callargs_and_dst(ir, &store[callid]);
-            self.writeback_acc(ir);
-            self.send_not_cached(ir, pc, callid);
-            self.rax2acc(ir, dst);
-        } else {
-            // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
-            if store[callid].block_fid.is_some() || store[func_id].meta().is_eval() {
-                self.write_back_locals(ir);
-            }
-            self.fetch_for_gpr(ir, recv, GP::Rdi);
-            let (deopt, error) = ir.new_deopt_error(self, pc);
-            let using_xmm = self.get_using_xmm();
-            ir.guard_version(func_id, version, callid, using_xmm, deopt, error);
-            // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-            // Thus, we can omit a class guard.
-            if !recv.is_self() && !self.is_class(recv, recv_class) {
-                ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
-            }
-            if let Some(evict) = self.call_cached(ir, store, callid, func_id, recv_class, pc) {
-                self.rax2acc(ir, dst);
-                if let Some(evict) = evict {
-                    ir.push(AsmInst::ImmediateEvict { evict });
-                    ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
-                }
+            let class_version = self.class_version();
+            let name = store[callid].name.unwrap();
+            if let Some(entry) =
+                store.check_method_for_class(self.self_value.class(), name, class_version)
+                && let Some(fid) = entry.func_id()
+            {
+                recv_class = self.self_value.class();
+                func_id = fid;
+                version = class_version;
             } else {
                 return CompileResult::Recompile;
             }
+        }
+        // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
+        if store[callid].block_fid.is_some() || store[func_id].meta().is_eval() {
+            self.write_back_locals(ir);
+        }
+        self.fetch_for_gpr(ir, recv, GP::Rdi);
+        let (deopt, error) = ir.new_deopt_error(self, pc);
+        let using_xmm = self.get_using_xmm();
+        ir.guard_version(func_id, version, callid, using_xmm, deopt, error);
+        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+        // Thus, we can omit a class guard.
+        if !recv.is_self() && !self.is_class(recv, recv_class) {
+            ir.guard_class(self, recv, GP::Rdi, recv_class, deopt);
+        }
+        if let Some(evict) = self.call_cached(ir, store, callid, func_id, recv_class, pc) {
+            self.rax2acc(ir, dst);
+            if let Some(evict) = evict {
+                ir.push(AsmInst::ImmediateEvict { evict });
+                ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
+            }
+        } else {
+            return CompileResult::Recompile;
         }
 
         CompileResult::Continue
@@ -263,7 +269,7 @@ impl BBContext {
         ir.handle_error(error);
     }
 
-    fn send_not_cached(&self, ir: &mut AsmIr, pc: BytecodePtr, callid: CallSiteId) {
+    /*fn send_not_cached(&self, ir: &mut AsmIr, pc: BytecodePtr, callid: CallSiteId) {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         let evict = ir.new_evict();
@@ -278,7 +284,7 @@ impl BBContext {
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
-    }
+    }*/
 
     ///
     /// Attribute writer
