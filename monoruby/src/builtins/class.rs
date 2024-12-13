@@ -22,7 +22,13 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_inline_func(
+        CLASS_CLASS,
+        "allocate",
+        allocate,
+        Box::new(class_allocate),
+        0,
+    );
 }
 
 /// ### Class.new
@@ -165,6 +171,33 @@ pub(super) fn gen_class_new(
         bb.rax2acc(ir, dst);
         true
     }
+}
+
+fn class_allocate(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    pc: BytecodePtr,
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
+    let callsite = &store[callid];
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+    bb.write_back_callargs_and_dst(ir, callsite);
+    ir.stack2reg(recv, GP::Rdi);
+    let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
+    ir.inline(move |gen, _| {
+        monoasm!( &mut gen.jit,
+            movq rax, (allocate_object);
+            call rax;
+        );
+    });
+    ir.xmm_restore(using_xmm);
+    bb.rax2acc(ir, dst);
+    true
 }
 
 extern "C" fn allocate_object(class_val: Value) -> Value {
