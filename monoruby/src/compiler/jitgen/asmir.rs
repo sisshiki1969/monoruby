@@ -17,9 +17,9 @@ mod compile;
 // +---+---+---+---++---+---+---+---+
 // ~~~
 
-const BC_OFFSET_CACHED_CLASS: usize = 24;
-const BC_OFFSET_CACHED_VERSION: usize = 28;
-const BC_OFFSET_CACHED_FUNCID: usize = 8;
+//const BC_OFFSET_CACHED_CLASS: usize = 24;
+//const BC_OFFSET_CACHED_VERSION: usize = 28;
+//const BC_OFFSET_CACHED_FUNCID: usize = 8;
 
 pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
@@ -978,7 +978,7 @@ pub(super) enum AsmInst {
         callee_fid: FuncId,
         evict: AsmEvict,
     },
-    ///
+    /*///
     /// Send non-cached method
     ///
     /// ### destroy
@@ -991,7 +991,7 @@ pub(super) enum AsmInst {
         pc: BytecodePtr,
         error: AsmError,
         evict: AsmEvict,
-    },
+    },*/
     Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,

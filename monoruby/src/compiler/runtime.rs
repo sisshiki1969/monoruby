@@ -9,7 +9,7 @@ pub(crate) use args::*;
 // Runtime functions.
 //
 
-///
+/*///
 /// Get FuncId of the given method.
 ///
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
@@ -30,7 +30,7 @@ pub(super) extern "C" fn find_method(
     } else {
         find_super(vm, globals)
     }
-}
+}*/
 
 pub(super) extern "C" fn find_method2(
     vm: &mut Executor,

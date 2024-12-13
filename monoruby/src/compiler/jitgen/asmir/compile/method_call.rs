@@ -45,7 +45,7 @@ impl Codegen {
         }
     }
 
-    ///
+    /*///
     /// generate JIT code for a method call which was not cached.
     ///
     pub(super) fn send_not_cached(
@@ -140,7 +140,7 @@ impl Codegen {
         self.jit.select_page(0);
 
         return_addr
-    }
+    }*/
 
     ///
     /// Attribute reader

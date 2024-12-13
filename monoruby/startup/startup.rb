@@ -185,4 +185,17 @@ class Errno
   ENOENT = 2
 end
 
+class Class
+  def new(...)
+    o = self.allocate
+    o.initialize(...)
+    o
+  end
+end
+
+class Object
+  def initialize
+  end
+end
+
 File::ALT_SEPARATOR = nil
