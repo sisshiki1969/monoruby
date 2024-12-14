@@ -338,7 +338,8 @@ impl Codegen {
     ///
     /// Execute garbage collection.
     ///
-    fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
+    fn 
+    execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
         let alloc_flag = self.alloc_flag;
         let gc = self.jit.label();
         let exit = self.jit.label();

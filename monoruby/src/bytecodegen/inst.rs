@@ -261,6 +261,21 @@ impl BytecodeInst {
             _ => false,
         }
     }
+
+    pub fn can_be_inlined(&self) -> bool {
+        match self {
+            Self::InitMethod(..)
+            | Self::Integer(..)
+            | Self::InlineCache(..)
+            | Self::Literal(..)
+            | Self::LoadConst { .. }
+            | Self::LoadIvar(..)
+            | Self::StoreConst { .. }
+            | Self::StoreIvar(..)
+            | Self::Ret(..) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Default)]

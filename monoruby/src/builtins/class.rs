@@ -178,7 +178,7 @@ fn class_allocate(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
-    pc: BytecodePtr,
+    _: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;

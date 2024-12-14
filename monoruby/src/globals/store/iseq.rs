@@ -121,6 +121,7 @@ pub struct ISeqInfo {
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
+    pub(crate) can_be_inlined: bool,
     ///
     /// Basic block information.
     ///
@@ -178,6 +179,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             is_block_style,
+            can_be_inlined: false,
             bb_info: BasicBlockInfo::default(),
         }
     }
