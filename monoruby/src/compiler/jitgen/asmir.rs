@@ -323,7 +323,7 @@ impl AsmIr {
         deopt: AsmDeopt,
         error: AsmError,
     ) {
-        self.push(AsmInst::GuardClassVersion(
+        self.push(AsmInst::GuardClassVersionWithRecovery(
             cached_fid,
             cached_version,
             callid,
@@ -868,8 +868,8 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - stack
     ///
-    GuardClassVersion(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
-    GuardClassVersion2(u32, AsmDeopt),
+    GuardClassVersionWithRecovery(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
+    GuardClassVersion(u32, AsmDeopt),
     ///
     /// Type guard.
     ///

@@ -94,7 +94,7 @@ impl Globals {
     pub(crate) fn dump_disas(
         &mut self,
         sourcemap: Vec<(bytecodegen::BcIndex, usize)>,
-        func_id: FuncId,
+        iseq_id: ISeqId,
     ) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
         eprintln!(
@@ -121,7 +121,7 @@ impl Globals {
                 )
             })
             .collect();
-        let iseq = self.store.iseq(func_id);
+        let iseq = &self.store[iseq_id];
         for (i, text) in dump {
             sourcemap
                 .iter()
@@ -158,10 +158,10 @@ impl Globals {
             eprintln!();
             eprintln!("deoptimization stats (top 20)");
             eprintln!(
-                "{:60} FuncId [{:05}]     {:7}",
+                " FuncId  {:60} [{:05}]     {:7}",
                 "func name", "index", "count"
             );
-            eprintln!("--------------------------------------------------------------------------------------------------------------------------------------------");
+            eprintln!("------------------------------------------------------------------------------------------------------------------------------------------------------");
             let mut v: Vec<_> = self.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, bc_pos), count) in v.into_iter().take(20) {
@@ -174,9 +174,9 @@ impl Globals {
                 };
                 let name = self.store.func_description(*func_id);
                 eprintln!(
-                    "{:60}  {:5} [{:05}]  {:10}   {fmt}",
-                    name,
+                    "({:6}) {:60} [{:05}]  {:10}   {fmt}",
                     func_id.get(),
+                    name,
                     bc_pos,
                     count
                 );
@@ -185,13 +185,33 @@ impl Globals {
             self.store.show_stats();
             eprintln!();
             eprintln!("jit class guard failed stats (top 20)");
-            eprintln!("{:40} {:30} {:10}", "func name", "class", "count");
-            eprintln!("------------------------------------------------------------------------");
+            eprintln!(" FuncId  {:40} {:30} {:10}", "func name", "class", "count");
+            eprintln!(
+                "--------------------------------------------------------------------------------------------"
+            );
             let mut v: Vec<_> = self.jit_class_unmatched_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, class_id), count) in v.into_iter().take(20) {
                 eprintln!(
-                    "{:40} {:30} {:10}",
+                    "({:6}) {:40} {:30} {:10}",
+                    func_id.get(),
+                    self.store.func_description(*func_id),
+                    self.store.debug_class_name(*class_id),
+                    count
+                );
+            }
+            eprintln!();
+            eprintln!("jit recompile stats (top 20)");
+            eprintln!(" FuncId  {:40} {:30} {:10}", "func name", "class", "count");
+            eprintln!(
+                "--------------------------------------------------------------------------------------------"
+            );
+            let mut v: Vec<_> = self.jit_recompile_count.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((func_id, class_id), count) in v.into_iter().take(20) {
+                eprintln!(
+                    "({:6}) {:40} {:30} {:10}",
+                    func_id.get(),
                     self.store.func_description(*func_id),
                     self.store.debug_class_name(*class_id),
                     count

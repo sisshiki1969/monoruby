@@ -275,7 +275,8 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
-        self.do_call(callee, codeptr, recv_class, pc)
+        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
+        self.do_call(callee, iseq, codeptr, recv_class, pc)
     }
 
     ///
@@ -305,12 +306,14 @@ impl Codegen {
             pushq r13;
             addq rsp, 64;
         }
-        self.do_call(callee, codeptr, recv_class, pc)
+        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
+        self.do_call(callee, iseq, codeptr, recv_class, pc)
     }
 
     fn do_call(
         &mut self,
         callee: &FuncInfo,
+        iseq: Option<&ISeqInfo>,
         codeptr: CodePtr,
         recv_class: ClassId,
         pc: Option<BytecodePtr>,
@@ -321,7 +324,7 @@ impl Codegen {
         if callee.is_native() {
             self.call_codeptr(codeptr)
         } else {
-            match callee.get_jit_code(recv_class) {
+            match iseq.unwrap().get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE

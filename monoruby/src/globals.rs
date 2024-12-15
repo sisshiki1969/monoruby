@@ -124,6 +124,8 @@ pub struct Globals {
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
+    #[cfg(feature = "profile")]
+    jit_recompile_count: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
 }
@@ -174,6 +176,8 @@ impl Globals {
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
             jit_class_unmatched_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            jit_recompile_count: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
         };
@@ -521,7 +525,18 @@ impl Globals {
     pub fn clear_stats(&mut self) {
         self.deopt_stats.clear();
         self.jit_class_unmatched_stats.clear();
+        self.jit_recompile_count.clear();
         self.store.clear_stats();
+    }
+
+    #[cfg(feature = "profile")]
+    pub fn countup_recompile(&mut self, func_id: FuncId, class_id: ClassId) {
+        match self.jit_recompile_count.get_mut(&(func_id, class_id)) {
+            Some(c) => *c += 1,
+            None => {
+                self.jit_recompile_count.insert((func_id, class_id), 1);
+            }
+        };
     }
 }
 

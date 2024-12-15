@@ -46,7 +46,7 @@ impl BBContext {
         let deopt = ir.new_deopt(self, pc);
         self.fetch_lhs(ir, mode);
         ir.guard_lhs_class_for_mode(self, mode, lhs_class, deopt);
-        ir.push(AsmInst::GuardClassVersion2(version, deopt));
+        ir.push(AsmInst::GuardClassVersion(version, deopt));
 
         let evict = ir.new_evict();
         ir.reg_move(GP::Rdi, GP::R13);

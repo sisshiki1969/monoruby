@@ -624,18 +624,14 @@ impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
         store: &Store,
-        func_id: FuncId,
+        iseq_id: ISeqId,
         self_value: Value,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        startup_flag: bool,
     ) -> Vec<(BcIndex, usize)> {
-        #[cfg(feature = "jit-log")]
-        let now = std::time::Instant::now();
-
         self.jit.bind_label(entry_label);
 
-        let func = store.iseq(func_id);
+        let func = &store[iseq_id];
         let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
@@ -660,6 +656,7 @@ impl Codegen {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
+
         let bb_begin = func.bb_info.get_bb_id(start_pos);
         let branch_dest = ctx.label();
         ctx.branch_map.insert(
@@ -705,24 +702,6 @@ impl Codegen {
 
         self.jit.finalize();
 
-        if startup_flag {
-            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-            {
-                self.jit.select_page(0);
-                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
-                self.jit.select_page(1);
-                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
-                self.jit.select_page(0);
-            }
-            #[cfg(feature = "jit-log")]
-            {
-                let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.jit_compile_time += elapsed;
-            }
-            #[cfg(feature = "emit-asm")]
-            eprintln!("<== finished compile.");
-        }
         ctx.sourcemap
     }
 

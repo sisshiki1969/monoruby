@@ -811,7 +811,7 @@ impl Globals {
 
     fn set_bop_redefine(&mut self) {
         self.codegen.set_bop_redefine();
-        self.store.functions.invalidate_jit_code();
+        self.store.invalidate_jit_code();
         let vm_entry = self.codegen.vm_entry;
         for func in self.store.functions.functions() {
             if let FuncKind::ISeq(_) = func.kind {

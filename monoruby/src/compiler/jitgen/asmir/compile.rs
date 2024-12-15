@@ -165,14 +165,28 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
-            AsmInst::GuardClassVersion(fid, cached_version, callid, using_xmm, deopt, error) => {
+            AsmInst::GuardClassVersionWithRecovery(
+                fid,
+                cached_version,
+                callid,
+                using_xmm,
+                deopt,
+                error,
+            ) => {
                 let deopt = labels[deopt];
                 let error = labels[error];
-                self.guard_class_version(fid, cached_version, callid, using_xmm, deopt, error);
+                self.guard_class_version_with_recovery(
+                    fid,
+                    cached_version,
+                    callid,
+                    using_xmm,
+                    deopt,
+                    error,
+                );
             }
-            AsmInst::GuardClassVersion2(cached_version, deopt) => {
+            AsmInst::GuardClassVersion(cached_version, deopt) => {
                 let deopt = labels[deopt];
-                self.guard_class_version2(cached_version, deopt);
+                self.guard_class_version(cached_version, deopt);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -720,112 +734,6 @@ impl Codegen {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
             .insert(return_addr, (None, evict_label));
-    }
-
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi
-    /// - stack
-    ///
-    fn guard_class_version(
-        &mut self,
-        cached_fid: FuncId,
-        cached_version: u32,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        deopt: DestLabel,
-        error: DestLabel,
-    ) {
-        assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
-        let unmatch = self.jit.label();
-        let exit = self.jit.label();
-        let fail = self.jit.label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  unmatch;
-        exit:
-        }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(unmatch);
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            pushq rdi;
-            pushq r13;
-            movq rcx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());  // CallSiteId
-            movq rax, (runtime::find_method2);
-            call rax;   // rax <- Option<FuncId>
-            popq r13;
-            popq rdi;
-            movl rax, rax;
-        }
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        monoasm! { &mut self.jit,
-            cmpl rax, (cached_fid.get());
-            jne  fail;
-            movl rax, [rip + global_version];
-            movl [rip + cached_version], rax;
-            jmp  exit;
-        fail:
-            movq rdi, (Value::symbol_from_str("__version_guard").id());
-            jmp  deopt;
-        }
-        self.jit.select_page(0);
-    }
-
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version.
-    /// If different, jump to `deopt`.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    fn guard_class_version2(&mut self, cached_version: u32, deopt: DestLabel) {
-        assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
-        let fail = self.jit.label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  fail;
-        }
-
-        self.jit.select_page(1);
-        monoasm! { &mut self.jit,
-        fail:
-            movq rdi, (Value::symbol_from_str("__version_guard").id());
-            jmp  deopt;
-        }
-        self.jit.select_page(0);
     }
 
     ///

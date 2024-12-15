@@ -422,6 +422,12 @@ impl Store {
             entry
         })
     }
+
+    pub(super) fn invalidate_jit_code(&mut self) {
+        self.iseqs
+            .iter_mut()
+            .for_each(|info| info.invalidate_jit_code())
+    }
 }
 
 impl Store {

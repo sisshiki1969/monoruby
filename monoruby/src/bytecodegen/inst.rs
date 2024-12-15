@@ -265,13 +265,12 @@ impl BytecodeInst {
     pub fn can_be_inlined(&self) -> bool {
         match self {
             Self::InitMethod(..)
-            | Self::Integer(..)
-            | Self::InlineCache(..)
-            | Self::Literal(..)
-            | Self::LoadConst { .. }
-            | Self::LoadIvar(..)
-            | Self::StoreConst { .. }
-            | Self::StoreIvar(..)
+            | Self::Nil(..)
+            //| Self::Integer(..)
+            //| Self::Symbol(..)
+            //| Self::Literal(..)
+            //| Self::LoadIvar(..)
+            //| Self::StoreIvar(..)
             | Self::Ret(..) => true,
             _ => false,
         }

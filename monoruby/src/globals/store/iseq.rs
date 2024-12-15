@@ -118,10 +118,15 @@ pub struct ISeqInfo {
     /// The number of temporary registers.
     ///
     pub temp_num: u16,
+    ///
+    /// Lexical module stack of this method.
+    ///
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
     is_block_style: bool,
     pub(crate) can_be_inlined: bool,
+    /// JIT code entries for each class of *self*.
+    jit_entry: HashMap<ClassId, DestLabel>,
     ///
     /// Basic block information.
     ///
@@ -180,6 +185,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block_style,
             can_be_inlined: false,
+            jit_entry: HashMap::default(),
             bb_info: BasicBlockInfo::default(),
         }
     }
@@ -377,6 +383,9 @@ impl ISeqInfo {
         self.exception_map
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
+    pub(crate) fn no_exception(&mut self) -> bool {
+        self.exception_map.is_empty()
+    }
 
     #[cfg(feature = "emit-bc")]
     pub(crate) fn get_exception_map(
@@ -397,6 +406,22 @@ impl ISeqInfo {
                 (start..end, rescue, ensure, entry.error_slot)
             })
             .collect::<Vec<_>>()
+    }
+
+    pub(crate) fn add_jit_code(
+        &mut self,
+        self_class: ClassId,
+        entry: DestLabel,
+    ) -> Option<DestLabel> {
+        self.jit_entry.insert(self_class, entry)
+    }
+
+    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry.get(&self_class).cloned()
+    }
+
+    pub(crate) fn invalidate_jit_code(&mut self) {
+        self.jit_entry.clear();
     }
 }
 

@@ -338,8 +338,7 @@ impl Codegen {
     ///
     /// Execute garbage collection.
     ///
-    fn 
-    execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
+    fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
         let alloc_flag = self.alloc_flag;
         let gc = self.jit.label();
         let exit = self.jit.label();
@@ -1059,16 +1058,16 @@ mod tests {
 impl Globals {
     pub(super) fn exec_jit_compile(
         &mut self,
-        func_id: FuncId,
+        iseq_id: ISeqId,
         self_value: Value,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
-            let func = self.store.iseq(func_id);
-            let start_pos = func.get_pc_index(position);
-            let name = self.store.func_description(func_id);
+            let iseq = &self.store[iseq_id];
+            let start_pos = iseq.get_pc_index(position);
+            let name = self.store.func_description(iseq.func_id());
             eprintln!(
                 "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
@@ -1076,7 +1075,7 @@ impl Globals {
                 } else {
                     "whole"
                 },
-                func.func_id(),
+                iseq.func_id(),
                 name,
                 if position.is_some() {
                     format!("start:[{}] ", start_pos)
@@ -1084,30 +1083,48 @@ impl Globals {
                     String::new()
                 },
                 self.store.debug_class_name(self_value.class()),
-                func.sourceinfo.file_name(),
-                func.sourceinfo.get_line(&func.loc),
+                iseq.sourceinfo.file_name(),
+                iseq.sourceinfo.get_line(&iseq.loc),
             );
         }
 
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
 
-        let _sourcemap = self.codegen.jit_compile(
-            &self.store,
-            func_id,
-            self_value,
-            position,
-            entry_label,
-            self.startup_flag,
-        );
+        #[cfg(feature = "jit-log")]
+        let now = std::time::Instant::now();
+
+        let _sourcemap =
+            self.codegen
+                .jit_compile(&self.store, iseq_id, self_value, position, entry_label);
+
+        if self.startup_flag {
+            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
+            {
+                self.codegen.jit.select_page(0);
+                eprintln!("    total bytes(0):{:?}", self.codegen.jit.get_current());
+                self.codegen.jit.select_page(1);
+                eprintln!("    total bytes(1):{:?}", self.codegen.jit.get_current());
+                self.codegen.jit.select_page(0);
+            }
+            #[cfg(feature = "jit-log")]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                self.codegen.jit_compile_time += elapsed;
+            }
+            #[cfg(feature = "emit-asm")]
+            eprintln!("<== finished compile.");
+        }
         #[cfg(feature = "perf")]
         {
-            let desc = format!("JIT:<{}>", self.store.func_description(func_id));
+            let iseq = &self.store[iseq_id];
+            let desc = format!("JIT:<{}>", self.store.func_description(iseq.func_id()));
             self.codegen.perf_info(pair, &desc);
         }
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            self.dump_disas(_sourcemap, func_id);
+            self.dump_disas(_sourcemap, iseq_id);
         }
     }
 
@@ -1116,10 +1133,10 @@ impl Globals {
     ///
     pub(super) fn exec_jit_compile_method(
         &mut self,
-        func_id: FuncId,
+        iseq_id: ISeqId,
         self_value: Value,
         jit_entry: DestLabel,
     ) {
-        self.exec_jit_compile(func_id, self_value, None, jit_entry)
+        self.exec_jit_compile(iseq_id, self_value, None, jit_entry)
     }
 }

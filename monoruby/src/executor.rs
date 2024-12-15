@@ -1243,6 +1243,7 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     let jit_entry = globals.codegen.jit.label();
     let guard = globals.codegen.jit.label();
     let func_id = lfp.meta().func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
     let self_value = lfp.self_val();
     let self_class = self_value.class();
     //eprintln!("{:?}", lfp.outermost().block());
@@ -1250,9 +1251,9 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
         .codegen
         .class_guard_stub(self_class, patch_point, jit_entry, guard);
 
-    let old_entry = globals[func_id].add_jit_code(self_class, patch_point);
+    let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
     assert!(old_entry.is_none());
-    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
+    globals.exec_jit_compile_method(iseq_id, self_value, jit_entry);
 
     globals
         .codegen
@@ -1264,11 +1265,19 @@ pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &
     let lfp = vm.cfp().lfp();
     let self_value = lfp.self_val();
     let func_id = lfp.meta().func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
     let jit_entry = globals.codegen.jit.label();
-    globals.exec_jit_compile_method(func_id, self_value, jit_entry);
+
+    #[cfg(feature = "profile")]
+    {
+        let class_id = self_value.class();
+        globals.countup_recompile(func_id, class_id);
+    }
+
+    globals.exec_jit_compile_method(iseq_id, self_value, jit_entry);
     // get_jit_code() must not be None.
     // After BOP redefinition occurs, recompilation in invalidated methods cause None.
-    if let Some(patch_point) = globals[func_id].get_jit_code(self_value.class()) {
+    if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_value.class()) {
         globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
     }
 }
@@ -1284,7 +1293,8 @@ pub(crate) extern "C" fn exec_jit_partial_compile(
     let entry_label = globals.codegen.jit.label();
     let self_value = vm.cfp().lfp().self_val();
     let func_id = vm.cfp().lfp().meta().func_id();
-    globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
+    let iseq_id = globals.store[func_id].as_iseq();
+    globals.exec_jit_compile(iseq_id, self_value, Some(pc), entry_label);
     let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);
 }
