@@ -808,6 +808,10 @@ pub(super) enum AsmInst {
     I32ToRSPOffset(i32, i32),
     RSPOffsetToArray(i32),
 
+    InlineLitToReg(Value, GP),
+    InlineRegToStack(GP, SlotId),
+    InlineStackToReg(SlotId, GP),
+
     XmmMove(Xmm, Xmm),
     XmmSwap(Xmm, Xmm),
     XmmBinOp {

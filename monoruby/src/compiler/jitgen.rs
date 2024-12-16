@@ -329,6 +329,28 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
+#[derive(Debug, Clone)]
+struct BBContextInline {
+    /// state stack slots.
+    slot_state: SlotContext,
+    /// stack top register.
+    sp: SlotId,
+    next_sp: SlotId,
+    /// the class version at compile time.
+    class_version: u32,
+}
+
+impl BBContextInline {
+    fn from_iseq(iseq: &ISeqInfo, class_version: u32) -> Self {
+        Self {
+            slot_state: SlotContext::from_iseq(iseq),
+            sp: SlotId(iseq.local_num() as u16),
+            next_sp: SlotId(iseq.local_num() as u16),
+            class_version,
+        }
+    }
+}
+
 ///
 /// Context of an each basic block.
 ///

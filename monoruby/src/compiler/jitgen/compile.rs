@@ -4,14 +4,14 @@ impl JitContext {
     pub(super) fn compile_basic_block(
         &mut self,
         store: &Store,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         position: Option<BytecodePtr>,
         bbid: BasicBlockId,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
         ir.push(AsmInst::Label(self.basic_block_labels[&bbid]));
 
-        let mut bbctx = match self.generate_entry_bb(&mut ir, func, bbid) {
+        let mut bbctx = match self.generate_entry_bb(&mut ir, iseq, bbid) {
             Some(bb) => bb,
             None => {
                 #[cfg(feature = "jit-debug")]
@@ -20,16 +20,16 @@ impl JitContext {
             }
         };
 
-        let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+        let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
         for bc_pos in begin..=end {
             ir.bc_index(bc_pos);
-            bbctx.next_sp = func.get_sp(bc_pos);
+            bbctx.next_sp = iseq.get_sp(bc_pos);
 
-            match self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos) {
+            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile => {
-                    let pc = func.get_pc(bc_pos);
+                    let pc = iseq.get_pc(bc_pos);
                     ir.recompile_and_deopt(&mut bbctx, pc, position);
                     return ir;
                 }
@@ -40,7 +40,7 @@ impl JitContext {
             bbctx.sp = bbctx.next_sp;
         }
 
-        self.prepare_next(&mut ir, bbctx, func, end);
+        self.prepare_next(&mut ir, bbctx, iseq, end);
 
         ir
     }

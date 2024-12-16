@@ -39,6 +39,10 @@ impl SlotContext {
         Self::new(cc.total_reg_num, cc.local_num)
     }
 
+    pub(super) fn from_iseq(iseq: &ISeqInfo) -> Self {
+        Self::new(iseq.total_reg_num(), iseq.local_num())
+    }
+
     pub(super) fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
         self[slot].link = mode;
         self[slot].guarded = guarded;

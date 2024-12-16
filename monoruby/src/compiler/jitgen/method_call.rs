@@ -189,6 +189,9 @@ impl BBContext {
     /// ### in
     /// - rdi: receiver: Value
     ///
+    /// ### out
+    /// - rax: return value: Value
+    ///
     fn call_cached(
         &mut self,
         ir: &mut AsmIr,
@@ -234,19 +237,52 @@ impl BBContext {
             }
             FuncKind::ISeq(iseq) => {
                 if store[iseq].can_be_inlined
+                    && store[iseq].args.is_simple()
                     && callsite.is_simple()
                     && callsite.block_fid.is_none()
                 {
-                    #[cfg(feature = "emit-bc")]
-                    {
-                        eprintln!("inlinable!!");
-                        store.dump_iseq(iseq);
+                    //let evict = ir.new_evict();
+                    let error = ir.new_error(self, pc);
+                    let reg_num = store[iseq].total_reg_num();
+                    let stack_offset = (((reg_num + 1) & !1) * 8) as i32;
+                    ir.reg_sub(GP::Rsp, stack_offset);
+
+                    callsite.recv;
+                    ir.stack2reg(callsite.recv, GP::Rax);
+                    ir.push(AsmInst::InlineRegToStack(GP::Rax, SlotId(0)));
+                    for i in 0..callsite.pos_num {
+                        ir.stack2reg(callsite.args + i, GP::Rax);
+                        ir.push(AsmInst::InlineRegToStack(GP::Rax, SlotId(i as u16 + 1)));
                     }
-                    let evict = ir.new_evict();
-                    ir.reg_sub(GP::Rsp, 32);
-                    self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
-                    ir.reg_add(GP::Rsp, 32);
-                    return Some(Some(evict));
+
+                    let iseq = &store[iseq];
+                    let mut bbctx = BBContextInline::from_iseq(iseq, self.class_version);
+                    assert_eq!(1, iseq.bb_info.len());
+                    let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(0)];
+                    for bc_pos in begin..=end {
+                        bbctx.next_sp = iseq.get_sp(bc_pos);
+
+                        match iseq.trace_ir(store, bc_pos) {
+                            TraceIr::InitMethod(..) => {}
+                            TraceIr::Nil(slot) => {
+                                ir.push(AsmInst::InlineLitToReg(Value::nil(), GP::Rax));
+                                ir.push(AsmInst::InlineRegToStack(GP::Rax, slot));
+                            }
+                            TraceIr::Ret(slot) => {
+                                ir.push(AsmInst::InlineStackToReg(slot, GP::Rax));
+                                break;
+                            }
+                            _ => unreachable!(),
+                        }
+
+                        //bbctx.clear(ir);
+                        bbctx.sp = bbctx.next_sp;
+                    }
+
+                    ir.reg_add(GP::Rsp, stack_offset);
+                    ir.handle_error(error);
+
+                    return Some(None);
                 } else {
                     let evict = ir.new_evict();
                     self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
