@@ -456,6 +456,40 @@ impl Store {
         }
     }
 
+    #[cfg(feature = "emit-bc")]
+    pub fn dump_iseq(&self, iseq: ISeqId) {
+        use bytecodegen::BcIndex;
+
+        let func = &self[iseq];
+        eprintln!("------------------------------------");
+        let loc = func.loc;
+        let line = func.sourceinfo.get_line(&loc);
+        let file_name = func.sourceinfo.file_name();
+        eprintln!(
+            "<{}> {file_name}:{line}",
+            self.func_description(func.func_id()),
+        );
+        eprintln!(
+            "{:?} local_vars:{} temp:{}",
+            self[func.func_id()].meta(),
+            func.local_num(),
+            func.temp_num
+        );
+        eprintln!("{:?}", func.args);
+        eprintln!("{:?}", func.get_exception_map());
+        for i in 0..func.bytecode().len() {
+            let bc_pos = BcIndex::from(i);
+            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
+                eprintln!("{:?}", bbid);
+            };
+            let trace_ir = func.trace_ir(self, bc_pos);
+            if let Some(fmt) = trace_ir.format(self) {
+                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
+            };
+        }
+        eprintln!("------------------------------------");
+    }
+
     #[cfg(feature = "profile")]
     pub fn clear_stats(&mut self) {
         GLOBAL_METHOD_CACHE.with(|cache| {

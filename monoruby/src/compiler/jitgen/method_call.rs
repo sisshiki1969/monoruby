@@ -201,13 +201,14 @@ impl BBContext {
         let CallSiteInfo {
             args, pos_num, dst, ..
         } = store[callid];
+        let callsite = &store[callid];
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);
-                assert!(!store[callid].kw_may_exists());
-                assert!(store[callid].block_fid.is_none());
-                assert!(store[callid].block_arg.is_none());
+                assert!(!callsite.kw_may_exists());
+                assert!(callsite.block_fid.is_none());
+                assert!(callsite.block_arg.is_none());
                 if recv_class.is_always_frozen() {
                     if dst.is_some() {
                         ir.lit2reg(Value::nil(), GP::Rax);
@@ -219,17 +220,38 @@ impl BBContext {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, pos_num);
-                assert!(!store[callid].kw_may_exists());
-                assert!(store[callid].block_fid.is_none());
-                assert!(store[callid].block_arg.is_none());
+                assert!(!callsite.kw_may_exists());
+                assert!(callsite.block_fid.is_none());
+                assert!(callsite.block_arg.is_none());
                 let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_for_gpr(ir, args, GP::Rdx);
                 self.attr_writer(ir, pc, ivar_id);
             }
-            FuncKind::Builtin { .. } | FuncKind::ISeq(_) => {
+            FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
                 self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
+            }
+            FuncKind::ISeq(iseq) => {
+                if store[iseq].can_be_inlined
+                    && callsite.is_simple()
+                    && callsite.block_fid.is_none()
+                {
+                    #[cfg(feature = "emit-bc")]
+                    {
+                        eprintln!("inlinable!!");
+                        store.dump_iseq(iseq);
+                    }
+                    let evict = ir.new_evict();
+                    ir.reg_sub(GP::Rsp, 32);
+                    self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
+                    ir.reg_add(GP::Rsp, 32);
+                    return Some(Some(evict));
+                } else {
+                    let evict = ir.new_evict();
+                    self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
+                    return Some(Some(evict));
+                }
             }
         };
         Some(None)

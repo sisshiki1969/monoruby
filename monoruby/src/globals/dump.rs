@@ -49,45 +49,11 @@ impl Globals {
             self.store.functions()[dumped_bc..]
                 .iter()
                 .for_each(|info| match &info.kind {
-                    FuncKind::ISeq(iseq) => self.dump_iseq(*iseq),
+                    FuncKind::ISeq(iseq) => self.store.dump_iseq(*iseq),
                     _ => {}
                 });
         }
         self.dumped_bc = self.store.func_len();
-    }
-
-    #[cfg(feature = "emit-bc")]
-    fn dump_iseq(&self, iseq: ISeqId) {
-        use bytecodegen::BcIndex;
-
-        let func = &self.store[iseq];
-        eprintln!("------------------------------------");
-        let loc = func.loc;
-        let line = func.sourceinfo.get_line(&loc);
-        let file_name = func.sourceinfo.file_name();
-        eprintln!(
-            "<{}> {file_name}:{line}",
-            self.store.func_description(func.func_id()),
-        );
-        eprintln!(
-            "{:?} local_vars:{} temp:{}",
-            self[func.func_id()].meta(),
-            func.local_num(),
-            func.temp_num
-        );
-        eprintln!("{:?}", func.args);
-        eprintln!("{:?}", func.get_exception_map());
-        for i in 0..func.bytecode().len() {
-            let bc_pos = BcIndex::from(i);
-            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
-                eprintln!("{:?}", bbid);
-            };
-            let trace_ir = func.trace_ir(&self.store, bc_pos);
-            if let Some(fmt) = trace_ir.format(&self.store) {
-                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
-            };
-        }
-        eprintln!("------------------------------------");
     }
 
     #[cfg(feature = "emit-asm")]
