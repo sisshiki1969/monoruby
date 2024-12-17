@@ -249,14 +249,14 @@ impl BBContext {
 
                     callsite.recv;
                     ir.stack2reg(callsite.recv, GP::Rax);
-                    ir.push(AsmInst::InlineRegToStack(GP::Rax, SlotId(0)));
+                    ir.reg2inline_stack(GP::Rax, SlotId(0));
                     for i in 0..callsite.pos_num {
                         ir.stack2reg(callsite.args + i, GP::Rax);
-                        ir.push(AsmInst::InlineRegToStack(GP::Rax, SlotId(i as u16 + 1)));
+                        ir.reg2inline_stack(GP::Rax, SlotId(i as u16 + 1));
                     }
 
                     let iseq = &store[iseq];
-                    let mut bbctx = BBContextInline::from_iseq(iseq, self.class_version);
+                    let mut bbctx = BBContextInner::from_iseq(iseq, self.class_version);
                     assert_eq!(1, iseq.bb_info.len());
                     let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(0)];
                     for bc_pos in begin..=end {
@@ -265,11 +265,23 @@ impl BBContext {
                         match iseq.trace_ir(store, bc_pos) {
                             TraceIr::InitMethod(..) => {}
                             TraceIr::Nil(slot) => {
-                                ir.push(AsmInst::InlineLitToReg(Value::nil(), GP::Rax));
-                                ir.push(AsmInst::InlineRegToStack(GP::Rax, slot));
+                                ir.lit2reg(Value::nil(), GP::Rax);
+                                ir.reg2inline_stack(GP::Rax, slot);
+                            }
+                            TraceIr::Integer(slot, i) => {
+                                ir.lit2reg(Value::integer(i as _), GP::Rax);
+                                ir.reg2inline_stack(GP::Rax, slot);
+                            }
+                            TraceIr::Symbol(slot, sym) => {
+                                ir.lit2reg(Value::symbol(sym), GP::Rax);
+                                ir.reg2inline_stack(GP::Rax, slot);
+                            }
+                            TraceIr::Literal(slot, val) => {
+                                ir.lit2reg(val, GP::Rax);
+                                ir.reg2inline_stack(GP::Rax, slot);
                             }
                             TraceIr::Ret(slot) => {
-                                ir.push(AsmInst::InlineStackToReg(slot, GP::Rax));
+                                ir.inline_stack2reg(slot, GP::Rax);
                                 break;
                             }
                             _ => unreachable!(),

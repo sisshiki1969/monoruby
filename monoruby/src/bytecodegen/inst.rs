@@ -266,9 +266,9 @@ impl BytecodeInst {
         match self {
             Self::InitMethod(..)
             | Self::Nil(..)
-            //| Self::Integer(..)
-            //| Self::Symbol(..)
-            //| Self::Literal(..)
+            | Self::Integer(..)
+            | Self::Symbol(..)
+            | Self::Literal(..)
             //| Self::LoadIvar(..)
             //| Self::StoreIvar(..)
             | Self::Ret(..) => true,

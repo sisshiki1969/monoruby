@@ -330,7 +330,7 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
 }
 
 #[derive(Debug, Clone)]
-struct BBContextInline {
+pub(crate) struct BBContextInner {
     /// state stack slots.
     slot_state: SlotContext,
     /// stack top register.
@@ -340,7 +340,20 @@ struct BBContextInline {
     class_version: u32,
 }
 
-impl BBContextInline {
+impl std::ops::Deref for BBContextInner {
+    type Target = SlotContext;
+    fn deref(&self) -> &Self::Target {
+        &self.slot_state
+    }
+}
+
+impl std::ops::DerefMut for BBContextInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot_state
+    }
+}
+
+impl BBContextInner {
     fn from_iseq(iseq: &ISeqInfo, class_version: u32) -> Self {
         Self {
             slot_state: SlotContext::from_iseq(iseq),
@@ -356,38 +369,34 @@ impl BBContextInline {
 ///
 #[derive(Debug, Clone)]
 pub(crate) struct BBContext {
-    /// state stack slots.
-    slot_state: SlotContext,
-    /// stack top register.
-    sp: SlotId,
-    next_sp: SlotId,
+    inner: BBContextInner,
     /// *self* value
     self_value: Value,
-    /// the class version at compile time.
-    class_version: u32,
 }
 
 impl std::ops::Deref for BBContext {
-    type Target = SlotContext;
+    type Target = BBContextInner;
     fn deref(&self) -> &Self::Target {
-        &self.slot_state
+        &self.inner
     }
 }
 
 impl std::ops::DerefMut for BBContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.slot_state
+        &mut self.inner
     }
 }
 
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            slot_state: SlotContext::from(cc),
-            sp: SlotId(cc.local_num as u16),
-            next_sp: SlotId(cc.local_num as u16),
+            inner: BBContextInner {
+                slot_state: SlotContext::from(cc),
+                sp: SlotId(cc.local_num as u16),
+                next_sp: SlotId(cc.local_num as u16),
+                class_version: cc.class_version,
+            },
             self_value: cc.self_value,
-            class_version: cc.class_version,
         }
     }
 

@@ -20,25 +20,6 @@ impl Codegen {
         inst: AsmInst,
     ) {
         match inst {
-            AsmInst::InlineLitToReg(val, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), (val.id());
-                );
-            }
-            AsmInst::InlineRegToStack(r, slot) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq [rsp + (slot.0 as i32 * 8)], R(r);
-                );
-            }
-            AsmInst::InlineStackToReg(slot, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), [rsp + (slot.0 as i32 * 8)];
-                );
-            }
-
             AsmInst::BcIndex(_) => {}
             AsmInst::Label(label) => {
                 let label = ctx.resolve_label(&mut self.jit, label);
@@ -104,6 +85,12 @@ impl Codegen {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
                     movq [rsp + (ofs)], R(r);
+                );
+            }
+            AsmInst::RSPOffsetToReg(ofs, r) => {
+                let r = r as u64;
+                monoasm!( &mut self.jit,
+                    movq R(r), [rsp + (ofs)];
                 );
             }
             AsmInst::RSPOffsetToArray(ofs) => {
