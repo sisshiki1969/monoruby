@@ -227,7 +227,7 @@ impl BBContext {
                 assert!(callsite.block_fid.is_none());
                 assert!(callsite.block_arg.is_none());
                 let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                self.fetch_for_gpr(ir, args, GP::Rdx);
+                self.fetch_for_gpr(ir, args, GP::Rax);
                 self.attr_writer(ir, ivar_id);
             }
             FuncKind::Builtin { .. } => {
@@ -361,7 +361,7 @@ impl BBContext {
     ///
     /// ### in
     /// - rdi: receiver: Value
-    /// - rdx: value: Value
+    /// - rax: value: Value
     ///
     fn attr_writer(&self, ir: &mut AsmIr, ivar_id: IvarId) {
         let using_xmm = self.get_using_xmm();

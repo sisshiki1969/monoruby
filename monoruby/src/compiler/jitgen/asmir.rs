@@ -1238,7 +1238,7 @@ pub(super) enum AsmInst {
     ///
     /// ### in
     /// - rdi: receiver: Value
-    /// - rdx: value: Value
+    /// - rax: value: Value
     ///
     /// #### destroy
     /// - caller-save registers
