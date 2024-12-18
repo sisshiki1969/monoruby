@@ -945,27 +945,6 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rdx: value: Value
-    ///
-    AttrWriter {
-        ivar_id: IvarId,
-        using_xmm: UsingXmm,
-        error: AsmError,
-    },
-    ///
-    /// Attribute reader
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    AttrReader {
-        ivar_id: IvarId,
-    },
-    ///
     /// Send cached method
     ///
     /// ### in
@@ -1199,13 +1178,73 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
 
+    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi
+    ///
     LoadIVar {
         ivarid: IvarId,
         is_object_ty: bool,
     },
+    ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rax: Value
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
+    ///
+    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    ///
+    /// ### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi, rdx
+    ///
+    LoadIVarGeneric {
+        ivar_id: IvarId,
+    },
+    ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rax: Value
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
     StoreIVar {
         ivarid: IvarId,
         is_object_ty: bool,
+        using_xmm: UsingXmm,
+    },
+    ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    /// - rdx: value: Value
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
+    StoreIVarGeneric {
+        ivar_id: IvarId,
         using_xmm: UsingXmm,
     },
 

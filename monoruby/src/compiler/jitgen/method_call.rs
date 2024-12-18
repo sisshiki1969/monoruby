@@ -218,7 +218,7 @@ impl BBContext {
                     }
                 } else {
                     let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                    ir.push(AsmInst::AttrReader { ivar_id });
+                    ir.push(AsmInst::LoadIVarGeneric { ivar_id });
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -228,7 +228,7 @@ impl BBContext {
                 assert!(callsite.block_arg.is_none());
                 let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_for_gpr(ir, args, GP::Rdx);
-                self.attr_writer(ir, pc, ivar_id);
+                self.attr_writer(ir, ivar_id);
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
@@ -363,14 +363,9 @@ impl BBContext {
     /// - rdi: receiver: Value
     /// - rdx: value: Value
     ///
-    fn attr_writer(&self, ir: &mut AsmIr, pc: BytecodePtr, ivar_id: IvarId) {
+    fn attr_writer(&self, ir: &mut AsmIr, ivar_id: IvarId) {
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
-        ir.push(AsmInst::AttrWriter {
-            using_xmm,
-            error,
-            ivar_id,
-        });
+        ir.push(AsmInst::StoreIVarGeneric { using_xmm, ivar_id });
     }
 }
 

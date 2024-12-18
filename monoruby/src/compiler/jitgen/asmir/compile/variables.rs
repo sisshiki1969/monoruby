@@ -1,12 +1,106 @@
 use super::*;
 
 impl Codegen {
+    ///
+    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi
+    ///
     pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool) {
         if is_object_ty && ivarid.is_inline() {
             self.load_ivar_inline(ivarid);
         } else {
             self.load_ivar_heap(ivarid, is_object_ty);
         }
+    }
+
+    ///
+    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    ///
+    /// ### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi, rdx
+    ///
+    pub(super) fn load_ivar_generic(&mut self, ivar_id: IvarId) {
+        if ivar_id.is_inline() {
+            let exit = self.jit.label();
+            let not_object = self.jit.label();
+            monoasm!( &mut self.jit,
+                // we don't know ty of the receiver in a compile time.
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                jne  not_object;
+                movq rax, [rdi + (ivar_id.get() as i32 * 8 + RVALUE_OFFSET_KIND)];
+                movq rdi, (NIL_VALUE);
+                testq rax,rax;
+                cmoveqq rax, rdi;
+            exit:
+            );
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+            not_object:
+            );
+            self.load_ivar_heap(ivar_id, false);
+            monoasm!( &mut self.jit,
+                jmp  exit;
+            );
+            self.jit.select_page(0);
+        } else {
+            self.load_ivar_heap_generic(ivar_id);
+        }
+    }
+
+    ///
+    /// Load ivar on `var_table`.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi, rdx
+    ///
+    fn load_ivar_heap_generic(&mut self, ivar_id: IvarId) {
+        monoasm!( &mut self.jit,
+            movl rsi, (ivar_id.get());
+            xorq rax, rax;
+            movl rdx, (OBJECT_INLINE_IVAR);
+            // we don't know ty of the receiver in a compile time.
+            cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+            cmoveqq rax, rdx;
+            subl rsi, rax;
+        );
+        let exit = self.jit.label();
+        monoasm!( &mut self.jit,
+            movq rax, (NIL_VALUE);
+            // ensure var_table is not None
+            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            testq rdx, rdx;
+            jz   exit;
+            // ensure capa is not 0
+            movq rdi, [rdx + (MONOVEC_CAPA)]; // capa
+            testq rdi, rdi;
+            jz   exit;
+            movq rdi, [rdx + (MONOVEC_LEN)]; // len
+            cmpq rdi, rsi;
+            movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+            // rax = if len > idx { rdi[idx] } else { nil }
+            cmovgtq rax, [rdi + rsi * 8];
+        exit:
+        );
     }
 
     ///
@@ -43,7 +137,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
@@ -72,6 +166,16 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rax: Value
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
     pub(super) fn store_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, using_xmm: UsingXmm) {
         if is_object_ty && ivarid.is_inline() {
             self.store_ivar_inline(ivarid);
@@ -81,9 +185,49 @@ impl Codegen {
     }
 
     ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
+    /// - rdx: value: Value
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
+    pub(super) fn store_ivar_generic(&mut self, using_xmm: UsingXmm, ivar_id: IvarId) {
+        let exit = self.jit.label();
+        let no_inline = self.jit.label();
+        if ivar_id.is_inline() {
+            monoasm!( &mut self.jit,
+                // we don't know ty of the receiver at a compile time.
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
+                jne  no_inline;
+                movq [rdi + (ivar_id.get() as i32 * 8 + RVALUE_OFFSET_KIND)], rdx;
+            exit:
+            );
+            self.jit.select_page(1);
+            self.jit.bind_label(no_inline);
+            monoasm!( &mut self.jit,
+                movl rsi, (ivar_id.get());
+            );
+            self.set_ivar(using_xmm);
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        } else {
+            monoasm!( &mut self.jit,
+                movl rsi, (ivar_id.get());
+            );
+            self.set_ivar(using_xmm);
+        }
+    }
+
+    ///
     /// Store ivar embedded to RValue. (only for object type)
     ///
     /// #### in
+    /// - rax: Value
     /// - rdi: &RValue
     ///
     fn store_ivar_inline(&mut self, ivarid: IvarId) {
@@ -100,7 +244,7 @@ impl Codegen {
     /// - rax: src: Value
     ///
     /// #### destroy
-    /// - rdi, rsi
+    /// - caller-save registers
     ///
     fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
         let exit = self.jit.label();

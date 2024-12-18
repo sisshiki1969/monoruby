@@ -49,7 +49,6 @@
     "./Cargo.toml"
   ],
   "rust-analyzer.showUnlinkedFileNotification": false,
-  "rust-analyzer.diagnostics.experimental.enable": true,
   "rust-analyzer.cargo.buildScripts.overrideCommand": null,
   "rust-analyzer.cargo.features": "all",
 }
