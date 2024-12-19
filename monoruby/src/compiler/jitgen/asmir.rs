@@ -352,7 +352,7 @@ impl AsmIr {
     ///
     pub(crate) fn guard_class(
         &mut self,
-        bb: &mut BBContext,
+        bb: &mut BBContextInner,
         slot: SlotId,
         r: GP,
         class: ClassId,
@@ -1193,16 +1193,6 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
         is_object_ty: bool,
     },
-    ///
-    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
-    ///
-    /// #### in
-    /// - rax: Value
-    /// - rdi: &RValue
-    ///
-    /// #### destroy
-    /// - caller-save registers
-    ///
     ///
     /// Load instance var *ivarid* of the object *rdi* into register *rax*.
     ///

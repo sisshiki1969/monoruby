@@ -51,4 +51,6 @@
   "rust-analyzer.showUnlinkedFileNotification": false,
   "rust-analyzer.cargo.buildScripts.overrideCommand": null,
   "rust-analyzer.cargo.features": "all",
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": true,
 }

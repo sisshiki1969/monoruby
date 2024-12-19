@@ -270,7 +270,7 @@ impl BytecodeInst {
             | Self::Symbol(..)
             | Self::Literal(..)
             //| Self::LoadIvar(..)
-            //| Self::StoreIvar(..)
+            | Self::StoreIvar(..)
             | Self::Ret(..) => true,
             _ => false,
         }

@@ -243,6 +243,7 @@ impl BBContext {
                 {
                     //let evict = ir.new_evict();
                     let error = ir.new_error(self, pc);
+                    let deopt = ir.new_deopt(self, pc);
                     let reg_num = store[iseq].total_reg_num();
                     let stack_offset = (((reg_num + 1) & !1) * 8) as i32;
                     ir.reg_sub(GP::Rsp, stack_offset);
@@ -283,6 +284,45 @@ impl BBContext {
                             TraceIr::Ret(slot) => {
                                 ir.inline_stack2reg(slot, GP::Rax);
                                 break;
+                            }
+                            TraceIr::StoreIvar(src, _name, cache) => {
+                                if let Some((cached_class, cached_ivarid)) = cache {
+                                    ir.inline_stack2reg(SlotId(0), GP::Rdi);
+                                    ir.guard_class(
+                                        &mut bbctx,
+                                        SlotId(0),
+                                        GP::Rdi,
+                                        cached_class,
+                                        deopt,
+                                    );
+                                    ir.inline_stack2reg(src, GP::Rax);
+                                    let using_xmm = self.get_using_xmm();
+                                    ir.push(AsmInst::StoreIVarGeneric {
+                                        ivar_id: cached_ivarid,
+                                        using_xmm,
+                                    });
+                                } else {
+                                    unimplemented!()
+                                }
+                            }
+                            TraceIr::LoadIvar(dst, _name, cache) => {
+                                if let Some((cached_class, cached_ivarid)) = cache {
+                                    self.unlink(ir, dst);
+                                    ir.inline_stack2reg(SlotId(0), GP::Rdi);
+                                    ir.guard_class(
+                                        &mut bbctx,
+                                        SlotId(0),
+                                        GP::Rdi,
+                                        cached_class,
+                                        deopt,
+                                    );
+                                    ir.push(AsmInst::LoadIVarGeneric {
+                                        ivar_id: cached_ivarid,
+                                    });
+                                    ir.reg2inline_stack(GP::Rax, dst);
+                                } else {
+                                    unimplemented!()
+                                }
                             }
                             _ => unreachable!(),
                         }
