@@ -7,7 +7,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("String", STRING_CLASS, ObjKind::STRING);
+    globals.define_builtin_class_under_obj_with_instance_ty("String", STRING_CLASS, ObjKind::STRING);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);

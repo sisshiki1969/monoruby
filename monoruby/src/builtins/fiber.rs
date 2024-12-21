@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("Fiber", FIBER_CLASS, ObjKind::FIBER);
+    globals.define_builtin_class_under_obj_with_instance_ty("Fiber", FIBER_CLASS, ObjKind::FIBER);
     globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
     globals.define_builtin_class_inline_func_rest(
         FIBER_CLASS,

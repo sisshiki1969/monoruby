@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("IO", IO_CLASS, ObjKind::IO);
+    globals.define_builtin_class_under_obj_with_instance_ty("IO", IO_CLASS, ObjKind::IO);
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);

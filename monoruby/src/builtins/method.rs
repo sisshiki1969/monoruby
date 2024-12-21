@@ -5,12 +5,16 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("Method", METHOD_CLASS, ObjKind::METHOD);
+    globals.define_builtin_class_under_obj_with_instance_ty(
+        "Method",
+        METHOD_CLASS,
+        ObjKind::METHOD,
+    );
     globals.define_builtin_func_rest(METHOD_CLASS, "call", call);
     globals.define_builtin_func_rest(METHOD_CLASS, "[]", call);
     globals.define_builtin_func_rest(METHOD_CLASS, "===", call);
 
-    globals.define_builtin_class_under_obj_with_allocator(
+    globals.define_builtin_class_under_obj_with_instance_ty(
         "UnboundMethod",
         UMETHOD_CLASS,
         ObjKind::METHOD,

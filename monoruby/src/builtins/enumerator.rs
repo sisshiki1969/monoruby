@@ -10,7 +10,7 @@ static YIELDER_INIT: Once = Once::new();
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator(
+    globals.define_builtin_class_under_obj_with_instance_ty(
         "Enumerator",
         ENUMERATOR_CLASS,
         ObjKind::ENUMERATOR,
@@ -32,7 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
     globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
 
-    globals.define_builtin_class_with_allocator(
+    globals.define_builtin_class_with_instance_ty(
         "Generator",
         GENERATOR_CLASS,
         globals.store.classes.object_class(),

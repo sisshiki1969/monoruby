@@ -339,12 +339,6 @@ impl Codegen {
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
             }
-            AsmInst::StoreIVarGeneric { ivar_id, using_xmm } => {
-                self.store_ivar_generic(using_xmm, ivar_id);
-            }
-            AsmInst::LoadIVarGeneric { ivar_id } => {
-                self.load_ivar_generic(ivar_id);
-            }
             AsmInst::BinopCached {
                 callee_fid,
                 recv_class,

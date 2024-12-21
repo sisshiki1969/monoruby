@@ -43,13 +43,17 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
-    globals.define_builtin_class_under_obj_with_allocator("NilClass", NIL_CLASS, ObjKind::INVALID);
-    globals.define_builtin_class_under_obj_with_allocator(
+    globals.define_builtin_class_under_obj_with_instance_ty(
+        "NilClass",
+        NIL_CLASS,
+        ObjKind::INVALID,
+    );
+    globals.define_builtin_class_under_obj_with_instance_ty(
         "TrueClass",
         TRUE_CLASS,
         ObjKind::INVALID,
     );
-    globals.define_builtin_class_under_obj_with_allocator(
+    globals.define_builtin_class_under_obj_with_instance_ty(
         "FalseClass",
         FALSE_CLASS,
         ObjKind::INVALID,

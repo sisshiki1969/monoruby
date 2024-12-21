@@ -82,7 +82,8 @@ struct JitContext {
     ///
     /// *self* for this loop/method.
     ///
-    self_value: Value,
+    self_class: ClassId,
+    self_ty: u8,
     ///
     /// Source map.
     ///
@@ -117,7 +118,13 @@ impl JitContext {
     ///
     /// Create new JitContext.
     ///
-    fn new(func: &ISeqInfo, codegen: &mut Codegen, is_loop: bool, self_value: Value) -> Self {
+    fn new(
+        func: &ISeqInfo,
+        codegen: &mut Codegen,
+        is_loop: bool,
+        self_class: ClassId,
+        self_ty: u8,
+    ) -> Self {
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..func.bb_info.len() {
@@ -138,7 +145,8 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_value,
+            self_class,
+            self_ty,
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
@@ -163,7 +171,8 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_value: Value::nil(),
+            self_class: NIL_CLASS,
+            self_ty: ObjKind::INVALID,
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
@@ -354,9 +363,9 @@ impl std::ops::DerefMut for BBContextInner {
 }
 
 impl BBContextInner {
-    fn from_iseq(iseq: &ISeqInfo, class_version: u32) -> Self {
+    fn from_iseq(iseq: &ISeqInfo, class_version: u32, self_class: ClassId) -> Self {
         Self {
-            slot_state: SlotContext::from_iseq(iseq),
+            slot_state: SlotContext::from_iseq(iseq, self_class),
             sp: SlotId(iseq.local_num() as u16),
             next_sp: SlotId(iseq.local_num() as u16),
             class_version,
@@ -370,8 +379,8 @@ impl BBContextInner {
 #[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     inner: BBContextInner,
-    /// *self* value
-    self_value: Value,
+    self_class: ClassId,
+    self_ty: u8,
 }
 
 impl std::ops::Deref for BBContext {
@@ -396,7 +405,8 @@ impl BBContext {
                 next_sp: SlotId(cc.local_num as u16),
                 class_version: cc.class_version,
             },
-            self_value: cc.self_value,
+            self_class: cc.self_class,
+            self_ty: cc.self_ty,
         }
     }
 
@@ -665,7 +675,9 @@ impl Codegen {
         let func = &store[iseq_id];
         let start_pos = func.get_pc_index(position);
 
-        let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
+        let self_class = self_value.class();
+        let self_ty = store.classes[self_class].instance_ty();
+        let mut ctx = JitContext::new(func, self, position.is_some(), self_class, self_ty);
         for (loop_start, loop_end) in func.bb_info.loops() {
             ctx.analyse_loop(store, func, *loop_start, *loop_end);
         }

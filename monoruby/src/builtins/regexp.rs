@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("Regexp", REGEXP_CLASS, ObjKind::REGEXP);
+    globals.define_builtin_class_under_obj_with_instance_ty("Regexp", REGEXP_CLASS, ObjKind::REGEXP);
     globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);

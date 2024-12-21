@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator(
+    globals.define_builtin_class_under_obj_with_instance_ty(
         "Binding",
         BINDING_CLASS,
         ObjKind::BINDING,

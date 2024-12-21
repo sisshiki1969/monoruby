@@ -43,7 +43,7 @@ impl Codegen {
         }
     }
 
-    ///
+    /*///
     /// Load instance var *ivarid* of the object *rdi* into register *rax*.
     ///
     /// ### in
@@ -80,9 +80,9 @@ impl Codegen {
         } else {
             self.load_ivar_heap_generic(ivarid);
         }
-    }
+    }*/
 
-    ///
+    /*///
     /// Load ivar on `var_table`.
     ///
     /// #### in
@@ -118,7 +118,7 @@ impl Codegen {
             cmovgtq rax, [rdi + rsi * 8];
         exit:
         }
-    }
+    }*/
 
     ///
     /// Load ivar on `var_table`.
@@ -190,7 +190,7 @@ impl Codegen {
         );
     }
 
-    ///
+    /*///
     /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
     ///
     /// ### in
@@ -259,7 +259,7 @@ impl Codegen {
             jmp  exit;
         );
         self.jit.select_page(0);
-    }
+    }*/
 
     ///
     /// Store ivar on `var_table`.

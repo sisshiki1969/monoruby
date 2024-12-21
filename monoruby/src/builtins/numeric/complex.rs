@@ -7,7 +7,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_with_allocator(
+    globals.define_builtin_class_with_instance_ty(
         "Complex",
         COMPLEX_CLASS,
         numeric,

@@ -1194,21 +1194,6 @@ pub(super) enum AsmInst {
         is_object_ty: bool,
     },
     ///
-    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
-    ///
-    /// ### in
-    /// - rdi: &RValue
-    ///
-    /// #### out
-    /// - rax: Value
-    ///
-    /// #### destroy
-    /// - rdi, rsi, rdx
-    ///
-    LoadIVarGeneric {
-        ivar_id: IvarId,
-    },
-    ///
     /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
@@ -1221,20 +1206,6 @@ pub(super) enum AsmInst {
     StoreIVar {
         ivarid: IvarId,
         is_object_ty: bool,
-        using_xmm: UsingXmm,
-    },
-    ///
-    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rax: value: Value
-    ///
-    /// #### destroy
-    /// - caller-save registers
-    ///
-    StoreIVarGeneric {
-        ivar_id: IvarId,
         using_xmm: UsingXmm,
     },
 

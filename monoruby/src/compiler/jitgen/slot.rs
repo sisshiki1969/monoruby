@@ -36,11 +36,11 @@ impl std::fmt::Debug for SlotContext {
 
 impl SlotContext {
     pub(super) fn from(cc: &JitContext) -> Self {
-        Self::new(cc.total_reg_num, cc.local_num)
+        Self::new(cc.total_reg_num, cc.local_num, cc.self_class)
     }
 
-    pub(super) fn from_iseq(iseq: &ISeqInfo) -> Self {
-        Self::new(iseq.total_reg_num(), iseq.local_num())
+    pub(super) fn from_iseq(iseq: &ISeqInfo, self_class: ClassId) -> Self {
+        Self::new(iseq.total_reg_num(), iseq.local_num(), self_class)
     }
 
     pub(super) fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
@@ -314,8 +314,8 @@ impl SlotContext {
 }
 
 impl SlotContext {
-    fn new(total_reg_num: usize, local_num: usize) -> Self {
-        SlotContext {
+    fn new(total_reg_num: usize, local_num: usize, self_class: ClassId) -> Self {
+        let mut ctx = SlotContext {
             slots: vec![SlotState::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
@@ -323,7 +323,9 @@ impl SlotContext {
             },
             r15: None,
             local_num,
-        }
+        };
+        ctx.set_guard_class(SlotId(0), self_class);
+        ctx
     }
 
     fn xmm(&self, xmm: Xmm) -> &[SlotId] {

@@ -285,6 +285,7 @@ impl ClassInfoTable {
         };
         let class_obj = Value::class_empty(class_id, Some(superclass));
         self[class_id].object = Some(class_obj.as_class());
+        self[class_id].instance_ty = ObjKind::OBJECT;
         class_obj
     }
 
@@ -477,7 +478,7 @@ impl ClassInfoTable {
         self.generate_class_obj(name_id, class_id, superclass.into(), parent, false, None)
     }
 
-    fn define_builtin_class_with_allocator(
+    fn define_builtin_class_with_instance_ty(
         &mut self,
         name_id: IdentId,
         class_id: ClassId,
@@ -546,14 +547,14 @@ impl Globals {
         self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
     }
 
-    pub(crate) fn define_builtin_class_under_obj_with_allocator(
+    pub(crate) fn define_builtin_class_under_obj_with_instance_ty(
         &mut self,
         name: &str,
         class_id: ClassId,
         instance_ty: u8,
     ) -> Module {
         let object_class = self.store.classes.object_class();
-        self.define_builtin_class_with_allocator(
+        self.define_builtin_class_with_instance_ty(
             name,
             class_id,
             Some(object_class),
@@ -595,7 +596,7 @@ impl Globals {
             .define_builtin_class(name_id, class_id, superclass, parent)
     }
 
-    pub(crate) fn define_builtin_class_with_allocator(
+    pub(crate) fn define_builtin_class_with_instance_ty(
         &mut self,
         name: &str,
         class_id: ClassId,
@@ -604,7 +605,7 @@ impl Globals {
         instance_ty: u8,
     ) -> Module {
         let name_id = IdentId::get_id(name);
-        self.store.classes.define_builtin_class_with_allocator(
+        self.store.classes.define_builtin_class_with_instance_ty(
             name_id,
             class_id,
             superclass,

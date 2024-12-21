@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let exception_class = globals.define_builtin_class_under_obj_with_allocator(
+    let exception_class = globals.define_builtin_class_under_obj_with_instance_ty(
         "Exception",
         EXCEPTION_CLASS,
         ObjKind::EXCEPTION,

@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS);
+    globals.define_builtin_class_under_obj_with_instance_ty("Struct", STRUCT_CLASS, ObjKind::CLASS);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
     globals.define_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);

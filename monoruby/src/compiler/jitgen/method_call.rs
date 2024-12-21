@@ -109,15 +109,14 @@ impl BBContext {
             mut func_id,
             mut version,
         } = cache;
-        if recv.is_self() && self.self_value.class() != recv_class {
+        if recv.is_self() && self.self_class != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
             let class_version = self.class_version();
             let name = store[callid].name.unwrap();
-            if let Some(entry) =
-                store.check_method_for_class(self.self_value.class(), name, class_version)
+            if let Some(entry) = store.check_method_for_class(self.self_class, name, class_version)
                 && let Some(fid) = entry.func_id()
             {
-                recv_class = self.self_value.class();
+                recv_class = self.self_class;
                 func_id = fid;
                 version = class_version;
             } else {
@@ -217,8 +216,12 @@ impl BBContext {
                         ir.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
-                    let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
-                    ir.push(AsmInst::LoadIVarGeneric { ivar_id });
+                    let ivarid = store.classes[recv_class].get_ivarid(ivar_name)?;
+                    let is_object_ty = store.classes[recv_class].instance_ty() == ObjKind::OBJECT;
+                    ir.push(AsmInst::LoadIVar {
+                        ivarid,
+                        is_object_ty,
+                    });
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -226,9 +229,15 @@ impl BBContext {
                 assert!(!callsite.kw_may_exists());
                 assert!(callsite.block_fid.is_none());
                 assert!(callsite.block_arg.is_none());
-                let ivar_id = store.classes[recv_class].get_ivarid(ivar_name)?;
+                let ivarid = store.classes[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_for_gpr(ir, args, GP::Rax);
-                self.attr_writer(ir, ivar_id);
+                let is_object_ty = store.classes[recv_class].instance_ty() == ObjKind::OBJECT;
+                let using_xmm = self.get_using_xmm();
+                ir.push(AsmInst::StoreIVar {
+                    ivarid,
+                    using_xmm,
+                    is_object_ty,
+                });
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
@@ -248,7 +257,6 @@ impl BBContext {
                     let stack_offset = (((reg_num + 1) & !1) * 8) as i32;
                     ir.reg_sub(GP::Rsp, stack_offset);
 
-                    callsite.recv;
                     ir.stack2reg(callsite.recv, GP::Rax);
                     ir.reg2inline_stack(GP::Rax, SlotId(0));
                     for i in 0..callsite.pos_num {
@@ -257,7 +265,7 @@ impl BBContext {
                     }
 
                     let iseq = &store[iseq];
-                    let mut bbctx = BBContextInner::from_iseq(iseq, self.class_version);
+                    let mut bbctx = BBContextInner::from_iseq(iseq, self.class_version, recv_class);
                     assert_eq!(1, iseq.bb_info.len());
                     let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(0)];
                     for bc_pos in begin..=end {
@@ -295,10 +303,13 @@ impl BBContext {
                                         cached_class,
                                         deopt,
                                     );
+                                    let is_object_ty = store.classes[cached_class].instance_ty()
+                                        == ObjKind::OBJECT;
                                     ir.inline_stack2reg(src, GP::Rax);
                                     let using_xmm = self.get_using_xmm();
-                                    ir.push(AsmInst::StoreIVarGeneric {
-                                        ivar_id: cached_ivarid,
+                                    ir.push(AsmInst::StoreIVar {
+                                        ivarid: cached_ivarid,
+                                        is_object_ty,
                                         using_xmm,
                                     });
                                 } else {
@@ -316,8 +327,11 @@ impl BBContext {
                                         cached_class,
                                         deopt,
                                     );
-                                    ir.push(AsmInst::LoadIVarGeneric {
-                                        ivar_id: cached_ivarid,
+                                    let is_object_ty = store.classes[cached_class].instance_ty()
+                                        == ObjKind::OBJECT;
+                                    ir.push(AsmInst::LoadIVar {
+                                        ivarid: cached_ivarid,
+                                        is_object_ty,
                                     });
                                     ir.reg2inline_stack(GP::Rax, dst);
                                 } else {
@@ -395,18 +409,6 @@ impl BBContext {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
     }*/
-
-    ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rax: value: Value
-    ///
-    fn attr_writer(&self, ir: &mut AsmIr, ivar_id: IvarId) {
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::StoreIVarGeneric { using_xmm, ivar_id });
-    }
 }
 
 #[cfg(test)]

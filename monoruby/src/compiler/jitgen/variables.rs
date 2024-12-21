@@ -11,10 +11,9 @@ impl BBContext {
         assert!(!self_class.is_always_frozen());
         self.unlink(ir, dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
-        let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
         ir.push(AsmInst::LoadIVar {
             ivarid,
-            is_object_ty,
+            is_object_ty: self.self_ty == ObjKind::OBJECT,
         });
         self.rax2acc(ir, dst);
     }
@@ -30,10 +29,9 @@ impl BBContext {
         self.fetch_for_gpr(ir, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let using_xmm = self.get_using_xmm();
-        let is_object_ty = self.self_value.ty() == Some(ObjKind::OBJECT);
         ir.push(AsmInst::StoreIVar {
             ivarid,
-            is_object_ty,
+            is_object_ty: self.self_ty == ObjKind::OBJECT,
             using_xmm,
         });
     }

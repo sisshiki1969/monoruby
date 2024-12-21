@@ -5,7 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_allocator("Module", MODULE_CLASS, ObjKind::MODULE);
+    globals.define_builtin_class_under_obj_with_instance_ty("Module", MODULE_CLASS, ObjKind::MODULE);
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
