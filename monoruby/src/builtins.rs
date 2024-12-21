@@ -43,9 +43,17 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
-    globals.define_builtin_class_under_obj("NilClass", NIL_CLASS);
-    globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS);
-    globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS);
+    globals.define_builtin_class_under_obj_with_allocator("NilClass", NIL_CLASS, ObjKind::INVALID);
+    globals.define_builtin_class_under_obj_with_allocator(
+        "TrueClass",
+        TRUE_CLASS,
+        ObjKind::INVALID,
+    );
+    globals.define_builtin_class_under_obj_with_allocator(
+        "FalseClass",
+        FALSE_CLASS,
+        ObjKind::INVALID,
+    );
     module::init(globals);
     class::init(globals);
     let kernel = kernel::init(globals);

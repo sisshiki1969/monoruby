@@ -10,7 +10,13 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
 
 pub(super) fn init(globals: &mut Globals) {
     let module = globals.store.classes[MODULE_CLASS].get_module();
-    globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
+    globals.define_builtin_class_with_allocator(
+        "Class",
+        CLASS_CLASS,
+        module,
+        OBJECT_CLASS,
+        ObjKind::CLASS,
+    );
     globals.define_builtin_class_func_with(CLASS_CLASS, "new", class_new, 0, 1, false);
     globals.define_builtin_inline_func_with(
         CLASS_CLASS,

@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
+    globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
@@ -317,6 +318,13 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     crate::runtime::_dump_stacktrace(vm, globals);
     Ok(Value::nil())
+}
+
+#[monoruby_builtin]
+fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().class();
+    let i = globals.store.classes[class_id].instance_ty();
+    Ok(Value::integer(i as _))
 }
 
 ///

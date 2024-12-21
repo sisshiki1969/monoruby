@@ -5,7 +5,11 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
+    let exception_class = globals.define_builtin_class_under_obj_with_allocator(
+        "Exception",
+        EXCEPTION_CLASS,
+        ObjKind::EXCEPTION,
+    );
     let standarderr = globals.define_class_by_str("StandardError", exception_class, OBJECT_CLASS);
 
     let system_exit_id = globals

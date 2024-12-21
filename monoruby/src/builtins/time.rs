@@ -9,7 +9,7 @@ use chrono::{
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Time", TIME_CLASS);
+    globals.define_builtin_class_under_obj_with_allocator("Time", TIME_CLASS, ObjKind::TIME);
     globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 0, false);
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,

@@ -163,6 +163,10 @@ pub(crate) struct ClassInfo {
     /// instance variable table.
     ///
     ivar_names: HashMap<IdentId, IvarId>,
+    ///
+    /// Object type of instances.
+    ///
+    instance_ty: u8,
 }
 
 impl alloc::GC<RValue> for ClassInfo {
@@ -191,6 +195,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             class_variables: None,
             ivar_names: HashMap::default(),
+            instance_ty: 0,
         }
     }
 
@@ -203,6 +208,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
+            instance_ty: self.instance_ty,
         }
     }
 
@@ -228,6 +234,10 @@ impl ClassInfo {
 
     pub(crate) fn get_name_id(&self) -> Option<IdentId> {
         self.name
+    }
+
+    pub(crate) fn instance_ty(&self) -> u8 {
+        self.instance_ty
     }
 
     fn set_cvar(&mut self, name: IdentId, val: Value) {
@@ -444,7 +454,14 @@ impl ClassInfoTable {
         is_module: bool,
     ) -> Module {
         let class_id = self.add_class();
-        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
+        let obj = self.generate_class_obj(
+            name_id,
+            class_id,
+            superclass.into(),
+            parent,
+            is_module,
+            None,
+        );
         self.get_metaclass(class_id);
         obj
     }
@@ -457,7 +474,26 @@ impl ClassInfoTable {
         parent: ClassId,
     ) -> Module {
         self.def_builtin_class(class_id);
-        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
+        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false, None)
+    }
+
+    fn define_builtin_class_with_allocator(
+        &mut self,
+        name_id: IdentId,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        instance_ty: u8,
+    ) -> Module {
+        self.def_builtin_class(class_id);
+        self.generate_class_obj(
+            name_id,
+            class_id,
+            superclass.into(),
+            parent,
+            false,
+            Some(instance_ty),
+        )
     }
 
     fn generate_class_obj(
@@ -467,7 +503,17 @@ impl ClassInfoTable {
         superclass: Option<Module>,
         parent: ClassId,
         is_module: bool,
+        instance_ty: Option<u8>,
     ) -> Module {
+        let instance_ty = if is_module {
+            0
+        } else if let Some(ty) = instance_ty {
+            ty
+        } else if let Some(superclass) = superclass {
+            self[superclass.id()].instance_ty
+        } else {
+            ObjKind::OBJECT
+        };
         let class_obj = if is_module {
             Value::module_empty(class_id, superclass)
         } else {
@@ -476,6 +522,7 @@ impl ClassInfoTable {
         self[class_id].object = Some(class_obj.as_class());
         self[class_id].name = Some(name_id);
         self[class_id].parent = Some(parent);
+        self[class_id].instance_ty = instance_ty;
         self.set_constant(parent, name_id, class_obj);
         class_obj.as_class()
     }
@@ -497,6 +544,22 @@ impl Globals {
     ) -> Module {
         let object_class = self.store.classes.object_class();
         self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
+    }
+
+    pub(crate) fn define_builtin_class_under_obj_with_allocator(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        instance_ty: u8,
+    ) -> Module {
+        let object_class = self.store.classes.object_class();
+        self.define_builtin_class_with_allocator(
+            name,
+            class_id,
+            Some(object_class),
+            OBJECT_CLASS,
+            instance_ty,
+        )
     }
 
     pub(crate) fn define_class_by_str(
@@ -530,6 +593,24 @@ impl Globals {
         self.store
             .classes
             .define_builtin_class(name_id, class_id, superclass, parent)
+    }
+
+    pub(crate) fn define_builtin_class_with_allocator(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        instance_ty: u8,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.store.classes.define_builtin_class_with_allocator(
+            name_id,
+            class_id,
+            superclass,
+            parent,
+            instance_ty,
+        )
     }
 
     pub fn include_module(&mut self, mut base: Module, module: Module) -> Result<()> {
