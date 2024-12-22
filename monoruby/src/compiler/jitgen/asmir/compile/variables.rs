@@ -146,6 +146,9 @@ impl Codegen {
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
                 movq rax, [rdi + (idx * 8)];
+                testq rax, rax;
+                jnz  exit;
+                movq rax, (NIL_VALUE);
             exit:
             }
         } else {
@@ -165,9 +168,13 @@ impl Codegen {
             }
             monoasm! { &mut self.jit,
                 cmpq [rdx + (MONOVEC_LEN)], (idx);  // len
+                jle  exit;
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
                 // rax = if len > idx { rdi[idx] } else { nil }
-                cmovgtq rax, [rdi + (idx * 8)];
+                movq rdx, [rdi + (idx * 8)];
+                testq rdx, rdx;
+                jz  exit;
+                movq rax, rdx;
             exit:
             }
         }
