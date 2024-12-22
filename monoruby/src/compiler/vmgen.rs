@@ -19,7 +19,10 @@ macro_rules! vm_cmp_opt {
           fn [<vm_ $op _opt_rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
-              self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+              self.fetch3();
+              self.vm_get_slot_value(GP::Rdi);
+              self.vm_get_slot_value(GP::Rsi);
+              self.vm_get_slot_addr(GP::R15);
               self.guard_rdi_rsi_fixnum(generic);
               self.vm_save_binary_integer();
 
@@ -36,7 +39,10 @@ macro_rules! vm_cmp_opt {
           fn [<vm_ $op _opt_ri>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
-              self.vm_get_ri_r15();
+              self.fetch3();
+              self.vm_get_slot_value(GP::Rdi);
+              self.vm_get_smi_rsi(); // rsi <- rhs addr
+              self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
               self.guard_rdi_fixnum(generic);
               self.vm_save_binary_integer();
 
@@ -53,7 +59,10 @@ macro_rules! vm_cmp_opt {
           fn [<vm_ $op _rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
-              self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+              self.fetch3();
+              self.vm_get_slot_value(GP::Rdi);
+              self.vm_get_slot_value(GP::Rsi);
+              self.vm_get_slot_addr(GP::R15);
               self.vm_save_binary_integer();
               self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
               self.fetch_and_dispatch();
@@ -64,7 +73,10 @@ macro_rules! vm_cmp_opt {
           fn [<vm_ $op _ri>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
               let generic = self.jit.label();
-              self.vm_get_ri_r15();
+              self.fetch3();
+              self.vm_get_slot_value(GP::Rdi);
+              self.vm_get_smi_rsi(); // rsi <- rhs addr
+              self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
               self.vm_save_binary_integer();
               self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
               self.fetch_and_dispatch();
@@ -657,40 +669,6 @@ impl Codegen {
         };
     }
 
-    ///
-    /// Get values of registers(rdi, rsi) and address of r15.
-    ///
-    /// ### in
-    /// - rdi: register number
-    /// - rsi: register number
-    /// - r15: register number
-    ///
-    /// ### out
-    /// - rdi: value of the register
-    /// - rsi: value of the register
-    /// - r15: address of the register
-    ///
-    fn vm_get_rr_r15(&mut self) {
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi);
-        self.vm_get_slot_value(GP::Rsi);
-        self.vm_get_slot_addr(GP::R15);
-    }
-
-    fn vm_get_ir_r15(&mut self) {
-        self.fetch3();
-        self.vm_get_smi_rdi();
-        self.vm_get_slot_value(GP::Rsi); // rsi <- rhs addr
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
-    }
-
-    fn vm_get_ri_r15(&mut self) {
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi);
-        self.vm_get_smi_rsi(); // rsi <- rhs addr
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
-    }
-
     fn vm_store_r15(&mut self) {
         monoasm! { &mut self.jit,
             movq [r15], rax;
@@ -1046,7 +1024,9 @@ impl Codegen {
 
     fn vm_range(&mut self, exclude_end: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_rr_r15();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
         monoasm! { &mut self.jit,
             movq rdx, rbx;
             movq rcx, r12;
@@ -1055,7 +1035,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -1067,7 +1047,9 @@ impl Codegen {
     //
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_rr_r15();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
         monoasm! { &mut self.jit,
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
@@ -1078,7 +1060,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -1379,7 +1361,10 @@ impl Codegen {
         let ptr_rr = self.jit.get_current_address();
         let generic = self.jit.label();
         let exit = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
+        self.vm_get_slot_addr(GP::R15);
         self.guard_rdi_rsi_fixnum(generic);
         self.jit.bind_label(common);
         self.vm_save_binary_integer();
@@ -1392,14 +1377,20 @@ impl Codegen {
         monoasm! { &mut self.jit, jmp exit; };
 
         let ptr_ri = self.jit.get_current_address();
-        self.vm_get_ri_r15();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_smi_rsi(); // rsi <- rhs addr
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.guard_rdi_fixnum(generic);
         monoasm!( &mut self.jit,
             jmp common;
         );
 
         let ptr_ir = self.jit.get_current_address();
-        self.vm_get_ir_r15();
+        self.fetch3();
+        self.vm_get_smi_rdi();
+        self.vm_get_slot_value(GP::Rsi); // rsi <- rhs addr
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.guard_rsi_fixnum(generic);
         monoasm!( &mut self.jit,
             jmp common;
@@ -1411,16 +1402,25 @@ impl Codegen {
     fn vm_binops(&mut self, func: BinaryOpFn) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
+        self.vm_get_slot_addr(GP::R15);
         self.vm_generic_binop(common, func);
         self.fetch_and_dispatch();
 
         let ptr_ri = self.jit.get_current_address();
-        self.vm_get_ri_r15();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_smi_rsi(); // rsi <- rhs addr
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         monoasm!( &mut self.jit, jmp common; );
 
         let ptr_ir = self.jit.get_current_address();
-        self.vm_get_ir_r15();
+        self.fetch3();
+        self.vm_get_smi_rdi();
+        self.vm_get_slot_value(GP::Rsi); // rsi <- rhs addr
+        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         monoasm!( &mut self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
