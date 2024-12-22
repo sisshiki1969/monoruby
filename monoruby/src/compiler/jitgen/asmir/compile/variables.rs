@@ -141,20 +141,35 @@ impl Codegen {
         } else {
             ivar
         };
-        monoasm! { &mut self.jit,
-            movq rax, (NIL_VALUE);
-            // ensure var_table is not None
-            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rdx, rdx;
-            jz   exit;
-            // ensure capa is not 0
-            cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
-            jz   exit;
-            cmpq [rdx + (MONOVEC_LEN)], (idx);  // len
-            movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-            // rax = if len > idx { rdi[idx] } else { nil }
-            cmovgtq rax, [rdi + (idx * 8)];
-        exit:
+        if len_flag {
+            monoasm! { &mut self.jit,
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+                movq rax, [rdi + (idx * 8)];
+            exit:
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (NIL_VALUE);
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            }
+            if min_len == 0 {
+                monoasm! { &mut self.jit,
+                    // ensure var_table is not None
+                    testq rdx, rdx;
+                    jz   exit;
+                    // ensure capa is not 0
+                    cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                    jz   exit;
+                }
+            }
+            monoasm! { &mut self.jit,
+                cmpq [rdx + (MONOVEC_LEN)], (idx);  // len
+                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+                // rax = if len > idx { rdi[idx] } else { nil }
+                cmovgtq rax, [rdi + (idx * 8)];
+            exit:
+            }
         }
     }
 }
@@ -302,7 +317,6 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         generic:
-            //movq rdi, [r14 - (LFP_SELF)];
             movl rsi, (ivar);
             movq rdx, rax;
         );
@@ -315,16 +329,26 @@ impl Codegen {
 
     fn store_ivar_heap_sub(&mut self, idx: i32, generic: DestLabel, len_flag: bool, nonzero: bool) {
         monoasm! { &mut self.jit,
-            // check var_table is not None
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rdx, rdx;
-            jz   generic;
-            // check capa is not 0
-            cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
-            jz   generic;
-            // check len > idx
-            cmpq [rdx + (MONOVEC_LEN)], (idx); // len
-            jle  generic;
+        }
+        if !len_flag {
+            monoasm! { &mut self.jit,
+                // check var_table is not None
+                testq rdx, rdx;
+                jz   generic;
+                // check capa is not 0
+                cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                jz   generic;
+            }
+        }
+        if !len_flag {
+            monoasm! { &mut self.jit,
+                // check len > idx
+                cmpq [rdx + (MONOVEC_LEN)], (idx); // len
+                jle  generic;
+            }
+        }
+        monoasm! { &mut self.jit,
             movq rdx, [rdx + (MONOVEC_PTR)]; // ptr
             movq [rdx + (idx * 8)], rax;
         }

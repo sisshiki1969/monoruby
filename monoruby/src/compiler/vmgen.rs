@@ -698,8 +698,10 @@ impl Codegen {
             jeq exit;
         };
         self.vm_get_slot_addr(GP::R15);
-        self.vm_store_r15();
-        self.jit.bind_label(exit);
+        monoasm! { &mut self.jit,
+            movq [r15], rax;
+        exit:
+        };
     }
 
     ///

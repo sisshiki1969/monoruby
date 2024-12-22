@@ -1,22 +1,16 @@
-for i in 0..20
-  case i
-  when 3
-    puts "3"
-  when 1
-    puts "1"
-  when 4
-    puts "4"
-  when 2
-    puts "2"
-  when 13
-    puts "13"
-  when 11
-    puts "11"
-  when 14
-    puts "14"
-  when 12
-    puts "12"
-  else
-    puts "else"
+class A < Array
+  def f(x)
+    @a = 1
+    @b = 2
+    @c = 3
+    @a + @b + @c
+    if x % 2 == 0
+      @d = 4
+      @e = 5
+      @f = 6
+    end
+    @f
   end
 end
+
+30.times do |x| puts A.new.f(x) end

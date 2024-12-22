@@ -67,7 +67,6 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movq rdx, rdi;  // ConstSiteId
             movq rcx, [rip + const_version]; // usize
@@ -80,7 +79,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -94,7 +93,6 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movq rdx, rdi;  // ConstSiteId
             movq rcx, [rip + const_version]; // usize
@@ -106,7 +104,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -142,7 +140,6 @@ impl Codegen {
     pub(super) fn vm_load_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movq rsi, rdi; // name: IdentId
             movq rdi, [r14 - (LFP_SELF)];  // base: Value
@@ -151,7 +148,7 @@ impl Codegen {
             movq rax, (get_instance_var_with_cache);
             call rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -195,7 +192,6 @@ impl Codegen {
     pub(super) fn vm_load_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
@@ -204,7 +200,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -224,7 +220,6 @@ impl Codegen {
     pub(super) fn vm_check_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
@@ -232,7 +227,7 @@ impl Codegen {
             movq rax, (runtime::check_class_var);
             call rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -280,14 +275,13 @@ impl Codegen {
     pub(super) fn vm_load_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movl rsi, rdi; // name: IdentId
             movq rdi, r12; // &mut Globals
             movq rax, (runtime::get_global_var);
             call rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }
@@ -328,7 +322,6 @@ impl Codegen {
     pub(super) fn vm_load_svar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             movl rdx, rdi;  // id
             movq rdi, rbx;  // &Executor
@@ -336,7 +329,7 @@ impl Codegen {
             movq rax, (runtime::get_special_var);
             call rax;
         };
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero();
         self.fetch_and_dispatch();
         label
     }

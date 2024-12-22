@@ -315,6 +315,10 @@ impl BBContext {
                                         min_len: bbctx.self_ivar_len,
                                         using_xmm,
                                     });
+                                    bbctx.self_ivar_len = std::cmp::max(
+                                        cached_ivarid.get() as usize + 1,
+                                        bbctx.self_ivar_len,
+                                    );
                                 } else {
                                     unimplemented!()
                                 }
