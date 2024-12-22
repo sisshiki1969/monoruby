@@ -1,16 +1,12 @@
 class A < Array
-  def f(x)
-    @a = 1
-    @b = 2
-    @c = 3
-    @a + @b + @c
-    if x % 2 == 0
-      @d = 4
-      @e = 5
-      @f = 6
-    end
-    @f
+  def f
+    @a = @b = @c = @d = @e = @f = 6
+  end
+  def c
+    @a = 7
+    @c
   end
 end
 
-30.times do |x| puts A.new.f(x) end
+A.new.f
+30.times do puts A.new.c end
