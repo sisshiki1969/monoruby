@@ -564,12 +564,14 @@ impl Codegen {
             AsmInst::LoadIVar {
                 ivarid,
                 is_object_ty,
-            } => self.load_ivar(ivarid, is_object_ty),
+                min_len,
+            } => self.load_ivar(ivarid, is_object_ty, min_len),
             AsmInst::StoreIVar {
                 ivarid: cached_ivarid,
                 is_object_ty,
+                min_len,
                 using_xmm,
-            } => self.store_ivar(cached_ivarid, is_object_ty, using_xmm),
+            } => self.store_ivar(cached_ivarid, is_object_ty, min_len, using_xmm),
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);

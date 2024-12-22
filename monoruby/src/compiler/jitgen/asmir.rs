@@ -1192,6 +1192,7 @@ pub(super) enum AsmInst {
     LoadIVar {
         ivarid: IvarId,
         is_object_ty: bool,
+        min_len: usize,
     },
     ///
     /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
@@ -1206,6 +1207,7 @@ pub(super) enum AsmInst {
     StoreIVar {
         ivarid: IvarId,
         is_object_ty: bool,
+        min_len: usize,
         using_xmm: UsingXmm,
     },
 

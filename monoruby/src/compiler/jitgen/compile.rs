@@ -194,7 +194,7 @@ impl JitContext {
                 bbctx.write_back_range(ir, args, pos_num as u16);
                 bbctx.unlink(ir, dst);
                 ir.new_array(bbctx, callid);
-                bbctx.reg2acc_array_ty(ir, GP::Rax, dst);
+                bbctx.reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { dst, func_id } => {
                 bbctx.unlink(ir, dst);
@@ -470,7 +470,7 @@ impl JitContext {
                 class,
             } => {
                 if let Some((base_class, idx_class)) = class {
-                    bbctx.index(ir, dst, base, idx, base_class, idx_class, pc);
+                    bbctx.index(ir, store, dst, base, idx, base_class, idx_class, pc);
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -482,7 +482,7 @@ impl JitContext {
                 class,
             } => {
                 if let Some((base_class, idx_class)) = class {
-                    bbctx.index_assign(ir, src, base, idx, base_class, idx_class, pc);
+                    bbctx.index_assign(ir, store, src, base, idx, base_class, idx_class, pc);
                 } else {
                     return CompileResult::Recompile;
                 }

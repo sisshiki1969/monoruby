@@ -79,6 +79,7 @@ fn math_sqrt(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -104,6 +105,7 @@ fn math_cos(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -137,6 +139,7 @@ fn math_sin(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {

@@ -207,6 +207,7 @@ fn array_size(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -449,6 +450,7 @@ fn array_shl(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    recv_class: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -465,7 +467,7 @@ fn array_shl(
         );
     });
     ir.xmm_restore(using_xmm);
-    bb.reg2acc_array_ty(ir, GP::Rax, dst);
+    bb.reg2acc_class(ir, GP::Rax, dst, recv_class);
     true
 }
 

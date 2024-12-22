@@ -7,6 +7,7 @@ pub(crate) struct SlotContext {
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
     local_num: usize,
+    pub self_ivar_len: usize,
 }
 
 impl std::ops::Index<SlotId> for SlotContext {
@@ -65,10 +66,6 @@ impl SlotContext {
         self.set_guarded(slot, Guarded::Float)
     }
 
-    pub(super) fn set_guard_array_ty(&mut self, slot: SlotId) {
-        self.set_guarded(slot, Guarded::ArrayTy)
-    }
-
     pub(super) fn set_guard_class(&mut self, slot: SlotId, class: ClassId) {
         self.set_guarded(slot, Guarded::Class(class))
     }
@@ -99,12 +96,16 @@ impl SlotContext {
         }
     }
 
-    pub fn is_array_ty(&self, slot: SlotId) -> bool {
-        let b = self.guarded(slot) == Guarded::ArrayTy;
+    pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
+        let b = if let Guarded::Class(class) = self.guarded(slot) {
+            store.classes[class].instance_ty() == ObjKind::ARRAY
+        } else {
+            false
+        };
         match self[slot].link {
             LinkMode::Xmm(_) => assert!(!b),
             LinkMode::ConcreteValue(v) => assert_eq!(v.is_array_ty(), b),
-            LinkMode::Alias(origin) => assert_eq!(self.is_array_ty(origin), b),
+            LinkMode::Alias(origin) => assert_eq!(self.is_array_ty(store, origin), b),
             _ => {}
         };
         b
@@ -158,7 +159,6 @@ impl SlotContext {
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
-                Guarded::ArrayTy => true,
                 Guarded::Value => false,
                 Guarded::Class(_) => false,
             },
@@ -174,7 +174,6 @@ impl SlotContext {
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => false,
                 Guarded::Float => false,
-                Guarded::ArrayTy => false,
                 Guarded::Value => false,
                 Guarded::Class(_) => false,
             },
@@ -200,7 +199,6 @@ impl SlotContext {
             _ => match self.guarded(slot) {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
-                Guarded::ArrayTy => true,
                 Guarded::Value => false,
                 Guarded::Class(_) => true,
             },
@@ -323,6 +321,7 @@ impl SlotContext {
             },
             r15: None,
             local_num,
+            self_ivar_len: 0,
         };
         ctx.set_guard_class(SlotId(0), self_class);
         ctx
@@ -656,7 +655,6 @@ pub enum Guarded {
     Value,
     Fixnum,
     Float,
-    ArrayTy,
     Class(ClassId),
 }
 
@@ -666,8 +664,6 @@ impl Guarded {
             Guarded::Fixnum
         } else if v.is_float() {
             Guarded::Float
-        } else if v.is_array_ty() {
-            Guarded::ArrayTy
         } else {
             Guarded::Class(v.class())
         }
@@ -985,6 +981,7 @@ impl BBContext {
 impl MergeContext {
     pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotContext) {
         let mut ir = AsmIr::new();
+        self.self_ivar_len = std::cmp::min(self.self_ivar_len, other.self_ivar_len);
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self[i].is_used.merge(&other[i].is_used);

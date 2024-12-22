@@ -456,13 +456,14 @@ impl BBContext {
         self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
     }
 
-    pub(crate) fn reg2acc_array_ty(
+    pub(crate) fn reg2acc_class(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
+        class: ClassId,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::ArrayTy)
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
     }
 
     pub(crate) fn reg2acc_concrete_value(

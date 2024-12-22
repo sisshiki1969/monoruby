@@ -240,6 +240,7 @@ fn integer_tof(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -401,6 +402,7 @@ fn integer_shr(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -434,6 +436,7 @@ fn integer_shl(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {

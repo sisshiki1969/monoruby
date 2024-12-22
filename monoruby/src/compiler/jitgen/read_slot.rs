@@ -83,15 +83,15 @@ impl BBContext {
     pub(crate) fn fetch_array_ty(
         &mut self,
         ir: &mut AsmIr,
+        store: &Store,
         slot: SlotId,
         dst: GP,
         deopt: AsmDeopt,
     ) {
-        let is_array = self.is_array_ty(slot);
+        let is_array = self.is_array_ty(store, slot);
         self.fetch_for_gpr(ir, slot, dst);
         if !is_array {
             ir.guard_array_ty(dst, deopt);
-            self.set_guard_array_ty(slot);
         }
     }
 

@@ -25,6 +25,7 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     &mut jitgen::BBContext,
     CallSiteId,
+    ClassId,
     BytecodePtr,
 ) -> bool;
 

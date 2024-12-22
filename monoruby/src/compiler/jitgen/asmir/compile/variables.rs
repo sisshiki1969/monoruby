@@ -13,11 +13,11 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi
     ///
-    pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, min_len: usize) {
         if is_object_ty && ivarid.is_inline() {
             self.load_ivar_inline(ivarid);
         } else {
-            self.load_ivar_heap(ivarid, is_object_ty);
+            self.load_ivar_heap(ivarid, is_object_ty, min_len);
         }
     }
 
@@ -132,9 +132,10 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi, rdx
     ///
-    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, min_len: usize) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
+        let len_flag = min_len > (ivarid.get() as usize);
         let idx = if is_object_ty {
             ivar - OBJECT_INLINE_IVAR as i32
         } else {
@@ -169,11 +170,17 @@ impl Codegen {
     /// #### destroy
     /// - caller-save registers
     ///
-    pub(super) fn store_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, using_xmm: UsingXmm) {
+    pub(super) fn store_ivar(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        min_len: usize,
+        using_xmm: UsingXmm,
+    ) {
         if is_object_ty && ivarid.is_inline() {
             self.store_ivar_inline(ivarid);
         } else {
-            self.store_ivar_heap(ivarid, is_object_ty, using_xmm);
+            self.store_ivar_heap(ivarid, is_object_ty, min_len, using_xmm);
         }
     }
 
@@ -271,16 +278,23 @@ impl Codegen {
     /// #### destroy
     /// - caller-save registers
     ///
-    fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
+    fn store_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        min_len: usize,
+        using: UsingXmm,
+    ) {
         let exit = self.jit.label();
         let generic = self.jit.label();
         let ivar = ivarid.get() as i32;
+        let len_flag = min_len > (ivarid.get() as usize);
         let idx = if is_object_ty {
             ivar - OBJECT_INLINE_IVAR as i32
         } else {
             ivar
         };
-        self.store_ivar_heap_sub(idx, generic);
+        self.store_ivar_heap_sub(idx, generic, len_flag, min_len > 0);
         monoasm! { &mut self.jit,
         exit:
         }
@@ -299,7 +313,7 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn store_ivar_heap_sub(&mut self, idx: i32, generic: DestLabel) {
+    fn store_ivar_heap_sub(&mut self, idx: i32, generic: DestLabel, len_flag: bool, nonzero: bool) {
         monoasm! { &mut self.jit,
             // check var_table is not None
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];

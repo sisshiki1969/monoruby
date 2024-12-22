@@ -58,6 +58,7 @@ fn fiber_yield_inline(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {

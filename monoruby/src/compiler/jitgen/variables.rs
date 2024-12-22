@@ -14,6 +14,7 @@ impl BBContext {
         ir.push(AsmInst::LoadIVar {
             ivarid,
             is_object_ty: self.self_ty == ObjKind::OBJECT,
+            min_len: self.self_ivar_len,
         });
         self.rax2acc(ir, dst);
     }
@@ -32,8 +33,10 @@ impl BBContext {
         ir.push(AsmInst::StoreIVar {
             ivarid,
             is_object_ty: self.self_ty == ObjKind::OBJECT,
+            min_len: self.self_ivar_len,
             using_xmm,
         });
+        self.self_ivar_len = std::cmp::max(ivarid.get() as usize + 1, self.self_ivar_len);
     }
 }
 

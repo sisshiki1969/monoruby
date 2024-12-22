@@ -153,7 +153,7 @@ impl BBContext {
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, BytecodePtr) -> bool,
+        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, ClassId, BytecodePtr) -> bool,
         callid: CallSiteId,
         cache: &MethodCacheEntry,
         pc: BytecodePtr,
@@ -173,7 +173,7 @@ impl BBContext {
         if !recv.is_self() && !self.is_class(recv, *recv_class) {
             ir.guard_class(self, recv, GP::Rdi, *recv_class, deopt);
         }
-        if f(ir, store, self, callid, pc) {
+        if f(ir, store, self, callid, *recv_class, pc) {
             true
         } else {
             std::mem::swap(self, &mut ctx_save);
@@ -221,6 +221,7 @@ impl BBContext {
                     ir.push(AsmInst::LoadIVar {
                         ivarid,
                         is_object_ty,
+                        min_len: 0,
                     });
                 }
             }
@@ -236,6 +237,7 @@ impl BBContext {
                 ir.push(AsmInst::StoreIVar {
                     ivarid,
                     using_xmm,
+                    min_len: 0,
                     is_object_ty,
                 });
             }
@@ -310,6 +312,7 @@ impl BBContext {
                                     ir.push(AsmInst::StoreIVar {
                                         ivarid: cached_ivarid,
                                         is_object_ty,
+                                        min_len: bbctx.self_ivar_len,
                                         using_xmm,
                                     });
                                 } else {
@@ -332,6 +335,7 @@ impl BBContext {
                                     ir.push(AsmInst::LoadIVar {
                                         ivarid: cached_ivarid,
                                         is_object_ty,
+                                        min_len: bbctx.self_ivar_len,
                                     });
                                     ir.reg2inline_stack(GP::Rax, dst);
                                 } else {

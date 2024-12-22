@@ -81,6 +81,7 @@ fn object_object_id(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -123,6 +124,7 @@ pub fn object_send(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
