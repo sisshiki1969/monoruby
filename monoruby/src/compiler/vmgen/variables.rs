@@ -79,7 +79,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -104,7 +104,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -148,7 +148,7 @@ impl Codegen {
             movq rax, (get_instance_var_with_cache);
             call rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -200,7 +200,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -227,7 +227,7 @@ impl Codegen {
             movq rax, (runtime::check_class_var);
             call rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -281,7 +281,7 @@ impl Codegen {
             movq rax, (runtime::get_global_var);
             call rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -329,7 +329,7 @@ impl Codegen {
             movq rax, (runtime::get_special_var);
             call rax;
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -365,7 +365,7 @@ impl Codegen {
             negq rdi;
             movq rax, [rax + rdi * 8 - (LFP_SELF)];
         };
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }

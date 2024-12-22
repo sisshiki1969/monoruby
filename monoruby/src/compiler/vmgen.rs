@@ -635,6 +635,12 @@ impl Codegen {
         };
     }
 
+    fn fetch_r15(&mut self) {
+        monoasm! { &mut self.jit,
+            movzxw r15, [r13 - 12];  // r15 <- :1
+        };
+    }
+
     fn fetch_addr_r15(&mut self) {
         monoasm! { &mut self.jit,
             movzxw r15, [r13 - 12];  // r15 <- :1
@@ -691,15 +697,16 @@ impl Codegen {
         };
     }
 
-    fn vm_store_r15_if_nonzero(&mut self) {
+    fn vm_store_r15_if_nonzero(&mut self, reg: GP) {
         let exit = self.jit.label();
+        let r = reg as u64;
         monoasm! { &mut self.jit,
             testq r15, r15;
             jeq exit;
         };
         self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
-            movq [r15], rax;
+            movq [r15], R(r);
         exit:
         };
     }
@@ -773,7 +780,7 @@ impl Codegen {
         self.vm_save_lhs_class();
         self.call_unop(func);
         self.vm_handle_error();
-        self.vm_store_r15();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
     }
 
@@ -867,7 +874,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -885,7 +892,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -935,10 +942,11 @@ impl Codegen {
 
     fn vm_nil(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch_addr_r15();
+        self.fetch_r15();
         monoasm! { &mut self.jit,
-            movq [r15], (NIL_VALUE);
+            movq rax, (NIL_VALUE);
         };
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -946,12 +954,11 @@ impl Codegen {
     fn vm_integer(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             shlq rdi, 1;
             addq rdi, 1;
-            movq [r15], rdi;
         };
+        self.vm_store_r15_if_nonzero(GP::Rdi);
         self.fetch_and_dispatch();
         label
     }
@@ -959,12 +966,11 @@ impl Codegen {
     fn vm_symbol(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
-        self.vm_get_slot_addr(GP::R15);
         monoasm! { &mut self.jit,
             shlq rdi, 32;
             orq rdi, (TAG_SYMBOL);
-            movq [r15], rdi;
         };
+        self.vm_store_r15_if_nonzero(GP::Rdi);
         self.fetch_and_dispatch();
         label
     }
@@ -1249,11 +1255,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.not_rdi_to_rax();
-        monoasm! { &mut self.jit,
-            movq [r15], rax;
-        };
+        self.vm_store_r15_if_nonzero(GP::Rax);
         self.fetch_and_dispatch();
         label
     }
@@ -1263,7 +1266,6 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.vm_generic_unop(generic, bitnot_value);
         label
     }
@@ -1273,7 +1275,6 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.vm_generic_unop(generic, bitnot_value_no_opt);
         label
     }
@@ -1283,15 +1284,14 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.guard_rdi_fixnum(generic);
         monoasm! { &mut self.jit,
             sarq rdi, 1;
             negq rdi;
             lea rdi, [rdi + rdi + 1];
-            movq [r15], rdi;
         };
         self.vm_lhs_integer();
+        self.vm_store_r15_if_nonzero(GP::Rdi);
         self.fetch_and_dispatch();
         self.vm_generic_unop(generic, neg_value);
         label
@@ -1302,7 +1302,6 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.vm_generic_unop(generic, neg_value_no_opt);
         label
     }
@@ -1312,12 +1311,11 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         monoasm! { &mut self.jit,
             testq rdi, 0x1;
             jz generic;
-            movq [r15], rdi;
         }
+        self.vm_store_r15_if_nonzero(GP::Rdi);
         self.fetch_and_dispatch();
         self.vm_generic_unop(generic, pos_value);
         label
@@ -1328,7 +1326,6 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_get_slot_addr(GP::R15); // r15 <- ret addr
         self.vm_generic_unop(generic, pos_value_no_opt);
         label
     }

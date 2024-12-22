@@ -209,7 +209,7 @@ impl Codegen {
             addq r13, 16;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero();
+        self.vm_store_r15_if_nonzero(GP::Rax);
     }
 
     ///
