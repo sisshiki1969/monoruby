@@ -101,7 +101,7 @@ impl Codegen {
             popq r13;
         };
         self.vm_handle_error();
-        self.vm_store_r15_if_nonzero(GP::Rax);
+        self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
     }
 }
