@@ -716,7 +716,7 @@ impl RValue {
     /// Get class object of *self.
     ///
     pub(crate) fn get_class_obj(&self, store: &Store) -> Module {
-        store.classes[self.class()].get_module()
+        store[self.class()].get_module()
     }
 
     pub(crate) fn real_class(&self, store: &Store) -> Module {
@@ -725,13 +725,13 @@ impl RValue {
 
     pub(crate) fn get_ivar(&self, store: &Store, name: IdentId) -> Option<Value> {
         let class_id = self.class();
-        let id = store.classes[class_id].get_ivarid(name)?;
+        let id = store[class_id].get_ivarid(name)?;
         self.get_var(id)
     }
 
     pub(crate) fn get_ivars(&self, store: &Store) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
-        store.classes[class_id]
+        store[class_id]
             .ivar_names()
             .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
             .collect()

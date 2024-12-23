@@ -133,7 +133,7 @@ pub(crate) enum ConstState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ClassInfo {
+pub struct ClassInfo {
     ///
     /// the constant name which this class object is bound.
     /// if this class object is not bound to any constant, this is None.
@@ -238,6 +238,14 @@ impl ClassInfo {
 
     pub(crate) fn instance_ty(&self) -> u8 {
         self.instance_ty
+    }
+
+    pub(crate) fn is_object_ty_instance(&self) -> bool {
+        self.instance_ty == ObjKind::OBJECT
+    }
+
+    pub(crate) fn is_array_ty_instance(&self) -> bool {
+        self.instance_ty == ObjKind::ARRAY
     }
 
     fn set_cvar(&mut self, name: IdentId, val: Value) {

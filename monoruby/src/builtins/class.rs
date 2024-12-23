@@ -9,7 +9,7 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
 }
 
 pub(super) fn init(globals: &mut Globals) {
-    let module = globals.store.classes[MODULE_CLASS].get_module();
+    let module = globals.store[MODULE_CLASS].get_module();
     globals.define_builtin_class_with_instance_ty(
         "Class",
         CLASS_CLASS,
@@ -50,7 +50,7 @@ fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     } else {
         Some(lfp.arg(0).expect_class(globals)?)
     };
-    let obj = globals.store.classes.new_unnamed_class(superclass);
+    let obj = globals.store.new_unnamed_class(superclass);
     Ok(obj)
 }
 

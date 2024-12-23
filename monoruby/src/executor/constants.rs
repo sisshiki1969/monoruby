@@ -21,7 +21,7 @@ impl Executor {
         base: ClassId,
         name: &[&str],
     ) -> Result<Value> {
-        let mut class = globals.store.classes[base].get_module();
+        let mut class = globals.store[base].get_module();
         for name in name {
             let name = IdentId::get_id(name);
             class = self
@@ -42,14 +42,14 @@ impl Executor {
         class_id: ClassId,
         name: IdentId,
     ) -> Result<Option<Value>> {
-        match globals.store.classes.get_constant(class_id, name) {
+        match globals.store.get_constant(class_id, name) {
             None => return Ok(None),
             Some(ConstState::Loaded(v)) => return Ok(Some(*v)),
             Some(ConstState::Autoload(file_name)) => {
                 self.require(globals, &file_name.clone(), false)?;
             }
         };
-        match globals.store.classes.get_constant(class_id, name) {
+        match globals.store.get_constant(class_id, name) {
             None => Ok(None),
             Some(ConstState::Loaded(v)) => Ok(Some(*v)),
             Some(ConstState::Autoload(_)) => Ok(None),
@@ -106,7 +106,7 @@ impl Executor {
             .lexical_context
             .last()
             .cloned()
-            .unwrap_or(globals.store.classes.object_class());
+            .unwrap_or(globals.store.object_class());
 
         self.search_constant_superclass_checked(globals, module, name)
     }
@@ -124,7 +124,7 @@ impl Executor {
             .iter()
             .rev();
         for m in stack {
-            if globals.store.classes.get_constant(m.id(), name).is_some() {
+            if globals.store.get_constant(m.id(), name).is_some() {
                 return self.get_constant(globals, m.id(), name);
             }
         }

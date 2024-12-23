@@ -22,7 +22,7 @@ pub struct Store {
     /// ISEQ info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
-    pub(crate) classes: ClassInfoTable,
+    classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -31,6 +31,19 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+}
+
+impl std::ops::Deref for Store {
+    type Target = ClassInfoTable;
+    fn deref(&self) -> &Self::Target {
+        &self.classes
+    }
+}
+
+impl std::ops::DerefMut for Store {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.classes
+    }
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -56,6 +69,19 @@ impl std::ops::Index<ISeqId> for Store {
 impl std::ops::IndexMut<ISeqId> for Store {
     fn index_mut(&mut self, index: ISeqId) -> &mut ISeqInfo {
         &mut self.iseqs[index.get()]
+    }
+}
+
+impl std::ops::Index<ClassId> for Store {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &ClassInfo {
+        &self.classes[index]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for Store {
+    fn index_mut(&mut self, index: ClassId) -> &mut ClassInfo {
+        &mut self.classes[index]
     }
 }
 
@@ -536,7 +562,7 @@ impl Store {
     }
 }
 
-pub(crate) struct ClassInfoTable {
+pub struct ClassInfoTable {
     table: Vec<ClassInfo>,
 }
 

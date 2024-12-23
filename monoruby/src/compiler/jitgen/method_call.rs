@@ -216,8 +216,8 @@ impl BBContext {
                         ir.lit2reg(Value::nil(), GP::Rax);
                     }
                 } else {
-                    let ivarid = store.classes[recv_class].get_ivarid(ivar_name)?;
-                    let is_object_ty = store.classes[recv_class].instance_ty() == ObjKind::OBJECT;
+                    let ivarid = store[recv_class].get_ivarid(ivar_name)?;
+                    let is_object_ty = store[recv_class].is_object_ty_instance();
                     ir.push(AsmInst::LoadIVar {
                         ivarid,
                         is_object_ty,
@@ -230,9 +230,9 @@ impl BBContext {
                 assert!(!callsite.kw_may_exists());
                 assert!(callsite.block_fid.is_none());
                 assert!(callsite.block_arg.is_none());
-                let ivarid = store.classes[recv_class].get_ivarid(ivar_name)?;
+                let ivarid = store[recv_class].get_ivarid(ivar_name)?;
                 self.fetch_for_gpr(ir, args, GP::Rax);
-                let is_object_ty = store.classes[recv_class].instance_ty() == ObjKind::OBJECT;
+                let is_object_ty = store[recv_class].is_object_ty_instance();
                 let using_xmm = self.get_using_xmm();
                 ir.push(AsmInst::StoreIVar {
                     ivarid,
@@ -305,8 +305,7 @@ impl BBContext {
                                         cached_class,
                                         deopt,
                                     );
-                                    let is_object_ty = store.classes[cached_class].instance_ty()
-                                        == ObjKind::OBJECT;
+                                    let is_object_ty = store[cached_class].is_object_ty_instance();
                                     ir.inline_stack2reg(src, GP::Rax);
                                     let using_xmm = self.get_using_xmm();
                                     ir.push(AsmInst::StoreIVar {
@@ -334,8 +333,7 @@ impl BBContext {
                                         cached_class,
                                         deopt,
                                     );
-                                    let is_object_ty = store.classes[cached_class].instance_ty()
-                                        == ObjKind::OBJECT;
+                                    let is_object_ty = store[cached_class].is_object_ty_instance();
                                     ir.push(AsmInst::LoadIVar {
                                         ivarid: cached_ivarid,
                                         is_object_ty,

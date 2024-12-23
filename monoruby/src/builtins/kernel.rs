@@ -324,7 +324,7 @@ fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().class();
-    let i = globals.store.classes[class_id].instance_ty();
+    let i = globals.store[class_id].instance_ty();
     Ok(Value::integer(i as _))
 }
 

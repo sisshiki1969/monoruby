@@ -131,7 +131,7 @@ pub struct Globals {
     dumped_bc: usize,
 }
 
-impl std::ops::Index<FuncId> for Globals {
+/*impl std::ops::Index<FuncId> for Globals {
     type Output = FuncInfo;
     fn index(&self, index: FuncId) -> &FuncInfo {
         &self.store[index]
@@ -142,7 +142,7 @@ impl std::ops::IndexMut<FuncId> for Globals {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.store[index]
     }
-}
+}*/
 
 impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
@@ -241,7 +241,7 @@ impl Globals {
     }
 
     pub fn locals_len(&self, func_id: FuncId) -> usize {
-        match self[func_id].kind {
+        match self.store[func_id].kind {
             FuncKind::ISeq(info) => self.store[info].locals.len(),
             _ => 0,
         }
@@ -356,7 +356,7 @@ impl Globals {
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
-        let info = &self[func_id];
+        let info = &self.store[func_id];
         assert!(info.codeptr().is_some());
         info.data_ref()
     }
@@ -501,14 +501,14 @@ impl Globals {
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
-        let kind = self[func_id].kind.clone();
+        let kind = self.store[func_id].kind.clone();
         let entry = self.codegen.gen_wrapper(&kind, self.no_jit);
         let codeptr = self.codegen.jit.get_label_address(entry);
-        self[func_id].set_entry(entry, codeptr);
+        self.store[func_id].set_entry(entry, codeptr);
         #[cfg(feature = "perf")]
         {
             let info = self.codegen.get_wrapper_info(pair);
-            self[func_id].set_wrapper_info(info);
+            self.store[func_id].set_wrapper_info(info);
         }
     }
 

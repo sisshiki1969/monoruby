@@ -12,7 +12,7 @@ impl BBContext {
         idx_class: ClassId,
         pc: BytecodePtr,
     ) {
-        if store.classes[base_class].instance_ty() == ObjKind::ARRAY && idx_class == INTEGER_CLASS {
+        if store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
             let deopt = ir.new_deopt(self, pc);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
@@ -41,7 +41,7 @@ impl BBContext {
         idx_class: ClassId,
         pc: BytecodePtr,
     ) {
-        if store.classes[base_class].instance_ty() == ObjKind::ARRAY && idx_class == INTEGER_CLASS {
+        if store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
             let deopt = ir.new_deopt(self, pc);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {

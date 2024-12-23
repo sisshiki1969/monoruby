@@ -11,7 +11,7 @@ pub(crate) fn jit_hash_splat_kw_rest(
     meta: Meta,
 ) -> Result<()> {
     let callee_func_id = meta.func_id();
-    let callee = &globals[callee_func_id];
+    let callee = &globals.store[callee_func_id];
     let caller = &globals.store[callid];
     hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
 }
@@ -80,7 +80,7 @@ pub(crate) fn set_frame_arguments(
     pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
-    let callee = &globals[callee_fid];
+    let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
 
     positional(caller, callee, src, pos_num, callee_lfp, caller_lfp)?;
@@ -100,7 +100,7 @@ pub(crate) fn set_frame_arguments_simple(
     pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
-    let callee = &globals[callee_fid];
+    let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
 
     positional_simple(callee, src, pos_num, callee_lfp)?;
@@ -117,7 +117,7 @@ pub(crate) fn set_frame_arguments_send_splat(
     src: *const Value,
 ) -> Result<()> {
     let callee_fid = callee_lfp.meta().func_id();
-    let callee = &globals[callee_fid];
+    let callee = &globals.store[callee_fid];
 
     positional_send_splat(callee, src, callee_lfp)?;
     if !callee.no_keyword() {

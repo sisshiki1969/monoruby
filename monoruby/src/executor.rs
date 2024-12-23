@@ -489,7 +489,7 @@ impl Executor {
                 .expect_class_or_module(&globals.store)?
                 .id();
         }
-        globals.store.classes.set_constant(parent, name, val);
+        globals.store.set_constant(parent, name, val);
         Ok(())
     }
 
@@ -551,7 +551,7 @@ impl Executor {
             visibility,
         } = self.get_class_context();
         let current_func = self.method_func_id();
-        if let Some(iseq) = globals[func].is_iseq() {
+        if let Some(iseq) = globals.store[func].is_iseq() {
             globals.store[iseq].lexical_context =
                 globals.store.iseq(current_func).lexical_context.clone();
             globals.add_method(class_id, name, func, visibility);
@@ -926,11 +926,10 @@ impl Executor {
                         assert!(is_module != 1);
                         superclass.expect_class(globals)?
                     }
-                    None => globals.store.classes.object_class(),
+                    None => globals.store.object_class(),
                 };
                 globals
                     .store
-                    .classes
                     .define_class(name, Some(superclass), parent, is_module == 1)
             }
         };

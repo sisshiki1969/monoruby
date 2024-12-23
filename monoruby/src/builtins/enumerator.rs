@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     let yielder = globals.define_class_by_str(
         "Yielder",
-        globals.store.classes[ARRAY_CLASS].get_module(),
+        globals.store[ARRAY_CLASS].get_module(),
         ENUMERATOR_CLASS,
     );
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
@@ -35,7 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_with_instance_ty(
         "Generator",
         GENERATOR_CLASS,
-        globals.store.classes.object_class(),
+        globals.store.object_class(),
         ENUMERATOR_CLASS,
         ObjKind::GENERATOR,
     );

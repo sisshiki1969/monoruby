@@ -251,7 +251,7 @@ impl JitContext {
             }
             TraceIr::LoadIvar(dst, name, cache) => {
                 let self_class = self.self_class;
-                if let Some(ivarid) = store.classes[self_class].get_ivarid(name) {
+                if let Some(ivarid) = store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class
                     {
@@ -264,7 +264,7 @@ impl JitContext {
             }
             TraceIr::StoreIvar(src, name, cache) => {
                 let self_class = self.self_class;
-                if let Some(ivarid) = store.classes[self_class].get_ivarid(name) {
+                if let Some(ivarid) = store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class
                     {

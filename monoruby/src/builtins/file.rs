@@ -11,7 +11,6 @@ use std::{
 pub(super) fn init(globals: &mut Globals) {
     let io_class = globals
         .store
-        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))
         .unwrap()
         .as_class();

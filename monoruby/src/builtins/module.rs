@@ -5,7 +5,11 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_instance_ty("Module", MODULE_CLASS, ObjKind::MODULE);
+    globals.define_builtin_class_under_obj_with_instance_ty(
+        "Module",
+        MODULE_CLASS,
+        ObjKind::MODULE,
+    );
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
@@ -214,7 +218,6 @@ fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
     let feature = lfp.arg(1).expect_string()?;
     globals
         .store
-        .classes
         .set_constant_autoload(lfp.self_val().as_class_id(), const_name, feature);
     Ok(Value::nil())
 }
@@ -301,7 +304,7 @@ fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let name = lfp.arg(0).expect_symbol_or_string()?;
     let module = lfp.self_val().as_class();
     let val = lfp.arg(1);
-    globals.store.classes.set_constant(module.id(), name, val);
+    globals.store.set_constant(module.id(), name, val);
     Ok(val)
 }
 
@@ -314,9 +317,9 @@ fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().expect_class_or_module(&globals.store)?;
     let v = if lfp.try_arg(0).is_none() || lfp.arg(0).as_bool() {
-        globals.store.classes.get_constant_names_inherit(class)
+        globals.store.get_constant_names_inherit(class)
     } else {
-        globals.store.classes.get_constant_names(class.id())
+        globals.store.get_constant_names(class.id())
     };
     let iter = v.into_iter().map(Value::symbol);
     Ok(Value::array_from_iter(iter))
@@ -379,9 +382,9 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     let iter = if !inherited_too {
-        globals.store.classes.get_method_names(class_id)
+        globals.store.get_method_names(class_id)
     } else {
-        globals.store.classes.get_method_names_inherit(class_id)
+        globals.store.get_method_names_inherit(class_id)
     }
     .into_iter()
     .map(Value::symbol);
@@ -545,7 +548,7 @@ fn private_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_class_method.html]
 #[monoruby_builtin]
 fn private_class_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let singleton = globals.store.classes.get_singleton(lfp.self_val());
+    let singleton = globals.store.get_singleton(lfp.self_val());
     let arg = lfp.arg(0).as_array();
     let (_, names) = extract_names(arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Private)?;

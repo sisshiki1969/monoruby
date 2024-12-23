@@ -98,7 +98,7 @@ impl SlotContext {
 
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
         let b = if let Guarded::Class(class) = self.guarded(slot) {
-            store.classes[class].instance_ty() == ObjKind::ARRAY
+            store[class].is_array_ty_instance()
         } else {
             false
         };

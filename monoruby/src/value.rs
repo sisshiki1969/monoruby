@@ -104,9 +104,9 @@ impl Value {
 
     pub(crate) fn get_singleton(self, store: &mut Store) -> Value {
         if let Some(class) = self.is_class_or_module() {
-            store.classes.get_metaclass(class.id())
+            store.get_metaclass(class.id())
         } else {
-            store.classes.get_singleton(self)
+            store.get_singleton(self)
         }
         .as_val()
     }
@@ -115,7 +115,7 @@ impl Value {
     /// Get class object of *self.
     ///
     pub(crate) fn get_class_obj(self, store: &Store) -> Module {
-        store.classes[self.class()].get_module()
+        store[self.class()].get_module()
     }
 
     pub(crate) fn real_class(self, store: &Store) -> Module {
@@ -1135,19 +1135,16 @@ impl Value {
                     let constant = IdentId::get_id(name);
                     globals
                         .store
-                        .classes
                         .get_constant_noautoload(OBJECT_CLASS, constant)
                         .unwrap()
                 } else {
                     let mut module = globals
                         .store
-                        .classes
                         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id(&prefix[0]))
                         .unwrap();
                     for id in &prefix[1..] {
                         module = globals
                             .store
-                            .classes
                             .get_constant_noautoload(
                                 module.is_class_or_module().unwrap().id(),
                                 IdentId::get_id(id),
@@ -1156,7 +1153,6 @@ impl Value {
                     }
                     globals
                         .store
-                        .classes
                         .get_constant_noautoload(
                             module.is_class_or_module().unwrap().id(),
                             IdentId::get_id(name),

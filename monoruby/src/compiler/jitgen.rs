@@ -677,7 +677,7 @@ impl Codegen {
         let start_pos = func.get_pc_index(position);
 
         let self_class = self_value.class();
-        let self_ty = store.classes[self_class].instance_ty();
+        let self_ty = store[self_class].instance_ty();
         let mut ctx = JitContext::new(func, self, position.is_some(), self_class, self_ty);
         for (loop_start, loop_end) in func.bb_info.loops() {
             ctx.analyse_loop(store, func, *loop_start, *loop_end);
