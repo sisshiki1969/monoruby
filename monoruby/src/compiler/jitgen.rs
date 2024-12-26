@@ -683,17 +683,20 @@ impl Codegen {
             ctx.analyse_loop(store, func, *loop_start, *loop_end);
         }
 
-        let bbctx = BBContext::new(&ctx);
+        let mut bbctx = BBContext::new(&ctx);
 
         if let Some(pc) = position {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let side_exit = self.gen_deopt(pc + 1, &bbctx);
-            monoasm!( &mut self.jit,
+            monoasm! { &mut self.jit,
                 movq rdi, [r14 - (LFP_SELF)];
-            );
+            }
             self.guard_class_rdi(self_value.class(), side_exit);
         } else {
+            for i in (1 + ctx.local_num)..ctx.total_reg_num {
+                bbctx.store_concrete_value(SlotId(i as u16), Value::nil());
+            }
             // for method JIT, class of *self* is already checked in an entry stub.
             self.prologue(func, store);
         }

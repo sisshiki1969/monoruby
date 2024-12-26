@@ -121,10 +121,14 @@ impl Executor {
     }
 
     fn load_gems(&mut self, globals: &mut Globals) {
-        self.require(globals, &std::path::PathBuf::from("rubygems"), false)
-            .expect("error occurred in startup.");
-        self.require(globals, &std::path::PathBuf::from("pp"), false)
-            .expect("error occurred in startup.");
+        if let Err(err) = self.require(globals, &std::path::PathBuf::from("rubygems"), false) {
+            err.show_error_message_and_all_loc(&globals.store);
+            panic!("error occured in loading Gems.");
+        }
+        if let Err(err) = self.require(globals, &std::path::PathBuf::from("pp"), false) {
+            err.show_error_message_and_all_loc(&globals.store);
+            panic!("error occurred in loading pp.");
+        }
     }
 
     pub fn cfp(&self) -> Cfp {

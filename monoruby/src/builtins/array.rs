@@ -60,6 +60,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
@@ -1069,6 +1070,30 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 ///
+/// ### Array#reject
+///
+/// - reject {|x| ... } -> self | nil
+/// - reject -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reject.html]
+#[monoruby_builtin]
+fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut res = vec![];
+        for elem in ary.iter() {
+            if !vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
+                res.push(*elem);
+            };
+        }
+        Ok(Value::array_from_vec(res))
+    } else {
+        vm.generate_enumerator(IdentId::get_id("reject"), lfp.self_val(), vec![])
+    }
+}
+
+///
 /// ### Array#reject!
 ///
 /// - reject! {|x| ... } -> self | nil
@@ -1092,7 +1117,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
             Value::nil()
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![])
+        vm.generate_enumerator(IdentId::get_id("reject!"), lfp.self_val(), vec![])
     }
 }
 
@@ -2299,9 +2324,12 @@ mod tests {
     fn select() {
         run_test(r##"[1,2,3,4,5].select { |num| num.even? }"##);
         run_test(r##"[1,2,3,4,5].select(&:even?)"##);
-        run_test(r##"[1,2,3,4,5].reject! { |num| num.even? }"##);
-        run_test(r##"[1,2,3,4,5].reject! { true }"##);
-        run_test(r##"[1,2,3,4,5].reject!(&:even?)"##);
+        run_test(r##"[1,2,3,4,5].reject { |num| num.even? }"##);
+        run_test(r##"[1,2,3,4,5].reject { true }"##);
+        run_test(r##"[1,2,3,4,5].reject(&:even?)"##);
+        run_test(r##"a=[1,2,3,4,5]; a.reject! { |num| num.even? }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.reject! { true }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.reject!(&:even?); a"##);
         run_test(
             r##"
         a = %w{ a b c d e f }

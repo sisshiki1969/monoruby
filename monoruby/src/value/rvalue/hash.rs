@@ -167,11 +167,12 @@ impl HashmapInner {
                     } else {
                         v.inspect(store)
                     };
-                    result = if first {
-                        format!("{k_inspect}=>{v_inspect}")
+                    let s = if let Some(k) = k.try_symbol() {
+                        format!("{k}: {v_inspect}")
                     } else {
-                        format!("{result}, {k_inspect}=>{v_inspect}")
+                        format!("{k_inspect} => {v_inspect}")
                     };
+                    result = if first { s } else { format!("{result}, {s}") };
                     first = false;
                 }
                 format! {"{{{}}}", result}

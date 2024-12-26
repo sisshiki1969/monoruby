@@ -1,4 +1,4 @@
 #!/bin/sh
 
 cargo build --release
-benchmark-driver -o markdown benchmark/integer.yml benchmark/math.yml benchmark/inline_method.yml --rbenv '3.3.0; 3.3.0 --yjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3
+benchmark-driver -o markdown benchmark/integer.yml benchmark/math.yml benchmark/inline_method.yml --rbenv '3.4.1; 3.4.1 --yjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3

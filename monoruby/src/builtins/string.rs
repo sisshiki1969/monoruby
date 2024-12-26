@@ -98,7 +98,7 @@ pub(super) fn init(globals: &mut Globals) {
         .set_ivar(
             val,
             IdentId::_NAME,
-            Value::string_from_str("#<Encoding:ASCII-8BIT>"),
+            Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"),
         )
         .unwrap();
     globals
