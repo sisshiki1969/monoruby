@@ -509,7 +509,7 @@ impl RValue {
     }
 
     fn regexp_tos(&self) -> String {
-        format!("/{}/", self.as_regex().as_str())
+        format!("(?:{})", self.as_regex().as_str())
     }
 
     fn range_debug(&self, store: &Store) -> String {
