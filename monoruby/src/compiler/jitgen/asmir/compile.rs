@@ -347,7 +347,7 @@ impl Codegen {
                 let return_addr = self.binop_cached(store, callee_fid, recv_class);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
-            AsmInst::SendCached {
+            AsmInst::Send {
                 callid,
                 callee_fid,
                 recv_class,

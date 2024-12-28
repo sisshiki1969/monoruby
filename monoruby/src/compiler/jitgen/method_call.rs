@@ -243,7 +243,7 @@ impl BBContext {
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
+                self.send(ir, store, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
             }
             FuncKind::ISeq(iseq) => {
@@ -357,7 +357,7 @@ impl BBContext {
                     return Some(None);
                 } else {
                     let evict = ir.new_evict();
-                    self.send_cached(ir, store, pc, callid, fid, recv_class, evict);
+                    self.send(ir, store, pc, callid, fid, recv_class, evict);
                     return Some(Some(evict));
                 }
             }
@@ -369,7 +369,7 @@ impl BBContext {
     /// ### in
     /// rdi: receiver: Value
     ///
-    fn send_cached(
+    fn send(
         &mut self,
         ir: &mut AsmIr,
         store: &Store,
@@ -388,7 +388,7 @@ impl BBContext {
         self.clear();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
-        ir.push(AsmInst::SendCached {
+        ir.push(AsmInst::Send {
             callid,
             callee_fid,
             recv_class,

@@ -945,7 +945,7 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Send cached method
+    /// Send method
     ///
     /// ### in
     /// - rdi: receiver: Value
@@ -954,7 +954,7 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - r15
     ///
-    SendCached {
+    Send {
         callid: CallSiteId,
         recv_class: ClassId,
         callee_fid: FuncId,

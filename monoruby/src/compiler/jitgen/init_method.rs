@@ -27,10 +27,7 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        self.test_heap_frame();
-        monoasm! { &mut self.jit,
-            jnz l1;
-        }
+        self.branch_if_heap_frame(l1);
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num;
         if clear_len > 2 {

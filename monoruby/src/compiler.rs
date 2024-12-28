@@ -569,9 +569,15 @@ impl Codegen {
         );
     }
 
-    fn test_heap_frame(&mut self) {
+    ///
+    /// Test whether the current local frame is on the heap.
+    ///
+    /// if the frame is on the heap, jump to *label*.
+    ///
+    fn branch_if_heap_frame(&mut self, label: DestLabel) {
         monoasm! { &mut self.jit,
             testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            jnz label;
         }
     }
 

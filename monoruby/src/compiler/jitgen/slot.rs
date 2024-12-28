@@ -7,6 +7,7 @@ pub(crate) struct SlotContext {
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
     local_num: usize,
+    /// minimal length of ivar table for *self*.
     pub self_ivar_len: usize,
 }
 
@@ -804,9 +805,6 @@ impl BBContext {
 
     ///
     /// Clear slots above *next_sp*.
-    ///
-    /// ### destroy
-    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn clear(&mut self) {
         let sp = self.next_sp;
