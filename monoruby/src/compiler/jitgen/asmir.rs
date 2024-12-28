@@ -452,7 +452,7 @@ impl AsmIr {
         cached_version: usize,
         deopt: AsmDeopt,
     ) {
-        let fdst = bbctx.store_new_both_float(self, dst);
+        let fdst = bbctx.store_new_both_float(dst);
         self.push(AsmInst::LoadFloatConstant {
             fdst,
             f,

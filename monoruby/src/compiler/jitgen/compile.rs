@@ -36,7 +36,7 @@ impl JitContext {
                 CompileResult::ExitLoop => break,
             }
 
-            bbctx.clear(&mut ir);
+            bbctx.clear();
             bbctx.sp = bbctx.next_sp;
         }
 
@@ -123,7 +123,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         if let Some(bb) = self.target_ctx.remove(&bbid) {
             Some(bb)
-        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
+        } else if let Some(bb) = self.incoming_context(func, bbid) {
             self.gen_continuation(ir);
             Some(bb)
         } else {
@@ -136,7 +136,7 @@ impl JitContext {
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.label();
             self.new_continue(func, end, next_bbid, bbctx, label);
-            if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
+            if let Some(target_ctx) = self.incoming_context(func, next_bbid) {
                 self.gen_continuation(ir);
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }
@@ -169,19 +169,19 @@ impl JitContext {
                 }
             }
             TraceIr::Integer(dst, i) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 bbctx.store_concrete_value(dst, Value::i32(i));
             }
             TraceIr::Symbol(dst, id) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 bbctx.store_concrete_value(dst, Value::symbol(id));
             }
             TraceIr::Nil(dst) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 bbctx.store_concrete_value(dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 if val.is_packed_value() || val.is_float() {
                     bbctx.store_concrete_value(dst, val);
                 } else {
@@ -192,18 +192,18 @@ impl JitContext {
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 bbctx.write_back_range(ir, args, pos_num as u16);
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 ir.new_array(bbctx, callid);
                 bbctx.reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { dst, func_id } => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 ir.new_lambda(bbctx, func_id);
                 bbctx.rax2acc(ir, dst);
             }
             TraceIr::Hash { dst, args, len } => {
                 bbctx.write_back_range(ir, args, len * 2);
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 ir.new_hash(bbctx, args, len as _);
                 bbctx.rax2acc(ir, dst);
             }
@@ -214,13 +214,13 @@ impl JitContext {
                 exclude_end,
             } => {
                 bbctx.write_back_slots(ir, &[start, end]);
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 ir.new_range(bbctx, pc, start, end, exclude_end);
                 bbctx.rax2acc(ir, dst);
             }
 
             TraceIr::LoadConst(dst, id) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
 
                 if let Some(cache) = &store[id].cache {
                     let base_slot = store[id].base;
@@ -242,11 +242,11 @@ impl JitContext {
                 ir.push(AsmInst::StoreConstant { id, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                bbctx.unlink(ir, ret);
+                bbctx.unlink(ret);
                 ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                bbctx.unlink(ir, ret);
+                bbctx.unlink(ret);
                 ir.block_arg(bbctx, pc, ret, outer);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
@@ -291,12 +291,12 @@ impl JitContext {
                 bbctx.jit_store_gvar(ir, name, val);
             }
             TraceIr::LoadSvar { dst, id } => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 ir.load_svar(bbctx, id);
                 bbctx.rax2acc(ir, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 if !dst.is_self() {
                     ir.push(AsmInst::LoadDynVar { src });
                     bbctx.rax2acc(ir, dst);
@@ -308,14 +308,14 @@ impl JitContext {
             }
             TraceIr::Not { dst, src, .. } => {
                 if bbctx.is_truthy(src) {
-                    bbctx.unlink(ir, dst);
+                    bbctx.unlink(dst);
                     bbctx.store_concrete_value(dst, Value::bool(false));
                 } else if bbctx.is_falsy(src) {
-                    bbctx.unlink(ir, dst);
+                    bbctx.unlink(dst);
                     bbctx.store_concrete_value(dst, Value::bool(true));
                 } else {
                     bbctx.fetch_for_gpr(ir, src, GP::Rdi);
-                    bbctx.unlink(ir, dst);
+                    bbctx.unlink(dst);
                     ir.push(AsmInst::Not);
                     bbctx.rax2acc(ir, dst);
                 }
@@ -339,7 +339,7 @@ impl JitContext {
             TraceIr::FUnOp { kind, dst, src } => {
                 let deopt = ir.new_deopt(bbctx, pc);
                 let fsrc = bbctx.fetch_float_for_xmm(ir, src, deopt);
-                let dst = bbctx.xmm_write(ir, dst);
+                let dst = bbctx.xmm_write(dst);
                 ir.xmm_move(fsrc, dst);
                 ir.push(AsmInst::XmmUnOp { kind, dst });
             }
@@ -368,7 +368,7 @@ impl JitContext {
             TraceIr::FBinOp { kind, info } => {
                 let fmode = bbctx.fmode(ir, info, pc);
                 if let Some(dst) = info.dst {
-                    let dst = bbctx.xmm_write(ir, dst);
+                    let dst = bbctx.xmm_write(dst);
                     let using_xmm = bbctx.get_using_xmm();
                     ir.xmm_binop(kind, fmode, dst, using_xmm);
                 }
@@ -391,12 +391,12 @@ impl JitContext {
             TraceIr::FCmp { kind, info } => {
                 if kind != CmpKind::Cmp {
                     let mode = bbctx.fmode(ir, info, pc);
-                    bbctx.unlink(ir, info.dst);
-                    bbctx.clear(ir);
+                    bbctx.unlink(info.dst);
+                    bbctx.clear();
                     ir.push(AsmInst::FloatCmp { kind, mode });
                 } else {
                     bbctx.fetch_binary(ir, info.mode);
-                    bbctx.unlink(ir, info.dst);
+                    bbctx.unlink(info.dst);
                     bbctx.generic_cmp(ir, pc, kind);
                 }
                 bbctx.rax2acc(ir, info.dst);
@@ -430,8 +430,8 @@ impl JitContext {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
                 let mode = bbctx.fmode(ir, info, pc);
-                bbctx.unlink(ir, info.dst);
-                bbctx.clear(ir);
+                bbctx.unlink(info.dst);
+                bbctx.clear();
                 ir.float_cmp_br(mode, kind, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
@@ -445,8 +445,8 @@ impl JitContext {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
                 bbctx.fetch_fixnum_binary(ir, pc, &mode);
-                bbctx.unlink(ir, dst);
-                bbctx.clear(ir);
+                bbctx.unlink(dst);
+                bbctx.clear();
                 ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
@@ -492,7 +492,7 @@ impl JitContext {
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 bbctx.write_back_range(ir, arg, len);
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 let error = ir.new_error(bbctx, pc);
                 ir.concat_str(bbctx, arg, len);
                 ir.handle_error(error);
@@ -500,7 +500,7 @@ impl JitContext {
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 bbctx.write_back_range(ir, arg, len);
-                bbctx.unlink(ir, dst);
+                bbctx.unlink(dst);
                 let error = ir.new_error(bbctx, pc);
                 ir.concat_regexp(bbctx, arg, len);
                 ir.handle_error(error);
@@ -512,7 +512,7 @@ impl JitContext {
             } => {
                 bbctx.fetch_for_gpr(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    bbctx.unlink(ir, SlotId(reg));
+                    bbctx.unlink(SlotId(reg));
                 }
                 ir.expand_array(bbctx, dst, len);
             }

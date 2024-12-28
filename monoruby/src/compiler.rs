@@ -70,7 +70,7 @@ pub(crate) enum GP {
     Rsp = 4,
     Rsi = 6,
     Rdi = 7,
-    R8 = 8,
+    //R8 = 8,
     //R9 = 9,
     R13 = 13,
     R15 = 15,

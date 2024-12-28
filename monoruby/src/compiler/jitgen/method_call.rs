@@ -55,8 +55,8 @@ impl BBContext {
 
         ir.set_binop_arguments(store, self, fid, mode);
 
-        self.unlink(ir, dst);
-        self.clear(ir);
+        self.unlink(dst);
+        self.clear();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
         ir.push(AsmInst::BinopCached {
@@ -324,7 +324,7 @@ impl BBContext {
                             }
                             TraceIr::LoadIvar(dst, _name, cache) => {
                                 if let Some((cached_class, cached_ivarid)) = cache {
-                                    self.unlink(ir, dst);
+                                    self.unlink(dst);
                                     ir.inline_stack2reg(SlotId(0), GP::Rdi);
                                     ir.guard_class(
                                         &mut bbctx,
@@ -384,8 +384,8 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         ir.xmm_save(using_xmm);
         ir.set_arguments(store, self, callid, callee_fid, pc);
-        self.unlink(ir, store[callid].dst);
-        self.clear(ir);
+        self.unlink(store[callid].dst);
+        self.clear();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
         ir.push(AsmInst::SendCached {

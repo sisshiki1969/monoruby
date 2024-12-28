@@ -89,7 +89,7 @@ fn math_sqrt(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
-        let fret = bb.xmm_write_enc(ir, dst);
+        let fret = bb.xmm_write_enc(dst);
         ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
@@ -115,7 +115,7 @@ fn math_cos(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ir, ret);
+        let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
@@ -149,7 +149,7 @@ fn math_sin(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ir, ret);
+        let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);

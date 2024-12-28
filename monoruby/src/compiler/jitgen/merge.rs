@@ -23,7 +23,7 @@ impl JitContext {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("  backedge_write_back {_src_idx}->{:?}", bbid);
                 let mut ir = AsmIr::new();
-                bbctx.remove_unused(&mut ir, &unused);
+                bbctx.remove_unused(&unused);
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 self.bridges.push((ir, branch_dest, bbid));
             }
@@ -35,7 +35,6 @@ impl JitContext {
     ///
     pub(super) fn incoming_context(
         &mut self,
-        ir: &mut AsmIr,
         func: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
@@ -43,7 +42,7 @@ impl JitContext {
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {:?}", bbid);
-            self.incoming_context_loop(ir, func, bbid)
+            self.incoming_context_loop(func, bbid)
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {:?}", bbid);
@@ -84,12 +83,7 @@ impl JitContext {
     ///                           bbid
     /// ```
     ///
-    fn incoming_context_loop(
-        &mut self,
-        ir: &mut AsmIr,
-        func: &ISeqInfo,
-        bbid: BasicBlockId,
-    ) -> Option<BBContext> {
+    fn incoming_context_loop(&mut self, func: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
         let (use_set, unused) = self.loop_info(bbid);
@@ -108,16 +102,16 @@ impl JitContext {
                 LinkMode::Stack => {}
                 LinkMode::ConcreteValue(v) => {
                     if v.is_float() {
-                        bbctx.store_new_xmm(ir, slot);
+                        bbctx.store_new_xmm(slot);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    bbctx.store_xmm(ir, slot, r);
+                    bbctx.store_xmm(slot, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    bbctx.store_both(ir, slot, r, Guarded::Value);
+                    bbctx.store_both(slot, r, Guarded::Value);
                 }
-                LinkMode::Accumulator | LinkMode::Alias(_) => unreachable!(),
+                LinkMode::Accumulator => unreachable!(),
             };
         }
         #[cfg(feature = "jit-debug")]
@@ -184,7 +178,7 @@ impl JitContext {
                 ));
             } else {
                 let mut ir = AsmIr::new();
-                bbctx.remove_unused(&mut ir, unused);
+                bbctx.remove_unused(unused);
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 self.bridges.push((ir, branch_dest, bbid));
             }
@@ -198,9 +192,9 @@ impl BBContext {
     ///
     /// Clear slots that are not to be used.
     ///
-    fn remove_unused(&mut self, ir: &mut AsmIr, unused: &[SlotId]) {
+    fn remove_unused(&mut self, unused: &[SlotId]) {
         for r in unused {
-            self.unlink(ir, *r);
+            self.unlink(*r);
         }
     }
 
@@ -262,12 +256,12 @@ impl BBContext {
                     let deopt = ir.new_deopt(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
                     ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
-                    self.store_both(ir, slot, r, guarded);
+                    self.store_both(slot, r, guarded);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
                 (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
                     if let Some(f) = l.try_float() {
-                        self.store_xmm(ir, slot, r);
+                        self.store_xmm(slot, r);
                         ir.f64toxmm(f, r);
                     } else {
                         unreachable!()
@@ -281,7 +275,7 @@ impl BBContext {
     /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Xmm.
     fn to_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm) {
         if self.is_xmm_vacant(r) {
-            self.store_xmm(ir, slot, r);
+            self.store_xmm(slot, r);
             ir.xmm_move(l, r);
         } else {
             self.xmm_swap(ir, l, r);
@@ -291,7 +285,7 @@ impl BBContext {
     /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Both.
     fn to_both(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
         if self.is_xmm_vacant(r) {
-            self.store_both(ir, slot, r, guarded);
+            self.store_both(slot, r, guarded);
             ir.xmm_move(l, r);
         } else {
             self.xmm_swap(ir, l, r);

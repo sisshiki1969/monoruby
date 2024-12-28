@@ -487,20 +487,20 @@ impl BBContext {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            self.clear(ir);
-            if let Some(acc) = self.clear_r15(ir)
+            self.clear();
+            if let Some(acc) = self.clear_r15()
                 && acc < self.sp
                 && acc != dst
             {
                 ir.acc2stack(acc);
             }
-            self.store_r15(ir, dst, guarded);
+            self.store_r15(dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
     }
 
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.clear_r15(ir)
+        if let Some(slot) = self.clear_r15()
             && slot < self.sp
         {
             ir.acc2stack(slot);
@@ -621,10 +621,6 @@ enum LinkMode {
     ///
     Both(Xmm),
     ///
-    /// Alias of *SlotId*.
-    ///
-    Alias(SlotId),
-    ///
     /// Concrete value..
     ///
     ConcreteValue(Value),
@@ -660,8 +656,7 @@ impl MergeContext {
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
-        let mut ir = AsmIr::new();
-        unused.iter().for_each(|reg| self.unlink(&mut ir, *reg));
+        unused.iter().for_each(|reg| self.unlink(*reg));
     }
 }
 
