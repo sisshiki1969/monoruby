@@ -42,7 +42,7 @@ fn main() {
     )
     .unwrap();
     let dummy_fid = monoruby::bytecode_compile_script(&mut globals, parse_result).unwrap();
-    let meta = globals.store[dummy_fid].meta();
+    let meta = globals[dummy_fid].meta();
     let dummy_outer = Lfp::heap_frame(globals.main_object, meta);
 
     let binding = Binding::from_outer(dummy_outer);

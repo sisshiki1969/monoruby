@@ -131,18 +131,18 @@ pub struct Globals {
     dumped_bc: usize,
 }
 
-/*impl std::ops::Index<FuncId> for Globals {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.store[index]
+impl std::ops::Deref for Globals {
+    type Target = Store;
+    fn deref(&self) -> &Self::Target {
+        &self.store
     }
 }
 
-impl std::ops::IndexMut<FuncId> for Globals {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.store[index]
+impl std::ops::DerefMut for Globals {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.store
     }
-}*/
+}
 
 impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
@@ -184,12 +184,13 @@ impl Globals {
         };
 
         let mut object_class =
-            globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
-        let basic_object = globals.define_builtin_class_by_str(
+            globals.define_builtin_class("Object", OBJECT_CLASS, None, OBJECT_CLASS, ObjTy::OBJECT);
+        let basic_object = globals.define_builtin_class(
             "BasicObject",
             BASIC_OBJECT_CLASS,
             None,
             OBJECT_CLASS,
+            ObjTy::OBJECT,
         );
         object_class.set_superclass(Some(basic_object));
         assert_eq!(

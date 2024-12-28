@@ -932,9 +932,11 @@ impl Executor {
                     }
                     None => globals.store.object_class(),
                 };
-                globals
-                    .store
-                    .define_class(name, Some(superclass), parent, is_module == 1)
+                if is_module == 1 {
+                    globals.define_module_with_identid(name, parent)
+                } else {
+                    globals.define_class_with_identid(name, Some(superclass), parent)
+                }
             }
         };
         self.push_class_context(self_val.id());

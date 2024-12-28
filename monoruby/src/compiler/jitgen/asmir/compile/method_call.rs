@@ -653,7 +653,7 @@ impl Codegen {
             movq rcx, [r14 - (conv(args))];
             testq rcx, 0b111;
             jnz  exit;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  exit;
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);

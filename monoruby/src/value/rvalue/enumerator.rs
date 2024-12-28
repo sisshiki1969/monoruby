@@ -42,7 +42,7 @@ impl EnumeratorInner {
 
 impl Enumerator {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::ENUMERATOR));
+        assert_eq!(val.ty(), Some(ObjTy::ENUMERATOR));
         Self(val)
     }
 
@@ -110,7 +110,7 @@ pub struct Generator(Value);
 
 impl Generator {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::GENERATOR));
+        assert_eq!(val.ty(), Some(ObjTy::GENERATOR));
         Self(val)
     }
 }

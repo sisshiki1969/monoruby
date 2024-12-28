@@ -10,11 +10,7 @@ static YIELDER_INIT: Once = Once::new();
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_instance_ty(
-        "Enumerator",
-        ENUMERATOR_CLASS,
-        ObjKind::ENUMERATOR,
-    );
+    globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS, ObjTy::ENUMERATOR);
     globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
@@ -23,21 +19,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
 
-    let yielder = globals.define_class_by_str(
-        "Yielder",
-        globals.store[ARRAY_CLASS].get_module(),
-        ENUMERATOR_CLASS,
-    );
+    let array_class = globals[ARRAY_CLASS].get_module();
+    let yielder = globals.define_class("Yielder", array_class, ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
     globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
     globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
 
-    globals.define_builtin_class_with_instance_ty(
+    let object_class = globals.object_class();
+    globals.define_builtin_class(
         "Generator",
         GENERATOR_CLASS,
-        globals.store.object_class(),
+        object_class,
         ENUMERATOR_CLASS,
-        ObjKind::GENERATOR,
+        ObjTy::GENERATOR,
     );
     globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new, 0);
     globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);

@@ -9,7 +9,7 @@ use chrono::{
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_instance_ty("Time", TIME_CLASS, ObjKind::TIME);
+    globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
     globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 0, false);
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,
@@ -290,7 +290,7 @@ fn sub(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
     let rhs = match rhs_rv.try_rvalue().unwrap().ty() {
-        ObjKind::TIME => rhs_rv.as_time().clone(),
+        ObjTy::TIME => rhs_rv.as_time().clone(),
         _ => {
             return Err(MonorubyErr::method_not_found(IdentId::_SUB, self_));
         }

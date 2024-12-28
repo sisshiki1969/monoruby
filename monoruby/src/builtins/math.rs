@@ -6,13 +6,13 @@ use num::ToPrimitive;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let klass = globals.define_module("Math").id();
+    let klass = globals.define_toplevel_module("Math").id();
     let standarderr = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("StandardError"))
         .unwrap()
         .as_class();
-    globals.define_class_by_str("DomainError", standarderr, klass);
+    globals.define_class("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
     globals.define_builtin_module_inline_func(klass, "cos", cos, Box::new(math_cos), 1);

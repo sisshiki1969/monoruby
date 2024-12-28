@@ -10,7 +10,7 @@ impl Module {
 
     pub(crate) fn is_module(&self) -> bool {
         match self.0.try_rvalue() {
-            Some(rvalue) => rvalue.ty() == ObjKind::MODULE,
+            Some(rvalue) => rvalue.ty() == ObjTy::MODULE,
             None => false,
         }
     }

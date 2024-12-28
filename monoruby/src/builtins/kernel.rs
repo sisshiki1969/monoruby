@@ -8,7 +8,7 @@ use std::{io::Write, mem::transmute};
 //
 
 pub(super) fn init(globals: &mut Globals) -> Module {
-    let klass = globals.define_module("Kernel");
+    let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(object_nil), 0);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
@@ -324,7 +324,11 @@ fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().class();
-    let i = globals.store[class_id].instance_ty();
+    let i = if let Some(ty) = globals.store[class_id].instance_ty() {
+        ty.get()
+    } else {
+        0
+    };
     Ok(Value::integer(i as _))
 }
 

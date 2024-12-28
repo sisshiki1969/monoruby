@@ -7,12 +7,12 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_with_instance_ty(
+    globals.define_builtin_class(
         "Complex",
         COMPLEX_CLASS,
         numeric,
         OBJECT_CLASS,
-        ObjKind::COMPLEX,
+        ObjTy::COMPLEX,
     );
     globals.define_builtin_func(COMPLEX_CLASS, "==", eq, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "!=", ne, 1);

@@ -7,7 +7,7 @@ pub struct Hashmap(Value);
 
 impl Hashmap {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::HASH));
+        assert_eq!(val.ty(), Some(ObjTy::HASH));
         Self(val)
     }
 
@@ -249,14 +249,14 @@ impl Hash for HashKey {
             None => self.0.hash(state),
             Some(lhs) => unsafe {
                 match lhs.ty() {
-                    ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
-                    ObjKind::BIGNUM => lhs.as_bignum().hash(state),
-                    ObjKind::FLOAT => lhs.as_float().to_bits().hash(state),
-                    ObjKind::STRING => lhs.as_bytes().hash(state),
-                    ObjKind::ARRAY => lhs.as_array().hash(state),
-                    ObjKind::RANGE => lhs.as_range().hash(state),
-                    ObjKind::HASH => lhs.as_hashmap().hash(state),
-                    //ObjKind::METHOD => lhs.method().hash(state),
+                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
+                    ObjTy::BIGNUM => lhs.as_bignum().hash(state),
+                    ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
+                    ObjTy::STRING => lhs.as_bytes().hash(state),
+                    ObjTy::ARRAY => lhs.as_array().hash(state),
+                    ObjTy::RANGE => lhs.as_range().hash(state),
+                    ObjTy::HASH => lhs.as_hashmap().hash(state),
+                    //ObjTy::METHOD => lhs.method().hash(state),
                     _ => self.0.hash(state),
                 }
             },

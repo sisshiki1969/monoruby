@@ -43,21 +43,9 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
-    globals.define_builtin_class_under_obj_with_instance_ty(
-        "NilClass",
-        NIL_CLASS,
-        ObjKind::INVALID,
-    );
-    globals.define_builtin_class_under_obj_with_instance_ty(
-        "TrueClass",
-        TRUE_CLASS,
-        ObjKind::INVALID,
-    );
-    globals.define_builtin_class_under_obj_with_instance_ty(
-        "FalseClass",
-        FALSE_CLASS,
-        ObjKind::INVALID,
-    );
+    globals.define_builtin_class_under_obj("NilClass", NIL_CLASS, None);
+    globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS, None);
+    globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS, None);
     module::init(globals);
     class::init(globals);
     let kernel = kernel::init(globals);
@@ -83,7 +71,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     binding::init(globals);
     dir::init(globals);
     main_object::init(globals);
-    globals.store.object_class().include_module(kernel).unwrap();
+    globals.object_class().include_module(kernel).unwrap();
 }
 
 #[derive(Debug, Clone, Copy)]

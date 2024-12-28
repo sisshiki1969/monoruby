@@ -25,13 +25,10 @@ impl std::ops::IndexMut<SlotId> for SlotContext {
 
 impl std::fmt::Debug for SlotContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s: String = self
-            .slots
-            .iter()
-            .enumerate()
-            .map(|(i, state)| format!("[%{i}: {:?}] ", state))
-            .collect();
-        write!(f, "[{s}]")
+        for (i, state) in self.slots.iter().enumerate() {
+            write!(f, "\n[%{i}: {:?}]", state)?;
+        }
+        Ok(())
     }
 }
 
@@ -631,12 +628,33 @@ impl Liveness {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default)]
 pub(crate) struct SlotState {
     link: LinkMode,
     guarded: Guarded,
     alias: Vec<SlotId>,
     is_used: IsUsed,
+}
+
+impl std::fmt::Debug for SlotState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}{}{}",
+            self.link,
+            match self.guarded {
+                Guarded::Value => "".to_string(),
+                Guarded::Fixnum => " <Fixnum>".to_string(),
+                Guarded::Float => " <Float>".to_string(),
+                Guarded::Class(class) => format!(" <{:?}>", class),
+            },
+            if self.alias.is_empty() {
+                "".to_string()
+            } else {
+                format!(" alias {:?}", self.alias)
+            }
+        )
+    }
 }
 
 impl SlotState {

@@ -10,7 +10,7 @@ mod integer;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let numeric = globals.define_builtin_class_under_obj("Numeric", NUMERIC_CLASS);
+    let numeric = globals.define_builtin_class_under_obj("Numeric", NUMERIC_CLASS, None);
     integer::init(globals, numeric);
     float::init(globals, numeric);
     complex::init(globals, numeric);

@@ -228,7 +228,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq R(r as _), 0b111;
             jnz  label;
-            cmpw [R(r as _) + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+            cmpw [R(r as _) + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  label;
         }
     }

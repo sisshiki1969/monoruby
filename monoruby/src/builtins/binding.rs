@@ -5,11 +5,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_instance_ty(
-        "Binding",
-        BINDING_CLASS,
-        ObjKind::BINDING,
-    );
+    globals.define_builtin_class_under_obj("Binding", BINDING_CLASS, ObjTy::BINDING);
     globals.define_builtin_func(BINDING_CLASS, "local_variables", local_variables, 0);
 }
 

@@ -83,7 +83,10 @@ struct JitContext {
     /// *self* for this loop/method.
     ///
     self_class: ClassId,
-    self_ty: u8,
+    ///
+    /// Object type of *self*.
+    ///
+    self_ty: Option<ObjTy>,
     ///
     /// Source map.
     ///
@@ -123,7 +126,7 @@ impl JitContext {
         codegen: &mut Codegen,
         is_loop: bool,
         self_class: ClassId,
-        self_ty: u8,
+        self_ty: Option<ObjTy>,
     ) -> Self {
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
@@ -172,7 +175,7 @@ impl JitContext {
             total_reg_num,
             local_num,
             self_class: NIL_CLASS,
-            self_ty: ObjKind::INVALID,
+            self_ty: None,
             sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
@@ -380,7 +383,7 @@ impl BBContextInner {
 pub(crate) struct BBContext {
     inner: BBContextInner,
     self_class: ClassId,
-    self_ty: u8,
+    self_ty: Option<ObjTy>,
 }
 
 impl std::ops::Deref for BBContext {

@@ -90,7 +90,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn ty(&self) -> Option<u8> {
+    pub(crate) fn ty(&self) -> Option<ObjTy> {
         self.try_rvalue().map(|rv| rv.ty())
     }
 
@@ -619,7 +619,7 @@ impl Value {
         if let Some(f) = self.try_flonum() {
             return Some(f);
         } else if let Some(rv) = self.try_rvalue() {
-            if rv.ty() == ObjKind::FLOAT {
+            if rv.ty() == ObjTy::FLOAT {
                 return Some(unsafe { rv.as_float() });
             }
         }
@@ -627,7 +627,7 @@ impl Value {
     }
 
     pub fn try_complex(&self) -> Option<&ComplexInner> {
-        if self.ty()? == ObjKind::COMPLEX {
+        if self.ty()? == ObjTy::COMPLEX {
             Some(unsafe { self.rvalue().as_complex() })
         } else {
             None
@@ -635,14 +635,9 @@ impl Value {
     }
 
     pub fn as_complex(&self) -> &ComplexInner {
-        assert_eq!(Some(ObjKind::COMPLEX), self.ty());
+        assert_eq!(Some(ObjTy::COMPLEX), self.ty());
         unsafe { self.rvalue().as_complex() }
     }
-
-    /*fn as_complex_mut(&mut self) -> &mut ComplexInner {
-        assert_eq!(ObjKind::COMPLEX, self.rvalue().ty());
-        unsafe { self.rvalue_mut().as_complex_mut() }
-    }*/
 
     fn is_symbol(&self) -> bool {
         self.id() & 0xff == TAG_SYMBOL
@@ -661,17 +656,17 @@ impl Value {
     }
 
     fn as_module_inner(&self) -> &ModuleInner {
-        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        assert!(self.rvalue().ty() == ObjTy::MODULE || self.rvalue().ty() == ObjTy::CLASS);
         unsafe { self.rvalue().as_module() }
     }
 
     fn as_module_inner_mut(&mut self) -> &mut ModuleInner {
-        assert!(self.rvalue().ty() == ObjKind::MODULE || self.rvalue().ty() == ObjKind::CLASS);
+        assert!(self.rvalue().ty() == ObjTy::MODULE || self.rvalue().ty() == ObjTy::CLASS);
         unsafe { self.rvalue_mut().as_module_mut() }
     }
 
     pub(crate) fn as_array(self) -> Array {
-        assert_eq!(self.ty(), Some(ObjKind::ARRAY));
+        assert_eq!(self.ty(), Some(ObjTy::ARRAY));
         Array::new_unchecked(self)
     }
 
@@ -679,19 +674,19 @@ impl Value {
     /// Get a reference of underlying array from `self`.
     ///
     fn as_array_inner(&self) -> &ArrayInner {
-        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
+        assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
         self.rvalue().as_array()
     }
 
     fn as_array_inner_mut(&mut self) -> &mut ArrayInner {
-        assert_eq!(ObjKind::ARRAY, self.rvalue().ty());
+        assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
         self.rvalue_mut().as_array_mut()
     }
 
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::ARRAY => Some(self.as_array()),
+            ObjTy::ARRAY => Some(self.as_array()),
             _ => None,
         }
     }
@@ -763,7 +758,7 @@ impl Value {
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::EXCEPTION => Some(rv.as_exception()),
+            ObjTy::EXCEPTION => Some(rv.as_exception()),
             _ => None,
         }
     }
@@ -771,38 +766,38 @@ impl Value {
     pub(crate) fn is_hash(self) -> Option<Hashmap> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::HASH => Some(Hashmap::new(self)),
+            ObjTy::HASH => Some(Hashmap::new(self)),
             _ => None,
         }
     }
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
-        assert_eq!(ObjKind::HASH, self.rvalue().ty());
+        assert_eq!(ObjTy::HASH, self.rvalue().ty());
         self.rvalue().as_hashmap()
     }
 
     pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
-        assert_eq!(ObjKind::HASH, self.rvalue().ty());
+        assert_eq!(ObjTy::HASH, self.rvalue().ty());
         self.rvalue_mut().as_hashmap_mut()
     }
 
     pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::REGEXP => Some(rv.as_regex()),
+            ObjTy::REGEXP => Some(rv.as_regex()),
             _ => None,
         }
     }
 
     pub(crate) fn is_class_or_module(&self) -> Option<Module> {
         match self.try_rvalue()?.ty() {
-            ObjKind::CLASS | ObjKind::MODULE => Some(Module::new_unchecked(*self)),
+            ObjTy::CLASS | ObjTy::MODULE => Some(Module::new_unchecked(*self)),
             _ => None,
         }
     }
 
     pub(crate) fn is_class(&self) -> Option<Module> {
-        if self.try_rvalue()?.ty() == ObjKind::CLASS {
+        if self.try_rvalue()?.ty() == ObjTy::CLASS {
             Some(Module::new_unchecked(*self))
         } else {
             None
@@ -810,7 +805,7 @@ impl Value {
     }
 
     pub(crate) fn is_module(&self) -> Option<Module> {
-        if self.try_rvalue()?.ty() == ObjKind::MODULE {
+        if self.try_rvalue()?.ty() == ObjTy::MODULE {
             Some(Module::new_unchecked(*self))
         } else {
             None
@@ -820,7 +815,7 @@ impl Value {
     pub(crate) fn as_class(&self) -> Module {
         assert!(matches!(
             self.ty(),
-            Some(ObjKind::CLASS) | Some(ObjKind::MODULE)
+            Some(ObjTy::CLASS) | Some(ObjTy::MODULE)
         ));
         Module::new_unchecked(*self)
     }
@@ -831,14 +826,14 @@ impl Value {
 
     pub(crate) fn as_time(&self) -> &TimeInner {
         match self.rvalue().ty() {
-            ObjKind::TIME => self.rvalue().as_time(),
+            ObjTy::TIME => self.rvalue().as_time(),
             _ => unreachable!(),
         }
     }
 
     pub(crate) fn as_time_mut(&mut self) -> &mut TimeInner {
         match self.rvalue().ty() {
-            ObjKind::TIME => self.rvalue_mut().as_time_mut(),
+            ObjTy::TIME => self.rvalue_mut().as_time_mut(),
             _ => unreachable!(),
         }
     }
@@ -846,7 +841,7 @@ impl Value {
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
-                ObjKind::RANGE => Some(self.rvalue().as_range()),
+                ObjTy::RANGE => Some(self.rvalue().as_range()),
                 _ => None,
             }
         } else {
@@ -857,7 +852,7 @@ impl Value {
     pub(crate) fn is_proc(&self) -> Option<&ProcInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
-                ObjKind::PROC => Some(self.rvalue().as_proc()),
+                ObjTy::PROC => Some(self.rvalue().as_proc()),
                 _ => None,
             }
         } else {
@@ -868,7 +863,7 @@ impl Value {
     pub(crate) fn is_method(&self) -> Option<&MethodInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
-                ObjKind::METHOD => Some(self.rvalue().as_method()),
+                ObjTy::METHOD => Some(self.rvalue().as_method()),
                 _ => None,
             }
         } else {
@@ -976,7 +971,7 @@ impl Value {
     pub(crate) fn try_bytes(&self) -> Option<&StringInner> {
         if let Some(rv) = self.try_rvalue() {
             match rv.ty() {
-                ObjKind::STRING => Some(rv.as_bytes()),
+                ObjTy::STRING => Some(rv.as_bytes()),
                 _ => None,
             }
         } else {
@@ -985,114 +980,114 @@ impl Value {
     }
 
     pub(crate) fn as_bytes(&self) -> &StringInner {
-        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
         self.rvalue().as_bytes()
     }
 
     pub(crate) fn as_bytes_mut(&mut self) -> &mut StringInner {
-        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
         self.rvalue_mut().as_bytes_mut()
     }
 
     pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::STRING => Some(rv.as_bytes()),
+            ObjTy::STRING => Some(rv.as_bytes()),
             _ => None,
         }
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
         self.rvalue().as_str()
     }
 
     pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjKind::STRING => Some(rv.as_str()),
+            ObjTy::STRING => Some(rv.as_str()),
             _ => None,
         }
     }
 
     pub(crate) fn replace_string(&mut self, replace: String) {
-        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
         *self.rvalue_mut().as_bytes_mut() = StringInner::from_string(replace);
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
-        assert_eq!(ObjKind::STRING, self.rvalue().ty());
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
         *self.rvalue_mut().as_bytes_mut() = StringInner::from_str(replace);
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
-        assert_eq!(ObjKind::RANGE, self.rvalue().ty());
+        assert_eq!(ObjTy::RANGE, self.rvalue().ty());
         self.rvalue().as_range()
     }
 
     #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
-        assert_eq!(ObjKind::IO, self.rvalue().ty());
+        assert_eq!(ObjTy::IO, self.rvalue().ty());
         self.rvalue().as_io()
     }
 
     pub(crate) fn as_io_inner_mut(&mut self) -> &mut IoInner {
-        assert_eq!(ObjKind::IO, self.rvalue().ty());
+        assert_eq!(ObjTy::IO, self.rvalue().ty());
         self.rvalue_mut().as_io_mut()
     }
 
     pub(crate) fn as_proc_inner(&self) -> &ProcInner {
-        assert_eq!(ObjKind::PROC, self.rvalue().ty());
+        assert_eq!(ObjTy::PROC, self.rvalue().ty());
         self.rvalue().as_proc()
     }
 
     pub(crate) fn as_proc_inner_mut(&mut self) -> &mut ProcInner {
-        assert_eq!(ObjKind::PROC, self.rvalue().ty());
+        assert_eq!(ObjTy::PROC, self.rvalue().ty());
         self.rvalue_mut().as_proc_mut()
     }
 
     pub fn as_method(&self) -> &MethodInner {
-        assert_eq!(ObjKind::METHOD, self.rvalue().ty());
+        assert_eq!(ObjTy::METHOD, self.rvalue().ty());
         self.rvalue().as_method()
     }
 
     pub fn as_fiber_inner(&self) -> &FiberInner {
-        assert_eq!(ObjKind::FIBER, self.rvalue().ty());
+        assert_eq!(ObjTy::FIBER, self.rvalue().ty());
         unsafe { self.rvalue().as_fiber() }
     }
 
     pub fn as_fiber_inner_mut(&mut self) -> &mut FiberInner {
-        assert_eq!(ObjKind::FIBER, self.rvalue().ty());
+        assert_eq!(ObjTy::FIBER, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_fiber_mut() }
     }
 
     pub fn as_enumerator_inner(&self) -> &EnumeratorInner {
-        assert_eq!(ObjKind::ENUMERATOR, self.rvalue().ty());
+        assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
         unsafe { self.rvalue().as_enumerator() }
     }
 
     pub fn as_enumerator_inner_mut(&mut self) -> &mut EnumeratorInner {
-        assert_eq!(ObjKind::ENUMERATOR, self.rvalue().ty());
+        assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_enumerator_mut() }
     }
 
     pub fn as_generator_inner(&self) -> &GeneratorInner {
-        assert_eq!(ObjKind::GENERATOR, self.rvalue().ty());
+        assert_eq!(ObjTy::GENERATOR, self.rvalue().ty());
         unsafe { self.rvalue().as_generator() }
     }
 
     pub fn as_generator_inner_mut(&mut self) -> &mut GeneratorInner {
-        assert_eq!(ObjKind::GENERATOR, self.rvalue().ty());
+        assert_eq!(ObjTy::GENERATOR, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_generator_mut() }
     }
 
     pub fn as_binding_inner(&self) -> &BindingInner {
-        assert_eq!(ObjKind::BINDING, self.rvalue().ty());
+        assert_eq!(ObjTy::BINDING, self.rvalue().ty());
         unsafe { self.rvalue().as_binding() }
     }
 
     pub fn as_binding_inner_mut(&mut self) -> &mut BindingInner {
-        assert_eq!(ObjKind::BINDING, self.rvalue().ty());
+        assert_eq!(ObjTy::BINDING, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_binding_mut() }
     }
 }

@@ -13,7 +13,7 @@ impl BBContext {
         ir.stack2reg(SlotId(0), GP::Rdi);
         ir.push(AsmInst::LoadIVar {
             ivarid,
-            is_object_ty: self.self_ty == ObjKind::OBJECT,
+            is_object_ty: self.self_ty == Some(ObjTy::OBJECT),
             min_len: self.self_ivar_len,
         });
         self.rax2acc(ir, dst);
@@ -32,7 +32,7 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         ir.push(AsmInst::StoreIVar {
             ivarid,
-            is_object_ty: self.self_ty == ObjKind::OBJECT,
+            is_object_ty: self.self_ty == Some(ObjTy::OBJECT),
             min_len: self.self_ivar_len,
             using_xmm,
         });

@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap()
         .as_class();
     let klass = globals
-        .define_builtin_class_by_str("File", FILE_CLASS, io_class, OBJECT_CLASS)
+        .define_builtin_class("File", FILE_CLASS, io_class, OBJECT_CLASS, ObjTy::IO)
         .id();
     globals.define_builtin_class_func(klass, "write", write, 2);
     globals.define_builtin_class_func(klass, "read", file_read, 1);

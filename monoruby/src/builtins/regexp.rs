@@ -5,10 +5,10 @@ use super::*;
 //
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj_with_instance_ty(
+    globals.define_builtin_class_under_obj(
         "Regexp",
         REGEXP_CLASS,
-        ObjKind::REGEXP,
+        ObjTy::REGEXP,
     );
     globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);

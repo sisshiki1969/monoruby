@@ -7,12 +7,12 @@ use std::ops::{BitAnd, BitOr, BitXor};
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_with_instance_ty(
+    globals.define_builtin_class(
         "Integer",
         INTEGER_CLASS,
         numeric,
         OBJECT_CLASS,
-        ObjKind::INVALID,
+        None,
     );
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);

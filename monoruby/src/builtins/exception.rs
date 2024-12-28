@@ -5,15 +5,12 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let exception_class = globals.define_builtin_class_under_obj_with_instance_ty(
-        "Exception",
-        EXCEPTION_CLASS,
-        ObjKind::EXCEPTION,
-    );
-    let standarderr = globals.define_class_by_str("StandardError", exception_class, OBJECT_CLASS);
+    let exception_class =
+        globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS, ObjTy::EXCEPTION);
+    let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
 
     let system_exit_id = globals
-        .define_class_by_str("SystemExit", exception_class, OBJECT_CLASS)
+        .define_class("SystemExit", exception_class, OBJECT_CLASS)
         .id();
     globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
     globals.define_attr_reader(
@@ -22,39 +19,39 @@ pub(super) fn init(globals: &mut Globals) {
         Visibility::Public,
     );
 
-    globals.define_class_by_str("NoMemoryError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("SecurityError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("SignalException", standarderr, OBJECT_CLASS);
+    globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
+    globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
+    globals.define_class("SignalException", standarderr, OBJECT_CLASS);
 
-    let scripterr = globals.define_class_by_str("ScriptError", standarderr, OBJECT_CLASS);
-    let loaderr = globals.define_class_by_str("LoadError", scripterr, OBJECT_CLASS);
+    let scripterr = globals.define_class("ScriptError", standarderr, OBJECT_CLASS);
+    let loaderr = globals.define_class("LoadError", scripterr, OBJECT_CLASS);
     globals.define_builtin_func(loaderr.id(), "path", loaderror_path, 0);
-    globals.define_class_by_str("SyntaxError", scripterr, OBJECT_CLASS);
-    globals.define_class_by_str("NotImplementedError", scripterr, OBJECT_CLASS);
+    globals.define_class("SyntaxError", scripterr, OBJECT_CLASS);
+    globals.define_class("NotImplementedError", scripterr, OBJECT_CLASS);
 
-    globals.define_class_by_str("ArgumentError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("EncodingError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("FiberError", standarderr, OBJECT_CLASS);
-    let ioerr = globals.define_class_by_str("IOError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("EOFError", ioerr, OBJECT_CLASS);
+    globals.define_class("ArgumentError", standarderr, OBJECT_CLASS);
+    globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
+    globals.define_class("FiberError", standarderr, OBJECT_CLASS);
+    let ioerr = globals.define_class("IOError", standarderr, OBJECT_CLASS);
+    globals.define_class("EOFError", ioerr, OBJECT_CLASS);
 
-    let indexerr = globals.define_class_by_str("IndexError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("KeyError", indexerr, OBJECT_CLASS);
-    globals.define_class_by_str("StopIteration", indexerr, OBJECT_CLASS);
+    let indexerr = globals.define_class("IndexError", standarderr, OBJECT_CLASS);
+    globals.define_class("KeyError", indexerr, OBJECT_CLASS);
+    globals.define_class("StopIteration", indexerr, OBJECT_CLASS);
 
-    globals.define_class_by_str("LocalJumpError", standarderr, OBJECT_CLASS);
+    globals.define_class("LocalJumpError", standarderr, OBJECT_CLASS);
 
-    let nameerr = globals.define_class_by_str("NameError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("NoMethodError", nameerr, OBJECT_CLASS);
+    let nameerr = globals.define_class("NameError", standarderr, OBJECT_CLASS);
+    globals.define_class("NoMethodError", nameerr, OBJECT_CLASS);
 
-    let runtimeerr = globals.define_class_by_str("RuntimeError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("FrozenError", runtimeerr, OBJECT_CLASS);
+    let runtimeerr = globals.define_class("RuntimeError", standarderr, OBJECT_CLASS);
+    globals.define_class("FrozenError", runtimeerr, OBJECT_CLASS);
 
-    globals.define_class_by_str("RangeError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("RegexpError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("SystemCallError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("TypeError", standarderr, OBJECT_CLASS);
-    globals.define_class_by_str("ZeroDivisionError", standarderr, OBJECT_CLASS);
+    globals.define_class("RangeError", standarderr, OBJECT_CLASS);
+    globals.define_class("RegexpError", standarderr, OBJECT_CLASS);
+    globals.define_class("SystemCallError", standarderr, OBJECT_CLASS);
+    globals.define_class("TypeError", standarderr, OBJECT_CLASS);
+    globals.define_class("ZeroDivisionError", standarderr, OBJECT_CLASS);
 
     globals.define_builtin_class_funcs_with(
         EXCEPTION_CLASS,
