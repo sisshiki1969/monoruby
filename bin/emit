@@ -24,6 +24,12 @@ target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.bytecode 
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode > /dev/null
 target/release/monoruby benchmark/quick_sort.rb 2> benchmark/quick_sort.bytecode > /dev/null
 target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.bytecode > /dev/null
+
+target/release/monoruby benchmark/plb2/nqueen.rb 2> benchmark/plb2/nqueen.bytecode > /dev/null
+target/release/monoruby benchmark/plb2/sudoku.rb 2> benchmark/plb2/sudoku.bytecode > /dev/null
+target/release/monoruby benchmark/plb2/matmul.rb 2> benchmark/plb2/matmul.bytecode > /dev/null
+target/release/monoruby benchmark/plb2/bedcov.rb 2> benchmark/plb2/bedcov.bytecode > /dev/null
+
 target/release/monoruby ../optcarrot/bin/optcarrot -b ../optcarrot/examples/Lan_Master.nes 2> benchmark/optcarrot.bytecode > /dev/null
 
 cargo build --release && target/release/monoruby benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg

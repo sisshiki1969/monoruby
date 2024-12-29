@@ -814,7 +814,7 @@ impl Codegen {
     ///
     /// ### in
     /// - rdi: lhs:Value
-    /// - rsi: rhs:Value
+    /// - rcx: rhs:Value
     ///
     /// ### out
     /// - rdi: result:Value
@@ -828,7 +828,6 @@ impl Codegen {
         let after = self.jit.label();
         let under = self.jit.label();
         monoasm!( &mut self.jit,
-            movq rcx, rsi;
             sarq rcx, 1;
             js shl;
             cmpq rcx, 64;
@@ -878,7 +877,7 @@ impl Codegen {
     ///
     /// ### in
     /// - rdi: lhs:Value
-    /// - rsi: rhs:Value
+    /// - rcx: rhs:Value
     ///
     /// ### out
     /// - rdi: result:Value
@@ -892,7 +891,6 @@ impl Codegen {
         let after = self.jit.label();
         let under = self.jit.label();
         monoasm!( &mut self.jit,
-            movq rcx, rsi;
             sarq rcx, 1;
             js shr;
             lzcntq rax, rdi;
@@ -917,6 +915,49 @@ impl Codegen {
     }
 
     ///
+    /// gen code for shift-left of integer (lhs must be a Fixnum).
+    ///
+    /// ### in
+    /// - rcx: rhs:Value
+    ///
+    /// ### out
+    /// - rdi: result:Value
+    ///
+    /// ### destroy
+    /// - rax
+    /// - rcx
+    ///
+    pub(crate) fn gen_shl_lhs_imm(&mut self, lhs: i64, deopt: DestLabel) {
+        let shr = self.jit.label();
+        let after = self.jit.label();
+        let under = self.jit.label();
+        let lhs = Value::fixnum(lhs);
+        let lzcnt = lhs.id().leading_zeros();
+        monoasm!( &mut self.jit,
+            sarq rcx, 1;
+            js shr;
+            cmpq rcx, (lzcnt);
+            jgt deopt;
+            movq rdi, (lhs.id() - 1);
+            salq rdi, rcx;
+        after:
+            orq rdi, 1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        shr:
+            movq rdi, (lhs.id());
+            negq rcx;
+            cmpq rcx, 64;
+            jge under;
+            sarq rdi, rcx;
+            jmp after;
+        );
+        self.jit.select_page(0);
+        self.shift_under(under, after);
+    }
+
+    ///
     /// gen code for shift-left of integer (rhs is u8).
     ///
     /// ### in
@@ -929,15 +970,13 @@ impl Codegen {
     /// - rax
     /// - rcx
     ///
-    pub(crate) fn gen_shl_imm(&mut self, imm: u8, deopt: DestLabel) {
-        let imm1 = imm;
-        let imm2 = imm;
+    pub(crate) fn gen_shl_rhs_imm(&mut self, rhs: u8, deopt: DestLabel) {
         monoasm!( &mut self.jit,
             lzcntq rax, rdi;
-            cmpq rax, (imm1);
+            cmpq rax, (rhs);
             jle deopt;
             subq rdi, 1;
-            shlq rdi, (imm2);
+            shlq rdi, (rhs);
             orq rdi, 1;
         );
     }

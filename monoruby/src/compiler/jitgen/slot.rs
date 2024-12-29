@@ -76,6 +76,14 @@ impl SlotContext {
         self.set_both(slot, xmm, Guarded::Float)
     }
 
+    pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
+        if let LinkMode::ConcreteValue(v) = self[slot].link {
+            v.try_fixnum()
+        } else {
+            None
+        }
+    }
+
     pub fn is_u16_literal(&self, slot: SlotId) -> Option<u16> {
         if let LinkMode::ConcreteValue(v) = self[slot].link {
             let i = v.try_fixnum()?;
@@ -202,9 +210,6 @@ impl SlotContext {
     ///
     /// Clear the LinkMode::R15 slot.
     ///
-    /// ### destroy
-    /// - r8
-    ///
     pub(super) fn clear_r15(&mut self) -> Option<SlotId> {
         let res = self.r15;
         if let Some(r) = res {
@@ -220,9 +225,6 @@ impl SlotContext {
     ///
     /// Link the slot *reg* to the given xmm register *xmm*.
     ///
-    /// ### destroy
-    /// - r8
-    ///
     pub(super) fn store_xmm(&mut self, slot: SlotId, xmm: Xmm) {
         self.unlink(slot);
         self.set_xmm(slot, xmm);
@@ -232,9 +234,6 @@ impl SlotContext {
     ///
     /// Link the slot *reg* to a new xmm register.
     ///
-    /// ### destroy
-    /// - r8
-    ///
     pub(super) fn store_new_xmm(&mut self, slot: SlotId) -> Xmm {
         let xmm = self.alloc_xmm();
         self.store_xmm(slot, xmm);
@@ -243,9 +242,6 @@ impl SlotContext {
 
     ///
     /// Link the slot *reg* to both of the stack and the given xmm register *xmm*.
-    ///
-    /// ### destroy
-    /// - r8
     ///
     pub(super) fn store_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
         self.unlink(slot);
@@ -264,9 +260,6 @@ impl SlotContext {
     ///
     /// Link the slot *reg* to both of the stack and a new xmm register.
     ///
-    /// ### destroy
-    /// - r8
-    ///
     fn store_new_both(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
         let x = self.alloc_xmm();
         self.store_both(slot, x, guarded);
@@ -275,9 +268,6 @@ impl SlotContext {
 
     ///
     /// Link the slot *reg* to a concrete value *v*.
-    ///
-    /// ### destroy
-    /// - r8
     ///
     pub(super) fn store_concrete_value(&mut self, slot: SlotId, v: Value) {
         let guarded = Guarded::from_concrete_value(v);
@@ -468,9 +458,6 @@ impl SlotContext {
     ///
     /// *reg* is set to LinkMode::Stack / Guarded::Value.
     ///
-    /// ### destroy
-    /// - r8
-    ///
     pub(crate) fn unlink(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
             match self[slot].link {
@@ -490,9 +477,6 @@ impl SlotContext {
 
     ///
     /// Link the slot *reg* to the accumulator.
-    ///
-    /// ### destroy
-    /// - r8
     ///
     pub(super) fn store_r15(&mut self, slot: impl Into<Option<SlotId>>, guarded: Guarded) {
         if let Some(slot) = slot.into() {
@@ -817,7 +801,7 @@ impl BBContext {
     /// Copy *src* to *dst*.
     ///
     /// ### destroy
-    /// - rax, r8
+    /// - rax
     ///
     pub(in crate::compiler::jitgen) fn copy_slot(
         &mut self,
@@ -854,9 +838,6 @@ impl BBContext {
 
     ///
     /// Allocate new xmm register corresponding to the slot *reg* for read/write f64.
-    ///
-    /// ### destroy
-    /// - r8
     ///
     pub(in crate::compiler::jitgen) fn xmm_write(&mut self, slot: SlotId) -> Xmm {
         match self[slot].link {

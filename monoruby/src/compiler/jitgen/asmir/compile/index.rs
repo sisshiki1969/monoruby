@@ -208,7 +208,6 @@ impl Codegen {
     fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: DestLabel, error: DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
-        let store = self.jit.label();
 
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
@@ -219,9 +218,7 @@ impl Codegen {
             cmpq rax, rsi;
             // upper bound check
             jle  generic;
-            lea  rdi, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-        store:
-            movq [rdi], r15;
+            movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], r15;
         exit:
         };
 
@@ -233,8 +230,8 @@ impl Codegen {
             cmpq rax, rsi;
             jle generic;
             movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-            lea  rdi, [rdi + rsi * 8];
-            jmp  store;
+            movq [rdi + rsi * 8], r15;
+            jmp  exit;
         };
         self.jit.bind_label(generic);
         self.xmm_save(using_xmm);

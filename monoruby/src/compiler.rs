@@ -65,7 +65,7 @@ const COUNT_DEOPT_RECOMPILE: i32 = 5;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
-    //Rcx = 1,
+    Rcx = 1,
     Rdx = 2,
     Rsp = 4,
     Rsi = 6,
