@@ -4,23 +4,6 @@ use super::*;
 
 mod compile;
 
-// ~~~text
-// MethodCall
-//  0   2   4   6    8  10  12  14
-// +---+---+---+---++---+---+---+---+
-// |callid |ret| op||  fid  |   -   |
-// +---+---+---+---++---+---+---+---+
-// InlineCache
-// 16  18  20  22   24  26  28  30
-// +---+---+---+---++---+---+---+---+
-// |pos|arg|rcv| op|| class |version|
-// +---+---+---+---++---+---+---+---+
-// ~~~
-
-//const BC_OFFSET_CACHED_CLASS: usize = 24;
-//const BC_OFFSET_CACHED_VERSION: usize = 28;
-//const BC_OFFSET_CACHED_FUNCID: usize = 8;
-
 pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
 }
@@ -918,6 +901,7 @@ pub(super) enum AsmInst {
         branch_table: Box<[BasicBlockId]>,
     },
 
+    Init(FnInitInfo),
     /// deoptimize
     Deopt(AsmDeopt),
     /// recompile and deoptimize
@@ -1426,6 +1410,7 @@ impl Codegen {
         ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
+        sourcemap: &mut Vec<(BcIndex, usize)>,
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
     ) {
@@ -1479,7 +1464,7 @@ impl Codegen {
             let map = _sourcemap
                 .into_iter()
                 .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
-            ctx.sourcemap.extend(map);
+            sourcemap.extend(map);
         }
     }
 

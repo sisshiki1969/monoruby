@@ -199,6 +199,9 @@ impl Codegen {
                 self.guard_class(r, class, deopt);
             }
 
+            AsmInst::Init(info) => {
+                self.init_func(&info);
+            }
             AsmInst::HandleError(error) => {
                 let error = labels[error];
                 self.handle_error(error);

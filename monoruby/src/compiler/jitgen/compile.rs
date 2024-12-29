@@ -1,7 +1,80 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile_basic_block(
+    pub(super) fn compile(
+        &mut self,
+        store: &Store,
+        iseq_id: ISeqId,
+        position: Option<BytecodePtr>,
+    ) -> Vec<(BasicBlockId, AsmIr)> {
+        let func = &store[iseq_id];
+
+        for (loop_start, loop_end) in func.bb_info.loops() {
+            self.analyse_loop(store, func, *loop_start, *loop_end);
+        }
+
+        let mut bbctx = BBContext::new(&self);
+
+        let mut ir = AsmIr::new();
+        if let Some(pc) = position {
+            // generate class guard of *self* for loop JIT
+            // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
+            let deopt = ir.new_deopt(&bbctx, pc + 1);
+            ir.stack2reg(SlotId::self_(), GP::Rdi);
+            ir.guard_class(&mut bbctx, SlotId::self_(), GP::Rdi, self.self_class, deopt);
+        } else {
+            for i in (1 + self.local_num)..self.total_reg_num {
+                bbctx.store_concrete_value(SlotId(i as u16), Value::nil());
+            }
+            bbctx.set_guard_class(SlotId::self_(), self.self_class);
+            // for method JIT, class of *self* is already checked in an entry stub.
+            match func.trace_ir(store, BcIndex::from(0)) {
+                TraceIr::InitMethod(fn_info) => {
+                    ir.push(AsmInst::Init(fn_info));
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let mut bbir = vec![(BasicBlockId(0), ir)];
+        let start_pos = func.get_pc_index(position);
+
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
+
+        let bb_begin = func.bb_info.get_bb_id(start_pos);
+        let branch_dest = self.label();
+        self.branch_map.insert(
+            bb_begin,
+            vec![BranchEntry {
+                src_idx: BcIndex(0),
+                bbctx,
+                branch_dest,
+                cont: true,
+            }],
+        );
+
+        let bb_end = match func.bb_info.get_loop(bb_begin) {
+            Some((a, b)) => {
+                assert_eq!(a, bb_begin);
+                b
+            }
+            None => BasicBlockId(func.bb_info.len() - 1),
+        };
+        bbir.extend((bb_begin..=bb_end).map(|bbid| {
+            let ir = self.compile_basic_block(store, func, position, bbid);
+            (bbid, ir)
+        }));
+
+        self.backedge_branches(func);
+
+        #[cfg(feature = "emit-cfg")]
+        dump_cfg(func, store, bb_begin, bb_end);
+
+        bbir
+    }
+
+    fn compile_basic_block(
         &mut self,
         store: &Store,
         iseq: &ISeqInfo,
@@ -721,4 +794,78 @@ impl JitContext {
         ir.push(AsmInst::Br(branch_dest));
         self.new_branch(func, bc_pos, dest, bbctx.clone(), branch_dest);
     }
+}
+
+#[cfg(feature = "emit-cfg")]
+fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
+    let mut s = format!(
+        r###"digraph graph_name {{
+  graph [
+    charset = "UTF-8";
+    label = "{}",
+    labelloc = "t",
+    labeljust = "c",
+    bgcolor = "#343434",
+    fontcolor = white,
+    fontsize = 20,
+    rankdir = TB,
+    margin = 0.2,
+    splines = spline,
+    nodesep = 0.8,
+    ranksep = 1.1
+  ];
+
+  node [
+    colorscheme = "accent8"
+    shape = box,
+    style = "solid,filled",
+    fontsize = 16,
+    fontcolor = 5,
+    fontname = "Consolas",
+    color = 5,
+    fillcolor = 4,
+  ];
+
+  edge [
+    style = solid,
+    fontsize = 14,
+    fontcolor = white,
+    fontname = "Migu 1M",
+    color = white,
+    labelfloat = true,
+    labeldistance = 2.5,
+    labelangle = 70
+  ];"###,
+        store.func_description(func.func_id())
+    );
+    s += "\n";
+    for bbid in bb_begin..=bb_end {
+        s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
+        let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
+        for bc in begin..=end {
+            if let Some(inst) = func.trace_ir(store, bc).format(store) {
+                s += "|";
+                let html = html_escape::encode_text(&inst)
+                    .replace('|', "\\|")
+                    .replace('"', "\\\"");
+                s += &format!("{} {}\\l", bc, html);
+            }
+        }
+        s += "}\"\n  ];\n";
+    }
+
+    for bbid in bb_begin..=bb_end {
+        let entry = &func.bb_info[bbid];
+        for succ in &entry.succ {
+            s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
+        }
+    }
+
+    s += "}\n";
+    let path = std::path::PathBuf::from(".cfg");
+    match path.try_exists() {
+        Ok(true) => {}
+        _ => std::fs::create_dir(&path).unwrap(),
+    }
+    std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
 }

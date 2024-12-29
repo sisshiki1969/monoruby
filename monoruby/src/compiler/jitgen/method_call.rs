@@ -267,7 +267,8 @@ impl BBContext {
                     }
 
                     let iseq = &store[iseq];
-                    let mut bbctx = BBContextInner::from_iseq(iseq, self.class_version, recv_class);
+                    let mut bbctx = BBContextInner::from_iseq(iseq, self.class_version);
+                    bbctx.set_guard_class(SlotId::self_(), recv_class);
                     assert_eq!(1, iseq.bb_info.len());
                     let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(0)];
                     for bc_pos in begin..=end {

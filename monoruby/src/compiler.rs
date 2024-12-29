@@ -1100,9 +1100,13 @@ impl Globals {
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
-        let _sourcemap =
-            self.codegen
-                .jit_compile(&self.store, iseq_id, self_value, position, entry_label);
+        let _sourcemap = self.codegen.jit_compile(
+            &self.store,
+            iseq_id,
+            self_value.class(),
+            position,
+            entry_label,
+        );
 
         if self.startup_flag {
             #[cfg(any(feature = "jit-debug", feature = "jit-log"))]

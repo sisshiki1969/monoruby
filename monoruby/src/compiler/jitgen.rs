@@ -88,10 +88,6 @@ struct JitContext {
     ///
     self_ty: Option<ObjTy>,
     ///
-    /// Source map.
-    ///
-    sourcemap: Vec<(BcIndex, usize)>,
-    ///
     /// Information for bridges.
     ///
     bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
@@ -150,7 +146,6 @@ impl JitContext {
             local_num,
             self_class,
             self_ty,
-            sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
             labels,
@@ -176,7 +171,6 @@ impl JitContext {
             local_num,
             self_class: NIL_CLASS,
             self_ty: None,
-            sourcemap: vec![],
             bridges: vec![],
             continuation_bridge: None,
             labels: vec![],
@@ -366,9 +360,9 @@ impl std::ops::DerefMut for BBContextInner {
 }
 
 impl BBContextInner {
-    fn from_iseq(iseq: &ISeqInfo, class_version: u32, self_class: ClassId) -> Self {
+    fn from_iseq(iseq: &ISeqInfo, class_version: u32) -> Self {
         Self {
-            slot_state: SlotContext::from_iseq(iseq, self_class),
+            slot_state: SlotContext::from_iseq(iseq),
             sp: SlotId(iseq.local_num() as u16),
             next_sp: SlotId(iseq.local_num() as u16),
             class_version,
@@ -665,163 +659,44 @@ impl Codegen {
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
-        self_value: Value,
+        self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) -> Vec<(BcIndex, usize)> {
-        self.jit.bind_label(entry_label);
-
         let func = &store[iseq_id];
-        let start_pos = func.get_pc_index(position);
 
-        let self_class = self_value.class();
         let self_ty = store[self_class].instance_ty();
         let mut ctx = JitContext::new(func, self, position.is_some(), self_class, self_ty);
-        for (loop_start, loop_end) in func.bb_info.loops() {
-            ctx.analyse_loop(store, func, *loop_start, *loop_end);
-        }
 
-        let mut bbctx = BBContext::new(&ctx);
+        let bbir = ctx.compile(store, iseq_id, position);
 
-        if let Some(pc) = position {
-            // generate class guard of *self* for loop JIT
-            // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let side_exit = self.gen_deopt(pc + 1, &bbctx);
-            monoasm! { &mut self.jit,
-                movq rdi, [r14 - (LFP_SELF)];
-            }
-            self.guard_class_rdi(self_value.class(), side_exit);
-        } else {
-            for i in (1 + ctx.local_num)..ctx.total_reg_num {
-                bbctx.store_concrete_value(SlotId(i as u16), Value::nil());
-            }
-            // for method JIT, class of *self* is already checked in an entry stub.
-            self.prologue(func, store);
-        }
+        self.jit.bind_label(entry_label);
+        self.gen_machine_code(store, bbir, ctx)
+    }
 
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
-
-        let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = ctx.label();
-        ctx.branch_map.insert(
-            bb_begin,
-            vec![BranchEntry {
-                src_idx: BcIndex(0),
-                bbctx,
-                branch_dest,
-                cont: true,
-            }],
-        );
-
-        let bb_end = match func.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
-            }
-            None => BasicBlockId(func.bb_info.len() - 1),
-        };
-        let bbir: Vec<_> = (bb_begin..=bb_end)
-            .map(|bbid| {
-                let ir = ctx.compile_basic_block(store, func, position, bbid);
-                (bbid, ir)
-            })
-            .collect();
-
-        ctx.backedge_branches(func);
-
-        #[cfg(feature = "emit-cfg")]
-        Self::dump_cfg(func, store, bb_begin, bb_end);
+    fn gen_machine_code(
+        &mut self,
+        store: &Store,
+        bbir: Vec<(BasicBlockId, AsmIr)>,
+        mut ctx: JitContext,
+    ) -> Vec<(BcIndex, usize)> {
+        let mut sourcemap: Vec<(BcIndex, usize)> = vec![];
 
         // generate machine code for a main context
         for (_bbid, ir) in bbir.into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None, None);
+            self.gen_asm(ir, store, &mut ctx, &mut sourcemap, None, None);
         }
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
+            self.gen_asm(ir, store, &mut ctx, &mut sourcemap, Some(entry), Some(exit));
         }
         assert!(ctx.continuation_bridge.is_none());
 
         self.jit.finalize();
 
-        ctx.sourcemap
-    }
-
-    #[cfg(feature = "emit-cfg")]
-    fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
-        let mut s = format!(
-            r###"digraph graph_name {{
-  graph [
-    charset = "UTF-8";
-    label = "{}",
-    labelloc = "t",
-    labeljust = "c",
-    bgcolor = "#343434",
-    fontcolor = white,
-    fontsize = 20,
-    rankdir = TB,
-    margin = 0.2,
-    splines = spline,
-    nodesep = 0.8,
-    ranksep = 1.1
-  ];
-
-  node [
-    colorscheme = "accent8"
-    shape = box,
-    style = "solid,filled",
-    fontsize = 16,
-    fontcolor = 5,
-    fontname = "Consolas",
-    color = 5,
-    fillcolor = 4,
-  ];
-
-  edge [
-    style = solid,
-    fontsize = 14,
-    fontcolor = white,
-    fontname = "Migu 1M",
-    color = white,
-    labelfloat = true,
-    labeldistance = 2.5,
-    labelangle = 70
-  ];"###,
-            store.func_description(func.func_id())
-        );
-        s += "\n";
-        for bbid in bb_begin..=bb_end {
-            s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
-            let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
-            for bc in begin..=end {
-                if let Some(inst) = func.trace_ir(store, bc).format(store) {
-                    s += "|";
-                    let html = html_escape::encode_text(&inst)
-                        .replace('|', "\\|")
-                        .replace('"', "\\\"");
-                    s += &format!("{} {}\\l", bc, html);
-                }
-            }
-            s += "}\"\n  ];\n";
-        }
-
-        for bbid in bb_begin..=bb_end {
-            let entry = &func.bb_info[bbid];
-            for succ in &entry.succ {
-                s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
-            }
-        }
-
-        s += "}\n";
-        let path = std::path::PathBuf::from(".cfg");
-        match path.try_exists() {
-            Ok(true) => {}
-            _ => std::fs::create_dir(&path).unwrap(),
-        }
-        std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
+        sourcemap
     }
 }
 
@@ -1047,19 +922,6 @@ impl Codegen {
                 movq [r14 - (conv(reg))], rax;
             }
         }
-    }
-
-    ///
-    /// Get *DestLabel* for write-back and fallback to interpreter.
-    ///
-    /// ### in
-    /// - rdi: deopt-reason:Value
-    ///
-    pub(crate) fn gen_deopt(&mut self, pc: BytecodePtr, bb: &BBContext) -> DestLabel {
-        let entry = self.jit.label();
-        let wb = bb.get_write_back();
-        self.gen_deopt_with_label(pc, &wb, entry);
-        entry
     }
 
     ///
