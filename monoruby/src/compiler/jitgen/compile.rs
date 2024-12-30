@@ -6,7 +6,7 @@ impl JitContext {
         store: &Store,
         iseq_id: ISeqId,
         position: Option<BytecodePtr>,
-    ) -> Vec<(BasicBlockId, AsmIr)> {
+    ) {
         let func = &store[iseq_id];
 
         for (loop_start, loop_end) in func.bb_info.loops() {
@@ -36,7 +36,8 @@ impl JitContext {
             }
         }
 
-        let mut bbir = vec![(BasicBlockId(0), ir)];
+        assert!(self.ir.is_empty());
+        let mut ir = vec![ir];
         let start_pos = func.get_pc_index(position);
 
         #[cfg(feature = "jit-debug")]
@@ -61,17 +62,16 @@ impl JitContext {
             }
             None => BasicBlockId(func.bb_info.len() - 1),
         };
-        bbir.extend((bb_begin..=bb_end).map(|bbid| {
-            let ir = self.compile_basic_block(store, func, position, bbid);
-            (bbid, ir)
-        }));
+
+        ir.extend(
+            (bb_begin..=bb_end).map(|bbid| self.compile_basic_block(store, func, position, bbid)),
+        );
+        self.ir = ir;
 
         self.backedge_branches(func);
 
         #[cfg(feature = "emit-cfg")]
         dump_cfg(func, store, bb_begin, bb_end);
-
-        bbir
     }
 
     fn compile_basic_block(
@@ -95,6 +95,7 @@ impl JitContext {
 
         let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
         for bc_pos in begin..=end {
+            #[cfg(feature = "emit-asm")]
             ir.bc_index(bc_pos);
             bbctx.next_sp = iseq.get_sp(bc_pos);
 

@@ -99,13 +99,16 @@ struct JitContext {
     ///
     /// Class version at compile time.
     ///
-    #[allow(dead_code)]
     class_version: u32,
     ///
-    /// BOP redefinition flag at compile time.
+    /// Generated AsmIr.
     ///
-    #[allow(dead_code)]
-    bop_redefine_flags: u32,
+    ir: Vec<AsmIr>,
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    #[cfg(feature = "emit-asm")]
+    sourcemap: Vec<(BcIndex, usize)>,
     ///
     /// Start offset of a machine code corresponding to the current basic block.
     ///
@@ -119,8 +122,8 @@ impl JitContext {
     ///
     fn new(
         func: &ISeqInfo,
-        codegen: &mut Codegen,
         is_loop: bool,
+        class_version: u32,
         self_class: ClassId,
         self_ty: Option<ObjTy>,
     ) -> Self {
@@ -129,7 +132,7 @@ impl JitContext {
         for i in 0..func.bb_info.len() {
             let idx = BasicBlockId(i);
             basic_block_labels.insert(idx, JitLabel(labels.len()));
-            labels.push(Some(codegen.jit.label()));
+            labels.push(None);
         }
 
         let total_reg_num = func.total_reg_num();
@@ -149,10 +152,12 @@ impl JitContext {
             bridges: vec![],
             continuation_bridge: None,
             labels,
-            class_version: codegen.class_version(),
-            bop_redefine_flags: codegen.bop_redefine_flags(),
+            class_version,
+            ir: vec![],
             #[cfg(feature = "emit-asm")]
-            start_codepos: codegen.jit.get_current(),
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
         }
     }
 
@@ -175,7 +180,9 @@ impl JitContext {
             continuation_bridge: None,
             labels: vec![],
             class_version: 0,
-            bop_redefine_flags: 0,
+            ir: vec![],
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
             start_codepos: 0,
         }
@@ -662,41 +669,100 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-    ) -> Vec<(BcIndex, usize)> {
+    ) {
+        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
+        if self.startup_flag {
+            let iseq = &store[iseq_id];
+            let start_pos = iseq.get_pc_index(position);
+            let name = store.func_description(iseq.func_id());
+            eprintln!(
+                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
+                if position.is_some() {
+                    "partial"
+                } else {
+                    "whole"
+                },
+                iseq.func_id(),
+                name,
+                if position.is_some() {
+                    format!("start:[{}] ", start_pos)
+                } else {
+                    String::new()
+                },
+                store.debug_class_name(self_class),
+                iseq.sourceinfo.file_name(),
+                iseq.sourceinfo.get_line(&iseq.loc),
+            );
+        }
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+        #[cfg(feature = "jit-log")]
+        let now = std::time::Instant::now();
+
         let func = &store[iseq_id];
 
         let self_ty = store[self_class].instance_ty();
-        let mut ctx = JitContext::new(func, self, position.is_some(), self_class, self_ty);
+        let mut ctx = JitContext::new(
+            func,
+            position.is_some(),
+            self.class_version(),
+            self_class,
+            self_ty,
+        );
 
-        let bbir = ctx.compile(store, iseq_id, position);
+        ctx.compile(store, iseq_id, position);
 
-        self.jit.bind_label(entry_label);
-        self.gen_machine_code(store, bbir, ctx)
+        self.gen_machine_code(&mut ctx, store, entry_label);
+
+        if self.startup_flag {
+            #[cfg(feature = "jit-log")]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                self.jit_compile_time += elapsed;
+            }
+            #[cfg(feature = "emit-asm")]
+            self.dump_disas(store, ctx.sourcemap, iseq_id);
+            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
+            {
+                self.jit.select_page(0);
+                eprintln!("    total bytes(0):{:?}", self.jit.get_current());
+                self.jit.select_page(1);
+                eprintln!("    total bytes(1):{:?}", self.jit.get_current());
+                self.jit.select_page(0);
+            }
+            #[cfg(feature = "emit-asm")]
+            eprintln!("<== finished compile.");
+        }
+        #[cfg(feature = "perf")]
+        {
+            let fid = store[iseq_id].func_id();
+            let desc = format!("JIT:<{}>", store.func_description(fid));
+            self.perf_info(pair, &desc);
+        }
     }
 
-    fn gen_machine_code(
-        &mut self,
-        store: &Store,
-        bbir: Vec<(BasicBlockId, AsmIr)>,
-        mut ctx: JitContext,
-    ) -> Vec<(BcIndex, usize)> {
-        let mut sourcemap: Vec<(BcIndex, usize)> = vec![];
+    fn gen_machine_code(&mut self, ctx: &mut JitContext, store: &Store, entry_label: DestLabel) {
+        self.jit.bind_label(entry_label);
+        #[cfg(feature = "emit-asm")]
+        {
+            ctx.start_codepos = self.jit.get_current();
+        }
 
         // generate machine code for a main context
-        for (_bbid, ir) in bbir.into_iter() {
-            self.gen_asm(ir, store, &mut ctx, &mut sourcemap, None, None);
+        for ir in std::mem::take(&mut ctx.ir).into_iter() {
+            self.gen_asm(ir, store, ctx, None);
         }
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, &mut sourcemap, Some(entry), Some(exit));
+            self.gen_asm(ir, store, ctx, Some((entry, exit)));
         }
         assert!(ctx.continuation_bridge.is_none());
 
         self.jit.finalize();
-
-        sourcemap
     }
 }
 

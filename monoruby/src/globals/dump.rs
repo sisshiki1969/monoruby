@@ -45,7 +45,7 @@ impl Globals {
     #[cfg(feature = "emit-bc")]
     pub fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
-        if self.startup_flag {
+        if self.codegen.startup_flag {
             self.store.functions()[dumped_bc..]
                 .iter()
                 .for_each(|info| match &info.kind {
@@ -54,67 +54,6 @@ impl Globals {
                 });
         }
         self.dumped_bc = self.store.func_len();
-    }
-
-    #[cfg(feature = "emit-asm")]
-    pub(crate) fn dump_disas(
-        &mut self,
-        sourcemap: Vec<(bytecodegen::BcIndex, usize)>,
-        iseq_id: ISeqId,
-    ) {
-        let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
-        eprintln!(
-            "offset:{:?} code: {} bytes  data: {} bytes",
-            start,
-            *code_end - *start,
-            *end - *code_end
-        );
-        self.codegen.jit.select_page(0);
-        let dump = self.codegen.jit.dump_code().unwrap();
-        let dump: Vec<(usize, String)> = dump
-            .split('\n')
-            .filter(|s| s.len() >= 29)
-            .map(|x| {
-                let i = x.find(':').unwrap();
-                (
-                    match usize::from_str_radix(&x[0..i].trim(), 16) {
-                        Ok(i) => i,
-                        _ => {
-                            panic!("{}", &x[0..i].trim());
-                        }
-                    },
-                    x[i + 24..].to_string(),
-                )
-            })
-            .collect();
-        let iseq = &self.store[iseq_id];
-        for (i, text) in dump {
-            sourcemap
-                .iter()
-                .filter_map(
-                    |(bc_pos, code_pos)| {
-                        if *code_pos == i {
-                            Some(*bc_pos)
-                        } else {
-                            None
-                        }
-                    },
-                )
-                .for_each(|bc_pos| {
-                    if iseq.bb_info.is_bb_head(bc_pos).is_some() {
-                        eprintln!("{:?}", iseq.bb_info.get_bb_id(bc_pos));
-                    }
-                    eprintln!(
-                        "{bc_pos} {}",
-                        match iseq.trace_ir(&self.store, bc_pos).format(&self.store) {
-                            Some(s) => s,
-                            None => "".to_string(),
-                        }
-                    );
-                });
-
-            eprintln!("  {:05x}: {}", i, text);
-        }
     }
 
     #[cfg(any(feature = "profile", feature = "jit-log"))]

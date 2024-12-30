@@ -34,6 +34,12 @@ class Hash
   end
 end
 
+class Integer
+  def succ
+    self + 1
+  end
+end
+
 class GC
   def self.auto_compact=(x)
   end

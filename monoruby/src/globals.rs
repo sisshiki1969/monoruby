@@ -106,7 +106,6 @@ pub struct Globals {
     pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
-
     /// suppress jit compilation.
     no_jit: bool,
     /// suppress loading gem.
@@ -119,7 +118,6 @@ pub struct Globals {
     random: Box<Prng>,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
-    pub(super) startup_flag: bool,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -172,7 +170,6 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
-            startup_flag: false,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]

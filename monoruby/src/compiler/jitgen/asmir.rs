@@ -774,6 +774,7 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
+    #[cfg(feature = "emit-asm")]
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1296,8 +1297,7 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
-
-    #[allow(dead_code)]
+    #[cfg(feature = "emit-asm")]
     BcIndex(BcIndex),
     Label(JitLabel),
 }
@@ -1410,9 +1410,7 @@ impl Codegen {
         ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
-        sourcemap: &mut Vec<(BcIndex, usize)>,
-        entry: Option<DestLabel>,
-        exit: Option<BasicBlockId>,
+        entry_exit: Option<(DestLabel, BasicBlockId)>,
     ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
@@ -1432,39 +1430,29 @@ impl Codegen {
             }
         }
 
-        if exit.is_some() {
+        if entry_exit.is_some() {
             self.jit.select_page(1);
         }
-        if let Some(entry) = entry {
+        if let Some((entry, _)) = entry_exit {
             self.jit.bind_label(entry);
         }
-
-        #[cfg(feature = "emit-asm")]
-        let mut _sourcemap = vec![];
 
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
-                _sourcemap.push((*i, self.jit.get_current()));
+                ctx.sourcemap
+                    .push((*i, self.jit.get_current() - ctx.start_codepos));
             }
             self.gen_asmir(store, ctx, &side_exits, inst);
         }
 
-        if let Some(exit) = exit {
+        if let Some((_, exit)) = entry_exit {
             let exit = *ctx.basic_block_labels.get(&exit).unwrap();
             let exit = ctx.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }
             self.jit.select_page(0);
-        }
-
-        #[cfg(feature = "emit-asm")]
-        if entry.is_none() {
-            let map = _sourcemap
-                .into_iter()
-                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
-            sourcemap.extend(map);
         }
     }
 

@@ -20,6 +20,7 @@ impl Codegen {
         inst: AsmInst,
     ) {
         match inst {
+            #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(_) => {}
             AsmInst::Label(label) => {
                 let label = ctx.resolve_label(&mut self.jit, label);

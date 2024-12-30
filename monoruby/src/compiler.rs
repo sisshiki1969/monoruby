@@ -171,6 +171,7 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) startup_flag: bool,
     #[cfg(feature = "jit-log")]
     pub(crate) jit_compile_time: std::time::Duration,
     #[cfg(feature = "perf")]
@@ -234,6 +235,7 @@ impl Codegen {
             },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            startup_flag: false,
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
             #[cfg(feature = "perf")]
@@ -826,6 +828,68 @@ impl Codegen {
         self.jit.select_page(0);
         (ptr0, ptr1)
     }
+
+    #[cfg(feature = "emit-asm")]
+    pub(crate) fn dump_disas(
+        &mut self,
+        store: &Store,
+        sourcemap: Vec<(bytecodegen::BcIndex, usize)>,
+        iseq_id: ISeqId,
+    ) {
+        let (start, code_end, end) = self.jit.code_block.last().unwrap();
+        eprintln!(
+            "offset:{:?} code: {} bytes  data: {} bytes",
+            start,
+            *code_end - *start,
+            *end - *code_end
+        );
+        self.jit.select_page(0);
+        let dump = self.jit.dump_code().unwrap();
+        let dump: Vec<(usize, String)> = dump
+            .split('\n')
+            .filter(|s| s.len() >= 29)
+            .map(|x| {
+                let i = x.find(':').unwrap();
+                (
+                    match usize::from_str_radix(&x[0..i].trim(), 16) {
+                        Ok(i) => i,
+                        _ => {
+                            panic!("{}", &x[0..i].trim());
+                        }
+                    },
+                    x[i + 24..].to_string(),
+                )
+            })
+            .collect();
+        let iseq = &store[iseq_id];
+        for (i, text) in dump {
+            sourcemap
+                .iter()
+                .filter_map(
+                    |(bc_pos, code_pos)| {
+                        if *code_pos == i {
+                            Some(*bc_pos)
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .for_each(|bc_pos| {
+                    if iseq.bb_info.is_bb_head(bc_pos).is_some() {
+                        eprintln!("{:?}", iseq.bb_info.get_bb_id(bc_pos));
+                    }
+                    eprintln!(
+                        "{bc_pos} {}",
+                        match iseq.trace_ir(store, bc_pos).format(store) {
+                            Some(s) => s,
+                            None => "".to_string(),
+                        }
+                    );
+                });
+
+            eprintln!("  {:05x}: {}", i, text);
+        }
+    }
 }
 
 ///
@@ -1065,77 +1129,12 @@ impl Globals {
     pub(super) fn exec_jit_compile(
         &mut self,
         iseq_id: ISeqId,
-        self_value: Value,
+        self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) {
-        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
-        if self.startup_flag {
-            let iseq = &self.store[iseq_id];
-            let start_pos = iseq.get_pc_index(position);
-            let name = self.store.func_description(iseq.func_id());
-            eprintln!(
-                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
-                if position.is_some() {
-                    "partial"
-                } else {
-                    "whole"
-                },
-                iseq.func_id(),
-                name,
-                if position.is_some() {
-                    format!("start:[{}] ", start_pos)
-                } else {
-                    String::new()
-                },
-                self.store.debug_class_name(self_value.class()),
-                iseq.sourceinfo.file_name(),
-                iseq.sourceinfo.get_line(&iseq.loc),
-            );
-        }
-
-        #[cfg(feature = "perf")]
-        let pair = self.codegen.get_address_pair();
-
-        #[cfg(feature = "jit-log")]
-        let now = std::time::Instant::now();
-
-        let _sourcemap = self.codegen.jit_compile(
-            &self.store,
-            iseq_id,
-            self_value.class(),
-            position,
-            entry_label,
-        );
-
-        if self.startup_flag {
-            #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
-            {
-                self.codegen.jit.select_page(0);
-                eprintln!("    total bytes(0):{:?}", self.codegen.jit.get_current());
-                self.codegen.jit.select_page(1);
-                eprintln!("    total bytes(1):{:?}", self.codegen.jit.get_current());
-                self.codegen.jit.select_page(0);
-            }
-            #[cfg(feature = "jit-log")]
-            {
-                let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.codegen.jit_compile_time += elapsed;
-            }
-            #[cfg(feature = "emit-asm")]
-            eprintln!("<== finished compile.");
-        }
-        #[cfg(feature = "perf")]
-        {
-            let iseq = &self.store[iseq_id];
-            let desc = format!("JIT:<{}>", self.store.func_description(iseq.func_id()));
-            self.codegen.perf_info(pair, &desc);
-        }
-        #[cfg(feature = "emit-asm")]
-        if self.startup_flag {
-            self.dump_disas(_sourcemap, iseq_id);
-        }
+        self.codegen
+            .jit_compile(&self.store, iseq_id, self_class, position, entry_label);
     }
 
     ///
@@ -1144,9 +1143,9 @@ impl Globals {
     pub(super) fn exec_jit_compile_method(
         &mut self,
         iseq_id: ISeqId,
-        self_value: Value,
+        self_class: ClassId,
         jit_entry: DestLabel,
     ) {
-        self.exec_jit_compile(iseq_id, self_value, None, jit_entry)
+        self.exec_jit_compile(iseq_id, self_class, None, jit_entry)
     }
 }
