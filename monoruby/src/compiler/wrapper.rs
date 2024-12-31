@@ -29,7 +29,7 @@ impl Codegen {
     ///    +-------------------------------+     +------------------------------------------+
     ///    |                               |     |                                          |        JIT code for self_class
     /// ---+-> entry:                      |  /--+-> guard:                                 |     +---------------------------+
-    ///    |     jmp [next]; --------------+-/   |     movq rdi, [r14 - (LBP_SELF)];        |     |                           |
+    ///    |     jmp [next]; --------------+-/   |     movq rdi, [r14 - (LFP_SELF)];        |     |                           |
     ///    |   next:                       |     |     <class_guard(self_class, vm_entry)>  |  /--+-> jit_code_body:          |
     ///    |     subl [rip + counter], 1;  |     |   jit_entry:                             |  |  |     <jit_code>            |
     ///    |     jne vm_entry;             |     |     jmp [jit_code_body]; ----------------+--/  |                           |

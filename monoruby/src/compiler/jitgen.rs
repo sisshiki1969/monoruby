@@ -105,6 +105,10 @@ struct JitContext {
     ///
     ir: Vec<AsmIr>,
     ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    ivar_heap_accessed: bool,
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
@@ -154,6 +158,7 @@ impl JitContext {
             labels,
             class_version,
             ir: vec![],
+            ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -181,6 +186,7 @@ impl JitContext {
             labels: vec![],
             class_version: 0,
             ir: vec![],
+            ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]

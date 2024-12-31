@@ -8,11 +8,17 @@ mod index;
 mod method_call;
 mod variables;
 
+extern "C" fn extend_ivar(mut self_: Value, globals: &Globals) {
+    if let Some(rvalue) = self_.try_rvalue_mut() {
+        rvalue.extend_ivar(globals);
+    }
+}
+
 impl Codegen {
     ///
     /// Generate machine code for *inst*.
     ///
-    pub(super) fn gen_asmir(
+    pub(super) fn compile_asmir(
         &mut self,
         store: &Store,
         ctx: &mut JitContext,
@@ -22,6 +28,19 @@ impl Codegen {
         match inst {
             #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(_) => {}
+            AsmInst::Init(info) => {
+                self.init_func(&info);
+            }
+            AsmInst::Preparation => {
+                /*if !ctx.self_class.is_always_frozen() && ctx.ivar_heap_accessed {
+                    monoasm!(&mut self.jit,
+                        movq rdi, [r14 - (LFP_SELF)];
+                        movq rsi, r12;
+                        movq rax, (extend_ivar);
+                        call rax;
+                    );
+                }*/
+            }
             AsmInst::Label(label) => {
                 let label = ctx.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
@@ -194,9 +213,6 @@ impl Codegen {
                 self.guard_class(r, class, deopt);
             }
 
-            AsmInst::Init(info) => {
-                self.init_func(&info);
-            }
             AsmInst::HandleError(error) => {
                 let error = labels[error];
                 self.handle_error(error);

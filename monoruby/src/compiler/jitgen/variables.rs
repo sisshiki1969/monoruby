@@ -7,21 +7,24 @@ impl BBContext {
         dst: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
-    ) {
+    ) -> bool {
         assert!(!self_class.is_always_frozen());
         self.unlink(dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
-        if is_object_ty && ivarid.is_inline() {
-            ir.push(AsmInst::LoadIVarInline { ivarid })
+        let ivar_heap = if is_object_ty && ivarid.is_inline() {
+            ir.push(AsmInst::LoadIVarInline { ivarid });
+            false
         } else {
             ir.push(AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 min_len: self.self_ivar_len,
             });
-        }
+            true
+        };
         self.rax2acc(ir, dst);
+        ivar_heap
     }
 
     pub(in crate::compiler::jitgen) fn store_ivar(
@@ -30,13 +33,14 @@ impl BBContext {
         src: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
-    ) {
+    ) -> bool {
         assert!(!self_class.is_always_frozen());
         self.fetch_for_gpr(ir, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { ivarid });
+            false
         } else {
             ir.push(AsmInst::StoreIVarHeap {
                 ivarid,
@@ -45,6 +49,7 @@ impl BBContext {
                 using_xmm: self.get_using_xmm(),
             });
             self.self_ivar_len = std::cmp::max(ivarid.get() as usize + 1, self.self_ivar_len);
+            true
         }
     }
 }

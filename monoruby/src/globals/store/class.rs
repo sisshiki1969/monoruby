@@ -222,6 +222,10 @@ impl ClassInfo {
         self.ivar_names.get(&name).cloned()
     }
 
+    pub(crate) fn ivar_len(&self) -> usize {
+        self.ivar_names.len()
+    }
+
     pub(crate) fn ivar_names(&self) -> impl Iterator<Item = (&IdentId, &IvarId)> {
         self.ivar_names.iter()
     }

@@ -893,6 +893,7 @@ pub(super) enum AsmInst {
         branch_table: Box<[BasicBlockId]>,
     },
 
+    Preparation,
     Init(FnInitInfo),
     /// deoptimize
     Deopt(AsmDeopt),
@@ -1440,7 +1441,7 @@ impl Codegen {
                 ctx.sourcemap
                     .push((*i, self.jit.get_current() - ctx.start_codepos));
             }
-            self.gen_asmir(store, ctx, &side_exits, inst);
+            self.compile_asmir(store, ctx, &side_exits, inst);
         }
 
         if let Some((_, exit)) = entry_exit {

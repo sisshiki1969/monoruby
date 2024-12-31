@@ -35,6 +35,7 @@ impl JitContext {
                 _ => unreachable!(),
             }
         }
+        ir.push(AsmInst::Preparation);
 
         assert!(self.ir.is_empty());
         let mut ir = vec![ir];
@@ -331,7 +332,9 @@ impl JitContext {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    bbctx.load_ivar(ir, dst, self_class, ivarid);
+                    if bbctx.load_ivar(ir, dst, self_class, ivarid) {
+                        self.ivar_heap_accessed = true;
+                    }
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -344,7 +347,9 @@ impl JitContext {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    bbctx.store_ivar(ir, src, self_class, ivarid);
+                    if bbctx.store_ivar(ir, src, self_class, ivarid) {
+                        self.ivar_heap_accessed = true;
+                    }
                 } else {
                     return CompileResult::Recompile;
                 }

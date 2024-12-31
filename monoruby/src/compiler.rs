@@ -647,7 +647,7 @@ impl Codegen {
     /// ~~~text
     ///
     /// guard:
-    ///     movq rdi, [r14 - (LBP_SELF)];
+    ///     movq rdi, [r14 - (LFP_SELF)];
     ///     guard_class_rdi(self_class, vm_entry);
     /// patch_point:
     ///     jmp jit_entry;

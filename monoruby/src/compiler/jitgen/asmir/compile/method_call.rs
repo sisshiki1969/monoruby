@@ -259,24 +259,20 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], rax;
             );
         } else if let Some(block) = callsite.block_arg {
             monoasm!( &mut self.jit,
                 movq rax, [r14 - (conv(block))];
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], rax;
             );
         } else {
             monoasm!( &mut self.jit,
                 xorq rax, rax;
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], 0;
             );
         }
         // set self
         monoasm! { &mut self.jit,
-            //movq [rsp - (RSP_STACK_LFP + LBP_SELF)], r13;
             pushq r13;
             addq rsp, 64;
         }
