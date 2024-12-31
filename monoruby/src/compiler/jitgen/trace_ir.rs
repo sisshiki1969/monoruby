@@ -69,12 +69,13 @@ pub(crate) enum TraceIr {
         exclude_end: bool,
     },
 
+    BlockArgProxy(SlotId, usize),
+    BlockArg(SlotId, usize),
+
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, ConstSiteId),
     LoadDynVar(SlotId, DynVar),
     StoreDynVar(DynVar, SlotId),
-    BlockArgProxy(SlotId, usize),
-    BlockArg(SlotId, usize),
     LoadIvar(SlotId, IdentId, Option<(ClassId, IvarId)>), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, Option<(ClassId, IvarId)>), // src, id  - @id = %src
     LoadGvar {

@@ -1,22 +1,20 @@
-for i in 0..20
-  case i
-  when 3
-    puts "3"
-  when 1
-    puts "1"
-  when 4
-    puts "4"
-  when 2
-    puts "2"
-  when 13
-    puts "13"
-  when 11
-    puts "11"
-  when 14
-    puts "14"
-  when 12
-    puts "12"
-  else
-    puts "else"
+require "reline"
+
+prompt = 'prompt> '
+use_history = true
+
+begin
+  while true
+    text = Reline.readmultiline(prompt, use_history) do |multiline_input|
+      # Accept the input until `end` is entered
+      multiline_input.split.last == "end"
+    end
+
+    puts 'You entered:'
+    puts text
   end
+# If you want to exit, type Ctrl-C
+rescue Interrupt
+  puts '^C'
+  exit 0
 end

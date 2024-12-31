@@ -7,7 +7,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_by_str("Float", FLOAT_CLASS, numeric, OBJECT_CLASS);
+    globals.define_builtin_class("Float", FLOAT_CLASS, numeric, OBJECT_CLASS, None);
     globals.set_constant_by_str(FLOAT_CLASS, "NAN", Value::float(f64::NAN));
     globals.set_constant_by_str(FLOAT_CLASS, "INFINITY", Value::float(f64::INFINITY));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX", Value::float(f64::MAX));

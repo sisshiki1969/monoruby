@@ -1,4 +1,5 @@
 #!/bin/bash
 
 cargo build --release
-benchmark-driver -o markdown benchmark/vm_ivar.yaml benchmark/vm_ivar_get.yml benchmark/vm_ivar_set.yml benchmark/vm_ivar_generic_get.yml benchmark/vm_ivar_generic_set.yml benchmark/vm_attr_ivar.yaml benchmark/vm_attr_ivar_set.yaml --rbenv '3.3.0; 3.3.0 --yjit; truffleruby-23.1.1' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3
+#benchmark-driver -o markdown benchmark/vm_ivar.yaml benchmark/vm_ivar_get.yml benchmark/vm_ivar_set.yml benchmark/vm_ivar_generic_get.yml benchmark/vm_ivar_generic_set.yml benchmark/vm_attr_ivar.yaml benchmark/vm_attr_ivar_set.yaml --rbenv '3.3.0; 3.3.0 --yjit; truffleruby-23.1.1' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3
+benchmark-driver -o markdown benchmark/vm_ivar.yaml benchmark/vm_ivar_get.yml benchmark/vm_ivar_set.yml benchmark/vm_ivar_generic_get.yml benchmark/vm_ivar_generic_set.yml benchmark/vm_attr_ivar.yaml benchmark/vm_attr_ivar_set.yaml --rbenv '3.4.1 --yjit; truffleruby-24.1.1' -e 'target/release/monoruby' --repeat-count 5

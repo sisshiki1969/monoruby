@@ -18,7 +18,7 @@ impl BBContext {
         if let Some(superclass) = superclass {
             self.write_back_slots(ir, &[superclass]);
         }
-        self.unlink(ir, dst);
+        self.unlink(dst);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         ir.push(AsmInst::ClassDef {
@@ -42,7 +42,7 @@ impl BBContext {
         pc: BytecodePtr,
     ) {
         self.write_back_slots(ir, &[base]);
-        self.unlink(ir, dst);
+        self.unlink(dst);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         ir.push(AsmInst::SingletonClassDef {

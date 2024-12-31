@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS);
+    globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS, ObjTy::CLASS);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
     globals.define_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
@@ -20,16 +20,13 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let self_val = lfp.self_val();
     let args = lfp.arg(0).as_array();
 
-    let mut new_struct = globals
-        .store
-        .classes
-        .new_unnamed_class(Some(self_val.as_class()));
+    let mut new_struct = globals.store.new_unnamed_class(Some(self_val.as_class()));
     let class_id = new_struct.as_class_id();
     let start_idx = if let Some(arg0) = args.first()
         && let Some(s) = arg0.is_str()
     {
         if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-            globals.store.classes[class_id].set_name(&format!("Struct::{s}"));
+            globals.store[class_id].set_name(&format!("Struct::{s}"));
             1
         } else {
             return Err(MonorubyErr::identifier_must_be_constant(s));
@@ -82,9 +79,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
-    let struct_class = globals.store.classes[self_val.class()]
-        .get_module()
-        .as_val();
+    let struct_class = globals.store[self_val.class()].get_module().as_val();
     let members = globals
         .store
         .get_ivar(struct_class, IdentId::get_id("/members"))
@@ -106,8 +101,8 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let mut inspect = "#<struct ".to_string();
     let self_val = lfp.self_val();
     let class_id = self_val.class();
-    let struct_class = globals.store.classes[class_id].get_module().as_val();
-    if let Some(name) = globals.store.classes[class_id].get_name_id() {
+    let struct_class = globals.store[class_id].get_module().as_val();
+    if let Some(name) = globals.store[class_id].get_name_id() {
         inspect += &format!("{name}");
     };
     let name = globals
@@ -135,9 +130,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 
 #[monoruby_builtin]
 fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_obj = globals.store.classes[lfp.self_val().class()]
-        .get_module()
-        .as_val();
+    let class_obj = globals.store[lfp.self_val().class()].get_module().as_val();
     let members = globals
         .store
         .get_ivar(class_obj, IdentId::get_id("/members"))

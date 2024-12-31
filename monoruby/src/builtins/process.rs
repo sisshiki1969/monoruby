@@ -12,8 +12,9 @@ mod rusage;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let klass = globals.define_module("Process").id();
-    globals.define_class_by_str("Tms", globals.store.classes.object_class(), klass);
+    let klass = globals.define_toplevel_module("Process").id();
+    let object_class = globals.store.object_class();
+    globals.define_class("Tms", object_class, klass);
     globals.define_builtin_module_func(klass, "pid", pid, 0);
     globals.define_builtin_module_func(klass, "times", times, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);

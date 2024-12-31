@@ -5,12 +5,12 @@ pub struct Binding(Value);
 
 impl Binding {
     /*fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::BINDING));
+        assert_eq!(val.ty(), Some(ObjTy::BINDING));
         Binding(val)
     }*/
 
     pub(crate) fn try_new(val: Value) -> Option<Self> {
-        if val.ty() == Some(ObjKind::BINDING) {
+        if val.ty() == Some(ObjTy::BINDING) {
             Some(Binding(val))
         } else {
             None

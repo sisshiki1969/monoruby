@@ -8,7 +8,7 @@ use std::{io::Write, mem::transmute};
 //
 
 pub(super) fn init(globals: &mut Globals) -> Module {
-    let klass = globals.define_module("Kernel");
+    let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(object_nil), 0);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
+    globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
@@ -79,6 +80,7 @@ fn object_nil(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -317,6 +319,17 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     crate::runtime::_dump_stacktrace(vm, globals);
     Ok(Value::nil())
+}
+
+#[monoruby_builtin]
+fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().class();
+    let i = if let Some(ty) = globals.store[class_id].instance_ty() {
+        ty.get()
+    } else {
+        0
+    };
+    Ok(Value::integer(i as _))
 }
 
 ///

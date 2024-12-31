@@ -7,7 +7,11 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("String", STRING_CLASS);
+    globals.define_builtin_class_under_obj(
+        "String",
+        STRING_CLASS,
+        ObjTy::STRING,
+    );
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
@@ -87,17 +91,14 @@ pub(super) fn init(globals: &mut Globals) {
         .store
         .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
         .unwrap();
-    globals
-        .store
-        .classes
-        .set_constant(enc.id(), IdentId::UTF_8, val);
+    globals.store.set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
         .store
         .set_ivar(
             val,
             IdentId::_NAME,
-            Value::string_from_str("#<Encoding:ASCII-8BIT>"),
+            Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"),
         )
         .unwrap();
     globals
@@ -110,7 +111,6 @@ pub(super) fn init(globals: &mut Globals) {
         .unwrap();
     globals
         .store
-        .classes
         .set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
 }
@@ -118,7 +118,6 @@ pub(super) fn init(globals: &mut Globals) {
 fn encoding_class(globals: &Globals) -> ClassId {
     globals
         .store
-        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
         .unwrap()
         .as_class_id()

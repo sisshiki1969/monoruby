@@ -33,12 +33,6 @@ impl BBContext {
                 }
                 ir.stack2reg(slot, dst);
             }
-            LinkMode::Alias(origin) => {
-                if dst == GP::R15 {
-                    self.writeback_acc(ir);
-                }
-                ir.stack2reg(origin, dst);
-            }
             LinkMode::Accumulator => {
                 ir.reg_move(GP::R15, dst);
             }
@@ -83,15 +77,15 @@ impl BBContext {
     pub(crate) fn fetch_array_ty(
         &mut self,
         ir: &mut AsmIr,
+        store: &Store,
         slot: SlotId,
         dst: GP,
         deopt: AsmDeopt,
     ) {
-        let is_array = self.is_array_ty(slot);
+        let is_array = self.is_array_ty(store, slot);
         self.fetch_for_gpr(ir, slot, dst);
         if !is_array {
             ir.guard_array_ty(dst, deopt);
-            self.set_guard_array_ty(slot);
         }
     }
 
@@ -117,7 +111,7 @@ impl BBContext {
         deopt: AsmDeopt,
     ) -> Xmm {
         fn int_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
-            let x = bb.store_new_both_integer(ir, slot);
+            let x = bb.store_new_both_integer(slot);
             ir.stack2reg(slot, GP::Rdi);
             ir.int2xmm(GP::Rdi, x, deopt);
             x
@@ -126,10 +120,9 @@ impl BBContext {
         match self.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => int_to_both(ir, self, slot, deopt),
-            LinkMode::Alias(origin) => int_to_both(ir, self, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both_integer(ir, slot);
+                let x = self.store_new_both_integer(slot);
                 ir.reg2stack(GP::R15, slot);
                 ir.int2xmm(GP::R15, x, deopt);
                 x
@@ -152,7 +145,7 @@ impl BBContext {
         deopt: AsmDeopt,
     ) -> Xmm {
         fn float_to_both(ir: &mut AsmIr, bb: &mut BBContext, slot: SlotId, deopt: AsmDeopt) -> Xmm {
-            let x = bb.store_new_both_float(ir, slot);
+            let x = bb.store_new_both_float(slot);
             ir.stack2reg(slot, GP::Rdi);
             ir.float2xmm(GP::Rdi, x, deopt);
             x
@@ -161,10 +154,9 @@ impl BBContext {
         match self.slot(slot) {
             LinkMode::Both(x) | LinkMode::Xmm(x) => x,
             LinkMode::Stack => float_to_both(ir, self, slot, deopt),
-            LinkMode::Alias(origin) => float_to_both(ir, self, origin, deopt),
             LinkMode::Accumulator => {
                 // -> Both
-                let x = self.store_new_both_float(ir, slot);
+                let x = self.store_new_both_float(slot);
                 ir.reg2stack(GP::R15, slot);
                 ir.float2xmm(GP::R15, x, deopt);
                 x
@@ -181,12 +173,12 @@ impl BBContext {
     ) -> Xmm {
         if let Some(f) = v.try_float() {
             // -> Xmm
-            let x = self.store_new_xmm(ir, slot);
+            let x = self.store_new_xmm(slot);
             ir.f64toxmm(f, x);
             x
         } else if let Some(i) = v.try_fixnum() {
             // -> Both
-            let x = self.store_new_both_integer(ir, slot);
+            let x = self.store_new_both_integer(slot);
             ir.i64toboth(i, slot, x);
             x
         } else {

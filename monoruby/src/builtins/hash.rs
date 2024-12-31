@@ -7,7 +7,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
+    globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func(HASH_CLASS, "new", new, 0);
 
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);

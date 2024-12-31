@@ -6,14 +6,13 @@ use num::ToPrimitive;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let klass = globals.define_module("Math").id();
+    let klass = globals.define_toplevel_module("Math").id();
     let standarderr = globals
         .store
-        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("StandardError"))
         .unwrap()
         .as_class();
-    globals.define_class_by_str("DomainError", standarderr, klass);
+    globals.define_class("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
     globals.define_builtin_module_inline_func(klass, "cos", cos, Box::new(math_cos), 1);
@@ -79,6 +78,7 @@ fn math_sqrt(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -89,7 +89,7 @@ fn math_sqrt(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
-        let fret = bb.xmm_write_enc(ir, dst);
+        let fret = bb.xmm_write_enc(dst);
         ir.inline(move |gen, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
@@ -104,6 +104,7 @@ fn math_cos(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -114,7 +115,7 @@ fn math_cos(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ir, ret);
+        let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);
@@ -137,6 +138,7 @@ fn math_sin(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -147,7 +149,7 @@ fn math_sin(
     let deopt = ir.new_deopt(bb, pc);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = ret {
-        let fret = bb.xmm_write_enc(ir, ret);
+        let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
         ir.inline(move |gen, _| {
             gen.xmm_save(using_xmm);

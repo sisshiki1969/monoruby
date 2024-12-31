@@ -1,14 +1,6 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool) {
-        if is_object_ty && ivarid.is_inline() {
-            self.load_ivar_inline(ivarid);
-        } else {
-            self.load_ivar_heap(ivarid, is_object_ty);
-        }
-    }
-
     ///
     /// Load ivar embedded to RValue. (only for object type)
     ///
@@ -21,14 +13,14 @@ impl Codegen {
     /// #### destroy
     /// - rdi
     ///
-    fn load_ivar_inline(&mut self, ivarid: IvarId) {
-        monoasm!( &mut self.jit,
+    pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
+        monoasm! {&mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
             // We must check whether the ivar slot is None.
             movq rdi, (NIL_VALUE);
             testq rax, rax;
             cmoveqq rax, rdi;
-        );
+        }
     }
 
     ///
@@ -41,9 +33,9 @@ impl Codegen {
     /// - rax: Value
     ///
     /// #### destroy
-    /// - rdi, rsi
+    /// - rdi, rsi, rdx
     ///
-    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool) {
+    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, self_: bool) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
@@ -51,42 +43,43 @@ impl Codegen {
         } else {
             ivar
         };
-        monoasm!( &mut self.jit,
-            movq rax, (NIL_VALUE);
-            // ensure var_table is not None
-            movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rsi, rsi;
-            jz   exit;
-            // ensure capa is not 0
-            movq rdi, [rsi + (MONOVEC_CAPA)]; // capa
-            testq rdi, rdi;
-            jz   exit;
-            movq rdi, [rsi + (MONOVEC_LEN)]; // len
-            cmpq rdi, (idx);
-            movq rdi, [rsi + (MONOVEC_PTR)]; // ptr
-            // rax = if len > idx { rdi[idx] } else { nil }
-            cmovgtq rax, [rdi + (idx * 8)];
-        exit:
-        );
+        if self_ {
+            monoasm! { &mut self.jit,
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+                movq rax, [rdi + (idx * 8)];
+                testq rax, rax;
+                jnz  exit;
+                movq rax, (NIL_VALUE);
+            exit:
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (NIL_VALUE);
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+            }
+            self.check_len(idx, exit);
+            monoasm! { &mut self.jit,
+                movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
+                movq rdx, [rdi + (idx * 8)];
+                testq rdx, rdx;
+                jz  exit;
+                movq rax, rdx;
+            exit:
+            }
+        }
     }
 }
 
 impl Codegen {
-    pub(super) fn store_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, using_xmm: UsingXmm) {
-        if is_object_ty && ivarid.is_inline() {
-            self.store_ivar_inline(ivarid);
-        } else {
-            self.store_ivar_heap(ivarid, is_object_ty, using_xmm);
-        }
-    }
-
     ///
     /// Store ivar embedded to RValue. (only for object type)
     ///
     /// #### in
+    /// - rax: Value
     /// - rdi: &RValue
     ///
-    fn store_ivar_inline(&mut self, ivarid: IvarId) {
+    pub(super) fn store_ivar_object_inline(&mut self, ivarid: IvarId) {
         monoasm!( &mut self.jit,
             movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], rax;
         );
@@ -100,11 +93,17 @@ impl Codegen {
     /// - rax: src: Value
     ///
     /// #### destroy
-    /// - rdi, rsi
+    /// - caller-save registers
     ///
-    fn store_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, using: UsingXmm) {
+    pub(super) fn store_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+        using: UsingXmm,
+    ) {
         let exit = self.jit.label();
-        let generic = self.jit.label();
+        let generic = if self_ { None } else { Some(self.jit.label()) };
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
             ivar - OBJECT_INLINE_IVAR as i32
@@ -112,37 +111,62 @@ impl Codegen {
             ivar
         };
         monoasm! { &mut self.jit,
-            // check var_table is not None
-            movq rsi, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rsi, rsi;
-            jz   generic;
-            // check capa is not 0
-            movq rdi, [rsi + (MONOVEC_CAPA)]; // capa
-            testq rdi, rdi;
-            jz   generic;
-            movq rdi, [rsi + (MONOVEC_LEN)]; // len
-            cmpq rdi, (idx);
-            jle  generic;
+            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+        }
+        if let Some(generic) = generic {
+            self.check_len(idx, generic);
         }
         monoasm! { &mut self.jit,
-            movq rdi, [rsi + (MONOVEC_PTR)]; // ptr
-            movq [rdi + (idx * 8)], rax;
+            movq rdx, [rdx + (MONOVEC_PTR)]; // ptr
+            movq [rdx + (idx * 8)], rax;
+        }
+        monoasm! { &mut self.jit,
         exit:
         }
 
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        generic:
-            movq rdi, [r14 - (LFP_SELF)];
-            movl rsi, (ivar);
-            movq rdx, rax;
-        );
-        self.set_ivar(using);
-        monoasm!( &mut self.jit,
-            jmp  exit;
-        );
-        self.jit.select_page(0);
+        if let Some(generic) = generic {
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+            generic:
+                movl rsi, (ivar);
+                movq rdx, rax;
+            );
+            self.xmm_save(using);
+            monoasm!( &mut self.jit,
+                movq rax, (set_ivar);
+                call rax;
+            );
+            self.xmm_restore(using);
+            monoasm!( &mut self.jit,
+                jmp  exit;
+            );
+            self.jit.select_page(0);
+        }
     }
+
+    ///
+    /// Check whether the length of `ivar_table` is greater than `idx`.
+    ///
+    /// #### in
+    /// - rdx: ivar_table
+    ///
+    fn check_len(&mut self, idx: i32, fail: DestLabel) {
+        monoasm! { &mut self.jit,
+            // check var_table is not None
+            testq rdx, rdx;
+            jz   fail;
+            // check capa is not 0
+            cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+            jz   fail;
+            // check len > idx
+            cmpq [rdx + (MONOVEC_LEN)], (idx); // len
+            jle  fail;
+        }
+    }
+}
+
+extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+    base.set_ivar_by_ivarid(id, val)
 }
 
 impl Codegen {
@@ -245,30 +269,6 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(using_xmm);
-    }
-}
-
-impl Codegen {
-    ///
-    /// Set an instance variable.
-    ///
-    /// #### in
-    ///
-    /// - rdi: base: &mut RValue
-    /// - rsi: IvarId
-    /// - rdx: src: Value
-    ///
-    /// #### destroy
-    ///
-    /// - caller-save registers
-    ///
-    pub(in crate::compiler::jitgen::asmir) fn set_ivar(&mut self, using: UsingXmm) {
-        self.xmm_save(using);
-        monoasm!( &mut self.jit,
-            movq rax, (RValue::set_ivar);
-            call rax;
-        );
-        self.xmm_restore(using);
     }
 }
 

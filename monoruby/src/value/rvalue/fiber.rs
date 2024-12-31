@@ -5,7 +5,7 @@ pub struct Fiber(Value);
 
 impl Fiber {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::FIBER));
+        assert_eq!(val.ty(), Some(ObjTy::FIBER));
         Self(val)
     }
 

@@ -443,12 +443,6 @@ impl Funcs {
         FuncId::new(self.info.len() as u32)
     }
 
-    pub(super) fn invalidate_jit_code(&mut self) {
-        self.info
-            .iter_mut()
-            .for_each(|info| info.invalidate_jit_code())
-    }
-
     fn handle_args(
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
@@ -588,8 +582,6 @@ struct FuncExt {
     class_id: Option<ClassId>,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
-    /// JIT code entries for each class of *self*.
-    jit_entry: HashMap<ClassId, DestLabel>,
     /// parameter information of this function.
     params: ParamsInfo,
     #[cfg(feature = "perf")]
@@ -631,7 +623,6 @@ impl FuncInfo {
                 name,
                 class_id: None,
                 entry: None,
-                jit_entry: Default::default(),
                 params,
                 #[cfg(feature = "perf")]
                 wrapper: None,
@@ -915,21 +906,5 @@ impl FuncInfo {
             FuncKind::ISeq(info) => Some(*info),
             _ => None,
         }
-    }
-
-    pub(crate) fn add_jit_code(
-        &mut self,
-        self_class: ClassId,
-        entry: DestLabel,
-    ) -> Option<DestLabel> {
-        self.ext.jit_entry.insert(self_class, entry)
-    }
-
-    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
-        self.ext.jit_entry.get(&self_class).cloned()
-    }
-
-    pub(crate) fn invalidate_jit_code(&mut self) {
-        self.ext.jit_entry.clear();
     }
 }

@@ -82,11 +82,11 @@ struct JitContext {
     ///
     /// *self* for this loop/method.
     ///
-    self_value: Value,
+    self_class: ClassId,
     ///
-    /// Source map.
+    /// Object type of *self*.
     ///
-    sourcemap: Vec<(BcIndex, usize)>,
+    self_ty: Option<ObjTy>,
     ///
     /// Information for bridges.
     ///
@@ -99,13 +99,20 @@ struct JitContext {
     ///
     /// Class version at compile time.
     ///
-    #[allow(dead_code)]
     class_version: u32,
     ///
-    /// BOP redefinition flag at compile time.
+    /// Generated AsmIr.
     ///
-    #[allow(dead_code)]
-    bop_redefine_flags: u32,
+    ir: Vec<AsmIr>,
+    ///
+    /// Flag whether ivar on the heap is accessed in this context.
+    ///
+    ivar_heap_accessed: bool,
+    ///
+    /// Source map for bytecode index and machine code position.
+    ///
+    #[cfg(feature = "emit-asm")]
+    sourcemap: Vec<(BcIndex, usize)>,
     ///
     /// Start offset of a machine code corresponding to the current basic block.
     ///
@@ -117,13 +124,19 @@ impl JitContext {
     ///
     /// Create new JitContext.
     ///
-    fn new(func: &ISeqInfo, codegen: &mut Codegen, is_loop: bool, self_value: Value) -> Self {
+    fn new(
+        func: &ISeqInfo,
+        is_loop: bool,
+        class_version: u32,
+        self_class: ClassId,
+        self_ty: Option<ObjTy>,
+    ) -> Self {
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..func.bb_info.len() {
             let idx = BasicBlockId(i);
             basic_block_labels.insert(idx, JitLabel(labels.len()));
-            labels.push(Some(codegen.jit.label()));
+            labels.push(None);
         }
 
         let total_reg_num = func.total_reg_num();
@@ -138,15 +151,18 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_value,
-            sourcemap: vec![],
+            self_class,
+            self_ty,
             bridges: vec![],
             continuation_bridge: None,
             labels,
-            class_version: codegen.class_version(),
-            bop_redefine_flags: codegen.bop_redefine_flags(),
+            class_version,
+            ir: vec![],
+            ivar_heap_accessed: false,
             #[cfg(feature = "emit-asm")]
-            start_codepos: codegen.jit.get_current(),
+            sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            start_codepos: 0,
         }
     }
 
@@ -163,13 +179,16 @@ impl JitContext {
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
-            self_value: Value::nil(),
-            sourcemap: vec![],
+            self_class: NIL_CLASS,
+            self_ty: None,
             bridges: vec![],
             continuation_bridge: None,
             labels: vec![],
             class_version: 0,
-            bop_redefine_flags: 0,
+            ir: vec![],
+            ivar_heap_accessed: false,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
             start_codepos: 0,
         }
@@ -329,43 +348,64 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
-///
-/// Context of an each basic block.
-///
 #[derive(Debug, Clone)]
-pub(crate) struct BBContext {
+pub(crate) struct BBContextInner {
     /// state stack slots.
     slot_state: SlotContext,
     /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
-    /// *self* value
-    self_value: Value,
     /// the class version at compile time.
     class_version: u32,
 }
 
-impl std::ops::Deref for BBContext {
+impl std::ops::Deref for BBContextInner {
     type Target = SlotContext;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
 }
 
-impl std::ops::DerefMut for BBContext {
+impl std::ops::DerefMut for BBContextInner {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.slot_state
+    }
+}
+
+///
+/// Context of an each basic block.
+///
+#[derive(Debug, Clone)]
+pub(crate) struct BBContext {
+    inner: BBContextInner,
+    self_class: ClassId,
+    self_ty: Option<ObjTy>,
+}
+
+impl std::ops::Deref for BBContext {
+    type Target = BBContextInner;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl std::ops::DerefMut for BBContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            slot_state: SlotContext::from(cc),
-            sp: SlotId(cc.local_num as u16),
-            next_sp: SlotId(cc.local_num as u16),
-            self_value: cc.self_value,
-            class_version: cc.class_version,
+            inner: BBContextInner {
+                slot_state: SlotContext::from(cc),
+                sp: SlotId(cc.local_num as u16),
+                next_sp: SlotId(cc.local_num as u16),
+                class_version: cc.class_version,
+            },
+            self_class: cc.self_class,
+            self_ty: cc.self_ty,
         }
     }
 
@@ -415,13 +455,14 @@ impl BBContext {
         self.reg2acc_guarded(ir, src, dst, slot::Guarded::Fixnum)
     }
 
-    pub(crate) fn reg2acc_array_ty(
+    pub(crate) fn reg2acc_class(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
         dst: impl Into<Option<SlotId>>,
+        class: ClassId,
     ) {
-        self.reg2acc_guarded(ir, src, dst, slot::Guarded::ArrayTy)
+        self.reg2acc_guarded(ir, src, dst, slot::Guarded::Class(class))
     }
 
     pub(crate) fn reg2acc_concrete_value(
@@ -442,20 +483,20 @@ impl BBContext {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            self.clear(ir);
-            if let Some(acc) = self.clear_r15(ir)
+            self.clear();
+            if let Some(acc) = self.clear_r15()
                 && acc < self.sp
                 && acc != dst
             {
                 ir.acc2stack(acc);
             }
-            self.store_r15(ir, dst, guarded);
+            self.store_r15(dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
     }
 
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.clear_r15(ir)
+        if let Some(slot) = self.clear_r15()
             && slot < self.sp
         {
             ir.acc2stack(slot);
@@ -576,10 +617,6 @@ enum LinkMode {
     ///
     Both(Xmm),
     ///
-    /// Alias of *SlotId*.
-    ///
-    Alias(SlotId),
-    ///
     /// Concrete value..
     ///
     ConcreteValue(Value),
@@ -615,8 +652,7 @@ impl MergeContext {
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
-        let mut ir = AsmIr::new();
-        unused.iter().for_each(|reg| self.unlink(&mut ir, *reg));
+        unused.iter().for_each(|reg| self.unlink(*reg));
     }
 }
 
@@ -624,88 +660,65 @@ impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
         store: &Store,
-        func_id: FuncId,
-        self_value: Value,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        startup_flag: bool,
-    ) -> Vec<(BcIndex, usize)> {
+    ) {
+        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
+        if self.startup_flag {
+            let iseq = &store[iseq_id];
+            let start_pos = iseq.get_pc_index(position);
+            let name = store.func_description(iseq.func_id());
+            eprintln!(
+                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
+                if position.is_some() {
+                    "partial"
+                } else {
+                    "whole"
+                },
+                iseq.func_id(),
+                name,
+                if position.is_some() {
+                    format!("start:[{}] ", start_pos)
+                } else {
+                    String::new()
+                },
+                store.debug_class_name(self_class),
+                iseq.sourceinfo.file_name(),
+                iseq.sourceinfo.get_line(&iseq.loc),
+            );
+        }
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
-        self.jit.bind_label(entry_label);
+        let func = &store[iseq_id];
 
-        let func = store.iseq(func_id);
-        let start_pos = func.get_pc_index(position);
-
-        let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
-        for (loop_start, loop_end) in func.bb_info.loops() {
-            ctx.analyse_loop(store, func, *loop_start, *loop_end);
-        }
-
-        let bbctx = BBContext::new(&ctx);
-
-        if let Some(pc) = position {
-            // generate class guard of *self* for loop JIT
-            // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
-            let side_exit = self.gen_deopt(pc + 1, &bbctx);
-            monoasm!( &mut self.jit,
-                movq rdi, [r14 - (LFP_SELF)];
-            );
-            self.guard_class_rdi(self_value.class(), side_exit);
-        } else {
-            // for method JIT, class of *self* is already checked in an entry stub.
-            self.prologue(func, store);
-        }
-
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
-        let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = ctx.label();
-        ctx.branch_map.insert(
-            bb_begin,
-            vec![BranchEntry {
-                src_idx: BcIndex(0),
-                bbctx,
-                branch_dest,
-                cont: true,
-            }],
+        let self_ty = store[self_class].instance_ty();
+        let mut ctx = JitContext::new(
+            func,
+            position.is_some(),
+            self.class_version(),
+            self_class,
+            self_ty,
         );
 
-        let bb_end = match func.bb_info.get_loop(bb_begin) {
-            Some((a, b)) => {
-                assert_eq!(a, bb_begin);
-                b
+        ctx.compile(store, iseq_id, position);
+
+        self.gen_machine_code(&mut ctx, store, entry_label);
+
+        if self.startup_flag {
+            #[cfg(feature = "jit-log")]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+                self.jit_compile_time += elapsed;
             }
-            None => BasicBlockId(func.bb_info.len() - 1),
-        };
-        let bbir: Vec<_> = (bb_begin..=bb_end)
-            .map(|bbid| {
-                let ir = ctx.compile_basic_block(store, func, position, bbid);
-                (bbid, ir)
-            })
-            .collect();
-
-        ctx.backedge_branches(func);
-
-        #[cfg(feature = "emit-cfg")]
-        Self::dump_cfg(func, store, bb_begin, bb_end);
-
-        // generate machine code for a main context
-        for (_bbid, ir) in bbir.into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None, None);
-        }
-
-        // generate machine code for bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
-            let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
-        }
-        assert!(ctx.continuation_bridge.is_none());
-
-        self.jit.finalize();
-
-        if startup_flag {
+            #[cfg(feature = "emit-asm")]
+            self.dump_disas(store, ctx.sourcemap, iseq_id);
             #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
             {
                 self.jit.select_page(0);
@@ -714,90 +727,37 @@ impl Codegen {
                 eprintln!("    total bytes(1):{:?}", self.jit.get_current());
                 self.jit.select_page(0);
             }
-            #[cfg(feature = "jit-log")]
-            {
-                let elapsed = now.elapsed();
-                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
-                self.jit_compile_time += elapsed;
-            }
             #[cfg(feature = "emit-asm")]
             eprintln!("<== finished compile.");
         }
-        ctx.sourcemap
+        #[cfg(feature = "perf")]
+        {
+            let fid = store[iseq_id].func_id();
+            let desc = format!("JIT:<{}>", store.func_description(fid));
+            self.perf_info(pair, &desc);
+        }
     }
 
-    #[cfg(feature = "emit-cfg")]
-    fn dump_cfg(func: &ISeqInfo, store: &Store, bb_begin: BasicBlockId, bb_end: BasicBlockId) {
-        let mut s = format!(
-            r###"digraph graph_name {{
-  graph [
-    charset = "UTF-8";
-    label = "{}",
-    labelloc = "t",
-    labeljust = "c",
-    bgcolor = "#343434",
-    fontcolor = white,
-    fontsize = 20,
-    rankdir = TB,
-    margin = 0.2,
-    splines = spline,
-    nodesep = 0.8,
-    ranksep = 1.1
-  ];
-
-  node [
-    colorscheme = "accent8"
-    shape = box,
-    style = "solid,filled",
-    fontsize = 16,
-    fontcolor = 5,
-    fontname = "Consolas",
-    color = 5,
-    fillcolor = 4,
-  ];
-
-  edge [
-    style = solid,
-    fontsize = 14,
-    fontcolor = white,
-    fontname = "Migu 1M",
-    color = white,
-    labelfloat = true,
-    labeldistance = 2.5,
-    labelangle = 70
-  ];"###,
-            store.func_description(func.func_id())
-        );
-        s += "\n";
-        for bbid in bb_begin..=bb_end {
-            s += &format!("  {:?} [\n    shape=record\n    label=\"{{{:?}", bbid, bbid);
-            let BasciBlockInfoEntry { begin, end, .. } = func.bb_info[bbid];
-            for bc in begin..=end {
-                if let Some(inst) = func.trace_ir(store, bc).format(store) {
-                    s += "|";
-                    let html = html_escape::encode_text(&inst)
-                        .replace('|', "\\|")
-                        .replace('"', "\\\"");
-                    s += &format!("{} {}\\l", bc, html);
-                }
-            }
-            s += "}\"\n  ];\n";
+    fn gen_machine_code(&mut self, ctx: &mut JitContext, store: &Store, entry_label: DestLabel) {
+        self.jit.bind_label(entry_label);
+        #[cfg(feature = "emit-asm")]
+        {
+            ctx.start_codepos = self.jit.get_current();
         }
 
-        for bbid in bb_begin..=bb_end {
-            let entry = &func.bb_info[bbid];
-            for succ in &entry.succ {
-                s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
-            }
+        // generate machine code for a main context
+        for ir in std::mem::take(&mut ctx.ir).into_iter() {
+            self.gen_asm(ir, store, ctx, None);
         }
 
-        s += "}\n";
-        let path = std::path::PathBuf::from(".cfg");
-        match path.try_exists() {
-            Ok(true) => {}
-            _ => std::fs::create_dir(&path).unwrap(),
+        // generate machine code for bridges
+        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+            let entry = ctx.resolve_label(&mut self.jit, entry);
+            self.gen_asm(ir, store, ctx, Some((entry, exit)));
         }
-        std::fs::write(path.join(format!("fid-{}.dot", func.func_id().get())), s).unwrap();
+        assert!(ctx.continuation_bridge.is_none());
+
+        self.jit.finalize();
     }
 }
 
@@ -1023,19 +983,6 @@ impl Codegen {
                 movq [r14 - (conv(reg))], rax;
             }
         }
-    }
-
-    ///
-    /// Get *DestLabel* for write-back and fallback to interpreter.
-    ///
-    /// ### in
-    /// - rdi: deopt-reason:Value
-    ///
-    pub(crate) fn gen_deopt(&mut self, pc: BytecodePtr, bb: &BBContext) -> DestLabel {
-        let entry = self.jit.label();
-        let wb = bb.get_write_back();
-        self.gen_deopt_with_label(pc, &wb, entry);
-        entry
     }
 
     ///

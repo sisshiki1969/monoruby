@@ -133,7 +133,7 @@ pub(crate) enum ConstState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ClassInfo {
+pub struct ClassInfo {
     ///
     /// the constant name which this class object is bound.
     /// if this class object is not bound to any constant, this is None.
@@ -163,6 +163,12 @@ pub(crate) struct ClassInfo {
     /// instance variable table.
     ///
     ivar_names: HashMap<IdentId, IvarId>,
+    ///
+    /// Object type of instances of this class.
+    ///
+    /// None for modules.
+    ///
+    instance_ty: Option<ObjTy>,
 }
 
 impl alloc::GC<RValue> for ClassInfo {
@@ -191,6 +197,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             class_variables: None,
             ivar_names: HashMap::default(),
+            instance_ty: None,
         }
     }
 
@@ -203,6 +210,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             class_variables: None,
             ivar_names: self.ivar_names.clone(),
+            instance_ty: self.instance_ty,
         }
     }
 
@@ -212,6 +220,10 @@ impl ClassInfo {
 
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
         self.ivar_names.get(&name).cloned()
+    }
+
+    pub(crate) fn ivar_len(&self) -> usize {
+        self.ivar_names.len()
     }
 
     pub(crate) fn ivar_names(&self) -> impl Iterator<Item = (&IdentId, &IvarId)> {
@@ -228,6 +240,18 @@ impl ClassInfo {
 
     pub(crate) fn get_name_id(&self) -> Option<IdentId> {
         self.name
+    }
+
+    pub(crate) fn instance_ty(&self) -> Option<ObjTy> {
+        self.instance_ty
+    }
+
+    pub(crate) fn is_object_ty_instance(&self) -> bool {
+        self.instance_ty == Some(ObjTy::OBJECT)
+    }
+
+    pub(crate) fn is_array_ty_instance(&self) -> bool {
+        self.instance_ty == Some(ObjTy::ARRAY)
     }
 
     fn set_cvar(&mut self, name: IdentId, val: Value) {
@@ -275,6 +299,7 @@ impl ClassInfoTable {
         };
         let class_obj = Value::class_empty(class_id, Some(superclass));
         self[class_id].object = Some(class_obj.as_class());
+        self[class_id].instance_ty = Some(ObjTy::OBJECT);
         class_obj
     }
 
@@ -297,7 +322,7 @@ impl ClassInfoTable {
     ///
     pub(crate) fn get_metaclass(&mut self, original: ClassId) -> Module {
         let original_obj = self.get_module(original);
-        if original_obj.as_val().ty() == Some(ObjKind::CLASS) {
+        if original_obj.as_val().ty() == Some(ObjTy::CLASS) {
             let class = self[original_obj.as_val().class()].get_module();
             if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
                 return class;
@@ -436,30 +461,6 @@ impl ClassInfoTable {
         names
     }
 
-    pub(crate) fn define_class(
-        &mut self,
-        name_id: IdentId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-        is_module: bool,
-    ) -> Module {
-        let class_id = self.add_class();
-        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
-        self.get_metaclass(class_id);
-        obj
-    }
-
-    fn define_builtin_class(
-        &mut self,
-        name_id: IdentId,
-        class_id: ClassId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        self.def_builtin_class(class_id);
-        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
-    }
-
     fn generate_class_obj(
         &mut self,
         name_id: IdentId,
@@ -467,7 +468,17 @@ impl ClassInfoTable {
         superclass: Option<Module>,
         parent: ClassId,
         is_module: bool,
+        instance_ty: Option<ObjTy>,
     ) -> Module {
+        let instance_ty = if is_module {
+            None
+        } else if let Some(ty) = instance_ty {
+            Some(ty)
+        } else if let Some(superclass) = superclass {
+            self[superclass.id()].instance_ty
+        } else {
+            Some(ObjTy::OBJECT)
+        };
         let class_obj = if is_module {
             Value::module_empty(class_id, superclass)
         } else {
@@ -476,62 +487,110 @@ impl ClassInfoTable {
         self[class_id].object = Some(class_obj.as_class());
         self[class_id].name = Some(name_id);
         self[class_id].parent = Some(parent);
+        self[class_id].instance_ty = instance_ty;
         self.set_constant(parent, name_id, class_obj);
         class_obj.as_class()
     }
 }
 
-impl Globals {
-    pub(crate) fn define_module(&mut self, name: &str) -> Module {
-        let object_class = self.store.classes.object_class();
+impl ClassInfoTable {
+    pub(crate) fn define_module_with_identid(
+        &mut self,
+        name_id: IdentId,
+        parent: ClassId,
+    ) -> Module {
+        let object_class = self.object_class();
+        self.define_class_inner(name_id, Some(object_class), parent, true)
+    }
+
+    pub(crate) fn define_toplevel_module(&mut self, name: &str) -> Module {
         let name_id = IdentId::get_id(name);
-        self.store
-            .classes
-            .define_class(name_id, Some(object_class), OBJECT_CLASS, true)
+        self.define_module_with_identid(name_id, OBJECT_CLASS)
+    }
+
+    pub(crate) fn define_class_with_identid(
+        &mut self,
+        name_id: IdentId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+    ) -> Module {
+        self.define_class_inner(name_id, superclass, parent, false)
+    }
+
+    pub(crate) fn define_class(
+        &mut self,
+        name: &str,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.define_class_with_identid(name_id, superclass, parent)
+    }
+
+    pub fn define_class_inner(
+        &mut self,
+        name_id: IdentId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        is_module: bool,
+    ) -> Module {
+        let class_id = self.add_class();
+        let obj = self.generate_class_obj(
+            name_id,
+            class_id,
+            superclass.into(),
+            parent,
+            is_module,
+            None,
+        );
+        self.get_metaclass(class_id);
+        obj
+    }
+
+    pub(crate) fn define_builtin_class(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        instance_ty: impl Into<Option<ObjTy>>,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.def_builtin_class(class_id);
+        self.generate_class_obj(
+            name_id,
+            class_id,
+            superclass.into(),
+            parent,
+            false,
+            instance_ty.into(),
+        )
     }
 
     pub(crate) fn define_builtin_class_under_obj(
         &mut self,
         name: &str,
         class_id: ClassId,
+        instance_ty: impl Into<Option<ObjTy>>,
     ) -> Module {
-        let object_class = self.store.classes.object_class();
-        self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
-    }
-
-    pub(crate) fn define_class_by_str(
-        &mut self,
-        name: &str,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        let name_id = IdentId::get_id(name);
-        self.store
-            .classes
-            .define_class(name_id, superclass, parent, false)
+        let object_class = self.object_class();
+        self.define_builtin_class(
+            name,
+            class_id,
+            Some(object_class),
+            OBJECT_CLASS,
+            instance_ty,
+        )
     }
 
     pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
         let name_id = IdentId::get_id(name);
-        let object_class = self.store.classes.object_class();
-        self.store
-            .classes
-            .define_class(name_id, Some(object_class), OBJECT_CLASS, false)
+        let object_class = self.object_class();
+        self.define_class_inner(name_id, Some(object_class), OBJECT_CLASS, false)
     }
+}
 
-    pub(crate) fn define_builtin_class_by_str(
-        &mut self,
-        name: &str,
-        class_id: ClassId,
-        superclass: impl Into<Option<Module>>,
-        parent: ClassId,
-    ) -> Module {
-        let name_id = IdentId::get_id(name);
-        self.store
-            .classes
-            .define_builtin_class(name_id, class_id, superclass, parent)
-    }
-
+impl Globals {
     pub fn include_module(&mut self, mut base: Module, module: Module) -> Result<()> {
         self.class_version_inc();
         base.include_module(module)
@@ -811,7 +870,7 @@ impl Globals {
 
     fn set_bop_redefine(&mut self) {
         self.codegen.set_bop_redefine();
-        self.store.functions.invalidate_jit_code();
+        self.store.invalidate_jit_code();
         let vm_entry = self.codegen.vm_entry;
         for func in self.store.functions.functions() {
             if let FuncKind::ISeq(_) = func.kind {

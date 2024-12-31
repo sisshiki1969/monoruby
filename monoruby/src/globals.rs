@@ -25,6 +25,7 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     &mut jitgen::BBContext,
     CallSiteId,
+    ClassId,
     BytecodePtr,
 ) -> bool;
 
@@ -105,7 +106,6 @@ pub struct Globals {
     pub codegen: Codegen,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
-
     /// suppress jit compilation.
     no_jit: bool,
     /// suppress loading gem.
@@ -118,26 +118,27 @@ pub struct Globals {
     random: Box<Prng>,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
-    pub(super) startup_flag: bool,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
+    #[cfg(feature = "profile")]
+    jit_recompile_count: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
 }
 
-impl std::ops::Index<FuncId> for Globals {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.store[index]
+impl std::ops::Deref for Globals {
+    type Target = Store;
+    fn deref(&self) -> &Self::Target {
+        &self.store
     }
 }
 
-impl std::ops::IndexMut<FuncId> for Globals {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.store[index]
+impl std::ops::DerefMut for Globals {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.store
     }
 }
 
@@ -169,22 +170,24 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_canonicalized_files: IndexSet::default(),
-            startup_flag: false,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
             jit_class_unmatched_stats: HashMap::default(),
+            #[cfg(feature = "profile")]
+            jit_recompile_count: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
         };
 
         let mut object_class =
-            globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
-        let basic_object = globals.define_builtin_class_by_str(
+            globals.define_builtin_class("Object", OBJECT_CLASS, None, OBJECT_CLASS, ObjTy::OBJECT);
+        let basic_object = globals.define_builtin_class(
             "BasicObject",
             BASIC_OBJECT_CLASS,
             None,
             OBJECT_CLASS,
+            ObjTy::OBJECT,
         );
         object_class.set_superclass(Some(basic_object));
         assert_eq!(
@@ -236,7 +239,7 @@ impl Globals {
     }
 
     pub fn locals_len(&self, func_id: FuncId) -> usize {
-        match self[func_id].kind {
+        match self.store[func_id].kind {
             FuncKind::ISeq(info) => self.store[info].locals.len(),
             _ => 0,
         }
@@ -351,7 +354,7 @@ impl Globals {
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {
-        let info = &self[func_id];
+        let info = &self.store[func_id];
         assert!(info.codeptr().is_some());
         info.data_ref()
     }
@@ -496,14 +499,14 @@ impl Globals {
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
         #[cfg(feature = "perf")]
         let pair = self.codegen.get_address_pair();
-        let kind = self[func_id].kind.clone();
+        let kind = self.store[func_id].kind.clone();
         let entry = self.codegen.gen_wrapper(&kind, self.no_jit);
         let codeptr = self.codegen.jit.get_label_address(entry);
-        self[func_id].set_entry(entry, codeptr);
+        self.store[func_id].set_entry(entry, codeptr);
         #[cfg(feature = "perf")]
         {
             let info = self.codegen.get_wrapper_info(pair);
-            self[func_id].set_wrapper_info(info);
+            self.store[func_id].set_wrapper_info(info);
         }
     }
 
@@ -521,7 +524,18 @@ impl Globals {
     pub fn clear_stats(&mut self) {
         self.deopt_stats.clear();
         self.jit_class_unmatched_stats.clear();
+        self.jit_recompile_count.clear();
         self.store.clear_stats();
+    }
+
+    #[cfg(feature = "profile")]
+    pub fn countup_recompile(&mut self, func_id: FuncId, class_id: ClassId) {
+        match self.jit_recompile_count.get_mut(&(func_id, class_id)) {
+            Some(c) => *c += 1,
+            None => {
+                self.jit_recompile_count.insert((func_id, class_id), 1);
+            }
+        };
     }
 }
 

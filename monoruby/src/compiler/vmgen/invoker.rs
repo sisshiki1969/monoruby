@@ -516,7 +516,7 @@ extern "C" fn handle_invoker_arguments(
     mut arg_num: usize,
 ) -> Option<Value> {
     let callee_fid = callee_lfp.meta().func_id();
-    let info = &globals[callee_fid];
+    let info = &globals.store[callee_fid];
     // expand array for block
     if info.single_arg_expand() && arg_num == 1 {
         arg_num = expand_array_for_block(info, arg_num, callee_lfp);

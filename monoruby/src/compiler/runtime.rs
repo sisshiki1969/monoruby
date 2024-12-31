@@ -71,11 +71,10 @@ pub(super) extern "C" fn vm_find_method(
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
-    let class_context = globals[func_id].owner_class().unwrap();
-    let func_name = globals[func_id].name().unwrap();
+    let class_context = globals.store[func_id].owner_class().unwrap();
+    let func_name = globals.store[func_id].name().unwrap();
     match globals
         .store
-        .classes
         .check_super(self_val, class_context, func_name)
     {
         Some(func_id) => Some(func_id),
@@ -644,7 +643,7 @@ pub(super) extern "C" fn define_singleton_class(
     globals: &mut Globals,
     base: Value,
 ) -> Option<Value> {
-    let self_val = globals.store.classes.get_singleton(base);
+    let self_val = globals.store.get_singleton(base);
     vm.push_class_context(self_val.id());
     Some(self_val.as_val())
 }
@@ -672,7 +671,7 @@ pub(super) extern "C" fn singleton_define_method(
     let current_func = vm.method_func_id();
     globals.store.iseq_mut(func).lexical_context =
         globals.store.iseq(current_func).lexical_context.clone();
-    let class_id = globals.store.classes.get_singleton(obj).id();
+    let class_id = globals.store.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
     globals.class_version_inc();
 }
@@ -830,7 +829,7 @@ pub(super) extern "C" fn handle_error(
     meta: Meta,
     pc: BytecodePtr,
 ) -> ErrorReturn {
-    let func_info = &globals[meta.func_id()];
+    let func_info = &globals.store[meta.func_id()];
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             // check exception table.
