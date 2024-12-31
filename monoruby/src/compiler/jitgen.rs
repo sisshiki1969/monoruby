@@ -366,17 +366,6 @@ impl std::ops::DerefMut for BBContextInner {
     }
 }
 
-impl BBContextInner {
-    fn from_iseq(iseq: &ISeqInfo, class_version: u32) -> Self {
-        Self {
-            slot_state: SlotContext::from_iseq(iseq),
-            sp: SlotId(iseq.local_num() as u16),
-            next_sp: SlotId(iseq.local_num() as u16),
-            class_version,
-        }
-    }
-}
-
 ///
 /// Context of an each basic block.
 ///

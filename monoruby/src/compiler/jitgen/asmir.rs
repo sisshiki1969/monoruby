@@ -184,14 +184,6 @@ impl AsmIr {
         self.push(AsmInst::RegToRSPOffset(r, i));
     }
 
-    pub fn reg2inline_stack(&mut self, r: GP, slot: SlotId) {
-        self.reg2rsp_offset(r, slot.0 as i32 * 8)
-    }
-
-    pub fn inline_stack2reg(&mut self, slot: SlotId, r: GP) {
-        self.push(AsmInst::RSPOffsetToReg(slot.0 as i32 * 8, r));
-    }
-
     pub fn i32torsp_offset(&mut self, val: i32, i: i32) {
         self.push(AsmInst::I32ToRSPOffset(val, i));
     }
@@ -797,7 +789,6 @@ pub(super) enum AsmInst {
     RegAdd(GP, i32),
     RegSub(GP, i32),
     RegToRSPOffset(GP, i32),
-    RSPOffsetToReg(i32, GP),
     I32ToRSPOffset(i32, i32),
     RSPOffsetToArray(i32),
 

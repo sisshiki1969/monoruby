@@ -781,18 +781,18 @@ impl RValue {
     pub(crate) fn get_ivar(&self, store: &Store, name: IdentId) -> Option<Value> {
         let class_id = self.class();
         let id = store[class_id].get_ivarid(name)?;
-        self.get_var(id)
+        self.get_ivar_by_ivarid(id)
     }
 
     pub(crate) fn get_ivars(&self, store: &Store) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
         store[class_id]
             .ivar_names()
-            .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
+            .filter_map(|(name, id)| self.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
     }
 
-    pub(crate) fn get_var(&self, id: IvarId) -> Option<Value> {
+    pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
@@ -809,11 +809,7 @@ impl RValue {
         None
     }
 
-    /*pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
-        base.get_var(id).unwrap_or_default()
-    }*/
-
-    pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
+    pub(crate) fn set_ivar_by_ivarid(&mut self, id: IvarId, val: Value) {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
@@ -837,10 +833,6 @@ impl RValue {
                 self.var_table = Some(Box::new(v));
             }
         }
-    }
-
-    pub(crate) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
-        base.set_var(id, val)
     }
 
     pub(super) fn change_class(&mut self, new_class_id: ClassId) {

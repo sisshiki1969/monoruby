@@ -88,12 +88,6 @@ impl Codegen {
                     movq [rsp + (ofs)], R(r);
                 );
             }
-            AsmInst::RSPOffsetToReg(ofs, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), [rsp + (ofs)];
-                );
-            }
             AsmInst::RSPOffsetToArray(ofs) => {
                 monoasm!( &mut self.jit,
                     movq rdi, [rsp + (ofs)];

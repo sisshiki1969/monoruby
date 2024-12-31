@@ -182,7 +182,7 @@ impl Codegen {
         );
         self.xmm_save(using);
         monoasm!( &mut self.jit,
-            movq rax, (RValue::set_ivar);
+            movq rax, (set_ivar);
             call rax;
         );
         self.xmm_restore(using);
@@ -218,6 +218,10 @@ impl Codegen {
             movq [rdx + (idx * 8)], rax;
         }
     }
+}
+
+extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+    base.set_ivar_by_ivarid(id, val)
 }
 
 impl Codegen {
