@@ -835,22 +835,14 @@ impl RValue {
         }
     }
 
-    pub(crate) fn extend_ivar(&mut self, store: &Store) {
-        let mut len = store[self.class()].ivar_len();
-        if self.ty() == ObjTy::OBJECT {
-            if len <= OBJECT_INLINE_IVAR {
-                return;
-            } else {
-                len -= OBJECT_INLINE_IVAR;
-            }
-        }
+    pub(crate) fn extend_ivar(&mut self, heap_len: usize) {
         match &mut self.var_table {
             Some(v) => {
-                v.resize(len);
+                v.resize(heap_len);
             }
             None => {
-                let mut v = MonoVec::with_capacity(len);
-                v.resize(len);
+                let mut v = MonoVec::with_capacity(heap_len);
+                v.resize(heap_len);
                 self.var_table = Some(Box::new(v));
             }
         }

@@ -1169,7 +1169,7 @@ pub(super) enum AsmInst {
     LoadIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
-        min_len: usize,
+        self_: bool,
     },
     LoadIVarInline {
         ivarid: IvarId,
@@ -1187,7 +1187,7 @@ pub(super) enum AsmInst {
     StoreIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
-        min_len: usize,
+        self_: bool,
         using_xmm: UsingXmm,
     },
     StoreIVarInline {

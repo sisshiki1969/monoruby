@@ -224,7 +224,7 @@ impl BBContext {
                         ir.push(AsmInst::LoadIVarHeap {
                             ivarid,
                             is_object_ty,
-                            min_len: 0,
+                            self_: false,
                         });
                     }
                 }
@@ -244,7 +244,7 @@ impl BBContext {
                     ir.push(AsmInst::StoreIVarHeap {
                         ivarid,
                         using_xmm,
-                        min_len: 0,
+                        self_: false,
                         is_object_ty,
                     });
                 }

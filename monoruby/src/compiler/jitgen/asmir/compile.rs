@@ -8,10 +8,8 @@ mod index;
 mod method_call;
 mod variables;
 
-extern "C" fn extend_ivar(mut self_: Value, globals: &Globals) {
-    if let Some(rvalue) = self_.try_rvalue_mut() {
-        rvalue.extend_ivar(globals);
-    }
+extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
+    rvalue.extend_ivar(heap_len);
 }
 
 impl Codegen {
@@ -32,14 +30,39 @@ impl Codegen {
                 self.init_func(&info);
             }
             AsmInst::Preparation => {
-                /*if !ctx.self_class.is_always_frozen() && ctx.ivar_heap_accessed {
+                if !ctx.self_class.is_always_frozen() && ctx.ivar_heap_accessed {
+                    let ivar_len = store[ctx.self_class].ivar_len();
+                    let heap_len = if ctx.self_ty == Some(ObjTy::OBJECT) {
+                        ivar_len - OBJECT_INLINE_IVAR
+                    } else {
+                        ivar_len
+                    };
+                    let fail = self.jit.label();
+                    let exit = self.jit.label();
                     monoasm!(&mut self.jit,
                         movq rdi, [r14 - (LFP_SELF)];
-                        movq rsi, r12;
+                        movq rsi, (heap_len);
+                        movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                        // check var_table is not None
+                        testq rdx, rdx;
+                        jz   fail;
+                        // check capa is not 0
+                        cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                        jz   fail;
+                        // check len >= heap_len
+                        cmpq [rdx + (MONOVEC_LEN)], rsi; // len
+                        jlt  fail;
+                    exit:
+                    );
+                    self.jit.select_page(1);
+                    monoasm!( &mut self.jit,
+                    fail:
                         movq rax, (extend_ivar);
                         call rax;
+                        jmp exit;
                     );
-                }*/
+                    self.jit.select_page(0);
+                }
             }
             AsmInst::Label(label) => {
                 let label = ctx.resolve_label(&mut self.jit, label);
@@ -578,15 +601,15 @@ impl Codegen {
             AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
-                min_len,
-            } => self.load_ivar_heap(ivarid, is_object_ty, min_len),
+                self_,
+            } => self.load_ivar_heap(ivarid, is_object_ty, self_),
             AsmInst::LoadIVarInline { ivarid } => self.load_ivar_inline(ivarid),
             AsmInst::StoreIVarHeap {
                 ivarid: cached_ivarid,
                 is_object_ty,
-                min_len,
+                self_,
                 using_xmm,
-            } => self.store_ivar_heap(cached_ivarid, is_object_ty, min_len, using_xmm),
+            } => self.store_ivar_heap(cached_ivarid, is_object_ty, self_, using_xmm),
             AsmInst::StoreIVarInline {
                 ivarid: cached_ivarid,
             } => self.store_ivar_object_inline(cached_ivarid),

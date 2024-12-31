@@ -19,7 +19,7 @@ impl BBContext {
             ir.push(AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
-                min_len: self.self_ivar_len,
+                self_: true,
             });
             true
         };
@@ -45,10 +45,9 @@ impl BBContext {
             ir.push(AsmInst::StoreIVarHeap {
                 ivarid,
                 is_object_ty,
-                min_len: self.self_ivar_len,
+                self_: true,
                 using_xmm: self.get_using_xmm(),
             });
-            self.self_ivar_len = std::cmp::max(ivarid.get() as usize + 1, self.self_ivar_len);
             true
         }
     }

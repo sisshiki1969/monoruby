@@ -7,8 +7,6 @@ pub(crate) struct SlotContext {
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
     local_num: usize,
-    /// minimal length of ivar table for *self*.
-    pub self_ivar_len: usize,
 }
 
 impl std::ops::Index<SlotId> for SlotContext {
@@ -281,7 +279,6 @@ impl SlotContext {
             },
             r15: None,
             local_num,
-            self_ivar_len: 0,
         }
     }
 
@@ -904,7 +901,6 @@ impl BBContext {
 
 impl MergeContext {
     pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotContext) {
-        self.self_ivar_len = std::cmp::min(self.self_ivar_len, other.self_ivar_len);
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self[i].is_used.merge(&other[i].is_used);
