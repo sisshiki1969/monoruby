@@ -218,11 +218,15 @@ impl BBContext {
                 } else {
                     let ivarid = store[recv_class].get_ivarid(ivar_name)?;
                     let is_object_ty = store[recv_class].is_object_ty_instance();
-                    ir.push(AsmInst::LoadIVar {
-                        ivarid,
-                        is_object_ty,
-                        min_len: 0,
-                    });
+                    if is_object_ty && ivarid.is_inline() {
+                        ir.push(AsmInst::LoadIVarInline { ivarid })
+                    } else {
+                        ir.push(AsmInst::LoadIVarHeap {
+                            ivarid,
+                            is_object_ty,
+                            min_len: 0,
+                        });
+                    }
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
@@ -234,12 +238,16 @@ impl BBContext {
                 self.fetch_for_gpr(ir, args, GP::Rax);
                 let is_object_ty = store[recv_class].is_object_ty_instance();
                 let using_xmm = self.get_using_xmm();
-                ir.push(AsmInst::StoreIVar {
-                    ivarid,
-                    using_xmm,
-                    min_len: 0,
-                    is_object_ty,
-                });
+                if is_object_ty && ivarid.is_inline() {
+                    ir.push(AsmInst::StoreIVarInline { ivarid })
+                } else {
+                    ir.push(AsmInst::StoreIVarHeap {
+                        ivarid,
+                        using_xmm,
+                        min_len: 0,
+                        is_object_ty,
+                    });
+                }
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();

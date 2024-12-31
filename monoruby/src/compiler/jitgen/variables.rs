@@ -11,11 +11,16 @@ impl BBContext {
         assert!(!self_class.is_always_frozen());
         self.unlink(dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
-        ir.push(AsmInst::LoadIVar {
-            ivarid,
-            is_object_ty: self.self_ty == Some(ObjTy::OBJECT),
-            min_len: self.self_ivar_len,
-        });
+        let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
+        if is_object_ty && ivarid.is_inline() {
+            ir.push(AsmInst::LoadIVarInline { ivarid })
+        } else {
+            ir.push(AsmInst::LoadIVarHeap {
+                ivarid,
+                is_object_ty,
+                min_len: self.self_ivar_len,
+            });
+        }
         self.rax2acc(ir, dst);
     }
 
@@ -29,14 +34,18 @@ impl BBContext {
         assert!(!self_class.is_always_frozen());
         self.fetch_for_gpr(ir, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::StoreIVar {
-            ivarid,
-            is_object_ty: self.self_ty == Some(ObjTy::OBJECT),
-            min_len: self.self_ivar_len,
-            using_xmm,
-        });
-        self.self_ivar_len = std::cmp::max(ivarid.get() as usize + 1, self.self_ivar_len);
+        let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
+        if is_object_ty && ivarid.is_inline() {
+            ir.push(AsmInst::StoreIVarInline { ivarid });
+        } else {
+            ir.push(AsmInst::StoreIVarHeap {
+                ivarid,
+                is_object_ty,
+                min_len: self.self_ivar_len,
+                using_xmm: self.get_using_xmm(),
+            });
+            self.self_ivar_len = std::cmp::max(ivarid.get() as usize + 1, self.self_ivar_len);
+        }
     }
 }
 

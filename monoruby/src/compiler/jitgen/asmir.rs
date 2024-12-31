@@ -1165,10 +1165,13 @@ pub(super) enum AsmInst {
     /// #### destroy
     /// - rdi, rsi
     ///
-    LoadIVar {
+    LoadIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
         min_len: usize,
+    },
+    LoadIVarInline {
+        ivarid: IvarId,
     },
     ///
     /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
@@ -1180,11 +1183,14 @@ pub(super) enum AsmInst {
     /// #### destroy
     /// - caller-save registers
     ///
-    StoreIVar {
+    StoreIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
         min_len: usize,
         using_xmm: UsingXmm,
+    },
+    StoreIVarInline {
+        ivarid: IvarId,
     },
 
     /// rax = DynVar(src)

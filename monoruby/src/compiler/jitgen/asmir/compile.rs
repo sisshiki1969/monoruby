@@ -559,17 +559,21 @@ impl Codegen {
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
 
-            AsmInst::LoadIVar {
+            AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 min_len,
-            } => self.load_ivar(ivarid, is_object_ty, min_len),
-            AsmInst::StoreIVar {
+            } => self.load_ivar_heap(ivarid, is_object_ty, min_len),
+            AsmInst::LoadIVarInline { ivarid } => self.load_ivar_inline(ivarid),
+            AsmInst::StoreIVarHeap {
                 ivarid: cached_ivarid,
                 is_object_ty,
                 min_len,
                 using_xmm,
-            } => self.store_ivar(cached_ivarid, is_object_ty, min_len, using_xmm),
+            } => self.store_ivar_heap(cached_ivarid, is_object_ty, min_len, using_xmm),
+            AsmInst::StoreIVarInline {
+                ivarid: cached_ivarid,
+            } => self.store_ivar_object_inline(cached_ivarid),
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);

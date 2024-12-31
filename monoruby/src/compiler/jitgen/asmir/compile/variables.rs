@@ -2,26 +2,6 @@ use super::*;
 
 impl Codegen {
     ///
-    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    /// #### out
-    /// - rax: Value
-    ///
-    /// #### destroy
-    /// - rdi, rsi
-    ///
-    pub(super) fn load_ivar(&mut self, ivarid: IvarId, is_object_ty: bool, min_len: usize) {
-        if is_object_ty && ivarid.is_inline() {
-            self.load_ivar_inline(ivarid);
-        } else {
-            self.load_ivar_heap(ivarid, is_object_ty, min_len);
-        }
-    }
-
-    ///
     /// Load ivar embedded to RValue. (only for object type)
     ///
     /// #### in
@@ -33,7 +13,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi
     ///
-    fn load_ivar_inline(&mut self, ivarid: IvarId) {
+    pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
         monoasm! {&mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
             // We must check whether the ivar slot is None.
@@ -55,7 +35,7 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rsi, rdx
     ///
-    fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, min_len: usize) {
+    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, min_len: usize) {
         let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let len_flag = min_len > (ivarid.get() as usize);
@@ -106,37 +86,13 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
-    ///
-    /// #### in
-    /// - rax: Value
-    /// - rdi: &RValue
-    ///
-    /// #### destroy
-    /// - caller-save registers
-    ///
-    pub(super) fn store_ivar(
-        &mut self,
-        ivarid: IvarId,
-        is_object_ty: bool,
-        min_len: usize,
-        using_xmm: UsingXmm,
-    ) {
-        if is_object_ty && ivarid.is_inline() {
-            self.store_ivar_inline(ivarid);
-        } else {
-            self.store_ivar_heap(ivarid, is_object_ty, min_len, using_xmm);
-        }
-    }
-
-    ///
     /// Store ivar embedded to RValue. (only for object type)
     ///
     /// #### in
     /// - rax: Value
     /// - rdi: &RValue
     ///
-    fn store_ivar_inline(&mut self, ivarid: IvarId) {
+    pub(super) fn store_ivar_object_inline(&mut self, ivarid: IvarId) {
         monoasm!( &mut self.jit,
             movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], rax;
         );
@@ -152,7 +108,7 @@ impl Codegen {
     /// #### destroy
     /// - caller-save registers
     ///
-    fn store_ivar_heap(
+    pub(super) fn store_ivar_heap(
         &mut self,
         ivarid: IvarId,
         is_object_ty: bool,
