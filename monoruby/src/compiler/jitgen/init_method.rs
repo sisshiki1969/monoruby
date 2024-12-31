@@ -1,20 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn prologue(&mut self, func: &ISeqInfo, store: &Store) {
-        monoasm!( &mut self.jit,
-            pushq rbp;
-            movq rbp, rsp;
-        );
-        match func.trace_ir(store, BcIndex::from(0)) {
-            TraceIr::InitMethod(fn_info) => {
-                self.init_func(&fn_info);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn init_func(&mut self, fn_info: &FnInitInfo) {
+    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo) {
         let FnInitInfo {
             reg_num,
             arg_num,
@@ -23,14 +10,13 @@ impl Codegen {
         } = *fn_info;
 
         monoasm!( &mut self.jit,
+            pushq rbp;
+            movq rbp, rsp;
             subq rsp, (stack_offset * 16);
         );
 
         let l1 = self.jit.label();
-        self.test_heap_frame();
-        monoasm! { &mut self.jit,
-            jnz l1;
-        }
+        self.branch_if_heap_frame(l1);
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num;
         if clear_len > 2 {

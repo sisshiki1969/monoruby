@@ -81,6 +81,7 @@ fn object_object_id(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -123,6 +124,7 @@ pub fn object_send(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
@@ -164,7 +166,7 @@ fn extend(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let class = globals.store.classes.get_singleton(lfp.self_val());
+    let class = globals.store.get_singleton(lfp.self_val());
     for v in args.iter().cloned().rev() {
         globals.include_module(class, v.expect_module(globals)?)?;
     }

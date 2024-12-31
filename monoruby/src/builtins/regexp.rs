@@ -5,7 +5,11 @@ use super::*;
 //
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj("Regexp", REGEXP_CLASS);
+    globals.define_builtin_class_under_obj(
+        "Regexp",
+        REGEXP_CLASS,
+        ObjTy::REGEXP,
+    );
     globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
@@ -51,7 +55,7 @@ fn regexp_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
 fn regexp_escape(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_str()?;
-    let val = Value::string(regex::escape(string));
+    let val = Value::string(RegexpInner::escape(string));
     Ok(val)
 }
 
@@ -71,7 +75,7 @@ fn regexp_union(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
     }
     for arg in rest.iter() {
         if let Some(s) = arg.is_str() {
-            v.push(regex::escape(s));
+            v.push(RegexpInner::escape(s));
         } else if let Some(re) = arg.is_regex() {
             v.push(re.as_str().to_string());
         } else {

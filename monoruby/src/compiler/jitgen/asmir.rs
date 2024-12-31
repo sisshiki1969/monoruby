@@ -4,23 +4,6 @@ use super::*;
 
 mod compile;
 
-// ~~~text
-// MethodCall
-//  0   2   4   6    8  10  12  14
-// +---+---+---+---++---+---+---+---+
-// |callid |ret| op||  fid  |   -   |
-// +---+---+---+---++---+---+---+---+
-// InlineCache
-// 16  18  20  22   24  26  28  30
-// +---+---+---+---++---+---+---+---+
-// |pos|arg|rcv| op|| class |version|
-// +---+---+---+---++---+---+---+---+
-// ~~~
-
-//const BC_OFFSET_CACHED_CLASS: usize = 24;
-//const BC_OFFSET_CACHED_VERSION: usize = 28;
-//const BC_OFFSET_CACHED_FUNCID: usize = 8;
-
 pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &SideExitLabels)>,
 }
@@ -323,7 +306,7 @@ impl AsmIr {
         deopt: AsmDeopt,
         error: AsmError,
     ) {
-        self.push(AsmInst::GuardClassVersion(
+        self.push(AsmInst::GuardClassVersionWithRecovery(
             cached_fid,
             cached_version,
             callid,
@@ -344,7 +327,7 @@ impl AsmIr {
     ///
     pub(crate) fn guard_class(
         &mut self,
-        bb: &mut BBContext,
+        bb: &mut BBContextInner,
         slot: SlotId,
         r: GP,
         class: ClassId,
@@ -444,7 +427,7 @@ impl AsmIr {
         cached_version: usize,
         deopt: AsmDeopt,
     ) {
-        let fdst = bbctx.store_new_both_float(self, dst);
+        let fdst = bbctx.store_new_both_float(dst);
         self.push(AsmInst::LoadFloatConstant {
             fdst,
             f,
@@ -783,6 +766,7 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
+    #[cfg(feature = "emit-asm")]
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -868,8 +852,8 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - stack
     ///
-    GuardClassVersion(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
-    GuardClassVersion2(u32, AsmDeopt),
+    GuardClassVersionWithRecovery(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
+    GuardClassVersion(u32, AsmDeopt),
     ///
     /// Type guard.
     ///
@@ -909,6 +893,8 @@ pub(super) enum AsmInst {
         branch_table: Box<[BasicBlockId]>,
     },
 
+    Preparation,
+    Init(FnInitInfo),
     /// deoptimize
     Deopt(AsmDeopt),
     /// recompile and deoptimize
@@ -936,28 +922,7 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    /// - rdx: value: Value
-    ///
-    AttrWriter {
-        ivar_id: IvarId,
-        using_xmm: UsingXmm,
-        error: AsmError,
-    },
-    ///
-    /// Attribute reader
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    AttrReader {
-        ivar_id: IvarId,
-    },
-    ///
-    /// Send cached method
+    /// Send method
     ///
     /// ### in
     /// - rdi: receiver: Value
@@ -966,7 +931,7 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - r15
     ///
-    SendCached {
+    Send {
         callid: CallSiteId,
         recv_class: ClassId,
         callee_fid: FuncId,
@@ -1190,14 +1155,43 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
 
-    LoadIVar {
+    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - rax: Value
+    ///
+    /// #### destroy
+    /// - rdi, rsi
+    ///
+    LoadIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
+        self_: bool,
     },
-    StoreIVar {
+    LoadIVarInline {
+        ivarid: IvarId,
+    },
+    ///
+    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    ///
+    /// #### in
+    /// - rax: Value
+    /// - rdi: &RValue
+    ///
+    /// #### destroy
+    /// - caller-save registers
+    ///
+    StoreIVarHeap {
         ivarid: IvarId,
         is_object_ty: bool,
+        self_: bool,
         using_xmm: UsingXmm,
+    },
+    StoreIVarInline {
+        ivarid: IvarId,
     },
 
     /// rax = DynVar(src)
@@ -1301,8 +1295,7 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
-
-    #[allow(dead_code)]
+    #[cfg(feature = "emit-asm")]
     BcIndex(BcIndex),
     Label(JitLabel),
 }
@@ -1415,8 +1408,7 @@ impl Codegen {
         ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
-        entry: Option<DestLabel>,
-        exit: Option<BasicBlockId>,
+        entry_exit: Option<(DestLabel, BasicBlockId)>,
     ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
@@ -1436,39 +1428,29 @@ impl Codegen {
             }
         }
 
-        if exit.is_some() {
+        if entry_exit.is_some() {
             self.jit.select_page(1);
         }
-        if let Some(entry) = entry {
+        if let Some((entry, _)) = entry_exit {
             self.jit.bind_label(entry);
         }
-
-        #[cfg(feature = "emit-asm")]
-        let mut _sourcemap = vec![];
 
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             if let AsmInst::BcIndex(i) = &inst {
-                _sourcemap.push((*i, self.jit.get_current()));
+                ctx.sourcemap
+                    .push((*i, self.jit.get_current() - ctx.start_codepos));
             }
-            self.gen_asmir(store, ctx, &side_exits, inst);
+            self.compile_asmir(store, ctx, &side_exits, inst);
         }
 
-        if let Some(exit) = exit {
+        if let Some((_, exit)) = entry_exit {
             let exit = *ctx.basic_block_labels.get(&exit).unwrap();
             let exit = ctx.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }
             self.jit.select_page(0);
-        }
-
-        #[cfg(feature = "emit-asm")]
-        if entry.is_none() {
-            let map = _sourcemap
-                .into_iter()
-                .map(|(pc, pos)| (pc, pos - ctx.start_codepos));
-            ctx.sourcemap.extend(map);
         }
     }
 

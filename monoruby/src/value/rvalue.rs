@@ -43,6 +43,84 @@ pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_
 pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
 pub const PROCINNER_FUNCID: i64 = std::mem::offset_of!(ProcInner, func_id) as _;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ObjTy(std::num::NonZeroU8);
+
+impl std::fmt::Debug for ObjTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = self.0.get();
+        write!(
+            f,
+            "{}",
+            match ty {
+                1 => "CLASS",
+                2 => "MODULE",
+                3 => "OBJECT",
+                4 => "BIGNUM",
+                5 => "FLOAT",
+                6 => "STRING",
+                7 => "TIME",
+                8 => "ARRAY",
+                9 => "RANGE",
+                10 => "EXCEPTION",
+                11 => "PROC",
+                12 => "HASH",
+                13 => "REGEXP",
+                14 => "IO",
+                15 => "METHOD",
+                16 => "FIBER",
+                17 => "ENUMERATOR",
+                18 => "GENERATOR",
+                19 => "COMPLEX",
+                20 => "BINDING",
+                21 => "UMETHOD",
+                _ => unreachable!(),
+            }
+        )
+    }
+}
+
+impl ObjTy {
+    fn new(ty: u8) -> Self {
+        Self(std::num::NonZeroU8::new(ty).unwrap())
+    }
+
+    pub fn from_u8(ty: u8) -> Option<Self> {
+        if ty == 0 {
+            None
+        } else {
+            Some(Self::new(ty))
+        }
+    }
+    pub fn get(&self) -> u8 {
+        self.0.get()
+    }
+}
+
+impl ObjTy {
+    pub const CLASS: Self = Self(std::num::NonZeroU8::new(1).unwrap());
+    pub const MODULE: Self = Self(std::num::NonZeroU8::new(2).unwrap());
+    pub const OBJECT: Self = Self(std::num::NonZeroU8::new(3).unwrap());
+    pub const BIGNUM: Self = Self(std::num::NonZeroU8::new(4).unwrap());
+    pub const FLOAT: Self = Self(std::num::NonZeroU8::new(5).unwrap());
+    pub const STRING: Self = Self(std::num::NonZeroU8::new(6).unwrap());
+    pub const TIME: Self = Self(std::num::NonZeroU8::new(7).unwrap());
+    pub const ARRAY: Self = Self(std::num::NonZeroU8::new(8).unwrap());
+    pub const RANGE: Self = Self(std::num::NonZeroU8::new(9).unwrap());
+    pub const EXCEPTION: Self = Self(std::num::NonZeroU8::new(10).unwrap());
+    pub const PROC: Self = Self(std::num::NonZeroU8::new(11).unwrap());
+    pub const HASH: Self = Self(std::num::NonZeroU8::new(12).unwrap());
+    pub const REGEXP: Self = Self(std::num::NonZeroU8::new(13).unwrap());
+    pub const IO: Self = Self(std::num::NonZeroU8::new(14).unwrap());
+    pub const METHOD: Self = Self(std::num::NonZeroU8::new(15).unwrap());
+    pub const FIBER: Self = Self(std::num::NonZeroU8::new(16).unwrap());
+    pub const ENUMERATOR: Self = Self(std::num::NonZeroU8::new(17).unwrap());
+    pub const GENERATOR: Self = Self(std::num::NonZeroU8::new(18).unwrap());
+    pub const COMPLEX: Self = Self(std::num::NonZeroU8::new(19).unwrap());
+    pub const BINDING: Self = Self(std::num::NonZeroU8::new(20).unwrap());
+    pub const UMETHOD: Self = Self(std::num::NonZeroU8::new(21).unwrap());
+}
+
 #[repr(C)]
 pub union ObjKind {
     invalid: (),
@@ -66,32 +144,6 @@ pub union ObjKind {
     enumerator: ManuallyDrop<EnumeratorInner>,
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
-}
-
-#[allow(dead_code)]
-impl ObjKind {
-    pub const INVALID: u8 = 0;
-    pub const CLASS: u8 = 1;
-    pub const MODULE: u8 = 2;
-    pub const OBJECT: u8 = 3;
-    pub const BIGNUM: u8 = 4;
-    pub const FLOAT: u8 = 5;
-    pub const STRING: u8 = 6;
-    pub const TIME: u8 = 7;
-    pub const ARRAY: u8 = 8;
-    pub const RANGE: u8 = 9;
-    pub const EXCEPTION: u8 = 10;
-    pub const PROC: u8 = 11;
-    pub const HASH: u8 = 12;
-    pub const REGEXP: u8 = 13;
-    pub const IO: u8 = 14;
-    pub const METHOD: u8 = 15;
-    pub const FIBER: u8 = 16;
-    pub const ENUMERATOR: u8 = 17;
-    pub const GENERATOR: u8 = 18;
-    pub const COMPLEX: u8 = 19;
-    pub const BINDING: u8 = 20;
-    pub const UMETHOD: u8 = 21;
 }
 
 impl ObjKind {
@@ -322,32 +374,35 @@ impl std::fmt::Debug for RValue {
                 "{:016x} RValue {{ class:{:?} {} }}",
                 self.id(),
                 meta.class,
-                unsafe {
-                    match meta.ty {
-                        0 => "<INVALID>".to_string(),
-                        1 => format!("CLASS({:?})", self.kind.class),
-                        2 => format!("MODULE({:?})", self.kind.class),
-                        3 => format!("OBJECT({:?})", self.kind.object),
-                        4 => format!("BIGNUM({:?})", self.kind.bignum),
-                        5 => format!("FLOAT({:?})", self.kind.float),
-                        6 => format!("STRING({})", self.kind.string.to_str().unwrap()),
-                        7 => format!("TIME({:?})", self.kind.time),
-                        8 => format!("ARRAY({:?})", self.kind.array),
-                        9 => format!("RANGE({:?})", self.kind.range),
-                        10 => format!("EXCEPTION({:?})", self.kind.exception),
-                        11 => format!("PROC({:?})", self.kind.proc),
-                        12 => format!("HASH({:?})", self.kind.hash),
-                        13 => format!("REGEXP({:?})", self.kind.regexp),
-                        14 => format!("IO({:?})", self.kind.io),
-                        15 => format!("METHOD({:?})", self.kind.method),
-                        16 => format!("FIBER({:?})", self.kind.fiber),
-                        17 => format!("ENUMERATOR({:?})", self.kind.enumerator),
-                        18 => format!("GENERATOR({:?})", self.kind.generator),
-                        19 => format!("COMPLEX({:?})", self.kind.complex),
-                        20 => format!("BINDING({:?})", self.kind.binding),
-                        21 => format!("UMETHOD({:?})", self.kind.umethod),
-                        _ => unreachable!(),
-                    }
+                if let Some(ty) = meta.ty {
+                    format!("{:?}({})", ty, unsafe {
+                        match ty {
+                            ObjTy::CLASS => format!("{:?}", self.kind.class),
+                            ObjTy::MODULE => format!("{:?}", self.kind.class),
+                            ObjTy::OBJECT => format!("{:?}", self.kind.object),
+                            ObjTy::BIGNUM => format!("{:?}", self.kind.bignum),
+                            ObjTy::FLOAT => format!("{:?}", self.kind.float),
+                            ObjTy::STRING => format!("{}", self.kind.string.to_str().unwrap()),
+                            ObjTy::TIME => format!("{:?}", self.kind.time),
+                            ObjTy::ARRAY => format!("{:?}", self.kind.array),
+                            ObjTy::RANGE => format!("{:?}", self.kind.range),
+                            ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
+                            ObjTy::PROC => format!("{:?}", self.kind.proc),
+                            ObjTy::HASH => format!("{:?}", self.kind.hash),
+                            ObjTy::REGEXP => format!("{:?}", self.kind.regexp),
+                            ObjTy::IO => format!("{:?}", self.kind.io),
+                            ObjTy::METHOD => format!("{:?}", self.kind.method),
+                            ObjTy::FIBER => format!("{:?}", self.kind.fiber),
+                            ObjTy::ENUMERATOR => format!("{:?}", self.kind.enumerator),
+                            ObjTy::GENERATOR => format!("{:?}", self.kind.generator),
+                            ObjTy::COMPLEX => format!("{:?}", self.kind.complex),
+                            ObjTy::BINDING => format!("{:?}", self.kind.binding),
+                            ObjTy::UMETHOD => format!("{:?}", self.kind.umethod),
+                            _ => unreachable!(),
+                        }
+                    })
+                } else {
+                    "INVALID".to_string()
                 },
             )
         }
@@ -364,14 +419,14 @@ impl std::hash::Hash for RValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         unsafe {
             match self.ty() {
-                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-                ObjKind::BIGNUM => self.as_bignum().hash(state),
-                ObjKind::FLOAT => self.as_float().to_bits().hash(state),
-                ObjKind::STRING => self.as_bytes().hash(state),
-                ObjKind::ARRAY => self.as_array().hash(state),
-                ObjKind::RANGE => self.as_range().hash(state),
-                ObjKind::HASH => self.as_hashmap().hash(state),
-                ObjKind::COMPLEX => self.as_complex().hash(state),
+                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+                ObjTy::BIGNUM => self.as_bignum().hash(state),
+                ObjTy::FLOAT => self.as_float().to_bits().hash(state),
+                ObjTy::STRING => self.as_bytes().hash(state),
+                ObjTy::ARRAY => self.as_array().hash(state),
+                ObjTy::RANGE => self.as_range().hash(state),
+                ObjTy::HASH => self.as_hashmap().hash(state),
+                ObjTy::COMPLEX => self.as_complex().hash(state),
                 _ => self.hash(state),
             }
         }
@@ -386,23 +441,23 @@ impl RValue {
     pub(crate) fn debug(&self, store: &Store) -> String {
         unsafe {
             match self.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => store.debug_class_name(self.as_class_id()),
-                ObjKind::TIME => self.as_time().to_string(),
-                ObjKind::ARRAY => self.as_array().debug(store),
-                ObjKind::OBJECT => self.object_debug(store),
-                ObjKind::RANGE => self.range_debug(store),
-                ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.as_hashmap().debug(store),
-                ObjKind::REGEXP => self.regexp_tos(),
-                ObjKind::IO => self.as_io().to_string(),
-                ObjKind::EXCEPTION => self.as_exception().msg().to_string(),
-                ObjKind::METHOD => self.as_method().debug(store),
-                ObjKind::FIBER => self.fiber_debug(store),
-                ObjKind::ENUMERATOR => self.enumerator_debug(store),
-                ObjKind::GENERATOR => self.object_debug(store),
-                ObjKind::COMPLEX => self.as_complex().debug(store),
-                ObjKind::BINDING => self.object_debug(store),
-                ObjKind::UMETHOD => self.as_umethod().debug(store),
+                ObjTy::CLASS | ObjTy::MODULE => store.debug_class_name(self.as_class_id()),
+                ObjTy::TIME => self.as_time().to_string(),
+                ObjTy::ARRAY => self.as_array().debug(store),
+                ObjTy::OBJECT => self.object_debug(store),
+                ObjTy::RANGE => self.range_debug(store),
+                ObjTy::PROC => self.proc_tos(),
+                ObjTy::HASH => self.as_hashmap().debug(store),
+                ObjTy::REGEXP => self.regexp_tos(),
+                ObjTy::IO => self.as_io().to_string(),
+                ObjTy::EXCEPTION => self.as_exception().msg().to_string(),
+                ObjTy::METHOD => self.as_method().debug(store),
+                ObjTy::FIBER => self.fiber_debug(store),
+                ObjTy::ENUMERATOR => self.enumerator_debug(store),
+                ObjTy::GENERATOR => self.object_debug(store),
+                ObjTy::COMPLEX => self.as_complex().debug(store),
+                ObjTy::BINDING => self.object_debug(store),
+                ObjTy::UMETHOD => self.as_umethod().debug(store),
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -411,17 +466,17 @@ impl RValue {
     pub(crate) fn to_s(&self, store: &Store) -> String {
         unsafe {
             match self.ty() {
-                ObjKind::CLASS | ObjKind::MODULE => store.get_class_name(self.as_class_id()),
-                ObjKind::ARRAY => self.as_array().to_s(store),
-                ObjKind::OBJECT => self.object_tos(store),
-                ObjKind::RANGE => self.range_tos(store),
-                ObjKind::PROC => self.proc_tos(),
-                ObjKind::HASH => self.as_hashmap().to_s(store),
-                ObjKind::METHOD => self.as_method().to_s(store),
-                ObjKind::ENUMERATOR => self.enumerator_tos(store),
-                ObjKind::GENERATOR => self.object_tos(store),
-                ObjKind::BINDING => self.object_tos(store),
-                ObjKind::UMETHOD => self.as_umethod().to_s(store),
+                ObjTy::CLASS | ObjTy::MODULE => store.get_class_name(self.as_class_id()),
+                ObjTy::ARRAY => self.as_array().to_s(store),
+                ObjTy::OBJECT => self.object_tos(store),
+                ObjTy::RANGE => self.range_tos(store),
+                ObjTy::PROC => self.proc_tos(),
+                ObjTy::HASH => self.as_hashmap().to_s(store),
+                ObjTy::METHOD => self.as_method().to_s(store),
+                ObjTy::ENUMERATOR => self.enumerator_tos(store),
+                ObjTy::GENERATOR => self.object_tos(store),
+                ObjTy::BINDING => self.object_tos(store),
+                ObjTy::UMETHOD => self.as_umethod().to_s(store),
                 _ => self.debug(store),
             }
         }
@@ -429,8 +484,8 @@ impl RValue {
 
     pub(crate) fn inspect(&self, store: &Store) -> String {
         match self.ty() {
-            ObjKind::OBJECT => self.object_inspect(store),
-            ObjKind::EXCEPTION => {
+            ObjTy::OBJECT => self.object_inspect(store),
+            ObjTy::EXCEPTION => {
                 let class_name = store.get_class_name(self.class());
                 let msg = self.as_exception().msg();
                 format!("#<{class_name}: {msg}>")
@@ -509,7 +564,7 @@ impl RValue {
     }
 
     fn regexp_tos(&self) -> String {
-        format!("/{}/", self.as_regex().as_str())
+        format!("(?:{})", self.as_regex().as_str())
     }
 
     fn range_debug(&self, store: &Store) -> String {
@@ -538,12 +593,12 @@ impl RValue {
     pub(crate) fn eql(&self, other: &Self) -> bool {
         unsafe {
             match (self.ty(), other.ty()) {
-                (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
-                (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
-                (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
-                (ObjKind::COMPLEX, ObjKind::COMPLEX) => self.as_complex().eql(other.as_complex()),
-                (ObjKind::STRING, ObjKind::STRING) => self.as_bytes() == other.as_bytes(),
-                (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                (ObjTy::OBJECT, ObjTy::OBJECT) => self.id() == other.id(),
+                (ObjTy::BIGNUM, ObjTy::BIGNUM) => self.as_bignum() == other.as_bignum(),
+                (ObjTy::FLOAT, ObjTy::FLOAT) => self.as_float() == other.as_float(),
+                (ObjTy::COMPLEX, ObjTy::COMPLEX) => self.as_complex().eql(other.as_complex()),
+                (ObjTy::STRING, ObjTy::STRING) => self.as_bytes() == other.as_bytes(),
+                (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = self.as_array();
                     let rhs = other.as_array();
                     if lhs.len() != rhs.len() {
@@ -560,12 +615,12 @@ impl RValue {
                         }
                     })
                 }
-                (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
-                (ObjKind::HASH, ObjKind::HASH) => self.as_hashmap() == other.as_hashmap(),
-                //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
-                //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
-                (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
-                (_, ObjKind::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
+                (ObjTy::RANGE, ObjTy::RANGE) => self.as_range().eql(other.as_range()),
+                (ObjTy::HASH, ObjTy::HASH) => self.as_hashmap() == other.as_hashmap(),
+                //(ObjTy::METHOD, ObjTy::METHOD) => *self.method() == *other.method(),
+                //(ObjTy::UNBOUND_METHOD, ObjTy::UNBOUND_METHOD) => *self.method() == *other.method(),
+                //(ObjTy::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+                //(_, ObjTy::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
                 _ => false,
             }
         }
@@ -587,8 +642,8 @@ impl alloc::GC<RValue> for RValue {
         }
         unsafe {
             match self.ty() {
-                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::CLASS | ObjKind::MODULE => {
+                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                ObjTy::CLASS | ObjTy::MODULE => {
                     let module = self.as_module();
                     if let Some(class) = module.superclass_value() {
                         class.mark(alloc)
@@ -597,46 +652,46 @@ impl alloc::GC<RValue> for RValue {
                         val.mark(alloc)
                     }
                 }
-                ObjKind::OBJECT => {
+                ObjTy::OBJECT => {
                     self.as_object().iter().for_each(|v| {
                         v.map(|v| {
                             v.mark(alloc);
                         });
                     });
                 }
-                ObjKind::BIGNUM => {}
-                ObjKind::FLOAT => {}
-                ObjKind::COMPLEX => {
+                ObjTy::BIGNUM => {}
+                ObjTy::FLOAT => {}
+                ObjTy::COMPLEX => {
                     self.as_complex().re().get().mark(alloc);
                     self.as_complex().im().get().mark(alloc);
                 }
-                ObjKind::STRING => {}
-                ObjKind::TIME => {}
-                ObjKind::ARRAY => {
+                ObjTy::STRING => {}
+                ObjTy::TIME => {}
+                ObjTy::ARRAY => {
                     self.as_array().iter().for_each(|v| v.mark(alloc));
                 }
-                ObjKind::RANGE => {
+                ObjTy::RANGE => {
                     let range = self.as_range();
                     range.start.mark(alloc);
                     range.end.mark(alloc);
                 }
-                ObjKind::PROC => {}
-                ObjKind::HASH => {
+                ObjTy::PROC => {}
+                ObjTy::HASH => {
                     for (k, v) in self.as_hashmap().iter() {
                         k.mark(alloc);
                         v.mark(alloc);
                     }
                 }
-                ObjKind::REGEXP => {}
-                ObjKind::IO => {}
-                ObjKind::EXCEPTION => {}
-                ObjKind::METHOD => self.as_method().receiver().mark(alloc),
-                ObjKind::FIBER => self.as_fiber().mark(alloc),
-                ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
-                ObjKind::GENERATOR => self.as_generator().mark(alloc),
-                ObjKind::BINDING => self.as_binding().mark(alloc),
-                ObjKind::UMETHOD => {}
-                _ => unreachable!("mark {:016x} {}", self.id(), self.ty()),
+                ObjTy::REGEXP => {}
+                ObjTy::IO => {}
+                ObjTy::EXCEPTION => {}
+                ObjTy::METHOD => self.as_method().receiver().mark(alloc),
+                ObjTy::FIBER => self.as_fiber().mark(alloc),
+                ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
+                ObjTy::GENERATOR => self.as_generator().mark(alloc),
+                ObjTy::BINDING => self.as_binding().mark(alloc),
+                ObjTy::UMETHOD => {}
+                _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
     }
@@ -655,19 +710,19 @@ impl alloc::GCBox for RValue {
         }
         unsafe {
             match self.ty() {
-                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::MODULE | ObjKind::CLASS => ManuallyDrop::drop(&mut self.kind.class),
-                ObjKind::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
-                ObjKind::STRING => ManuallyDrop::drop(&mut self.kind.string),
-                ObjKind::TIME => ManuallyDrop::drop(&mut self.kind.time),
-                ObjKind::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
-                ObjKind::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),
-                ObjKind::HASH => ManuallyDrop::drop(&mut self.kind.hash),
-                ObjKind::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
-                ObjKind::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
-                ObjKind::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
-                ObjKind::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
-                ObjKind::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
+                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                ObjTy::MODULE | ObjTy::CLASS => ManuallyDrop::drop(&mut self.kind.class),
+                ObjTy::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
+                ObjTy::STRING => ManuallyDrop::drop(&mut self.kind.string),
+                ObjTy::TIME => ManuallyDrop::drop(&mut self.kind.time),
+                ObjTy::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
+                ObjTy::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),
+                ObjTy::HASH => ManuallyDrop::drop(&mut self.kind.hash),
+                ObjTy::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
+                ObjTy::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
+                ObjTy::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
+                ObjTy::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
+                ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
                 _ => {}
             }
             self.set_next_none();
@@ -708,7 +763,7 @@ impl RValue {
         self as *const RValue as u64
     }
 
-    pub(crate) fn ty(&self) -> u8 {
+    pub(crate) fn ty(&self) -> ObjTy {
         self.header.ty()
     }
 
@@ -716,7 +771,7 @@ impl RValue {
     /// Get class object of *self.
     ///
     pub(crate) fn get_class_obj(&self, store: &Store) -> Module {
-        store.classes[self.class()].get_module()
+        store[self.class()].get_module()
     }
 
     pub(crate) fn real_class(&self, store: &Store) -> Module {
@@ -725,21 +780,21 @@ impl RValue {
 
     pub(crate) fn get_ivar(&self, store: &Store, name: IdentId) -> Option<Value> {
         let class_id = self.class();
-        let id = store.classes[class_id].get_ivarid(name)?;
-        self.get_var(id)
+        let id = store[class_id].get_ivarid(name)?;
+        self.get_ivar_by_ivarid(id)
     }
 
     pub(crate) fn get_ivars(&self, store: &Store) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
-        store.classes[class_id]
+        store[class_id]
             .ivar_names()
-            .filter_map(|(name, id)| self.get_var(*id).map(|v| (*name, v)))
+            .filter_map(|(name, id)| self.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
     }
 
-    pub(crate) fn get_var(&self, id: IvarId) -> Option<Value> {
+    pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
-        if self.ty() == ObjKind::OBJECT {
+        if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 return unsafe { self.as_object()[i] };
             } else {
@@ -754,13 +809,9 @@ impl RValue {
         None
     }
 
-    /*pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
-        base.get_var(id).unwrap_or_default()
-    }*/
-
-    pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
+    pub(crate) fn set_ivar_by_ivarid(&mut self, id: IvarId, val: Value) {
         let mut i = id.into_usize();
-        if self.ty() == ObjKind::OBJECT {
+        if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 unsafe { self.as_object_mut()[i] = Some(val) };
                 return;
@@ -784,8 +835,17 @@ impl RValue {
         }
     }
 
-    pub(crate) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
-        base.set_var(id, val)
+    pub(crate) fn extend_ivar(&mut self, heap_len: usize) {
+        match &mut self.var_table {
+            Some(v) => {
+                v.resize(heap_len);
+            }
+            None => {
+                let mut v = MonoVec::with_capacity(heap_len);
+                v.resize(heap_len);
+                self.var_table = Some(Box::new(v));
+            }
+        }
     }
 
     pub(super) fn change_class(&mut self, new_class_id: ClassId) {
@@ -798,26 +858,26 @@ impl RValue {
             var_table: self.var_table.clone(),
             kind: unsafe {
                 match self.ty() {
-                    ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                    ObjKind::CLASS | ObjKind::MODULE => {
+                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                    ObjTy::CLASS | ObjTy::MODULE => {
                         let class = self.as_module();
                         ObjKind::class(class.id(), class.superclass(), class.class_type().clone())
                     }
-                    ObjKind::OBJECT => ObjKind::object(),
-                    ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
-                    ObjKind::FLOAT => ObjKind {
+                    ObjTy::OBJECT => ObjKind::object(),
+                    ObjTy::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
+                    ObjTy::FLOAT => ObjKind {
                         float: self.as_float(),
                     },
-                    ObjKind::COMPLEX => ObjKind::complex(
+                    ObjTy::COMPLEX => ObjKind::complex(
                         self.as_complex().re().deep_copy(),
                         self.as_complex().im().deep_copy(),
                     ),
-                    ObjKind::STRING => ObjKind::string_from_inner(self.as_bytes().clone()),
-                    ObjKind::TIME => ObjKind::time(self.as_time().clone()),
-                    ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
+                    ObjTy::STRING => ObjKind::string_from_inner(self.as_bytes().clone()),
+                    ObjTy::TIME => ObjKind::time(self.as_time().clone()),
+                    ObjTy::ARRAY => ObjKind::array(ArrayInner::from_iter(
                         self.as_array().iter().map(|v| v.deep_copy()),
                     )),
-                    ObjKind::RANGE => {
+                    ObjTy::RANGE => {
                         let lhs = self.as_range();
                         ObjKind::range(
                             lhs.start.deep_copy(),
@@ -825,7 +885,7 @@ impl RValue {
                             lhs.exclude_end != 0,
                         )
                     }
-                    ObjKind::HASH => {
+                    ObjTy::HASH => {
                         let mut map = IndexMap::default();
                         let hash = self.as_hashmap();
                         for (k, v) in hash.iter() {
@@ -833,7 +893,7 @@ impl RValue {
                         }
                         ObjKind::hash(map)
                     }
-                    ObjKind::REGEXP => {
+                    ObjTy::REGEXP => {
                         let regexp = self.as_regex();
                         ObjKind::regexp(regexp.clone())
                     }
@@ -849,50 +909,50 @@ impl RValue {
             var_table: self.var_table.clone(),
             kind: unsafe {
                 match self.ty() {
-                    ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                    ObjKind::CLASS | ObjKind::MODULE => ObjKind {
+                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                    ObjTy::CLASS | ObjTy::MODULE => ObjKind {
                         class: self.kind.class.clone(),
                     },
-                    ObjKind::OBJECT => ObjKind {
+                    ObjTy::OBJECT => ObjKind {
                         object: self.kind.object,
                     },
-                    ObjKind::BIGNUM => ObjKind {
+                    ObjTy::BIGNUM => ObjKind {
                         bignum: self.kind.bignum.clone(),
                     },
-                    ObjKind::FLOAT => ObjKind {
+                    ObjTy::FLOAT => ObjKind {
                         float: self.kind.float,
                     },
-                    ObjKind::COMPLEX => ObjKind {
+                    ObjTy::COMPLEX => ObjKind {
                         complex: ManuallyDrop::new(self.kind.complex.dup()),
                     },
-                    ObjKind::STRING => ObjKind {
+                    ObjTy::STRING => ObjKind {
                         string: self.kind.string.clone(),
                     },
-                    ObjKind::TIME => ObjKind {
+                    ObjTy::TIME => ObjKind {
                         time: self.kind.time.clone(),
                     },
-                    ObjKind::ARRAY => ObjKind {
+                    ObjTy::ARRAY => ObjKind {
                         array: self.kind.array.clone(),
                     },
-                    ObjKind::RANGE => ObjKind {
+                    ObjTy::RANGE => ObjKind {
                         range: self.kind.range.clone(),
                     },
-                    ObjKind::PROC => ObjKind {
+                    ObjTy::PROC => ObjKind {
                         proc: self.kind.proc.clone(),
                     },
-                    ObjKind::HASH => ObjKind {
+                    ObjTy::HASH => ObjKind {
                         hash: self.kind.hash.clone(),
                     },
-                    ObjKind::REGEXP => ObjKind {
+                    ObjTy::REGEXP => ObjKind {
                         regexp: self.kind.regexp.clone(),
                     },
-                    ObjKind::IO => ObjKind {
+                    ObjTy::IO => ObjKind {
                         io: self.kind.io.clone(),
                     },
-                    ObjKind::EXCEPTION => ObjKind {
+                    ObjTy::EXCEPTION => ObjKind {
                         exception: self.kind.exception.clone(),
                     },
-                    ObjKind::METHOD => ObjKind {
+                    ObjTy::METHOD => ObjKind {
                         method: self.kind.method.clone(),
                     },
                     _ => unreachable!("clone()"),
@@ -912,7 +972,7 @@ impl RValue {
 impl RValue {
     pub(super) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
-            header: Header::new(INTEGER_CLASS, ObjKind::BIGNUM),
+            header: Header::new(INTEGER_CLASS, ObjTy::BIGNUM),
             kind: ObjKind::bignum(bigint),
             var_table: None,
         }
@@ -920,7 +980,7 @@ impl RValue {
 
     pub(super) fn new_float(f: f64) -> Self {
         RValue {
-            header: Header::new(FLOAT_CLASS, ObjKind::FLOAT),
+            header: Header::new(FLOAT_CLASS, ObjTy::FLOAT),
             kind: ObjKind::float(f),
             var_table: None,
         }
@@ -928,7 +988,7 @@ impl RValue {
 
     pub(super) fn new_complex(re: Real, im: Real) -> Self {
         RValue {
-            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
             kind: ObjKind::complex(re, im),
             var_table: None,
         }
@@ -936,7 +996,7 @@ impl RValue {
 
     pub(super) fn new_complex_from(complex: num::Complex<Real>) -> Self {
         RValue {
-            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
             kind: ObjKind::complex_from(complex),
             var_table: None,
         }
@@ -944,7 +1004,7 @@ impl RValue {
 
     pub(super) fn new_complex_from_inner(inner: ComplexInner) -> Self {
         RValue {
-            header: Header::new(COMPLEX_CLASS, ObjKind::COMPLEX),
+            header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
             kind: ObjKind::complex_from_inner(inner),
             var_table: None,
         }
@@ -959,7 +1019,7 @@ impl RValue {
         class_type: ModuleType,
     ) -> Self {
         RValue {
-            header: Header::new(CLASS_CLASS, ObjKind::CLASS),
+            header: Header::new(CLASS_CLASS, ObjTy::CLASS),
             kind: ObjKind::class(id, superclass, class_type),
             var_table: None,
         }
@@ -971,7 +1031,7 @@ impl RValue {
         singleton: Value,
     ) -> Self {
         RValue {
-            header: Header::new(CLASS_CLASS, ObjKind::CLASS),
+            header: Header::new(CLASS_CLASS, ObjTy::CLASS),
             kind: ObjKind::singleton_class(id, superclass, singleton),
             var_table: None,
         }
@@ -982,7 +1042,7 @@ impl RValue {
     ///
     pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            header: Header::new(MODULE_CLASS, ObjKind::MODULE),
+            header: Header::new(MODULE_CLASS, ObjTy::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::RealClass),
             var_table: None,
         }
@@ -993,7 +1053,7 @@ impl RValue {
     ///
     pub(super) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            header: Header::new(MODULE_CLASS, ObjKind::MODULE),
+            header: Header::new(MODULE_CLASS, ObjTy::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::IClass),
             var_table: None,
         }
@@ -1004,7 +1064,7 @@ impl RValue {
     ///
     pub(super) fn new_object(class_id: ClassId) -> Self {
         RValue {
-            header: Header::new(class_id, ObjKind::OBJECT),
+            header: Header::new(class_id, ObjTy::OBJECT),
             kind: ObjKind::object(),
             var_table: None,
         }
@@ -1012,7 +1072,7 @@ impl RValue {
 
     pub(super) fn new_string(s: String) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_string(s),
             var_table: None,
         }
@@ -1020,7 +1080,7 @@ impl RValue {
 
     pub(super) fn new_string_from_inner(inner: StringInner) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_inner(inner),
             var_table: None,
         }
@@ -1028,7 +1088,7 @@ impl RValue {
 
     pub(super) fn new_string_from_str(s: &str) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_str(s),
             var_table: None,
         }
@@ -1036,7 +1096,7 @@ impl RValue {
 
     pub(super) fn new_string_from_vec(v: Vec<u8>) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_vec(v),
             var_table: None,
         }
@@ -1044,7 +1104,7 @@ impl RValue {
 
     pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::bytes_from_vec(v),
             var_table: None,
         }
@@ -1052,7 +1112,7 @@ impl RValue {
 
     pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
-            header: Header::new(STRING_CLASS, ObjKind::STRING),
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::bytes_from_slice(slice),
             var_table: None,
         }
@@ -1060,7 +1120,7 @@ impl RValue {
 
     pub(super) fn new_array(ary: ArrayInner) -> Self {
         RValue {
-            header: Header::new(ARRAY_CLASS, ObjKind::ARRAY),
+            header: Header::new(ARRAY_CLASS, ObjTy::ARRAY),
             kind: ObjKind::array(ary),
             var_table: None,
         }
@@ -1068,7 +1128,7 @@ impl RValue {
 
     pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
-            header: Header::new(class_id, ObjKind::ARRAY),
+            header: Header::new(class_id, ObjTy::ARRAY),
             kind: ObjKind::array(ArrayInner::from_vec(v)),
             var_table: None,
         }
@@ -1076,7 +1136,7 @@ impl RValue {
 
     pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue {
-            header: Header::new(HASH_CLASS, ObjKind::HASH),
+            header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
@@ -1084,7 +1144,7 @@ impl RValue {
 
     pub(super) fn new_hash_from_inner(inner: HashmapInner) -> Self {
         RValue {
-            header: Header::new(HASH_CLASS, ObjKind::HASH),
+            header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash_from_inner(inner),
             var_table: None,
         }
@@ -1092,7 +1152,7 @@ impl RValue {
 
     pub(super) fn new_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
         RValue {
-            header: Header::new(class_id, ObjKind::HASH),
+            header: Header::new(class_id, ObjTy::HASH),
             kind: ObjKind::hash_empty(default_proc),
             var_table: None,
         }
@@ -1100,7 +1160,7 @@ impl RValue {
 
     pub(super) fn new_regexp(regexp: RegexpInner) -> Self {
         RValue {
-            header: Header::new(REGEXP_CLASS, ObjKind::REGEXP),
+            header: Header::new(REGEXP_CLASS, ObjTy::REGEXP),
             kind: ObjKind::regexp(regexp),
             var_table: None,
         }
@@ -1113,7 +1173,7 @@ impl RValue {
         class_id: ClassId,
     ) -> Self {
         RValue {
-            header: Header::new(class_id, ObjKind::EXCEPTION),
+            header: Header::new(class_id, ObjTy::EXCEPTION),
             kind: ObjKind::exception(kind, msg, trace),
             var_table: None,
         }
@@ -1125,7 +1185,7 @@ impl RValue {
         class_id: ClassId,
     ) -> Self {
         RValue {
-            header: Header::new(class_id, ObjKind::EXCEPTION),
+            header: Header::new(class_id, ObjTy::EXCEPTION),
             kind: ObjKind::exception_from(err, store),
             var_table: None,
         }
@@ -1133,7 +1193,7 @@ impl RValue {
 
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
-            header: Header::new(IO_CLASS, ObjKind::IO),
+            header: Header::new(IO_CLASS, ObjTy::IO),
             kind: ObjKind::io(io),
             var_table: None,
         }
@@ -1154,7 +1214,7 @@ impl RValue {
     pub(super) fn new_file(file: std::fs::File, name: String) -> Self {
         let inner = IoInner::file(file, name);
         RValue {
-            header: Header::new(FILE_CLASS, ObjKind::IO),
+            header: Header::new(FILE_CLASS, ObjTy::IO),
             kind: ObjKind::io(inner),
             var_table: None,
         }
@@ -1162,7 +1222,7 @@ impl RValue {
 
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
-            header: Header::new(TIME_CLASS, ObjKind::TIME),
+            header: Header::new(TIME_CLASS, ObjTy::TIME),
             kind: ObjKind::time(time),
             var_table: None,
         }
@@ -1170,7 +1230,7 @@ impl RValue {
 
     pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
-            header: Header::new(RANGE_CLASS, ObjKind::RANGE),
+            header: Header::new(RANGE_CLASS, ObjTy::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
             var_table: None,
         }
@@ -1178,7 +1238,7 @@ impl RValue {
 
     pub(super) fn new_proc(block_data: ProcInner) -> Self {
         RValue {
-            header: Header::new(PROC_CLASS, ObjKind::PROC),
+            header: Header::new(PROC_CLASS, ObjTy::PROC),
             kind: ObjKind::proc(block_data),
             var_table: None,
         }
@@ -1186,7 +1246,7 @@ impl RValue {
 
     pub(super) fn new_method(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
         RValue {
-            header: Header::new(METHOD_CLASS, ObjKind::METHOD),
+            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
             kind: ObjKind::method(receiver, func_id, owner),
             var_table: None,
         }
@@ -1194,7 +1254,7 @@ impl RValue {
 
     pub(super) fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue {
-            header: Header::new(UMETHOD_CLASS, ObjKind::UMETHOD),
+            header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
             kind: ObjKind::unbound_method(func_id, owner),
             var_table: None,
         }
@@ -1202,7 +1262,7 @@ impl RValue {
 
     pub(super) fn new_fiber(proc: Proc) -> Self {
         RValue {
-            header: Header::new(FIBER_CLASS, ObjKind::FIBER),
+            header: Header::new(FIBER_CLASS, ObjTy::FIBER),
             kind: ObjKind::fiber(proc),
             var_table: None,
         }
@@ -1215,7 +1275,7 @@ impl RValue {
         args: Vec<Value>,
     ) -> Self {
         RValue {
-            header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
+            header: Header::new(ENUMERATOR_CLASS, ObjTy::ENUMERATOR),
             kind: ObjKind::enumerator(obj, method, proc, args),
             var_table: None,
         }
@@ -1223,7 +1283,7 @@ impl RValue {
 
     pub(super) fn new_generator(proc: Proc) -> Self {
         RValue {
-            header: Header::new(GENERATOR_CLASS, ObjKind::GENERATOR),
+            header: Header::new(GENERATOR_CLASS, ObjTy::GENERATOR),
             kind: ObjKind::generator(proc),
             var_table: None,
         }
@@ -1233,7 +1293,7 @@ impl RValue {
         let outer_lfp = outer_lfp.move_frame_to_heap();
         assert!(!outer_lfp.on_stack());
         RValue {
-            header: Header::new(BINDING_CLASS, ObjKind::BINDING),
+            header: Header::new(BINDING_CLASS, ObjTy::BINDING),
             kind: ObjKind::binding_from_outer(outer_lfp),
             var_table: None,
         }
@@ -1244,10 +1304,10 @@ impl RValue {
     pub fn unpack(&self) -> RV {
         unsafe {
             match self.ty() {
-                ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
-                ObjKind::FLOAT => RV::Float(self.as_float()),
-                ObjKind::STRING => RV::String(self.as_bytes()),
-                ObjKind::COMPLEX => RV::Complex(self.as_complex()),
+                ObjTy::BIGNUM => RV::BigInt(self.as_bignum()),
+                ObjTy::FLOAT => RV::Float(self.as_float()),
+                ObjTy::STRING => RV::String(self.as_bytes()),
+                ObjTy::COMPLEX => RV::Complex(self.as_complex()),
                 _ => RV::Object(self),
             }
         }
@@ -1259,14 +1319,14 @@ impl RValue {
     pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
         unsafe {
             match (lhs.ty(), rhs.ty()) {
-                (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
-                (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
-                (ObjKind::COMPLEX, ObjKind::COMPLEX) => {
+                (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+                (ObjTy::FLOAT, ObjTy::FLOAT) => lhs.as_float() == rhs.as_float(),
+                (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()
                 }
-                (ObjKind::STRING, ObjKind::STRING) => lhs.as_bytes() == rhs.as_bytes(),
-                (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                (ObjTy::STRING, ObjTy::STRING) => lhs.as_bytes() == rhs.as_bytes(),
+                (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();
                     lhs.len() == rhs.len()
@@ -1275,8 +1335,8 @@ impl RValue {
                             .zip(rhs.iter())
                             .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
                 }
-                (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
-                (ObjKind::HASH, ObjKind::HASH) => {
+                (ObjTy::RANGE, ObjTy::RANGE) => lhs.as_range() == rhs.as_range(),
+                (ObjTy::HASH, ObjTy::HASH) => {
                     let lhs = lhs.as_hashmap();
                     let rhs = rhs.as_hashmap();
                     lhs.len() == rhs.len()
@@ -1397,22 +1457,22 @@ impl RValue {
     }
 
     pub(crate) fn as_method(&self) -> &MethodInner {
-        assert_eq!(self.ty(), ObjKind::METHOD);
+        assert_eq!(self.ty(), ObjTy::METHOD);
         unsafe { &self.kind.method }
     }
 
     pub(crate) fn as_umethod(&self) -> &UMethodInner {
-        assert_eq!(self.ty(), ObjKind::UMETHOD);
+        assert_eq!(self.ty(), ObjTy::UMETHOD);
         unsafe { &self.kind.umethod }
     }
 
     pub(super) unsafe fn as_fiber(&self) -> &FiberInner {
-        assert_eq!(self.ty(), ObjKind::FIBER);
+        assert_eq!(self.ty(), ObjTy::FIBER);
         &self.kind.fiber
     }
 
     pub(super) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
-        assert_eq!(self.ty(), ObjKind::FIBER);
+        assert_eq!(self.ty(), ObjTy::FIBER);
         &mut self.kind.fiber
     }
 
@@ -1463,16 +1523,18 @@ union Header {
 #[repr(C)]
 struct Metadata {
     flag: u16,
-    ty: u16,
+    ty: Option<ObjTy>,
+    _padding: u8,
     class: ClassId,
 }
 
 impl Header {
-    fn new(class: ClassId, ty: u8) -> Self {
+    fn new(class: ClassId, ty: ObjTy) -> Self {
         Header {
             meta: Metadata {
                 flag: 1,
-                ty: ty as u16,
+                ty: Some(ty),
+                _padding: 0,
                 class,
             },
         }
@@ -1487,8 +1549,8 @@ impl Header {
         unsafe { self.meta.class }
     }
 
-    fn ty(&self) -> u8 {
-        unsafe { self.meta.ty as u8 }
+    fn ty(&self) -> ObjTy {
+        unsafe { self.meta.ty.unwrap() }
     }
 
     fn change_class(&mut self, class: ClassId) {
@@ -1551,7 +1613,7 @@ pub struct Proc(Value);
 
 impl Proc {
     pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjKind::PROC));
+        assert_eq!(val.ty(), Some(ObjTy::PROC));
         Proc(val)
     }
 

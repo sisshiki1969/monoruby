@@ -1,5 +1,5 @@
 #!/bin/bash
 
 cargo build --release
-cd benchmark && benchmark-driver -o markdown quick_sort.yaml app_fib.yml tarai.rb so_mandelbrot.yml so_nbody.yml app_aobench.rb bf.rb plb2/nqueen.rb plb2/sudoku.rb plb2/matmul.rb plb2/bedcov.rb --rbenv '3.4.0-preview1 --yjit' -e ../target/release/monoruby
+cd benchmark && benchmark-driver -o markdown quick_sort.yaml app_fib.yml tarai.rb so_mandelbrot.yml so_nbody.yml app_aobench.rb bf.rb plb2/nqueen.rb plb2/sudoku.rb plb2/matmul.rb plb2/bedcov.rb --rbenv '3.4.1 --yjit; truffleruby-24.1.1' -e ../target/release/monoruby
 # benchmark-driver -o markdown benchmark/app_fib.yml benchmark/so_mandelbrot.yml benchmark/so_nbody.yml --rbenv '3.4.0-preview1 --yjit' -e target/release/monoruby

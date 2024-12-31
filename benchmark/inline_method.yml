@@ -1,0 +1,16 @@
+prelude: |
+  def f(x)
+    x
+  end
+
+  def g(x)
+    100
+  end
+
+benchmark:
+  inline0: |
+    f(3)
+  inline1: |
+    g(3)
+
+loop_count: 100000

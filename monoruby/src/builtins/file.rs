@@ -11,12 +11,11 @@ use std::{
 pub(super) fn init(globals: &mut Globals) {
     let io_class = globals
         .store
-        .classes
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))
         .unwrap()
         .as_class();
     let klass = globals
-        .define_builtin_class_by_str("File", FILE_CLASS, io_class, OBJECT_CLASS)
+        .define_builtin_class("File", FILE_CLASS, io_class, OBJECT_CLASS, ObjTy::IO)
         .id();
     globals.define_builtin_class_func(klass, "write", write, 2);
     globals.define_builtin_class_func(klass, "read", file_read, 1);

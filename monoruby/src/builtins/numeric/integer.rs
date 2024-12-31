@@ -7,7 +7,7 @@ use std::ops::{BitAnd, BitOr, BitXor};
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_by_str("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS);
+    globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
@@ -234,6 +234,7 @@ fn integer_tof(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -241,7 +242,7 @@ fn integer_tof(
     }
     let CallSiteInfo { dst, .. } = store[callid];
     if let Some(ret) = dst {
-        let fret = bb.xmm_write_enc(ir, ret);
+        let fret = bb.xmm_write_enc(ret);
         ir.inline(move |gen, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;
@@ -395,6 +396,7 @@ fn integer_shr(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
@@ -405,7 +407,7 @@ fn integer_shr(
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
-        bb.fetch_fixnum(ir, args, GP::Rsi, deopt);
+        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
         ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -428,19 +430,25 @@ fn integer_shl(
     store: &Store,
     bb: &mut BBContext,
     callid: CallSiteId,
+    _: ClassId,
     pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, args, .. } = store[callid];
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = store[callid];
     let deopt = ir.new_deopt(bb, pc);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
-        ir.inline(move |gen, labels| gen.gen_shl_imm(rhs, labels[deopt]));
+        ir.inline(move |gen, labels| gen.gen_shl_rhs_imm(rhs, labels[deopt]));
+    } else if let Some(lhs) = bb.is_fixnum_literal(recv) {
+        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
+        ir.inline(move |gen, labels| gen.gen_shl_lhs_imm(lhs, labels[deopt]));
     } else {
-        bb.fetch_fixnum(ir, args, GP::Rsi, deopt);
+        bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
         ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);

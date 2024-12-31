@@ -27,13 +27,6 @@ impl PartialEq for RegexpInner {
     }
 }
 
-/*impl std::ops::Deref for RegexpInner {
-    type Target = Regex;
-    fn deref(&self) -> &Regex {
-        &self.0
-    }
-}*/
-
 impl RegexpInner {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
@@ -48,10 +41,13 @@ impl RegexpInner {
         Self::from_string(s)
     }
 
+    pub fn escape(text: &str) -> String {
+        regex::escape(text)
+    }
+
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
-    pub fn from_escaped(escaped_str: &str) -> Result<Self> {
-        let string = regex::escape(escaped_str);
-        RegexpInner::from_string(string)
+    pub fn from_escaped(text: &str) -> Result<Self> {
+        RegexpInner::from_string(Self::escape(text))
     }
 
     /// Create `RegexpInfo` from `reg_str`.

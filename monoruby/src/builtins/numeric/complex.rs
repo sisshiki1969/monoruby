@@ -7,7 +7,13 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
-    globals.define_builtin_class_by_str("Complex", COMPLEX_CLASS, numeric, OBJECT_CLASS);
+    globals.define_builtin_class(
+        "Complex",
+        COMPLEX_CLASS,
+        numeric,
+        OBJECT_CLASS,
+        ObjTy::COMPLEX,
+    );
     globals.define_builtin_func(COMPLEX_CLASS, "==", eq, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "!=", ne, 1);
     globals.define_builtin_class_func_with(COMPLEX_CLASS, "polar", complex_polar, 1, 2, false);

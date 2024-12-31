@@ -143,117 +143,6 @@ impl Codegen {
     }*/
 
     ///
-    /// Attribute reader
-    ///
-    /// ### in
-    /// rdi: receiver: Value
-    ///
-    pub(super) fn attr_reader(&mut self, ivar_id: IvarId) {
-        if ivar_id.is_inline() {
-            let exit = self.jit.label();
-            let not_object = self.jit.label();
-            monoasm!( &mut self.jit,
-                // we don't know ty of the receiver in a compile time.
-                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                jne  not_object;
-                movq rax, [rdi + (ivar_id.get() as i32 * 8 + RVALUE_OFFSET_KIND)];
-                movq rdi, (NIL_VALUE);
-                testq rax,rax;
-                cmoveqq rax, rdi;
-            exit:
-            );
-            self.jit.select_page(1);
-            monoasm!( &mut self.jit,
-            not_object:
-            );
-            self.load_ivar_heap(ivar_id, false);
-            monoasm!( &mut self.jit,
-                jmp  exit;
-            );
-            self.jit.select_page(0);
-        } else {
-            self.load_ivar_heap_index(ivar_id);
-        }
-    }
-
-    ///
-    /// Load ivar on `var_table`.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    /// #### out
-    /// - rax: Value
-    ///
-    /// #### destroy
-    /// - rdi, rsi, rdx
-    ///
-    fn load_ivar_heap_index(&mut self, ivar_id: IvarId) {
-        monoasm!( &mut self.jit,
-            movl rsi, (ivar_id.get());
-            xorq rax, rax;
-            movl rdx, (OBJECT_INLINE_IVAR);
-            // we don't know ty of the receiver in a compile time.
-            cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-            cmoveqq rax, rdx;
-            subl rsi, rax;
-        );
-        let exit = self.jit.label();
-        monoasm!( &mut self.jit,
-            movq rax, (NIL_VALUE);
-            movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-            testq rdx, rdx;
-            jz   exit;
-            movq rdi, [rdx + (MONOVEC_CAPA)]; // capa
-            testq rdi, rdi;
-            jz   exit;
-            movq rdi, [rdx + (MONOVEC_LEN)]; // len
-            cmpq rdi, rsi;
-            movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-            cmovgtq rax, [rdi + rsi * 8];
-        exit:
-        );
-    }
-
-    ///
-    /// Attribute writer
-    ///
-    /// ### in
-    /// rdi: receiver: Value
-    /// rdx: value: Value
-    ///
-    pub(super) fn attr_writer(&mut self, using_xmm: UsingXmm, error: DestLabel, ivar_id: IvarId) {
-        let exit = self.jit.label();
-        let no_inline = self.jit.label();
-        if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
-            monoasm!( &mut self.jit,
-                // we don't know ty of the receiver in a compile time.
-                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
-                jne  no_inline;
-                movq [rdi + (ivar_id.get() as i32 * 8 + RVALUE_OFFSET_KIND)], rdx;
-            exit:
-            );
-            self.jit.select_page(1);
-            self.jit.bind_label(no_inline);
-            monoasm!( &mut self.jit,
-                movl rsi, (ivar_id.get());
-            );
-            self.set_ivar(using_xmm);
-            self.handle_error(error);
-            monoasm!( &mut self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
-        } else {
-            monoasm!( &mut self.jit,
-                movl rsi, (ivar_id.get());
-            );
-            self.set_ivar(using_xmm);
-            self.handle_error(error);
-        }
-    }
-
-    ///
     /// ### in
     /// rdi: numer of args.
     ///
@@ -275,7 +164,8 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
-        self.do_call(callee, codeptr, recv_class, pc)
+        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
+        self.do_call(callee, iseq, codeptr, recv_class, pc)
     }
 
     ///
@@ -305,12 +195,14 @@ impl Codegen {
             pushq r13;
             addq rsp, 64;
         }
-        self.do_call(callee, codeptr, recv_class, pc)
+        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
+        self.do_call(callee, iseq, codeptr, recv_class, pc)
     }
 
     fn do_call(
         &mut self,
         callee: &FuncInfo,
+        iseq: Option<&ISeqInfo>,
         codeptr: CodePtr,
         recv_class: ClassId,
         pc: Option<BytecodePtr>,
@@ -321,7 +213,7 @@ impl Codegen {
         if callee.is_native() {
             self.call_codeptr(codeptr)
         } else {
-            match callee.get_jit_code(recv_class) {
+            match iseq.unwrap().get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE
@@ -367,24 +259,20 @@ impl Codegen {
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], rax;
             );
         } else if let Some(block) = callsite.block_arg {
             monoasm!( &mut self.jit,
                 movq rax, [r14 - (conv(block))];
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], rax;
             );
         } else {
             monoasm!( &mut self.jit,
                 xorq rax, rax;
                 pushq rax;
-                //movq [rsp - (RSP_STACK_LFP + LBP_BLOCK)], 0;
             );
         }
         // set self
         monoasm! { &mut self.jit,
-            //movq [rsp - (RSP_STACK_LFP + LBP_SELF)], r13;
             pushq r13;
             addq rsp, 64;
         }
@@ -761,7 +649,7 @@ impl Codegen {
             movq rcx, [r14 - (conv(args))];
             testq rcx, 0b111;
             jnz  exit;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
+            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  exit;
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);

@@ -27,7 +27,7 @@
    +---------------------------------+     +--------------------------------------------+
    |                                 |     |                                            |
 ---+-> entry:                        |  +--+-> guard1:                                  |
-   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LFP_SELF)];        |
    |   next:                         |     |       class_guard(self_class1)  -----------+-----> exit
    |       subl [rip + counter], 1;  |     |   patch_point:                             |
    |       jne vm_entry;             |     |       jmp [jit_entry1];                    |
@@ -55,7 +55,7 @@
    +---------------------------------+     +--------------------------------------------+
    |                                 |     |                                            |
 ---+-> entry:                        |  +--+-> guard1:                                  |
-   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LFP_SELF)];        |
    |   next:                         |     |       class_guard(self_class1)  -----------+-----> exit
    |       subl [rip + counter], 1;  |     |   patch_point:                             |
    |       jne vm_entry;             |     |       jmp [jit_entry2];                    |
@@ -83,7 +83,7 @@
    +---------------------------------+     +--------------------------------------------+     +--------------------------------------------+
    |                                 |     |                                            |     |                                            |
 ---+-> entry:                        |  +--+-> guard1:                                  |   +-+-> guard2:                                  |
-   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LBP_SELF)];        |  /  |       movq rdi, [r14 - (LBP_SELF)];        |
+   |       jmp [guard1]; ------------+-/   |       movq rdi, [r14 - (LFP_SELF)];        |  /  |       movq rdi, [r14 - (LFP_SELF)];        |
    |   next:                         |     |       class_guard(self_class1)  -----------+-+   |       class_guard(self_class2)  -----------+-----> vm_entry
    |       subl [rip + counter], 1;  |     |   patch_point:                             |     |   patch_point:                             |
    |       jne vm_entry;             |     |       jmp [jit_entry1];                    |     |       jmp [jit_entry2];                    |

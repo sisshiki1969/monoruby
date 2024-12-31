@@ -22,7 +22,7 @@ pub struct Store {
     /// ISEQ info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
-    pub(crate) classes: ClassInfoTable,
+    classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -31,6 +31,19 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+}
+
+impl std::ops::Deref for Store {
+    type Target = ClassInfoTable;
+    fn deref(&self) -> &Self::Target {
+        &self.classes
+    }
+}
+
+impl std::ops::DerefMut for Store {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.classes
+    }
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -56,6 +69,19 @@ impl std::ops::Index<ISeqId> for Store {
 impl std::ops::IndexMut<ISeqId> for Store {
     fn index_mut(&mut self, index: ISeqId) -> &mut ISeqInfo {
         &mut self.iseqs[index.get()]
+    }
+}
+
+impl std::ops::Index<ClassId> for Store {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &ClassInfo {
+        &self.classes[index]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for Store {
+    fn index_mut(&mut self, index: ClassId) -> &mut ClassInfo {
+        &mut self.classes[index]
     }
 }
 
@@ -422,6 +448,12 @@ impl Store {
             entry
         })
     }
+
+    pub(super) fn invalidate_jit_code(&mut self) {
+        self.iseqs
+            .iter_mut()
+            .for_each(|info| info.invalidate_jit_code())
+    }
 }
 
 impl Store {
@@ -448,6 +480,40 @@ impl Store {
         } else {
             "<INVALID>".to_string()
         }
+    }
+
+    #[cfg(feature = "emit-bc")]
+    pub fn dump_iseq(&self, iseq: ISeqId) {
+        use bytecodegen::BcIndex;
+
+        let func = &self[iseq];
+        eprintln!("------------------------------------");
+        let loc = func.loc;
+        let line = func.sourceinfo.get_line(&loc);
+        let file_name = func.sourceinfo.file_name();
+        eprintln!(
+            "<{}> {file_name}:{line}",
+            self.func_description(func.func_id()),
+        );
+        eprintln!(
+            "{:?} local_vars:{} temp:{}",
+            self[func.func_id()].meta(),
+            func.local_num(),
+            func.temp_num
+        );
+        eprintln!("{:?}", func.args);
+        eprintln!("{:?}", func.get_exception_map());
+        for i in 0..func.bytecode().len() {
+            let bc_pos = BcIndex::from(i);
+            if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
+                eprintln!("{:?}", bbid);
+            };
+            let trace_ir = func.trace_ir(self, bc_pos);
+            if let Some(fmt) = trace_ir.format(self) {
+                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
+            };
+        }
+        eprintln!("------------------------------------");
     }
 
     #[cfg(feature = "profile")]
@@ -496,7 +562,7 @@ impl Store {
     }
 }
 
-pub(crate) struct ClassInfoTable {
+pub struct ClassInfoTable {
     table: Vec<ClassInfo>,
 }
 

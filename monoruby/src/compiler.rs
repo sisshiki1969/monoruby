@@ -65,12 +65,12 @@ const COUNT_DEOPT_RECOMPILE: i32 = 5;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GP {
     Rax = 0,
-    //Rcx = 1,
+    Rcx = 1,
     Rdx = 2,
     Rsp = 4,
     Rsi = 6,
     Rdi = 7,
-    R8 = 8,
+    //R8 = 8,
     //R9 = 9,
     R13 = 13,
     R15 = 15,
@@ -171,6 +171,7 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) startup_flag: bool,
     #[cfg(feature = "jit-log")]
     pub(crate) jit_compile_time: std::time::Duration,
     #[cfg(feature = "perf")]
@@ -234,6 +235,7 @@ impl Codegen {
             },
             resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            startup_flag: false,
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
             #[cfg(feature = "perf")]
@@ -569,9 +571,15 @@ impl Codegen {
         );
     }
 
-    fn test_heap_frame(&mut self) {
+    ///
+    /// Test whether the current local frame is on the heap.
+    ///
+    /// if the frame is on the heap, jump to *label*.
+    ///
+    fn branch_if_heap_frame(&mut self, label: DestLabel) {
         monoasm! { &mut self.jit,
             testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
+            jnz label;
         }
     }
 
@@ -639,7 +647,7 @@ impl Codegen {
     /// ~~~text
     ///
     /// guard:
-    ///     movq rdi, [r14 - (LBP_SELF)];
+    ///     movq rdi, [r14 - (LFP_SELF)];
     ///     guard_class_rdi(self_class, vm_entry);
     /// patch_point:
     ///     jmp jit_entry;
@@ -819,6 +827,68 @@ impl Codegen {
         let ptr1 = self.jit.get_current_address();
         self.jit.select_page(0);
         (ptr0, ptr1)
+    }
+
+    #[cfg(feature = "emit-asm")]
+    pub(crate) fn dump_disas(
+        &mut self,
+        store: &Store,
+        sourcemap: Vec<(bytecodegen::BcIndex, usize)>,
+        iseq_id: ISeqId,
+    ) {
+        let (start, code_end, end) = self.jit.code_block.last().unwrap();
+        eprintln!(
+            "offset:{:?} code: {} bytes  data: {} bytes",
+            start,
+            *code_end - *start,
+            *end - *code_end
+        );
+        self.jit.select_page(0);
+        let dump = self.jit.dump_code().unwrap();
+        let dump: Vec<(usize, String)> = dump
+            .split('\n')
+            .filter(|s| s.len() >= 29)
+            .map(|x| {
+                let i = x.find(':').unwrap();
+                (
+                    match usize::from_str_radix(&x[0..i].trim(), 16) {
+                        Ok(i) => i,
+                        _ => {
+                            panic!("{}", &x[0..i].trim());
+                        }
+                    },
+                    x[i + 24..].to_string(),
+                )
+            })
+            .collect();
+        let iseq = &store[iseq_id];
+        for (i, text) in dump {
+            sourcemap
+                .iter()
+                .filter_map(
+                    |(bc_pos, code_pos)| {
+                        if *code_pos == i {
+                            Some(*bc_pos)
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .for_each(|bc_pos| {
+                    if iseq.bb_info.is_bb_head(bc_pos).is_some() {
+                        eprintln!("{:?}", iseq.bb_info.get_bb_id(bc_pos));
+                    }
+                    eprintln!(
+                        "{bc_pos} {}",
+                        match iseq.trace_ir(store, bc_pos).format(store) {
+                            Some(s) => s,
+                            None => "".to_string(),
+                        }
+                    );
+                });
+
+            eprintln!("  {:05x}: {}", i, text);
+        }
     }
 }
 
@@ -1058,56 +1128,13 @@ mod tests {
 impl Globals {
     pub(super) fn exec_jit_compile(
         &mut self,
-        func_id: FuncId,
-        self_value: Value,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
     ) {
-        #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
-        if self.startup_flag {
-            let func = self.store.iseq(func_id);
-            let start_pos = func.get_pc_index(position);
-            let name = self.store.func_description(func_id);
-            eprintln!(
-                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
-                if position.is_some() {
-                    "partial"
-                } else {
-                    "whole"
-                },
-                func.func_id(),
-                name,
-                if position.is_some() {
-                    format!("start:[{}] ", start_pos)
-                } else {
-                    String::new()
-                },
-                self.store.debug_class_name(self_value.class()),
-                func.sourceinfo.file_name(),
-                func.sourceinfo.get_line(&func.loc),
-            );
-        }
-
-        #[cfg(feature = "perf")]
-        let pair = self.codegen.get_address_pair();
-
-        let _sourcemap = self.codegen.jit_compile(
-            &self.store,
-            func_id,
-            self_value,
-            position,
-            entry_label,
-            self.startup_flag,
-        );
-        #[cfg(feature = "perf")]
-        {
-            let desc = format!("JIT:<{}>", self.store.func_description(func_id));
-            self.codegen.perf_info(pair, &desc);
-        }
-        #[cfg(feature = "emit-asm")]
-        if self.startup_flag {
-            self.dump_disas(_sourcemap, func_id);
-        }
+        self.codegen
+            .jit_compile(&self.store, iseq_id, self_class, position, entry_label);
     }
 
     ///
@@ -1115,10 +1142,10 @@ impl Globals {
     ///
     pub(super) fn exec_jit_compile_method(
         &mut self,
-        func_id: FuncId,
-        self_value: Value,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         jit_entry: DestLabel,
     ) {
-        self.exec_jit_compile(func_id, self_value, None, jit_entry)
+        self.exec_jit_compile(iseq_id, self_class, None, jit_entry)
     }
 }

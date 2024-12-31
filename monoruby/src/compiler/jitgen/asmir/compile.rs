@@ -8,11 +8,15 @@ mod index;
 mod method_call;
 mod variables;
 
+extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
+    rvalue.extend_ivar(heap_len);
+}
+
 impl Codegen {
     ///
     /// Generate machine code for *inst*.
     ///
-    pub(super) fn gen_asmir(
+    pub(super) fn compile_asmir(
         &mut self,
         store: &Store,
         ctx: &mut JitContext,
@@ -20,7 +24,46 @@ impl Codegen {
         inst: AsmInst,
     ) {
         match inst {
+            #[cfg(feature = "emit-asm")]
             AsmInst::BcIndex(_) => {}
+            AsmInst::Init(info) => {
+                self.init_func(&info);
+            }
+            AsmInst::Preparation => {
+                if !ctx.self_class.is_always_frozen() && ctx.ivar_heap_accessed {
+                    let ivar_len = store[ctx.self_class].ivar_len();
+                    let heap_len = if ctx.self_ty == Some(ObjTy::OBJECT) {
+                        ivar_len - OBJECT_INLINE_IVAR
+                    } else {
+                        ivar_len
+                    };
+                    let fail = self.jit.label();
+                    let exit = self.jit.label();
+                    monoasm!(&mut self.jit,
+                        movq rdi, [r14 - (LFP_SELF)];
+                        movq rsi, (heap_len);
+                        movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                        // check var_table is not None
+                        testq rdx, rdx;
+                        jz   fail;
+                        // check capa is not 0
+                        cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                        jz   fail;
+                        // check len >= heap_len
+                        cmpq [rdx + (MONOVEC_LEN)], rsi; // len
+                        jlt  fail;
+                    exit:
+                    );
+                    self.jit.select_page(1);
+                    monoasm!( &mut self.jit,
+                    fail:
+                        movq rax, (extend_ivar);
+                        call rax;
+                        jmp exit;
+                    );
+                    self.jit.select_page(0);
+                }
+            }
             AsmInst::Label(label) => {
                 let label = ctx.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
@@ -165,14 +208,28 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
-            AsmInst::GuardClassVersion(fid, cached_version, callid, using_xmm, deopt, error) => {
+            AsmInst::GuardClassVersionWithRecovery(
+                fid,
+                cached_version,
+                callid,
+                using_xmm,
+                deopt,
+                error,
+            ) => {
                 let deopt = labels[deopt];
                 let error = labels[error];
-                self.guard_class_version(fid, cached_version, callid, using_xmm, deopt, error);
+                self.guard_class_version_with_recovery(
+                    fid,
+                    cached_version,
+                    callid,
+                    using_xmm,
+                    deopt,
+                    error,
+                );
             }
-            AsmInst::GuardClassVersion2(cached_version, deopt) => {
+            AsmInst::GuardClassVersion(cached_version, deopt) => {
                 let deopt = labels[deopt];
-                self.guard_class_version2(cached_version, deopt);
+                self.guard_class_version(cached_version, deopt);
             }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
@@ -319,16 +376,6 @@ impl Codegen {
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
             }
-            AsmInst::AttrWriter {
-                ivar_id,
-                using_xmm,
-                error,
-            } => {
-                self.attr_writer(using_xmm, labels[error], ivar_id);
-            }
-            AsmInst::AttrReader { ivar_id } => {
-                self.attr_reader(ivar_id);
-            }
             AsmInst::BinopCached {
                 callee_fid,
                 recv_class,
@@ -337,7 +384,7 @@ impl Codegen {
                 let return_addr = self.binop_cached(store, callee_fid, recv_class);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
-            AsmInst::SendCached {
+            AsmInst::Send {
                 callid,
                 callee_fid,
                 recv_class,
@@ -551,15 +598,21 @@ impl Codegen {
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
 
-            AsmInst::LoadIVar {
+            AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
-            } => self.load_ivar(ivarid, is_object_ty),
-            AsmInst::StoreIVar {
+                self_,
+            } => self.load_ivar_heap(ivarid, is_object_ty, self_),
+            AsmInst::LoadIVarInline { ivarid } => self.load_ivar_inline(ivarid),
+            AsmInst::StoreIVarHeap {
                 ivarid: cached_ivarid,
                 is_object_ty,
+                self_,
                 using_xmm,
-            } => self.store_ivar(cached_ivarid, is_object_ty, using_xmm),
+            } => self.store_ivar_heap(cached_ivarid, is_object_ty, self_, using_xmm),
+            AsmInst::StoreIVarInline {
+                ivarid: cached_ivarid,
+            } => self.store_ivar_object_inline(cached_ivarid),
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
@@ -720,112 +773,6 @@ impl Codegen {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
             .insert(return_addr, (None, evict_label));
-    }
-
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi
-    /// - stack
-    ///
-    fn guard_class_version(
-        &mut self,
-        cached_fid: FuncId,
-        cached_version: u32,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        deopt: DestLabel,
-        error: DestLabel,
-    ) {
-        assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
-        let unmatch = self.jit.label();
-        let exit = self.jit.label();
-        let fail = self.jit.label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  unmatch;
-        exit:
-        }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(unmatch);
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            pushq rdi;
-            pushq r13;
-            movq rcx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());  // CallSiteId
-            movq rax, (runtime::find_method2);
-            call rax;   // rax <- Option<FuncId>
-            popq r13;
-            popq rdi;
-            movl rax, rax;
-        }
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        monoasm! { &mut self.jit,
-            cmpl rax, (cached_fid.get());
-            jne  fail;
-            movl rax, [rip + global_version];
-            movl [rip + cached_version], rax;
-            jmp  exit;
-        fail:
-            movq rdi, (Value::symbol_from_str("__version_guard").id());
-            jmp  deopt;
-        }
-        self.jit.select_page(0);
-    }
-
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version.
-    /// If different, jump to `deopt`.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    fn guard_class_version2(&mut self, cached_version: u32, deopt: DestLabel) {
-        assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
-        let fail = self.jit.label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  fail;
-        }
-
-        self.jit.select_page(1);
-        monoasm! { &mut self.jit,
-        fail:
-            movq rdi, (Value::symbol_from_str("__version_guard").id());
-            jmp  deopt;
-        }
-        self.jit.select_page(0);
     }
 
     ///

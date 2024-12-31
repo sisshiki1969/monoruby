@@ -40,7 +40,7 @@ impl Store {
         self.classes[class_id]
             .ivar_names
             .iter()
-            .filter_map(|(name, id)| rval.get_var(*id).map(|v| (*name, v)))
+            .filter_map(|(name, id)| rval.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
     }
 
@@ -56,7 +56,7 @@ impl Store {
             }
         };
         let id = self.get_ivar_id(class_id, name);
-        rval.set_var(id, val);
+        rval.set_ivar_by_ivarid(id, val);
         Ok(())
     }
 
@@ -91,7 +91,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
         None => return Value::nil(),
     };
     if class_id == cache.class_id {
-        return rval.get_var(cache.ivar_id).unwrap_or_default();
+        return rval.get_ivar_by_ivarid(cache.ivar_id).unwrap_or_default();
     }
     let ivar_id = match globals.store.classes[class_id].get_ivarid(name) {
         Some(id) => id,
@@ -99,7 +99,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     };
     let new_cache = InstanceVarCache { class_id, ivar_id };
     *cache = new_cache;
-    rval.get_var(ivar_id).unwrap_or_default()
+    rval.get_ivar_by_ivarid(ivar_id).unwrap_or_default()
 }
 
 pub(crate) extern "C" fn set_instance_var_with_cache(
@@ -119,13 +119,13 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
         }
     };
     if class_id == cache.class_id {
-        rval.set_var(cache.ivar_id, val);
+        rval.set_ivar_by_ivarid(cache.ivar_id, val);
         return Some(Value::nil());
     }
     let ivar_id = globals.store.get_ivar_id(class_id, name);
     let new_cache = InstanceVarCache { class_id, ivar_id };
     *cache = new_cache;
-    rval.set_var(ivar_id, val);
+    rval.set_ivar_by_ivarid(ivar_id, val);
     Some(Value::nil())
 }
 
