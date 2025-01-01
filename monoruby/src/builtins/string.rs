@@ -755,6 +755,15 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 
 fn succ_char(ch: char) -> char {
     // This logic is not compatible with CRuby.
+    match ch {
+        '9' => return '0',
+        '９' => return '０',
+        'z' => return 'a',
+        'Z' => return 'A',
+        'ｚ' => return 'ａ',
+        'Ｚ' => return 'Ａ',
+        _ => {}
+    }
     let u = match ch as u32 {
         0x7f => 0x00,
         0xdfbf => 0xe0a080,
@@ -765,13 +774,38 @@ fn succ_char(ch: char) -> char {
     std::char::from_u32(u).expect("Error occured in char_forward()")
 }
 
+fn is_carry(ch: char) -> bool {
+    is_carry_alpha(ch) || is_carry_digit(ch)
+}
+
+fn is_carry_digit(ch: char) -> bool {
+    match ch {
+        '9' | '９' => true,
+        _ => false,
+    }
+}
+
+fn is_carry_alpha(ch: char) -> bool {
+    match ch {
+        'z' | 'Z' | 'ｚ' | 'Ｚ' => true,
+        _ => false,
+    }
+}
+
 fn str_next(self_: &str) -> String {
+    #[derive(PartialEq)]
+    enum Type {
+        Alpha,
+        Digit,
+        NotDetermined,
+    }
     if self_.is_empty() {
         return "".to_string();
     }
     let chars = self_.chars();
     let mut buf: Vec<char> = vec![];
     let mut carry_flag = true;
+    let mut finish_flag = false;
     let mut last_alnum = 0;
     if self_.chars().all(|c| !c.is_alphanumeric()) {
         // non-alnum mode
@@ -785,47 +819,47 @@ fn str_next(self_: &str) -> String {
         }
         return buf.iter().rev().collect::<String>();
     }
+    let mut pad_flag = false;
+    let mut state = Type::NotDetermined;
     for c in chars.rev() {
-        if carry_flag {
-            if ('0'..='8').contains(&c)
-                || ('0'..='8').contains(&c)
-                || ('A'..='Y').contains(&c)
-                || ('０'..='８').contains(&c)
-            {
-                carry_flag = false;
-                buf.push(succ_char(c));
-            } else if c == '9' {
-                last_alnum = buf.len();
-                buf.push('0');
-            } else if c == '９' {
-                last_alnum = buf.len();
-                buf.push('０');
-            } else if c == 'z' {
-                last_alnum = buf.len();
-                buf.push('a');
-            } else if c == 'Z' {
-                last_alnum = buf.len();
-                buf.push('A');
-            } else if !c.is_alphanumeric() {
-                buf.push(c);
-            } else {
-                carry_flag = false;
-                buf.push(succ_char(c));
-            }
-        } else {
+        if finish_flag || !carry_flag {
             buf.push(c);
+            continue;
         }
+        if !c.is_alphanumeric() {
+            pad_flag = true;
+            buf.push(c);
+            continue;
+        }
+        if pad_flag {
+            if c.is_numeric() && state == Type::Alpha || c.is_alphabetic() && state == Type::Digit {
+                finish_flag = true;
+                buf.push(c);
+                continue;
+            }
+            pad_flag = false;
+        } else {
+            if c.is_alphabetic() {
+                state = Type::Alpha
+            } else if c.is_numeric() {
+                state = Type::Digit
+            };
+        }
+        if is_carry(c) {
+            last_alnum = buf.len();
+        } else {
+            carry_flag = false;
+        }
+        buf.push(succ_char(c));
     }
     if carry_flag {
         let c = buf[last_alnum];
-        if c == '0' {
-            buf.insert(last_alnum + 1, '1');
-        } else if c == '０' {
-            buf.insert(last_alnum + 1, '１');
-        } else if c == 'a' {
-            buf.insert(last_alnum + 1, 'a');
-        } else if c == 'A' {
-            buf.insert(last_alnum + 1, 'A');
+        if c.is_numeric() {
+            buf.insert(last_alnum + 1, succ_char(c));
+        } else if c.is_alphabetic() {
+            buf.insert(last_alnum + 1, c);
+        } else {
+            unreachable!()
         }
     }
     buf.iter().rev().collect::<String>()
@@ -2789,15 +2823,25 @@ mod tests {
         run_test(r#""aa".succ"#);
         run_test(r#""88".succ.succ"#);
         run_test(r#""99".succ"#);
+        run_test(r#""９９".succ"#);
+        run_test(r#""z９9".succ"#);
+        run_test(r#""zz".succ"#);
         run_test(r#""ZZ".succ"#);
+        run_test(r#""ＺＺ".succ"#);
+        run_test(r#""ｚｚ".succ"#);
+        run_test(r#""Ｚｚ".succ"#);
+        run_test(r#""Ｚ＃ｚ".succ"#);
         run_test(r#""a9".succ"#);
         run_test(r#""-9".succ"#);
         run_test(r#""9".succ"#);
         run_test(r#""09".succ"#);
         run_test(r#""1.9.9".succ"#);
+        run_test(r#""v9.9.9".succ"#);
         run_test(r#"".".succ"#);
         run_test(r#""".succ"#);
         run_test(r#""AZ".succ"#);
+        run_test(r#""1&&Z".succ"#);
+        run_test(r#""z&&Z".succ"#);
     }
 
     #[test]
