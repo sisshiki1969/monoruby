@@ -7,12 +7,12 @@ Ruby implementation with yet another JIT compiler written in Rust.
 
 ## Presentation
 
-Presentation slides for [RubyKaigi2024](https://rubykaigi.org/2024/presentations/s_isshiki1969.html#day2) are [here](./doc/RunningOptcarrotOnMyOwnRuby-Added.pdf).
+Presentation movie and slides for [RubyKaigi2024](https://rubykaigi.org/2024/presentations/s_isshiki1969.html#day2) are [here](https://www.youtube.com/watch?v=OfeUyQDFy_Y) and [here](./doc/RunningOptcarrotOnMyOwnRuby-Added.pdf).
 
 ## Features
 
 - Written in Rust from scratch. No dependencies on any other Ruby implementations.
-- Fast. Currently, monoruby is comparable to ruby3.3.0+YJIT in the optcarrot benchmark.
+- Fast. Currently, monoruby is comparable to ruby3.4.1+YJIT in the optcarrot benchmark.
 - Hand-written original parser.
 - Register-based bytecode.
 - Bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).

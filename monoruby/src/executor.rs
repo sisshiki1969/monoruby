@@ -493,7 +493,7 @@ impl Executor {
                 .expect_class_or_module(&globals.store)?
                 .id();
         }
-        globals.store.set_constant(parent, name, val);
+        globals.set_constant(parent, name, val);
         Ok(())
     }
 

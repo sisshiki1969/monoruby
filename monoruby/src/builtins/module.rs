@@ -28,6 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
+    globals.define_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
     globals.define_builtin_func_with(MODULE_CLASS, "constants", constants, 0, 1, false);
     globals.define_builtin_func_with(MODULE_CLASS, "define_method", define_method, 1, 2, false);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
@@ -298,10 +299,25 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 #[monoruby_builtin]
 fn const_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string()?;
-    let module = lfp.self_val().as_class();
+    let module = lfp.self_val().as_class().id();
     let val = lfp.arg(1);
-    globals.store.set_constant(module.id(), name, val);
+    globals.set_constant(module, name, val);
     Ok(val)
+}
+
+///
+/// ### Module#cremove_const
+///
+/// - remove_const(name) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_const.html]
+#[monoruby_builtin]
+fn remove_const(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let name = lfp.arg(0).expect_symbol_or_string()?;
+    let module = lfp.self_val().as_class().id();
+    globals
+        .remove_constant(module, name)
+        .ok_or(MonorubyErr::uninitialized_constant(name))
 }
 
 ///
@@ -1233,6 +1249,34 @@ mod tests {
             r#"
             module Foo; end
         "#,
+        );
+    }
+
+    #[test]
+    fn const_remove() {
+        run_test_once(
+            r#"
+            Bar = 100
+            class Foo
+              autoload :Bar, "./c"
+              def self.remove
+                remove_const(:Bar)
+              end
+              def self.define
+                const_set(:Bar, 2)
+              end
+              def self.get
+                Bar
+              end
+            end
+            res = []
+            res << Foo.get
+            res << Foo.remove
+            res << Foo.get
+            res << Foo.define
+            res << Foo.get
+            res
+            "#,
         );
     }
 

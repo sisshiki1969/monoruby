@@ -517,6 +517,16 @@ impl Globals {
     pub(crate) fn class_version(&self) -> u32 {
         self.codegen.class_version()
     }
+
+    pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
+        self.codegen.const_version_inc();
+        self.store.set_constant(class_id, name, val);
+    }
+
+    pub fn remove_constant(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        self.codegen.const_version_inc();
+        self[class_id].remove_constant(name)
+    }
 }
 
 impl Globals {

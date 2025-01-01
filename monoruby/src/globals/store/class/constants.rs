@@ -74,7 +74,12 @@ impl ClassInfoTable {
         names
     }
 
-    pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
+    pub(in crate::globals) fn set_constant(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        val: Value,
+    ) {
         if let Some(ConstState::Loaded(_)) = self[class_id]
             .constants
             .insert(name, ConstState::Loaded(val))
