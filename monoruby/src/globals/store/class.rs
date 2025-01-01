@@ -267,6 +267,18 @@ impl ClassInfo {
     fn get_cvar(&self, name: IdentId) -> Option<Value> {
         self.class_variables.as_ref()?.get(&name).cloned()
     }
+
+    ///
+    /// Remove aa constant with *name* in the class of *class_id*.
+    ///
+    /// If not found, return None.
+    ///
+    pub(in crate::globals) fn remove_constant(&mut self, name: IdentId) -> Option<Value> {
+        self.constants.remove(&name).map(|state| match state {
+            ConstState::Loaded(v) => v,
+            ConstState::Autoload(..) => Value::nil(),
+        })
+    }
 }
 
 impl ClassInfoTable {

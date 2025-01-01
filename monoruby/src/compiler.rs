@@ -102,8 +102,9 @@ pub struct Codegen {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
     class_version_addr: *mut u32,
-    alloc_flag: DestLabel,
     const_version: DestLabel,
+    const_version_addr: *mut u32,
+    alloc_flag: DestLabel,
     bop_redefined_flags: DestLabel,
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
@@ -197,8 +198,9 @@ impl Codegen {
             jit,
             class_version,
             class_version_addr: std::ptr::null_mut(),
-            alloc_flag,
             const_version,
+            const_version_addr: std::ptr::null_mut(),
+            alloc_flag,
             bop_redefined_flags,
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
@@ -254,6 +256,8 @@ impl Codegen {
 
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
+        codegen.const_version_addr =
+            codegen.jit.get_label_address(const_version).as_ptr() as *mut u32;
         let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {
             alloc.borrow_mut().set_alloc_flag_address(address);
@@ -271,6 +275,10 @@ impl Codegen {
 
     pub(crate) fn class_version_inc(&self) {
         unsafe { *self.class_version_addr += 1 }
+    }
+
+    pub(crate) fn const_version_inc(&self) {
+        unsafe { *self.const_version_addr += 1 }
     }
 
     pub(crate) fn bop_redefine_flags(&self) -> u32 {

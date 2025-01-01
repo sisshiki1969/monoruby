@@ -7,11 +7,7 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj(
-        "String",
-        STRING_CLASS,
-        ObjTy::STRING,
-    );
+    globals.define_builtin_class_under_obj("String", STRING_CLASS, ObjTy::STRING);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
@@ -91,7 +87,7 @@ pub(super) fn init(globals: &mut Globals) {
         .store
         .set_ivar(val, IdentId::_ENCODING, Value::string_from_str("UTF-8"))
         .unwrap();
-    globals.store.set_constant(enc.id(), IdentId::UTF_8, val);
+    globals.set_constant(enc.id(), IdentId::UTF_8, val);
     let val = Value::object(enc.id());
     globals
         .store
@@ -109,9 +105,7 @@ pub(super) fn init(globals: &mut Globals) {
             Value::string_from_str("ASCII-8BIT"),
         )
         .unwrap();
-    globals
-        .store
-        .set_constant(enc.id(), IdentId::ASCII_8BIT, val);
+    globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
 }
 
