@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
+    //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
     globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
     globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
@@ -88,6 +89,38 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Err(MonorubyErr::runtimeerr("not supported"))
     }
 }
+
+/*
+///
+/// ### Enumerable#reject
+///
+/// - reject {|item| ... } -> [object]
+/// - reject -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/reject.html]
+#[monoruby_builtin]
+fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let mut res = vec![];
+        let mut elem = range.start;
+        let end = range.end;
+        while !vm
+            .invoke_method_inner(globals, IdentId::_EQ, elem, &[end], None)?
+            .as_bool()
+        {
+            if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                res.push(elem);
+            };
+            elem = vm.invoke_method_inner(globals, IdentId::get_id("succ"), elem, &[], None)?;
+        }
+        Ok(Value::array_from_vec(res))
+    } else {
+        vm.generate_enumerator(IdentId::get_id("reject"), lfp.self_val(), vec![])
+    }
+}*/
 
 ///
 /// ### Range#all

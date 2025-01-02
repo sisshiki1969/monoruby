@@ -155,7 +155,7 @@ impl SlotContext {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
                 Guarded::Value => false,
-                Guarded::Class(_) => false,
+                Guarded::Class(class) => !class.is_falsy(),
             },
         }
     }
@@ -169,7 +169,7 @@ impl SlotContext {
                 Guarded::Fixnum => false,
                 Guarded::Float => false,
                 Guarded::Value => false,
-                Guarded::Class(_) => false,
+                Guarded::Class(class) => class.is_falsy(),
             },
         }
     }
@@ -179,7 +179,12 @@ impl SlotContext {
             LinkMode::Xmm(_) => false,
             LinkMode::Both(_) => false,
             LinkMode::ConcreteValue(v) => v.is_nil(),
-            _ => false,
+            _ => match self.guarded(slot) {
+                Guarded::Fixnum => false,
+                Guarded::Float => false,
+                Guarded::Value => false,
+                Guarded::Class(class) => class.is_nil(),
+            },
         }
     }
 
@@ -192,7 +197,7 @@ impl SlotContext {
                 Guarded::Fixnum => true,
                 Guarded::Float => true,
                 Guarded::Value => false,
-                Guarded::Class(_) => true,
+                Guarded::Class(class) => !class.is_nil(),
             },
         }
     }

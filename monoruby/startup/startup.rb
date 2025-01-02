@@ -126,7 +126,51 @@ class Marshal
 end
 
 module Enumerable
+  def inject(init = nil)
+    acc = init
+    if init.nil?
+      flag = true
+      self.each do |x|
+        if flag
+          acc = x
+          flag = false
+        else
+          acc = yield(acc, x)
+        end
+      end
+    else
+      self.each do |x|
+          acc = yield(acc, x)
+      end
+    end
+    acc
+  end
+  alias reduce inject
 end
+
+class Range
+  include Enumerable
+
+  alias first begin
+
+  def reject
+    if block_given?
+      elem = self.begin
+      end_ = self.end
+      res = []
+      while elem != end_
+        if !yield(elem)
+          res << elem
+        end
+        elem = elem.succ
+      end
+      res
+    else
+      self.to_enum(:reject)
+    end
+  end
+end
+
 
 module Comparable
   def ==(other)
