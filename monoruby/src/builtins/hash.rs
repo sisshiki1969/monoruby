@@ -19,6 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
+    globals.define_builtin_funcs(HASH_CLASS, "collect", &["map"], map, 0);
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
@@ -269,6 +270,33 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
 
     Ok(removed_value.unwrap_or_default())
+}
+
+///
+/// ### Enumerable#collect
+///
+/// - collect {|key, value| ... } -> self
+/// - map {|key, value| ... } -> self
+/// - collect -> Enumerator
+/// - map -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
+#[monoruby_builtin]
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("collect");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
+    let hash = lfp.self_val().as_hash();
+    let data = vm.get_block_data(globals, bh)?;
+    let mut res = vec![];
+    for (k, v) in hash.iter() {
+        res.push(vm.invoke_block(globals, &data, &[k, v])?);
+    }
+    Ok(Value::array_from_vec(res))
 }
 
 ///
@@ -686,6 +714,17 @@ mod tests {
             a << v
         }
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn map() {
+        run_test(
+            r##"
+        {:a=>1, :b=>2, :c=>3}.collect {|k, v|
+            k.to_s + v.to_s
+        }
         "##,
         );
     }

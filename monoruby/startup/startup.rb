@@ -17,7 +17,90 @@ class Process
   end
 end
 
+module Comparable
+  def ==(other)
+    case res = self <=> other
+    when Integer
+      res == 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def !=(other)
+    case res = self <=> other
+    when Integer
+      res != 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def >=(other)
+    case res = self <=> other
+    when Integer
+      res >= 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def >(other)
+    case res = self <=> other
+    when Integer
+      res > 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+
+  def <=(other)
+    case res = self <=> other
+    when Integer
+      res <= 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+  
+  def <(other)
+    case res = self <=> other
+    when Integer
+      res < 0
+    else
+      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+    end
+  end
+end
+
+
+module Enumerable
+  def inject(init = nil)
+    acc = init
+    if init.nil?
+      flag = true
+      self.each do |x|
+        if flag
+          acc = x
+          flag = false
+        else
+          acc = yield(acc, x)
+        end
+      end
+    else
+      self.each do |x|
+          acc = yield(acc, x)
+      end
+    end
+    acc
+  end
+  alias reduce inject
+end
+
 class Hash
+  
+  include Enumerable
+
   # Hash#to_h
   # to_h -> self
   # to_h {|key, value| block } -> Hash
@@ -125,33 +208,6 @@ class Marshal
   MINOR_VERSION = 0
 end
 
-module Enumerable
-  def inject(init = nil)
-    acc = init
-    if init.nil?
-      flag = true
-      self.each do |x|
-        if flag
-          acc = x
-          flag = false
-        else
-          acc = yield(acc, x)
-        end
-      end
-    else
-      self.each do |x|
-          acc = yield(acc, x)
-      end
-    end
-    acc
-  end
-  alias reduce inject
-end
-
-class Hash
-  include Enumerable
-end
-
 class Range
   include Enumerable
 
@@ -171,63 +227,6 @@ class Range
       res
     else
       self.to_enum(:reject)
-    end
-  end
-end
-
-
-module Comparable
-  def ==(other)
-    case res = self <=> other
-    when Integer
-      res == 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-    end
-  end
-
-  def !=(other)
-    case res = self <=> other
-    when Integer
-      res != 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-    end
-  end
-
-  def >=(other)
-    case res = self <=> other
-    when Integer
-      res >= 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-    end
-  end
-
-  def >(other)
-    case res = self <=> other
-    when Integer
-      res > 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-    end
-  end
-
-  def <=(other)
-    case res = self <=> other
-    when Integer
-      res <= 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
-    end
-  end
-  
-  def <(other)
-    case res = self <=> other
-    when Integer
-      res < 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
     end
   end
 end
