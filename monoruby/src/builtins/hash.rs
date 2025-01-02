@@ -8,8 +8,11 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    globals.define_builtin_class_func(HASH_CLASS, "new", new, 0);
+    globals.define_builtin_class_func_with(HASH_CLASS, "new", new, 0, 1, false);
 
+    globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
+    globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
+    globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
     globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
@@ -78,13 +81,72 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let default_proc = if let Some(bh) = lfp.block() {
-        Some(vm.generate_proc(globals, bh)?)
+    let obj = if let Some(bh) = lfp.block() {
+        let default_proc = vm.generate_proc(globals, bh)?;
+        Value::hash_with_class_and_default_proc(class, default_proc)
     } else {
-        None
+        let default = lfp.try_arg(0).unwrap_or_default();
+        Value::hash_with_class_and_default(class, default)
     };
-    let obj = Value::empty_hash_with_class(class, default_proc);
     Ok(obj)
+}
+
+///
+/// ### Hash#default
+///
+/// - default -> object | nil
+/// - default(key) -> object | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default.html]
+#[monoruby_builtin]
+fn default(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match lfp.try_arg(0) {
+        Some(key) => {
+            let self_ = lfp.self_val();
+            let hash = self_.as_hashmap_inner();
+            if let Some(default_proc) = hash.defalut_proc() {
+                vm.invoke_proc(globals, default_proc, &[self_, key])
+            } else {
+                Ok(hash.defalut_value().unwrap_or_default())
+            }
+        }
+        None => {
+            let default = lfp
+                .self_val()
+                .as_hashmap_inner()
+                .defalut_value()
+                .unwrap_or_default();
+            Ok(default)
+        }
+    }
+}
+
+///
+/// ### Hash#default_proc
+///
+/// - default_proc -> Proc | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default_proc.html]
+#[monoruby_builtin]
+fn default_proc(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let hash = self_.as_hashmap_inner();
+    Ok(hash.defalut_proc().map(Proc::as_val).unwrap_or_default())
+}
+
+///
+/// ### Hash#default=
+///
+/// - default=(value)
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default=3d.html]
+#[monoruby_builtin]
+fn default_assign(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let default = lfp.arg(0);
+    lfp.self_val()
+        .as_hashmap_inner_mut()
+        .set_defalut_value(default);
+    Ok(default)
 }
 
 ///
@@ -308,7 +370,7 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Some(block) => block,
     };
     let data = vm.get_block_data(globals, bh)?;
-    let mut inner = HashmapInner::new(IndexMap::default(), None);
+    let mut inner = HashmapInner::default();
     for (k, v) in lfp.self_val().as_hashmap_inner().iter() {
         if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
             inner.insert(k, v);
@@ -762,6 +824,48 @@ mod tests {
         end
 
         [h[:a], h[:a], h[:a]]
+        "##,
+        );
+        run_test(
+            r##"
+        res = []
+        h = Hash.new("default")
+        res << h.default
+        res << h.default(:some)
+        res << h
+        h.default = "another default"
+        res << h.default
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        res = []
+        h = Hash.new{|hash, key| hash[key] ="default"}
+        res << h.default
+        res << h.default(:some)
+        res << h
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        res = []
+        h = Hash.new
+        res << h.default
+        res << h.default(:some)
+        res << h
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        res = []
+        h = Hash.new {|hash, key| "The #{key} not exist in #{hash.inspect}"}
+        res << h.default
+        res << h.default_proc.call({}, :foo)
+        res << h
+        res
         "##,
         );
     }

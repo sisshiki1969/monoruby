@@ -14,10 +14,11 @@ impl Hashmap {
     pub fn index(&self, vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Value> {
         if let Some(v) = self.get(key) {
             Ok(v)
-        } else if let Some(p) = self.default_proc {
-            vm.invoke_proc(globals, p, &[self.0, key])
         } else {
-            Ok(Value::nil())
+            match self.default {
+                HashDefault::Proc(p) => vm.invoke_proc(globals, p, &[self.0, key]),
+                HashDefault::Value(v) => Ok(v),
+            }
         }
     }
 }
@@ -26,8 +27,20 @@ impl Hashmap {
 struct HashId(usize);
 
 #[derive(Debug, Clone)]
+enum HashDefault {
+    Value(Value),
+    Proc(Proc),
+}
+
+impl std::default::Default for HashDefault {
+    fn default() -> Self {
+        HashDefault::Value(Value::nil())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct HashmapInner {
-    default_proc: Option<Proc>,
+    default: HashDefault,
     content: HashContent,
 }
 
@@ -52,9 +65,10 @@ impl std::ops::DerefMut for HashmapInner {
 
 impl alloc::GC<RValue> for HashmapInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(p) = self.default_proc {
-            p.mark(alloc)
-        };
+        match self.default {
+            HashDefault::Proc(p) => p.mark(alloc),
+            HashDefault::Value(v) => v.mark(alloc),
+        }
         for (k, v) in self.content.iter() {
             k.mark(alloc);
             v.mark(alloc);
@@ -63,11 +77,49 @@ impl alloc::GC<RValue> for HashmapInner {
 }
 
 impl HashmapInner {
-    pub fn new(map: IndexMap<HashKey, Value>, default_proc: Option<Proc>) -> Self {
+    pub fn new(map: IndexMap<HashKey, Value>) -> Self {
         HashmapInner {
-            default_proc,
+            default: HashDefault::default(),
             content: HashContent::new(map),
         }
+    }
+
+    pub fn new_with_default(map: IndexMap<HashKey, Value>, default: Value) -> Self {
+        HashmapInner {
+            default: HashDefault::Value(default),
+            content: HashContent::new(map),
+        }
+    }
+
+    pub fn new_with_default_proc(map: IndexMap<HashKey, Value>, default_proc: Proc) -> Self {
+        HashmapInner {
+            default: HashDefault::Proc(default_proc),
+            content: HashContent::new(map),
+        }
+    }
+
+    pub fn defalut_value(&self) -> Option<Value> {
+        if let HashDefault::Value(v) = self.default {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn defalut_proc(&self) -> Option<Proc> {
+        if let HashDefault::Proc(p) = self.default {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_defalut_value(&mut self, default: Value) {
+        self.default = HashDefault::Value(default);
+    }
+
+    pub fn set_defalut_proc(&mut self, default_proc: Proc) {
+        self.default = HashDefault::Proc(default_proc);
     }
 
     fn id(&self) -> HashId {
@@ -185,6 +237,12 @@ impl HashmapInner {
 pub enum HashContent {
     Map(Box<IndexMap<HashKey, Value>>),
     IdentMap(Box<IndexMap<IdentKey, Value>>),
+}
+
+impl std::default::Default for HashContent {
+    fn default() -> Self {
+        HashContent::Map(Box::new(IndexMap::default()))
+    }
 }
 
 impl Hash for HashContent {
@@ -474,7 +532,7 @@ mod tests {
 
     #[test]
     fn hash0() {
-        let mut map = HashmapInner::new(IndexMap::default(), None);
+        let mut map = HashmapInner::default();
         map.insert(Value::integer(5), Value::float(12.0));
         map.insert(Value::integer(5), Value::float(5.7));
         map.insert(Value::integer(7), Value::float(42.5));

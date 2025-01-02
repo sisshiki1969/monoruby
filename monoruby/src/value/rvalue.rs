@@ -270,15 +270,30 @@ impl ObjKind {
         Self::exception(class_name, msg, err.take_trace())
     }
 
-    fn hash(map: IndexMap<HashKey, Value>) -> Self {
+    fn hash() -> Self {
         Self {
-            hash: ManuallyDrop::new(HashmapInner::new(map, None)),
+            hash: ManuallyDrop::new(HashmapInner::default()),
         }
     }
 
-    fn hash_empty(default_proc: Option<Proc>) -> Self {
+    fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashmapInner::new(IndexMap::default(), default_proc)),
+            hash: ManuallyDrop::new(HashmapInner::new(map)),
+        }
+    }
+
+    fn hash_with_default(default: Value) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashmapInner::new_with_default(IndexMap::default(), default)),
+        }
+    }
+
+    fn hash_with_default_proc(default_proc: Proc) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashmapInner::new_with_default_proc(
+                IndexMap::default(),
+                default_proc,
+            )),
         }
     }
 
@@ -891,7 +906,7 @@ impl RValue {
                         for (k, v) in hash.iter() {
                             map.insert(HashKey(k.deep_copy()), v.deep_copy());
                         }
-                        ObjKind::hash(map)
+                        ObjKind::hash_from(map)
                     }
                     ObjTy::REGEXP => {
                         let regexp = self.as_regex();
@@ -1137,7 +1152,7 @@ impl RValue {
     pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue {
             header: Header::new(HASH_CLASS, ObjTy::HASH),
-            kind: ObjKind::hash(map),
+            kind: ObjKind::hash_from(map),
             var_table: None,
         }
     }
@@ -1150,10 +1165,29 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash_with_class(class_id: ClassId, default_proc: Option<Proc>) -> Self {
+    pub(super) fn new_hash_with_class(class_id: ClassId) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::HASH),
-            kind: ObjKind::hash_empty(default_proc),
+            kind: ObjKind::hash(),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_hash_with_class_and_default(class_id: ClassId, default: Value) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::HASH),
+            kind: ObjKind::hash_with_default(default),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_hash_with_class_and_default_proc(
+        class_id: ClassId,
+        default_proc: Proc,
+    ) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::HASH),
+            kind: ObjKind::hash_with_default_proc(default_proc),
             var_table: None,
         }
     }
