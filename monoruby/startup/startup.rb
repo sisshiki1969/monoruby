@@ -148,6 +148,10 @@ module Enumerable
   alias reduce inject
 end
 
+class Hash
+  include Enumerable
+end
+
 class Range
   include Enumerable
 
