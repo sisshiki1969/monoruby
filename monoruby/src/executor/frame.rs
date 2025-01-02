@@ -436,7 +436,9 @@ impl Lfp {
         if self.block().is_none() {
             Ok(())
         } else {
-            Err(MonorubyErr::runtimeerr("not supported."))
+            Err(MonorubyErr::runtimeerr(
+                "Currently, calling with block is not supported.",
+            ))
         }
     }
 
