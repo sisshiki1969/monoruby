@@ -113,6 +113,14 @@ impl ClassId {
         )
     }
 
+    pub(crate) fn is_nil(&self) -> bool {
+        *self == NIL_CLASS
+    }
+
+    pub(crate) fn is_falsy(&self) -> bool {
+        *self == NIL_CLASS || *self == FALSE_CLASS
+    }
+
     /// Get class name(IdentId) of *ClassId*.
     pub(crate) fn get_name_id(self, store: &Store) -> IdentId {
         let class = store.classes.get_module(self);

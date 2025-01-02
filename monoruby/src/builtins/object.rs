@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, 0);
+    globals.define_builtin_funcs_with(OBJECT_CLASS, "enum_for", &["to_enum"], to_enum, 0, 1, false);
     globals.define_builtin_func(OBJECT_CLASS, "equal?", equal_, 1);
     globals.define_builtin_func_rest(OBJECT_CLASS, "extend", extend);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
@@ -24,7 +24,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_with(OBJECT_CLASS, "respond_to?", respond_to, 1, 2, false);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
@@ -211,15 +210,19 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// ### Object#enum_for
 ///
-/// - to_enum([NOT SUPPORTED] method = :each, *args) -> Enumerator
-/// - enum_for([NOT SUPPORTED] method = :each, *args) -> Enumerator
-/// - to_enum([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
-/// - enum_for([NOT SUPPORTED] method = :each, *args) {|*args| ... } -> Enumerator
+/// - to_enum(method = :each, [NOT SUPPORTED] *args) -> Enumerator
+/// - enum_for(method = :each, [NOT SUPPORTED] *args) -> Enumerator
+/// - to_enum(method = :each, [NOT SUPPORTED] *args) {|*args| ... } -> Enumerator
+/// - enum_for(method = :each, [NOT SUPPORTED] *args) {|*args| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
 fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
+    let method = match lfp.try_arg(0) {
+        Some(m) => m.expect_symbol_or_string()?,
+        None => IdentId::EACH,
+    };
+    vm.generate_enumerator(method, lfp.self_val(), vec![])
 }
 
 ///
