@@ -772,11 +772,14 @@ impl Value {
     }
 
     pub(crate) fn is_hash(self) -> Option<Hashmap> {
-        let rv = self.try_rvalue()?;
-        match rv.ty() {
+        match self.try_rvalue()?.ty() {
             ObjTy::HASH => Some(Hashmap::new(self)),
             _ => None,
         }
+    }
+
+    pub(crate) fn as_hash(self) -> Hashmap {
+        self.is_hash().unwrap()
     }
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
