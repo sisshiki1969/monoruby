@@ -89,7 +89,7 @@ module Enumerable
       end
     else
       self.each do |x|
-          acc = yield(acc, x)
+        acc = yield(acc, x)
       end
     end
     acc
@@ -97,8 +97,11 @@ module Enumerable
   alias reduce inject
 end
 
+class Array
+  include Enumerable
+end
+
 class Hash
-  
   include Enumerable
 
   # Hash#to_h

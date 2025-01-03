@@ -912,40 +912,56 @@ impl Codegen {
 fn get_class(jit: &mut JitMemory) -> DestLabel {
     let label = jit.label();
     let l1 = jit.label();
-    let exit = jit.label();
     let err = jit.label();
+    let fixnum = jit.label();
+    let flonum = jit.label();
+    let symbol = jit.label();
+    let nil = jit.label();
+    let true_ = jit.label();
+    let false_ = jit.label();
     monoasm!(jit,
     label:
-        movl  rax, (INTEGER_CLASS.u32());
         testq rdi, 0b001;
-        jnz   exit;
-        movl  rax, (FLOAT_CLASS.u32());
+        jnz   fixnum;
         testq rdi, 0b010;
-        jnz   exit;
+        jnz   flonum;
         testq rdi, 0b111;
         jnz   l1;
         testq rdi, rdi;
         jz    err;
-        movl  rax, [rdi + 4];
-        jmp   exit;
+        movl  rax, [rdi + (RVALUE_OFFSET_CLASS)];
+        ret;
     l1:
-        movl  rax, (SYMBOL_CLASS.u32());
         cmpb  rdi, (TAG_SYMBOL);
-        je    exit;
-        movl  rax, (NIL_CLASS.u32());
+        je    symbol;
         cmpq  rdi, (NIL_VALUE);
-        je    exit;
-        movl  rax, (TRUE_CLASS.u32());
+        je    nil;
         cmpq  rdi, (TRUE_VALUE);
-        je    exit;
-        movl  rax, (FALSE_CLASS.u32());
+        je    true_;
         cmpq  rdi, (FALSE_VALUE);
-        je    exit;
+        je    false_;
     err:
         movq  rax, (runtime::illegal_classid);  // rdi: Value
         call  rax;
         // no return
-    exit:
+        ret;
+    fixnum:
+        movl  rax, (INTEGER_CLASS.u32());
+        ret;
+    flonum:
+        movl  rax, (FLOAT_CLASS.u32());
+        ret;
+    symbol:
+        movl  rax, (SYMBOL_CLASS.u32());
+        ret;
+    nil:
+        movl  rax, (NIL_CLASS.u32());
+        ret;
+    true_:
+        movl  rax, (TRUE_CLASS.u32());
+        ret;
+    false_:
+        movl  rax, (FALSE_CLASS.u32());
         ret;
     );
     label
@@ -1067,6 +1083,58 @@ fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
             ret;
     }
     label
+}
+
+#[repr(C)]
+struct InstanceVarCache {
+    class_id: ClassId,
+    ivar_id: IvarId,
+}
+
+extern "C" fn get_instance_var_with_cache(
+    mut base: Value,
+    name: IdentId,
+    globals: &mut Globals,
+    cache: &mut InstanceVarCache,
+) -> Value {
+    let class_id = base.class();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => return Value::nil(),
+    };
+    if class_id == cache.class_id {
+        return rval.get_ivar_by_ivarid(cache.ivar_id).unwrap_or_default();
+    }
+    let ivar_id = globals.store.get_ivar_id(class_id, name);
+    *cache = InstanceVarCache { class_id, ivar_id };
+    rval.get_ivar_by_ivarid(ivar_id).unwrap_or_default()
+}
+
+extern "C" fn set_instance_var_with_cache(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut base: Value,
+    name: IdentId,
+    val: Value,
+    cache: &mut InstanceVarCache,
+) -> Option<Value> {
+    let class_id = base.class();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => {
+            vm.err_cant_modify_frozen(&globals.store, base);
+            return None;
+        }
+    };
+    if class_id == cache.class_id {
+        rval.set_ivar_by_ivarid(cache.ivar_id, val);
+        return Some(Value::nil());
+    }
+    let ivar_id = globals.store.get_ivar_id(class_id, name);
+    let new_cache = InstanceVarCache { class_id, ivar_id };
+    *cache = new_cache;
+    rval.set_ivar_by_ivarid(ivar_id, val);
+    Some(Value::nil())
 }
 
 #[cfg(feature = "profile")]
