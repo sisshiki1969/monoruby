@@ -1559,7 +1559,7 @@ struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
     _padding: u8,
-    class: ClassId,
+    class: Option<ClassId>,
 }
 
 impl Header {
@@ -1569,18 +1569,18 @@ impl Header {
                 flag: 1,
                 ty: Some(ty),
                 _padding: 0,
-                class,
+                class: Some(class),
             },
         }
     }
 
     fn is_live(&self) -> bool {
-        unsafe { self.meta.flag & 0b1 == 1 }
+        unsafe { self.meta.flag & 0b1 == 1 && self.meta.ty.is_some() }
     }
 
     fn class(&self) -> ClassId {
         assert!(self.is_live(), "dead RVALUE. {:?}", unsafe { self.meta });
-        unsafe { self.meta.class }
+        unsafe { self.meta.class.unwrap() }
     }
 
     fn ty(&self) -> ObjTy {
@@ -1588,7 +1588,7 @@ impl Header {
     }
 
     fn change_class(&mut self, class: ClassId) {
-        self.meta.class = class;
+        self.meta.class = Some(class);
     }
 }
 

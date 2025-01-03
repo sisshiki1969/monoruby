@@ -34,8 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "-", sub, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "shift", shift, 0, 1, false);
-    globals.define_builtin_func_rest(ARRAY_CLASS, "unshift", unshift);
-    globals.define_builtin_func_rest(ARRAY_CLASS, "prepend", unshift);
+    globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "push", push, 0, 0, true);
@@ -48,8 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
     globals.define_builtin_func_rest(ARRAY_CLASS, "zip", zip);
-    globals.define_builtin_func_with(ARRAY_CLASS, "inject", inject, 0, 1, false);
-    globals.define_builtin_func_with(ARRAY_CLASS, "reduce", inject, 0, 1, false);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "inject", &["reduce"], inject, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "join", join, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "last", last, 0, 1, false);
