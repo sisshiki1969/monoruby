@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(object_nil), 0);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
-    globals.define_builtin_module_func_rest(kernel_class, "gets", gets);
+    globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func(kernel_class, "proc", proc, 0);
     globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
@@ -144,7 +144,7 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// ### Kernel.#gets
 ///
-/// - gets(rs = $/) -> String | nil
+/// - gets([NOT SUPPORTED]rs = $/) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
 #[monoruby_builtin]

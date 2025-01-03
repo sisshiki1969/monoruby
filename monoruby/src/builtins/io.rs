@@ -8,6 +8,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
+    globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
+    globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
+    globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
@@ -45,6 +48,79 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     globals.flush_stdout();
     Ok(lfp.self_val())
+}
+
+///
+/// ### IO#puts
+///
+/// - puts(*obj) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
+#[monoruby_builtin]
+fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn decompose(collector: &mut Vec<Value>, val: Value) {
+        match val.try_array_ty() {
+            Some(ary) => {
+                ary.iter().for_each(|v| decompose(collector, *v));
+            }
+            None => collector.push(val),
+        }
+    }
+    let mut collector = Vec::new();
+    for v in lfp.arg(0).as_array().iter().cloned() {
+        decompose(&mut collector, v);
+    }
+
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    for v in collector {
+        io_write(globals, io, v)?;
+        io.write(b"\n")?;
+    }
+    globals.flush_stdout();
+    Ok(Value::nil())
+}
+
+///
+/// ### IO#print
+///
+/// - print(*arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/print.html]
+#[monoruby_builtin]
+fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    for v in lfp.arg(0).as_array().iter().cloned() {
+        io_write(globals, io, v)?;
+    }
+    Ok(Value::nil())
+}
+
+fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
+    if let Some(s) = v.is_bytes() {
+        io.write(s)
+    } else {
+        let v = v.to_s(globals).into_bytes();
+        io.write(&v)
+    }
+}
+
+///
+/// ### IO#gets
+///
+/// - gets([NOT SUPPORTED]rs = $/) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
+#[monoruby_builtin]
+fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    Ok(if let Some(buf) = io.read_line()? {
+        Value::string(buf)
+    } else {
+        Value::nil()
+    })
 }
 
 ///
