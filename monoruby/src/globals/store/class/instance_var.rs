@@ -93,12 +93,8 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     if class_id == cache.class_id {
         return rval.get_ivar_by_ivarid(cache.ivar_id).unwrap_or_default();
     }
-    let ivar_id = match globals.store.classes[class_id].get_ivarid(name) {
-        Some(id) => id,
-        None => return Value::nil(),
-    };
-    let new_cache = InstanceVarCache { class_id, ivar_id };
-    *cache = new_cache;
+    let ivar_id = globals.store.get_ivar_id(class_id, name);
+    *cache = InstanceVarCache { class_id, ivar_id };
     rval.get_ivar_by_ivarid(ivar_id).unwrap_or_default()
 }
 
