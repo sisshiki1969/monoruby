@@ -291,12 +291,12 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Some(block) => block,
     };
     let hash = lfp.self_val().as_hash();
-    let data = vm.get_block_data(globals, bh)?;
-    let mut res = vec![];
-    for (k, v) in hash.iter() {
-        res.push(vm.invoke_block(globals, &data, &[k, v])?);
-    }
-    Ok(Value::array_from_vec(res))
+    vm.invoke_block_map1(
+        globals,
+        bh,
+        hash.iter().map(|(k, v)| Value::array2(k, v)),
+        hash.len(),
+    )
 }
 
 ///
@@ -317,10 +317,10 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let ary = lfp.self_val();
+    let hash = lfp.self_val().as_hash();
     let data = vm.get_block_data(globals, bh)?;
-    for (k, v) in ary.as_hash().iter() {
-        vm.invoke_block(globals, &data, &[k, v])?;
+    for (k, v) in hash.iter() {
+        vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
     Ok(lfp.self_val())
 }
@@ -712,6 +712,15 @@ mod tests {
         {:a=>1, :b=>2, :c=>3}.each {|k, v|
             a << k
             a << v
+        }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        a = []
+        {:a=>1, :b=>2, :c=>3}.each {|kv|
+            a << kv
         }
         a
         "##,

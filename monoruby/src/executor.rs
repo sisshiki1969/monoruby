@@ -736,15 +736,23 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh)?;
-        let old = alloc::Allocator::<RValue>::set_enabled(false);
-        self.temp_array_new(size_hint);
-        for v in iter {
-            let res = self.invoke_block(globals, &data, &[v])?;
-            self.temp_array_push(res);
+        fn inner(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            data: &ProcInner,
+            iter: impl Iterator<Item = Value>,
+        ) -> Result<()> {
+            for v in iter {
+                let res = vm.invoke_block(globals, data, &[v])?;
+                vm.temp_array_push(res);
+            }
+            Ok(())
         }
-        alloc::Allocator::<RValue>::set_enabled(old);
+        let data = self.get_block_data(globals, bh)?;
+        self.temp_array_new(size_hint);
+        let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
+        res?;
         Ok(v)
     }
 
@@ -755,19 +763,27 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         size_hint: impl Into<Option<usize>>,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh)?;
-        let old = alloc::Allocator::<RValue>::set_enabled(false);
-        self.temp_array_new(size_hint);
-        for v in iter {
-            let res = self.invoke_block(globals, &data, &[v])?;
-            if let Some(ary) = res.try_array_ty() {
-                self.temp_array_extend_from_slice(&ary);
-            } else {
-                self.temp_array_push(res);
+        fn inner(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            data: &ProcInner,
+            iter: impl Iterator<Item = Value>,
+        ) -> Result<()> {
+            for v in iter {
+                let res = vm.invoke_block(globals, &data, &[v])?;
+                if let Some(ary) = res.try_array_ty() {
+                    vm.temp_array_extend_from_slice(&ary);
+                } else {
+                    vm.temp_array_push(res);
+                }
             }
+            Ok(())
         }
-        alloc::Allocator::<RValue>::set_enabled(old);
+        let data = self.get_block_data(globals, bh)?;
+        self.temp_array_new(size_hint);
+        let res = inner(self, globals, &data, iter);
         let v = self.temp_pop();
+        res?;
         Ok(v)
     }
 

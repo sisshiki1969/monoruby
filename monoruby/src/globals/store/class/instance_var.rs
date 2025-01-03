@@ -60,7 +60,7 @@ impl Store {
         Ok(())
     }
 
-    fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
+    pub(crate) fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
         let table = &mut self.classes[class_id].ivar_names;
         match table.get(&ivar_name) {
             Some(id) => *id,
@@ -71,62 +71,6 @@ impl Store {
             }
         }
     }
-}
-
-#[repr(C)]
-pub(crate) struct InstanceVarCache {
-    class_id: ClassId,
-    ivar_id: IvarId,
-}
-
-pub(crate) extern "C" fn get_instance_var_with_cache(
-    mut base: Value,
-    name: IdentId,
-    globals: &mut Globals,
-    cache: &mut InstanceVarCache,
-) -> Value {
-    let class_id = base.class();
-    let rval = match base.try_rvalue_mut() {
-        Some(rval) => rval,
-        None => return Value::nil(),
-    };
-    if class_id == cache.class_id {
-        return rval.get_ivar_by_ivarid(cache.ivar_id).unwrap_or_default();
-    }
-    let ivar_id = match globals.store.classes[class_id].get_ivarid(name) {
-        Some(id) => id,
-        None => return Value::nil(),
-    };
-    let new_cache = InstanceVarCache { class_id, ivar_id };
-    *cache = new_cache;
-    rval.get_ivar_by_ivarid(ivar_id).unwrap_or_default()
-}
-
-pub(crate) extern "C" fn set_instance_var_with_cache(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut base: Value,
-    name: IdentId,
-    val: Value,
-    cache: &mut InstanceVarCache,
-) -> Option<Value> {
-    let class_id = base.class();
-    let rval = match base.try_rvalue_mut() {
-        Some(rval) => rval,
-        None => {
-            vm.err_cant_modify_frozen(&globals.store, base);
-            return None;
-        }
-    };
-    if class_id == cache.class_id {
-        rval.set_ivar_by_ivarid(cache.ivar_id, val);
-        return Some(Value::nil());
-    }
-    let ivar_id = globals.store.get_ivar_id(class_id, name);
-    let new_cache = InstanceVarCache { class_id, ivar_id };
-    *cache = new_cache;
-    rval.set_ivar_by_ivarid(ivar_id, val);
-    Some(Value::nil())
 }
 
 #[test]

@@ -51,7 +51,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());  // CallSiteId
-            movq rax, (runtime::find_method2);
+            movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
             popq r13;
             popq rdi;

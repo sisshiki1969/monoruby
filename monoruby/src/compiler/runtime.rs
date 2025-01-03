@@ -9,37 +9,14 @@ pub(crate) use args::*;
 // Runtime functions.
 //
 
-/*///
-/// Get FuncId of the given method.
-///
-/// If no method was found or the number of arguments was invalid, return None (==0u64).
-///
 pub(super) extern "C" fn find_method(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-) -> Option<FuncId> {
-    if let Some(func_name) = globals.store[callid].name {
-        let recv_reg = globals.store[callid].recv;
-        let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
-        let is_func_call = recv_reg.is_self();
-        globals
-            .find_method(recv, func_name, is_func_call)
-            .map_err(|err| vm.set_error(err))
-            .ok()
-    } else {
-        find_super(vm, globals)
-    }
-}*/
-
-pub(super) extern "C" fn find_method2(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     recv: Value,
 ) -> Option<FuncId> {
-    if let Some(func_name) = globals.store[callid].name {
-        let is_func_call = globals.store[callid].recv.is_self();
+    if let Some(func_name) = globals[callid].name {
+        let is_func_call = globals[callid].recv.is_self();
         globals
             .find_method(recv, func_name, is_func_call)
             .map_err(|err| vm.set_error(err))
@@ -49,7 +26,7 @@ pub(super) extern "C" fn find_method2(
     }
 }
 
-pub(super) extern "C" fn vm_find_method(
+/*pub(super) extern "C" fn vm_find_method(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
@@ -66,7 +43,7 @@ pub(super) extern "C" fn vm_find_method(
         find_super(vm, globals)?
     };
     Some(func_id)
-}
+}*/
 
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     let func_id = vm.method_func_id();

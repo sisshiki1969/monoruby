@@ -32,7 +32,8 @@ mod regexp;
 mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
-pub const RVALUE_OFFSET_TY: usize = 2;
+pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
+pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
 pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
 pub const RVALUE_OFFSET_ARY_CAPA: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_CAPA;
@@ -929,7 +930,7 @@ impl RValue {
                         class: self.kind.class.clone(),
                     },
                     ObjTy::OBJECT => ObjKind {
-                        object: self.kind.object,
+                        object: self.kind.object.clone(),
                     },
                     ObjTy::BIGNUM => ObjKind {
                         bignum: self.kind.bignum.clone(),
@@ -1559,7 +1560,7 @@ struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
     _padding: u8,
-    class: ClassId,
+    class: Option<ClassId>,
 }
 
 impl Header {
@@ -1569,18 +1570,18 @@ impl Header {
                 flag: 1,
                 ty: Some(ty),
                 _padding: 0,
-                class,
+                class: Some(class),
             },
         }
     }
 
     fn is_live(&self) -> bool {
-        unsafe { self.meta.flag & 0b1 == 1 }
+        unsafe { self.meta.flag & 0b1 == 1 && self.meta.ty.is_some() }
     }
 
     fn class(&self) -> ClassId {
         assert!(self.is_live(), "dead RVALUE. {:?}", unsafe { self.meta });
-        unsafe { self.meta.class }
+        unsafe { self.meta.class.unwrap() }
     }
 
     fn ty(&self) -> ObjTy {
@@ -1588,7 +1589,7 @@ impl Header {
     }
 
     fn change_class(&mut self, class: ClassId) {
-        self.meta.class = class;
+        self.meta.class = Some(class);
     }
 }
 

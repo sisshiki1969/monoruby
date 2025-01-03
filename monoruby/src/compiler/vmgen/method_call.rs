@@ -57,6 +57,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rdi;
             call get_class;
+            movq rcx, rdi;
             movl r15, rax;
             // r15: class of receiver: ClassId
             cmpl r15, [r13 + (CACHED_CLASS)];
@@ -220,6 +221,7 @@ impl Codegen {
     ///
     /// ### in
     /// - r15: ClassId of receiver
+    /// - rcx: receiver: Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -237,14 +239,19 @@ impl Codegen {
             movb [r13 + (OPCODE_SUB)], 1;
             // version mismatch
         slow_path2:
+            subq rsp, 1024;
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
-            movq rax, (runtime::vm_find_method);
+            movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
+            addq rsp, 1024;
         );
         self.vm_handle_error();
-        self.save_cache(exec);
+        self.save_cache();
+        monoasm!( &mut self.jit,
+            jmp exec;
+        );
         self.jit.select_page(0);
     }
 
@@ -255,14 +262,13 @@ impl Codegen {
     /// - rax: FuncId
     /// - r15: ClassId of receiver
     ///
-    fn save_cache(&mut self, exec: DestLabel) {
+    fn save_cache(&mut self) {
         let class_version = self.class_version;
         monoasm!( &mut self.jit,
             movl [r13 + (CACHED_FUNCID)], rax;    // FuncId
             movl [r13 + (CACHED_CLASS)], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
             movl [r13 + (CACHED_VERSION)], rdi;    // class_version
-            jmp exec;
         );
     }
 }
