@@ -184,14 +184,6 @@ impl<T: GCBox> Allocator<T> {
         self.pages.len() + 1
     }
 
-    pub fn set_enabled(enable: bool) -> bool {
-        ALLOC.with(|alloc| {
-            let old = alloc.borrow().gc_enabled;
-            alloc.borrow_mut().gc_enabled = enable;
-            old
-        })
-    }
-
     ///
     /// Allocate object.
     ///
