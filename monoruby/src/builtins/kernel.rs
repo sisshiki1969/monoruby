@@ -295,6 +295,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
+    globals.flush_stdout();
     Ok(match len {
         0 => Value::nil(),
         1 => lfp.arg(0).as_array()[0],

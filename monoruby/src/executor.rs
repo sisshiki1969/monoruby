@@ -724,7 +724,11 @@ impl Executor {
     ) -> Result<()> {
         let data = self.get_block_data(globals, bh)?;
         for (index, val) in iter.enumerate() {
-            self.invoke_block(globals, &data, &[val, Value::integer(index as i64)])?;
+            self.invoke_block(
+                globals,
+                &data,
+                &[Value::array2(val, Value::integer(index as i64))],
+            )?;
         }
         Ok(())
     }

@@ -74,8 +74,7 @@ fn puts(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     for v in collector {
-        io_write(globals, io, v)?;
-        io.write(b"\n")?;
+        io_writeline(globals, io, v)?;
     }
     globals.flush_stdout();
     Ok(Value::nil())
@@ -95,6 +94,22 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         io_write(globals, io, v)?;
     }
     Ok(Value::nil())
+}
+
+fn io_writeline(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
+    if let Some(s) = v.is_bytes() {
+        io.write(s)?;
+        if s.last() != Some(&b'\n') {
+            io.write(b"\n")?;
+        }
+    } else {
+        let v = v.to_s(globals).into_bytes();
+        io.write(&v)?;
+        if v.last() != Some(&b'\n') {
+            io.write(b"\n")?;
+        }
+    }
+    Ok(())
 }
 
 fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {

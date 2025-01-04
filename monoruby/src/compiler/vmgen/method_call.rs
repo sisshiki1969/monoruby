@@ -245,6 +245,14 @@ impl Codegen {
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
+            movl rax, rax;
+            //pushq rax;
+            //subq rsp, 8;
+            //movq rdi, rax;
+            //movq rax, (dump_rdi);
+            //call rax;
+            //addq rsp, 8;
+            //popq rax;
             addq rsp, 1024;
         );
         self.vm_handle_error();

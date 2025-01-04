@@ -95,6 +95,40 @@ module Enumerable
     acc
   end
   alias reduce inject
+
+  def each_slice(n)
+    if n == 0 || n < 0
+      raise ArgumentError, "invalid slice size"
+    end
+    if block_given?
+      slice = []
+      self.each do |x|
+        slice << x
+        if slice.size == n
+          yield slice
+          slice = []
+        end
+      end
+      yield slice if !slice.empty?
+      self
+    else
+      self.to_enum(:each_slice, n)
+    end
+  end
+
+  def map
+    return self if !block_given?
+    res = []
+    self.each do |x|
+      res << yield(x)
+    end
+    res
+  end
+  alias collect map
+end
+
+class Enumerator
+  include Enumerable
 end
 
 class Array
