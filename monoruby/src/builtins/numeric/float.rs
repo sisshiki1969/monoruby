@@ -35,6 +35,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
+    globals.define_builtin_func(FLOAT_CLASS, "round", round, 0);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
@@ -191,6 +192,21 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 ///
+/// ### Float#round
+///
+/// - round([NOT SUPPORTED]ndigits = 0) -> Integer | Float
+/// - round([NOT SUPPORTED]ndigits = 0, [NOT SUPPORTED]half: :up) -> Integer | Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
+#[monoruby_builtin]
+fn round(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match lfp.self_val().unpack() {
+        RV::Float(f) => Ok(Value::integer(f.round_ties_even() as i64)),
+        _ => unreachable!(),
+    }
+}
+
+///
 /// ### Float#finite?
 ///
 /// - finite? -> bool
@@ -251,14 +267,22 @@ mod tests {
         run_test("-2.18.to_i");
         run_test("4.7777.to_f");
         run_test("-725.11.to_f");
-        run_test("1.2.floor");
-        run_test("(-1.2).floor");
         run_test("3.0.div(2)");
         run_test("3.0.div(-2)");
         run_test("(-3.0).div(2)");
         run_test("(-3.0).div(-2)");
         run_test("(-37.044).abs");
         run_test("37.044.magnitude");
+    }
+
+    #[test]
+    fn round() {
+        run_test("1.2.floor");
+        run_test("(-1.2).floor");
+        run_test("11.5.round");
+        run_test("11.4.round");
+        run_test("(-11.4).round");
+        run_test("(-11.5).round");
     }
 
     #[test]

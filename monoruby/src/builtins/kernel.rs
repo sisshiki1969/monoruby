@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
+    globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
     globals.define_builtin_func(kernel_class, "__check_stack", check_stack, 0);
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
@@ -302,6 +303,44 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         1 => lfp.arg(0).as_array()[0],
         _ => lfp.arg(0),
     })
+}
+
+///
+/// ### Kernel.#caller
+///
+/// - caller(start = 1) -> [String] | nil
+/// - [NOT SUPPORTED] caller(start, length) -> [String] | nil
+/// - [NOT SUPPORTED] caller(range) -> [String] | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/caller.html]
+#[monoruby_builtin]
+fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut cfp = vm.cfp();
+    let mut v = Vec::new();
+    let level = if let Some(arg0) = lfp.try_arg(0) {
+        arg0.coerce_to_i64()? as usize + 1
+    } else {
+        2
+    };
+    for i in 0..16 {
+        let prev_cfp = cfp.prev();
+        if i >= level {
+            let func_id = cfp.lfp().meta().func_id();
+            if let Some(iseq) = globals.store[func_id].is_iseq() {
+                let loc = globals.store[iseq].get_location();
+                let desc = globals.store.func_description(func_id);
+                v.push(Value::string_from_vec(
+                    format!("{loc}:in `{desc}`").into_bytes(),
+                ));
+            }
+        }
+        if let Some(prev_cfp) = prev_cfp {
+            cfp = prev_cfp;
+        } else {
+            break;
+        }
+    }
+    Ok(Value::array_from_vec(v))
 }
 
 #[monoruby_builtin]
@@ -1010,13 +1049,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn kernel() {
         run_test_no_result_check("sleep 1");
-        run_test_error("abort 1");
-        run_test_no_result_check("exit");
-        run_test_no_result_check("exit 0");
+        //run_test_error("abort 1");
+        //run_test_no_result_check("exit");
+        //run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
+        run_test_no_result_check("caller(1)");
     }
 
     #[test]

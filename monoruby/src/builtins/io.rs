@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
+    globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "gets", gets, 0);
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
@@ -93,6 +94,25 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     for v in lfp.arg(0).as_array().iter().cloned() {
         io_write(globals, io, v)?;
     }
+    Ok(Value::nil())
+}
+
+///
+/// ### IO#printf
+///
+/// - printf(format, *arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
+#[monoruby_builtin]
+fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let io = self_.as_io_inner_mut();
+    let format_str = lfp.arg(0).expect_string()?;
+    let args = lfp.arg(1).as_array();
+
+    let buf = globals.format_by_args(&format_str, &args)?;
+    io.write(buf.as_bytes())?;
+
     Ok(Value::nil())
 }
 
@@ -249,6 +269,9 @@ mod tests {
             r#"
             $stdout << "a"
             $stdout << 5
+            $stdout.puts 100
+            $stdout.print 100
+            $stdout.printf("%b%10.5f", 100, 3.14)
             File.open("/dev/null", "w") << 5
             File.open("/dev/null", "w+") << 5
             $stdin.sync
