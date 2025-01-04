@@ -47,6 +47,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
+    globals.define_builtin_func(kernel_class, "__check_stack", check_stack, 0);
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
     globals.define_builtin_func(
         kernel_class,
@@ -319,6 +320,14 @@ fn assert(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn dump(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     crate::runtime::_dump_stacktrace(vm, globals);
+    Ok(Value::nil())
+}
+
+#[monoruby_builtin]
+fn check_stack(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+    if crate::runtime::_check_stack(vm, globals) {
+        crate::runtime::_dump_stacktrace(vm, globals);
+    }
     Ok(Value::nil())
 }
 

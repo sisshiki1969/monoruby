@@ -864,3 +864,22 @@ pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {
     }
     eprintln!("-----end stacktrace");
 }
+
+pub extern "C" fn _check_stack(vm: &mut Executor, globals: &mut Globals) -> bool {
+    let mut invalid = false;
+    let mut cfp = vm.cfp();
+    unsafe {
+        for _ in 0..16 {
+            let prev_cfp = cfp.prev();
+            if globals.check_frame_info(cfp.lfp()) {
+                invalid = true;
+            };
+            if let Some(prev_cfp) = prev_cfp {
+                cfp = prev_cfp;
+            } else {
+                break;
+            }
+        }
+    }
+    invalid
+}

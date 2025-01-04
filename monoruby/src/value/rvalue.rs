@@ -381,8 +381,8 @@ impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let meta = unsafe { self.header.meta };
         if !self.header.is_live() {
-            write!(f, "{:016x} DEAD: next:{:?}", self.id(), unsafe {
-                self.header.next
+            write!(f, "{:016x} DEAD: {:?}", self.id(), unsafe {
+                self.header.meta
             })
         } else {
             write!(
@@ -683,21 +683,14 @@ impl alloc::GC<RValue> for RValue {
                 }
                 ObjTy::STRING => {}
                 ObjTy::TIME => {}
-                ObjTy::ARRAY => {
-                    self.as_array().iter().for_each(|v| v.mark(alloc));
-                }
+                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
                 ObjTy::RANGE => {
                     let range = self.as_range();
                     range.start.mark(alloc);
                     range.end.mark(alloc);
                 }
                 ObjTy::PROC => {}
-                ObjTy::HASH => {
-                    for (k, v) in self.as_hashmap().iter() {
-                        k.mark(alloc);
-                        v.mark(alloc);
-                    }
-                }
+                ObjTy::HASH => self.as_hashmap().mark(alloc),
                 ObjTy::REGEXP => {}
                 ObjTy::IO => {}
                 ObjTy::EXCEPTION => {}
@@ -781,6 +774,10 @@ impl RValue {
 
     pub(crate) fn ty(&self) -> ObjTy {
         self.header.ty()
+    }
+
+    pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
+        self.header.meta.ty
     }
 
     ///
@@ -924,61 +921,76 @@ impl RValue {
             header: self.header,
             var_table: self.var_table.clone(),
             kind: unsafe {
-                match self.ty() {
-                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                    ObjTy::CLASS | ObjTy::MODULE => ObjKind {
-                        class: self.kind.class.clone(),
-                    },
-                    ObjTy::OBJECT => ObjKind {
-                        object: self.kind.object.clone(),
-                    },
-                    ObjTy::BIGNUM => ObjKind {
-                        bignum: self.kind.bignum.clone(),
-                    },
-                    ObjTy::FLOAT => ObjKind {
-                        float: self.kind.float,
-                    },
-                    ObjTy::COMPLEX => ObjKind {
-                        complex: ManuallyDrop::new(self.kind.complex.dup()),
-                    },
-                    ObjTy::STRING => ObjKind {
-                        string: self.kind.string.clone(),
-                    },
-                    ObjTy::TIME => ObjKind {
-                        time: self.kind.time.clone(),
-                    },
-                    ObjTy::ARRAY => ObjKind {
-                        array: self.kind.array.clone(),
-                    },
-                    ObjTy::RANGE => ObjKind {
-                        range: self.kind.range.clone(),
-                    },
-                    ObjTy::PROC => ObjKind {
-                        proc: self.kind.proc.clone(),
-                    },
-                    ObjTy::HASH => ObjKind {
-                        hash: self.kind.hash.clone(),
-                    },
-                    ObjTy::REGEXP => ObjKind {
-                        regexp: self.kind.regexp.clone(),
-                    },
-                    ObjTy::IO => ObjKind {
-                        io: self.kind.io.clone(),
-                    },
-                    ObjTy::EXCEPTION => ObjKind {
-                        exception: self.kind.exception.clone(),
-                    },
-                    ObjTy::METHOD => ObjKind {
-                        method: self.kind.method.clone(),
-                    },
-                    _ => unreachable!("clone()"),
+                if let Some(ty) = self.try_ty() {
+                    match ty {
+                        ObjTy::CLASS | ObjTy::MODULE => ObjKind {
+                            class: self.kind.class.clone(),
+                        },
+                        ObjTy::OBJECT => ObjKind {
+                            object: self.kind.object.clone(),
+                        },
+                        ObjTy::BIGNUM => ObjKind {
+                            bignum: self.kind.bignum.clone(),
+                        },
+                        ObjTy::FLOAT => ObjKind {
+                            float: self.kind.float,
+                        },
+                        ObjTy::COMPLEX => ObjKind {
+                            complex: ManuallyDrop::new(self.kind.complex.dup()),
+                        },
+                        ObjTy::STRING => ObjKind {
+                            string: self.kind.string.clone(),
+                        },
+                        ObjTy::TIME => ObjKind {
+                            time: self.kind.time.clone(),
+                        },
+                        ObjTy::ARRAY => ObjKind {
+                            array: self.kind.array.clone(),
+                        },
+                        ObjTy::RANGE => ObjKind {
+                            range: self.kind.range.clone(),
+                        },
+                        ObjTy::PROC => ObjKind {
+                            proc: self.kind.proc.clone(),
+                        },
+                        ObjTy::HASH => ObjKind {
+                            hash: self.kind.hash.clone(),
+                        },
+                        ObjTy::REGEXP => ObjKind {
+                            regexp: self.kind.regexp.clone(),
+                        },
+                        ObjTy::IO => ObjKind {
+                            io: self.kind.io.clone(),
+                        },
+                        ObjTy::EXCEPTION => ObjKind {
+                            exception: self.kind.exception.clone(),
+                        },
+                        ObjTy::METHOD => ObjKind {
+                            method: self.kind.method.clone(),
+                        },
+                        ty => unreachable!("{ty:?}"),
+                    }
+                } else {
+                    unreachable!()
                 }
             },
         }
     }
 
     pub(crate) fn class(&self) -> ClassId {
-        self.header.class()
+        if self.header.is_live() {
+            self.header.class()
+        } else {
+            unreachable!("Dead object {:?}", self)
+        }
+    }
+
+    pub(crate) fn debug_class(&self) -> Option<ClassId> {
+        if self.header.is_live() {
+            Some(self.header.class())
+        } else {
+            None
+        }
     }
 }
 
@@ -1338,12 +1350,16 @@ impl RValue {
 impl RValue {
     pub fn unpack(&self) -> RV {
         unsafe {
-            match self.ty() {
-                ObjTy::BIGNUM => RV::BigInt(self.as_bignum()),
-                ObjTy::FLOAT => RV::Float(self.as_float()),
-                ObjTy::STRING => RV::String(self.as_bytes()),
-                ObjTy::COMPLEX => RV::Complex(self.as_complex()),
-                _ => RV::Object(self),
+            if let Some(ty) = self.try_ty() {
+                match ty {
+                    ObjTy::BIGNUM => RV::BigInt(self.as_bignum()),
+                    ObjTy::FLOAT => RV::Float(self.as_float()),
+                    ObjTy::STRING => RV::String(self.as_bytes()),
+                    ObjTy::COMPLEX => RV::Complex(self.as_complex()),
+                    _ => RV::Object(self),
+                }
+            } else {
+                RV::Invalid
             }
         }
     }

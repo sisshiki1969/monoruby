@@ -85,9 +85,29 @@ impl Value {
                 NIL_VALUE => NIL_CLASS,
                 TRUE_VALUE => TRUE_CLASS,
                 FALSE_VALUE => FALSE_CLASS,
-                _ => unreachable!("Illegal packed value. {:x}", self.0),
+                _ => unreachable!("Illegal packed value. 0x{:016x}", self.0),
             }
         }
+    }
+
+    pub(crate) fn debug_class(&self) -> Option<ClassId> {
+        let class = if self.is_fixnum() {
+            INTEGER_CLASS
+        } else if self.is_flonum() {
+            FLOAT_CLASS
+        } else if let Some(rv) = self.try_rvalue() {
+            rv.debug_class()?
+        } else if self.is_symbol() {
+            SYMBOL_CLASS
+        } else {
+            match self.0.get() {
+                NIL_VALUE => NIL_CLASS,
+                TRUE_VALUE => TRUE_CLASS,
+                FALSE_VALUE => FALSE_CLASS,
+                _ => return None,
+            }
+        };
+        Some(class)
     }
 
     pub(crate) fn ty(&self) -> Option<ObjTy> {
@@ -447,7 +467,7 @@ impl Value {
         } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
         } else if self.id() == 0 {
-            RV::None
+            RV::Invalid
         } else if let Some(rv) = self.try_rvalue() {
             rv.unpack()
         } else if self.is_symbol() {
@@ -471,7 +491,7 @@ impl Value {
     ///
     pub fn debug(&self, store: &Store) -> String {
         match self.unpack() {
-            RV::None => "UNDEFINED".to_string(),
+            RV::Invalid => "UNDEFINED".to_string(),
             RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Fixnum(n) => format!("{}", n),
@@ -482,6 +502,22 @@ impl Value {
             RV::String(s) => format!(r#""{}""#, s.inspect()),
             RV::Object(rvalue) => rvalue.debug(store),
         }
+    }
+
+    pub fn debug_check(&self, store: &Store) -> Option<String> {
+        let s = match self.unpack() {
+            RV::Invalid => return None,
+            RV::Nil => "nil".to_string(),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Fixnum(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Complex(_) => self.as_complex().debug(store),
+            RV::Symbol(id) => format!(":{id}"),
+            RV::String(s) => format!(r#""{}""#, s.inspect()),
+            RV::Object(rvalue) => rvalue.debug(store),
+        };
+        Some(s)
     }
 
     pub fn debug_tos(&self, store: &Store) -> String {
@@ -1242,7 +1278,7 @@ impl Value {
 
 #[derive(Clone, PartialEq)]
 pub enum RV<'a> {
-    None,
+    Invalid,
     Nil,
     Bool(bool),
     Fixnum(i64),
@@ -1257,7 +1293,7 @@ pub enum RV<'a> {
 impl<'a> std::fmt::Debug for RV<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RV::None => write!(f, "Undef"),
+            RV::Invalid => write!(f, "Undef"),
             RV::Nil => write!(f, "nil"),
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),

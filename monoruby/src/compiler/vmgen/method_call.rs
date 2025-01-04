@@ -240,19 +240,19 @@ impl Codegen {
             // version mismatch
         slow_path2:
             subq rsp, 1024;
+            //pushq rcx;
+            //subq rsp, 8;
+            //movq rdi, rcx;
+            //movq rax, (dump_rdi);
+            //call rax;
+            //addq rsp, 8;
+            //popq rcx;
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<FuncId>
             movl rax, rax;
-            //pushq rax;
-            //subq rsp, 8;
-            //movq rdi, rax;
-            //movq rax, (dump_rdi);
-            //call rax;
-            //addq rsp, 8;
-            //popq rax;
             addq rsp, 1024;
         );
         self.vm_handle_error();

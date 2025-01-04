@@ -17,7 +17,7 @@ impl Hashmap {
         } else {
             match self.default {
                 HashDefault::Proc(p) => vm.invoke_proc(globals, p, &[self.0, key]),
-                HashDefault::Value(v) => Ok(v),
+                HashDefault::Value(v) => Ok(v.dup()),
             }
         }
     }
