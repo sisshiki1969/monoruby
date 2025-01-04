@@ -1481,3 +1481,7 @@ extern "C" fn opt_case(
 ) -> u32 {
     globals.store[callid].find(idx)
 }
+
+extern "C" fn dump_rdi(reg: u64) {
+    eprintln!("rdi: 0x{:016x}", reg);
+}

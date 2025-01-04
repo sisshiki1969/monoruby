@@ -51,6 +51,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "join", join, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "last", last, 0, 1, false);
+    globals.define_builtin_func(ARRAY_CLASS, "take", take, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
@@ -800,6 +801,27 @@ fn last(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Array#take
+///
+/// - take(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/take.html]
+#[monoruby_builtin]
+fn take(_: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    let n = lfp.arg(0).coerce_to_i64()?;
+    if n < 0 {
+        return Err(MonorubyErr::argumenterr("must be positive."));
+    }
+    let n = n as usize;
+    if n > ary.len() {
+        Ok(ary.as_val().dup())
+    } else {
+        Ok(Value::array_from_iter(ary[0..n].iter().cloned()))
+    }
+}
+
+///
 /// ### Array#sum
 ///
 /// - sum(init=0) -> object
@@ -1195,7 +1217,7 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         vm.invoke_block_iter_with_index1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
-        vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
+        vm.generate_enumerator(IdentId::get_id("each_with_index"), lfp.self_val(), vec![])
     }
 }
 
@@ -2175,6 +2197,21 @@ mod tests {
         a = [0,1,2]
         [a.last(0), a.last(1), a.last(2), a.last(3), a.last(4)]
         "##,
+        );
+    }
+
+    #[test]
+    fn take() {
+        run_test_error(r##"[0,1,2,3].take(-5)"##);
+        run_test_error(r##"[0,1,2,3].take(:a)"##);
+        run_test(r##"[0,1,2,3,4,5].take(3)"##);
+        run_test(r##"[0,1,2,3,4,5].take(100)"##);
+        run_test(r##"[0,1,2,3,4,5].take(0)"##);
+        run_test(
+            r##"
+            a = [0,1,2,3,4,5];
+            [a.take(3) << 5, a]
+            "##,
         );
     }
 

@@ -481,8 +481,8 @@ impl NoMethodErrKind {
     pub fn show(&self, store: &Store) -> String {
         match self {
             NoMethodErrKind::MethodNotFound { name, obj } => format!(
-                "undefined method `{name}' for {}:{}",
-                obj.inspect(store),
+                "undefined method `{name}' for {}",
+                //obj.inspect(store),
                 obj.get_real_class_name(store)
             ),
             NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
