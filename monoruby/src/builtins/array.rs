@@ -47,7 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
     globals.define_builtin_func_rest(ARRAY_CLASS, "zip", zip);
-    globals.define_builtin_funcs_with(ARRAY_CLASS, "inject", &["reduce"], inject, 0, 1, false);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "inject", &["reduce"], inject, 0, 2, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "join", join, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "last", last, 0, 1, false);
@@ -59,6 +59,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
@@ -705,20 +706,41 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// ### Array#inject
 ///
 /// - inject(init = self.first) {|result, item| ... } -> object
+/// - inject(sym) -> object
+/// - inject(init, sym) -> object
 /// - reduce(init = self.first) {|result, item| ... } -> object
+/// - reduce(sym) -> object
+/// - reduce(init, sym) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
 #[monoruby_builtin]
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val().as_array();
     let mut iter = self_.iter().cloned();
-    let res = if lfp.try_arg(0).is_none() {
-        iter.next().unwrap_or_default()
+    if let Some(bh) = lfp.block() {
+        let res = if lfp.try_arg(0).is_none() {
+            iter.next().unwrap_or_default()
+        } else {
+            lfp.arg(0)
+        };
+        vm.invoke_block_fold1(globals, bh, iter, res)
     } else {
-        lfp.arg(0)
-    };
-    vm.invoke_block_fold1(globals, bh, iter, res)
+        let (sym, mut res) = if let Some(arg0) = lfp.try_arg(0) {
+            if let Some(arg1) = lfp.try_arg(1) {
+                (arg1.expect_symbol_or_string()?, arg0)
+            } else {
+                let sym = arg0.expect_symbol_or_string()?;
+                let res = iter.next().unwrap_or_default();
+                (sym, res)
+            }
+        } else {
+            return Err(MonorubyErr::argumenterr("wrong number of arguments"));
+        };
+        for v in iter {
+            res = vm.invoke_method_inner(globals, sym, res, &[v], None)?;
+        }
+        Ok(res)
+    }
 }
 
 ///
@@ -1138,6 +1160,28 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         })
     } else {
         vm.generate_enumerator(IdentId::get_id("reject!"), lfp.self_val(), vec![])
+    }
+}
+
+///
+/// ### Array#delete_if
+///
+/// - delete_if {|x| ... } -> self
+/// - delete_if -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_if.html]
+#[monoruby_builtin]
+fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        ary.retain(|v| {
+            vm.invoke_block(globals, &data, &[*v])
+                .map(|res| !res.as_bool())
+        })?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("delete_if"), lfp.self_val(), vec![])
     }
 }
 
@@ -2174,6 +2218,8 @@ mod tests {
         run_test(r##"[2, 3, 4, 5].inject(0) {|result, item| result + item }"##);
         run_test(r##"[2, 3, 4, 5].inject {|result, item| result + item }"##);
         run_test(r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##);
+        run_test(r##"[1, 2, 3, 4, 5].inject(:+)"##);
+        run_test(r##"[1, 2, 3, 4, 5].inject(10, :+)"##);
     }
 
     #[test]
@@ -2364,7 +2410,12 @@ mod tests {
         run_test(r##"[1,2,3,4,5].reject(&:even?)"##);
         run_test(r##"a=[1,2,3,4,5]; a.reject! { |num| num.even? }; a"##);
         run_test(r##"a=[1,2,3,4,5]; a.reject! { true }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.reject! { false }; a"##);
         run_test(r##"a=[1,2,3,4,5]; a.reject!(&:even?); a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.delete_if { |num| num.even? }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.delete_if { true }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.delete_if { false }; a"##);
+        run_test(r##"a=[1,2,3,4,5]; a.delete_if(&:even?); a"##);
         run_test(
             r##"
         a = %w{ a b c d e f }

@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
     globals.define_builtin_module_inline_func(klass, "cos", cos, Box::new(math_cos), 1);
     globals.define_builtin_module_inline_func(klass, "sin", sin, Box::new(math_sin), 1);
+    globals.define_builtin_module_func(klass, "log10", log10, 1);
 }
 
 /// ### Math.#sqrt
@@ -71,6 +72,29 @@ fn cos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     };
     Ok(Value::float(f.cos()))
+}
+
+/// Math.#log10
+/// - log10(x) -> Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Math/m/log10.html]
+#[monoruby_builtin]
+fn log10(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let f = match arg0.unpack() {
+        RV::Float(f) => f,
+        RV::Fixnum(i) => i as f64,
+        RV::BigInt(b) => b.to_f64().unwrap(),
+        _ => {
+            return Err(MonorubyErr::cant_convert_into_float(arg0));
+        }
+    };
+    if f.is_sign_negative() {
+        return Err(MonorubyErr::rangeerr(
+            "Numerical argument is out of domain - log10",
+        ));
+    }
+    Ok(Value::float(f.log10()))
 }
 
 fn math_sqrt(
@@ -185,6 +209,13 @@ mod tests {
         run_test("Math.cos -14.97522");
         run_test("Math.sin 149");
         run_test("Math.sin -14.97522");
+    }
+
+    #[test]
+    fn log() {
+        run_test("Math.log10 149");
+        run_test("Math.log10 14.9");
+        run_test("Math.log10 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
     }
 
     #[test]

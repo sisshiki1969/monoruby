@@ -160,11 +160,6 @@ class Integer
   end
 end
 
-class GC
-  def self.auto_compact=(x)
-  end
-end
-
 class Symbol
   def match(other)
     self.to_s.match(other)
@@ -184,14 +179,6 @@ class Object
   def freeze
     self
   end
-
-  #def to_enum
-  #  Enumerator.new do
-  #    self.each do |x|
-  #      Fiber.yield x
-  #    end
-  #  end
-  #end
 end
 
 class Module
@@ -202,7 +189,7 @@ end
 module Warning
   def self.warn(*x)
   end
-
+  
   def self.[](category)
     true
   end
@@ -233,7 +220,7 @@ class Thread
     def synchronize
       yield
     end
-
+    
     def owned?
       false
     end
@@ -247,9 +234,9 @@ end
 
 class Range
   include Enumerable
-
+  
   alias first begin
-
+  
   def reject
     if block_given?
       elem = self.begin
@@ -273,6 +260,14 @@ class Errno
   ENOSYS = 38
   ENOTSUP = 95
   ENOENT = 2
+end
+
+class GC
+  def self.auto_compact=(x)
+  end
+
+  def self.start
+  end
 end
 
 File::ALT_SEPARATOR = nil
