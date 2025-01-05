@@ -4,6 +4,13 @@ use super::*;
 #[repr(transparent)]
 pub struct ComplexInner(num::complex::Complex<Real>);
 
+impl GC<RValue> for ComplexInner {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.0.re.mark(alloc);
+        self.0.im.mark(alloc);
+    }
+}
+
 impl std::ops::Deref for ComplexInner {
     type Target = num::complex::Complex<Real>;
     fn deref(&self) -> &Self::Target {

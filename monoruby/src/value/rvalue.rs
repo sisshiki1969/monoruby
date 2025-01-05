@@ -82,17 +82,6 @@ impl std::fmt::Debug for ObjTy {
 }
 
 impl ObjTy {
-    fn new(ty: u8) -> Self {
-        Self(std::num::NonZeroU8::new(ty).unwrap())
-    }
-
-    pub fn from_u8(ty: u8) -> Option<Self> {
-        if ty == 0 {
-            None
-        } else {
-            Some(Self::new(ty))
-        }
-    }
     pub fn get(&self) -> u8 {
         self.0.get()
     }
@@ -197,12 +186,6 @@ impl ObjKind {
         }
     }
 
-    fn complex_from_inner(inner: ComplexInner) -> Self {
-        Self {
-            complex: ManuallyDrop::new(inner),
-        }
-    }
-
     fn string_from_inner(inner: StringInner) -> Self {
         Self {
             string: ManuallyDrop::new(inner),
@@ -269,12 +252,6 @@ impl ObjKind {
         let class_name = IdentId::get_id(err.get_class_name());
         let msg = err.show(store);
         Self::exception(class_name, msg, err.take_trace())
-    }
-
-    fn hash() -> Self {
-        Self {
-            hash: ManuallyDrop::new(HashmapInner::default()),
-        }
     }
 
     fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
@@ -658,16 +635,7 @@ impl alloc::GC<RValue> for RValue {
         }
         unsafe {
             match self.ty() {
-                //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjTy::CLASS | ObjTy::MODULE => {
-                    let module = self.as_module();
-                    if let Some(class) = module.superclass_value() {
-                        class.mark(alloc)
-                    }
-                    if let Some(val) = module.is_singleton() {
-                        val.mark(alloc)
-                    }
-                }
+                ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
                 ObjTy::OBJECT => {
                     self.as_object().iter().for_each(|v| {
                         v.map(|v| {
@@ -677,24 +645,17 @@ impl alloc::GC<RValue> for RValue {
                 }
                 ObjTy::BIGNUM => {}
                 ObjTy::FLOAT => {}
-                ObjTy::COMPLEX => {
-                    self.as_complex().re().get().mark(alloc);
-                    self.as_complex().im().get().mark(alloc);
-                }
+                ObjTy::COMPLEX => self.as_complex().mark(alloc),
                 ObjTy::STRING => {}
                 ObjTy::TIME => {}
                 ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
-                ObjTy::RANGE => {
-                    let range = self.as_range();
-                    range.start.mark(alloc);
-                    range.end.mark(alloc);
-                }
-                ObjTy::PROC => {}
+                ObjTy::RANGE => self.as_range().mark(alloc),
+                ObjTy::PROC => self.as_proc().mark(alloc),
                 ObjTy::HASH => self.as_hashmap().mark(alloc),
                 ObjTy::REGEXP => {}
                 ObjTy::IO => {}
                 ObjTy::EXCEPTION => {}
-                ObjTy::METHOD => self.as_method().receiver().mark(alloc),
+                ObjTy::METHOD => self.as_method().mark(alloc),
                 ObjTy::FIBER => self.as_fiber().mark(alloc),
                 ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjTy::GENERATOR => self.as_generator().mark(alloc),
@@ -985,6 +946,7 @@ impl RValue {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn debug_class(&self) -> Option<ClassId> {
         if self.header.is_live() {
             Some(self.header.class())
@@ -1026,14 +988,6 @@ impl RValue {
         RValue {
             header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
             kind: ObjKind::complex_from(complex),
-            var_table: None,
-        }
-    }
-
-    pub(super) fn new_complex_from_inner(inner: ComplexInner) -> Self {
-        RValue {
-            header: Header::new(COMPLEX_CLASS, ObjTy::COMPLEX),
-            kind: ObjKind::complex_from_inner(inner),
             var_table: None,
         }
     }
@@ -1174,14 +1128,6 @@ impl RValue {
         RValue {
             header: Header::new(HASH_CLASS, ObjTy::HASH),
             kind: ObjKind::hash_from_inner(inner),
-            var_table: None,
-        }
-    }
-
-    pub(super) fn new_hash_with_class(class_id: ClassId) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::HASH),
-            kind: ObjKind::hash(),
             var_table: None,
         }
     }
@@ -1645,6 +1591,13 @@ pub struct RangeInner {
     pub start: Value,
     pub end: Value,
     pub exclude_end: u32,
+}
+
+impl GC<RValue> for RangeInner {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.start.mark(alloc);
+        self.end.mark(alloc);
+    }
 }
 
 impl RangeInner {

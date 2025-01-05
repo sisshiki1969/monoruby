@@ -8,6 +8,12 @@ pub struct MethodInner {
     owner: ClassId,
 }
 
+impl alloc::GC<RValue> for MethodInner {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.receiver.mark(alloc);
+    }
+}
+
 impl MethodInner {
     pub fn new(receiver: Value, func_id: FuncId, owner: ClassId) -> Self {
         Self {
@@ -56,6 +62,10 @@ impl UMethodInner {
 
     pub fn func_id(&self) -> FuncId {
         self.func_id
+    }
+
+    pub fn owner(&self) -> ClassId {
+        self.owner
     }
 
     pub fn debug(&self, store: &Store) -> String {
