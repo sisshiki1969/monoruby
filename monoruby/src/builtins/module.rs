@@ -490,7 +490,7 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 }
 
 ///
-/// ### Module#instance_method
+/// ### Module#remove_method
 ///
 /// - remove_method(*name) -> self
 ///
@@ -1146,6 +1146,35 @@ mod tests {
             class C < S
               def c1; end
               def c2; end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn instance_method() {
+        run_test_with_prelude(
+            r#"
+            $res = []
+            interpreter = Interpreter.new
+            interpreter.interpret('dave')
+            $res
+            "#,
+            r#"
+            class Interpreter
+              def do_a() $res << "there, "; end
+              def do_d() $res << "Hello ";  end
+              def do_e() $res << "!\n";     end
+              def do_v() $res << "Dave";    end
+              Dispatcher = {
+                "a" => instance_method(:do_a),
+                "d" => instance_method(:do_d),
+                "e" => instance_method(:do_e),
+                "v" => instance_method(:do_v)
+              }
+              def interpret(string)
+                string.each_char {|b| Dispatcher[b].bind(self).call }
+              end
             end
         "#,
         );

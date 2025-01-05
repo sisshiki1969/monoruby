@@ -167,6 +167,20 @@ pub struct ModuleInner {
     class_type: ModuleType,
 }
 
+impl GC<RValue> for ModuleInner {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        if let Some(class) = self.superclass {
+            class.mark(alloc)
+        }
+        if let Some(val) = self.singleton {
+            val.mark(alloc)
+        }
+        if let Some(val) = self.origin {
+            val.mark(alloc)
+        }
+    }
+}
+
 impl ModuleInner {
     pub fn new(
         class_id: ClassId,

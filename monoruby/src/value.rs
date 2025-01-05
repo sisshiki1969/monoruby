@@ -90,6 +90,7 @@ impl Value {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn debug_class(&self) -> Option<ClassId> {
         let class = if self.is_fixnum() {
             INTEGER_CLASS
@@ -262,10 +263,6 @@ impl Value {
         RValue::new_complex_from(complex).pack()
     }
 
-    pub fn complex_from_inner(inner: ComplexInner) -> Self {
-        RValue::new_complex_from_inner(inner).pack()
-    }
-
     pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::integer(i)
@@ -364,10 +361,6 @@ impl Value {
 
     pub fn hash_from_inner(inner: HashmapInner) -> Self {
         RValue::new_hash_from_inner(inner).pack()
-    }
-
-    pub fn hash_with_class(class_id: ClassId) -> Self {
-        RValue::new_hash_with_class(class_id).pack()
     }
 
     pub fn hash_with_class_and_default_proc(class_id: ClassId, default_proc: Proc) -> Self {
@@ -1096,6 +1089,11 @@ impl Value {
     pub fn as_method(&self) -> &MethodInner {
         assert_eq!(ObjTy::METHOD, self.rvalue().ty());
         self.rvalue().as_method()
+    }
+
+    pub fn as_umethod(&self) -> &UMethodInner {
+        assert_eq!(ObjTy::UMETHOD, self.rvalue().ty());
+        self.rvalue().as_umethod()
     }
 
     pub fn as_fiber_inner(&self) -> &FiberInner {

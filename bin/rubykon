@@ -1,0 +1,13 @@
+#!/bin/sh
+
+cargo install --path monoruby
+monoruby ../yjit-bench/benchmarks/rubykon/benchmark/full_playout.rb
+ruby ../yjit-bench/benchmarks/rubykon/benchmark/full_playout.rb
+monoruby ../yjit-bench/benchmarks/rubykon/benchmark/playout.rb
+ruby ../yjit-bench/benchmarks/rubykon/benchmark/playout.rb
+monoruby ../yjit-bench/benchmarks/rubykon/benchmark/playput_micros.rb
+ruby ../yjit-bench/benchmarks/rubykon/benchmark/playput_micros.rb
+monoruby ../yjit-bench/benchmarks/rubykon/benchmark/scoring.rb
+ruby ../yjit-bench/benchmarks/rubykon/benchmark/scoring.rb
+monoruby ../yjit-bench/benchmarks/rubykon/benchmark/scoring_micros.rb
+ruby ../yjit-bench/benchmarks/rubykon/benchmark/scoring_micros.rb

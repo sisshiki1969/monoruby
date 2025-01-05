@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(METHOD_CLASS, "===", call);
 
     globals.define_builtin_class_under_obj("UnboundMethod", UMETHOD_CLASS, ObjTy::METHOD);
+    globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
 }
 
 ///
@@ -37,6 +38,23 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         lfp.block(),
     )
     .ok_or_else(|| vm.take_error())
+}
+
+///
+/// ### UnboundMethod#bind
+///
+/// - bind(obj) -> Method
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind.html]
+#[monoruby_builtin]
+fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    Ok(Value::new_method(
+        self_val,
+        method.func_id(),
+        method.owner(),
+    ))
 }
 
 #[cfg(test)]

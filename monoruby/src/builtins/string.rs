@@ -63,6 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
+    globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
     globals.define_builtin_func_with(STRING_CLASS, "center", center, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
     globals.define_builtin_func(STRING_CLASS, "encoding", encoding, 0);
@@ -1758,13 +1759,32 @@ fn replace(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str()?;
+    let iter = recv.chars().map(|c| Value::string(c.to_string()));
     if let Some(bh) = lfp.block() {
-        let iter = recv.chars().map(|c| Value::string(c.to_string()));
         vm.invoke_block_map1(globals, bh, iter, None)?;
         Ok(lfp.self_val())
     } else {
-        let iter = recv.chars().map(|c| Value::string(c.to_string()));
         Ok(Value::array_from_iter(iter))
+    }
+}
+
+///
+/// ### String#each_char
+///
+/// - each_char {|cstr| block } -> self
+/// - each_char -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_char.html]
+#[monoruby_builtin]
+fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let recv = self_.expect_str()?;
+    if let Some(bh) = lfp.block() {
+        let iter = recv.chars().map(|c| Value::string(c.to_string()));
+        vm.invoke_block_iter1(globals, bh, iter)?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![])
     }
 }
 
@@ -2534,6 +2554,20 @@ mod tests {
             r#"
         x = []
         ["hello world".chars do |c| x << c.upcase end, x]
+        "#,
+        );
+    }
+
+    #[test]
+    fn each_char() {
+        run_test(
+            r#"
+        x = []; res = "hello世界".each_char {|c| x << c.upcase }; [res, x]
+        "#,
+        );
+        run_test(
+            r#"
+        x = []; "hello世界".each_char.each_with_index {|c, i| x << c + i.to_s }; x
         "#,
         );
     }

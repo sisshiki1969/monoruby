@@ -116,6 +116,7 @@ pub(crate) enum TraceIr {
         kind: UnOpK,
         dst: SlotId,
         src: SlotId,
+        #[allow(dead_code)]
         src_class: Option<ClassId>,
     },
     IUnOp {

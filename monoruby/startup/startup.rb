@@ -115,6 +115,19 @@ module Enumerable
       self.to_enum(:each_slice, n)
     end
   end
+  
+  def each_with_index
+    if block_given?
+      i = 0
+      self.each do |x|
+        yield x, i
+        i += 1
+      end
+      self
+    else
+      self.to_enum(:each_with_index)
+    end
+  end
 
   def map
     return self if !block_given?

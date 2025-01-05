@@ -8,6 +8,12 @@ use super::*;
 #[repr(transparent)]
 pub struct Real(Value);
 
+impl GC<RValue> for Real {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.0.mark(alloc)
+    }
+}
+
 impl std::cmp::PartialEq for Real {
     fn eq(&self, other: &Self) -> bool {
         RealKind::from(*self) == RealKind::from(*other)
