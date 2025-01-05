@@ -14,6 +14,16 @@ impl GC<RValue> for Real {
     }
 }
 
+impl std::fmt::Display for Real {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match RealKind::from(*self) {
+            RealKind::Integer(i) => write!(fmt, "{}", i),
+            RealKind::BigInt(b) => write!(fmt, "{}", b),
+            RealKind::Float(f) => write!(fmt, "{}", f),
+        }
+    }
+}
+
 impl std::cmp::PartialEq for Real {
     fn eq(&self, other: &Self) -> bool {
         RealKind::from(*self) == RealKind::from(*other)

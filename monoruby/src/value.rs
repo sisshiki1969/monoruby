@@ -31,6 +31,12 @@ impl std::fmt::Debug for Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.unpack())
+    }
+}
+
 impl std::default::Default for Value {
     fn default() -> Self {
         Value::nil()
@@ -47,14 +53,19 @@ impl GC<RValue> for Value {
 
 impl Value {
     /// This function is only used for system assertion.
-    pub(crate) fn eq(lhs: Self, rhs: Self) -> bool {
+    pub(crate) fn assert_eq(lhs: Self, rhs: Self) {
         if lhs == rhs {
-            return true;
+            return;
         }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
-            (Some(lhs), Some(rhs)) => RValue::eq(lhs, rhs),
-            _ => false,
+            (Some(lhs), Some(rhs)) => {
+                if RValue::eq(lhs, rhs) {
+                    return;
+                }
+            }
+            _ => {}
         }
+        panic!("{} != {}", lhs, rhs)
     }
 
     pub(crate) fn eql(&self, other: &Self) -> bool {
@@ -1291,13 +1302,30 @@ pub enum RV<'a> {
 impl<'a> std::fmt::Debug for RV<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RV::Invalid => write!(f, "Undef"),
+            RV::Invalid => write!(f, "INVALID"),
             RV::Nil => write!(f, "nil"),
             RV::Bool(b) => write!(f, "{b:?}"),
             RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
-            RV::Complex(c) => write!(f, "{:?}", &c),
+            RV::Complex(c) => write!(f, "{:?}", c),
+            RV::Symbol(id) => write!(f, ":{}", id),
+            RV::String(s) => write!(f, "\"{}\"", s.to_str().unwrap()),
+            RV::Object(rvalue) => write!(f, "{rvalue:?}"),
+        }
+    }
+}
+
+impl<'a> std::fmt::Display for RV<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RV::Invalid => write!(f, "INVALID"),
+            RV::Nil => write!(f, "nil"),
+            RV::Bool(b) => write!(f, "{b:?}"),
+            RV::Fixnum(n) => write!(f, "{n}"),
+            RV::BigInt(n) => write!(f, "{n}"),
+            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
+            RV::Complex(c) => write!(f, "{}", c),
             RV::Symbol(id) => write!(f, ":{}", id),
             RV::String(s) => write!(f, "\"{}\"", s.to_str().unwrap()),
             RV::Object(rvalue) => write!(f, "{rvalue:?}"),

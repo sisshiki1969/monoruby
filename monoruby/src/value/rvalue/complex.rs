@@ -4,6 +4,12 @@ use super::*;
 #[repr(transparent)]
 pub struct ComplexInner(num::complex::Complex<Real>);
 
+impl std::fmt::Display for ComplexInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Complex(({})+({})i)", self.0.re, self.0.im)
+    }
+}
+
 impl GC<RValue> for ComplexInner {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         self.0.re.mark(alloc);

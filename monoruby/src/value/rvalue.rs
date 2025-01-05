@@ -1326,21 +1326,26 @@ impl RValue {
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();
-                    lhs.len() == rhs.len()
-                        && lhs
-                            .iter()
-                            .zip(rhs.iter())
-                            .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
+                    if lhs.len() != rhs.len() {
+                        return false;
+                    }
+                    lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
+                        Value::assert_eq(*lhs, *rhs);
+                    });
+                    true
                 }
                 (ObjTy::RANGE, ObjTy::RANGE) => lhs.as_range() == rhs.as_range(),
                 (ObjTy::HASH, ObjTy::HASH) => {
                     let lhs = lhs.as_hashmap();
                     let rhs = rhs.as_hashmap();
-                    lhs.len() == rhs.len()
-                        && lhs
-                            .iter()
-                            .zip(rhs.iter())
-                            .all(|(lhs, rhs)| Value::eq(lhs.0, rhs.0) && Value::eq(lhs.1, rhs.1))
+                    if lhs.len() != rhs.len() {
+                        return false;
+                    }
+                    lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
+                        Value::assert_eq(lhs.0, rhs.0);
+                        Value::assert_eq(lhs.1, rhs.1);
+                    });
+                    true
                 }
                 _ => false,
             }
