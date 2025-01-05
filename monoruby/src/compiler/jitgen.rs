@@ -38,6 +38,16 @@ mod variables;
 ///
 struct JitContext {
     ///
+    /// IseqId of the method.
+    ///
+    iseq_id: ISeqId,
+    ///
+    /// The start bytecode position of the loop to be compiled.
+    ///
+    /// None for method compilation.
+    ///
+    position: Option<BytecodePtr>,
+    ///
     /// Destination labels for each BasicBlock.
     ///
     basic_block_labels: HashMap<BasicBlockId, JitLabel>,
@@ -125,12 +135,14 @@ impl JitContext {
     /// Create new JitContext.
     ///
     fn new(
-        func: &ISeqInfo,
-        is_loop: bool,
+        store: &Store,
+        iseq_id: ISeqId,
+        position: Option<BytecodePtr>,
         class_version: u32,
         self_class: ClassId,
-        self_ty: Option<ObjTy>,
     ) -> Self {
+        let func = &store[iseq_id];
+        let self_ty = store[self_class].instance_ty();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..func.bb_info.len() {
@@ -142,10 +154,12 @@ impl JitContext {
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
+            iseq_id,
+            position,
             basic_block_labels,
             loop_info: HashMap::default(),
             loop_count: 0,
-            is_loop,
+            is_loop: position.is_some(),
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -170,10 +184,12 @@ impl JitContext {
         let total_reg_num = self.total_reg_num;
         let local_num = self.local_num;
         Self {
+            iseq_id: self.iseq_id,
+            position: self.position,
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
             loop_count: 0,
-            is_loop: true,
+            is_loop: self.is_loop,
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -690,23 +706,12 @@ impl Codegen {
             );
         }
 
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
-        let func = &store[iseq_id];
+        let mut ctx = JitContext::new(store, iseq_id, position, self.class_version(), self_class);
 
-        let self_ty = store[self_class].instance_ty();
-        let mut ctx = JitContext::new(
-            func,
-            position.is_some(),
-            self.class_version(),
-            self_class,
-            self_ty,
-        );
-
-        ctx.compile(store, iseq_id, position);
+        ctx.compile(store, position);
 
         self.gen_machine_code(&mut ctx, store, entry_label);
 
@@ -717,8 +722,7 @@ impl Codegen {
                 eprintln!("<== finished compile. elapsed:{:?}", elapsed);
                 self.jit_compile_time += elapsed;
             }
-            #[cfg(feature = "emit-asm")]
-            self.dump_disas(store, ctx.sourcemap, iseq_id);
+
             #[cfg(any(feature = "jit-debug", feature = "jit-log"))]
             {
                 self.jit.select_page(0);
@@ -730,12 +734,6 @@ impl Codegen {
             #[cfg(feature = "emit-asm")]
             eprintln!("<== finished compile.");
         }
-        #[cfg(feature = "perf")]
-        {
-            let fid = store[iseq_id].func_id();
-            let desc = format!("JIT:<{}>", store.func_description(fid));
-            self.perf_info(pair, &desc);
-        }
     }
 
     fn gen_machine_code(&mut self, ctx: &mut JitContext, store: &Store, entry_label: DestLabel) {
@@ -744,6 +742,8 @@ impl Codegen {
         {
             ctx.start_codepos = self.jit.get_current();
         }
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
 
         // generate machine code for a main context
         for ir in std::mem::take(&mut ctx.ir).into_iter() {
@@ -758,6 +758,20 @@ impl Codegen {
         assert!(ctx.continuation_bridge.is_none());
 
         self.jit.finalize();
+
+        #[cfg(feature = "emit-asm")]
+        if self.startup_flag {
+            let iseq_id = ctx.iseq_id;
+            self.dump_disas(store, &ctx.sourcemap, iseq_id);
+        }
+
+        #[cfg(feature = "perf")]
+        {
+            let iseq_id = ctx.iseq_id;
+            let fid = store[iseq_id].func_id();
+            let desc = format!("JIT:<{}>", store.func_description(fid));
+            self.perf_info(pair, &desc);
+        }
     }
 }
 

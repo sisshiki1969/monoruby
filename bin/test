@@ -1,6 +1,7 @@
 #!/bin/bash
 
-cargo install --path monoruby
+cargo install --features gc-stress --path monoruby
+
 monoruby benchmark/app_fib.rb > monoruby.log
 ruby benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
@@ -41,7 +42,7 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
-cargo run --release -- ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
+monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
 ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log

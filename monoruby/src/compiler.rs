@@ -932,7 +932,7 @@ impl Codegen {
     pub(crate) fn dump_disas(
         &mut self,
         store: &Store,
-        sourcemap: Vec<(bytecodegen::BcIndex, usize)>,
+        sourcemap: &Vec<(bytecodegen::BcIndex, usize)>,
         iseq_id: ISeqId,
     ) {
         let (start, code_end, end) = self.jit.code_block.last().unwrap();

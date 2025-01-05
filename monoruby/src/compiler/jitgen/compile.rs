@@ -1,12 +1,8 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile(
-        &mut self,
-        store: &Store,
-        iseq_id: ISeqId,
-        position: Option<BytecodePtr>,
-    ) {
+    pub(super) fn compile(&mut self, store: &Store, position: Option<BytecodePtr>) {
+        let iseq_id = self.iseq_id;
         let func = &store[iseq_id];
 
         for (loop_start, loop_end) in func.bb_info.loops() {
