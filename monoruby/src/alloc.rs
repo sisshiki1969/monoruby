@@ -390,18 +390,16 @@ impl<T: GCBox> Allocator<T> {
 
         #[cfg(feature = "gc-debug")]
         {
-            if self.current_page.as_ptr() == page_ptr {
-                return page_ptr;
+            if self.current_page.as_ptr() != page_ptr
+                && self.pages.iter().all(|heap| heap.as_ptr() != page_ptr)
+            {
+                eprintln!("dump heap pages");
+                self.pages.iter().for_each(|x| eprintln!("{:?}", x));
+                eprintln!("{:?}", self.current_page);
+                panic!("The ptr is not in heap pages. {:?}", ptr);
             };
-            if self.pages.iter().any(|heap| heap.as_ptr() == page_ptr) {
-                return page_ptr;
-            };
-            eprintln!("dump heap pages");
-            self.pages.iter().for_each(|x| eprintln!("{:?}", x));
-            eprintln!("{:?}", self.current_page);
-            panic!("The ptr is not in heap pages. {:?}", ptr);
         }
-        #[cfg(not(feature = "gc-debug"))]
+
         page_ptr
     }
 }

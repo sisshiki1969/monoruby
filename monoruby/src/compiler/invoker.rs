@@ -1,19 +1,7 @@
 use super::*;
 
-impl Codegen {
-    pub(super) fn gen_invoker(&mut self) {
-        self.method_invoker = self.method_invoker();
-        self.method_invoker2 = self.method_invoker2();
-        self.block_invoker = self.block_invoker();
-        self.block_invoker_with_self = self.block_invoker_with_self();
-        self.binding_invoker = self.binding_invoker();
-        self.fiber_invoker = self.fiber_invoker();
-        self.fiber_invoker_with_self = self.fiber_invoker_with_self();
-        self.resume_fiber = self.resume_fiber();
-        self.yield_fiber = self.yield_fiber();
-    }
-
-    fn method_invoker(&mut self) -> MethodInvoker {
+impl JitModule {
+    pub(super) fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -43,7 +31,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn method_invoker2(&mut self) -> MethodInvoker2 {
+    pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -73,7 +61,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn block_invoker(&mut self) -> BlockInvoker {
+    pub(super) fn block_invoker(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -99,7 +87,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn block_invoker_with_self(&mut self) -> BlockInvoker {
+    pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -125,7 +113,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn binding_invoker(&mut self) -> BindingInvoker {
+    pub(super) fn binding_invoker(&mut self) -> BindingInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -161,7 +149,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn fiber_invoker(&mut self) -> FiberInvoker {
+    pub(super) fn fiber_invoker(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -207,7 +195,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
+    pub(super) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -253,7 +241,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn resume_fiber(
+    pub(super) fn resume_fiber(
         &mut self,
     ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
@@ -279,7 +267,7 @@ impl Codegen {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+    pub(super) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -302,9 +290,207 @@ impl Codegen {
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
+
+    ///
+    /// Get *ClassId* of the *Value*.
+    ///
+    /// #### in
+    /// - rdi: Value
+    ///
+    /// #### out
+    /// - rax: ClassId
+    ///
+    pub(super) fn get_class(&mut self) -> DestLabel {
+        let label = self.label();
+        let l1 = self.label();
+        let err = self.label();
+        let fixnum = self.label();
+        let flonum = self.label();
+        let symbol = self.label();
+        let nil = self.label();
+        let true_ = self.label();
+        let false_ = self.label();
+        monoasm!(&mut self.jit,
+        label:
+            testq rdi, 0b001;
+            jnz   fixnum;
+            testq rdi, 0b010;
+            jnz   flonum;
+            testq rdi, 0b111;
+            jnz   l1;
+            testq rdi, rdi;
+            jz    err;
+            movl  rax, [rdi + (RVALUE_OFFSET_CLASS)];
+            ret;
+        l1:
+            cmpb  rdi, (TAG_SYMBOL);
+            je    symbol;
+            cmpq  rdi, (NIL_VALUE);
+            je    nil;
+            cmpq  rdi, (TRUE_VALUE);
+            je    true_;
+            cmpq  rdi, (FALSE_VALUE);
+            je    false_;
+        err:
+            movq  rax, (illegal_classid);  // rdi: Value
+            call  rax;
+            // no return
+            ret;
+        fixnum:
+            movl  rax, (INTEGER_CLASS.u32());
+            ret;
+        flonum:
+            movl  rax, (FLOAT_CLASS.u32());
+            ret;
+        symbol:
+            movl  rax, (SYMBOL_CLASS.u32());
+            ret;
+        nil:
+            movl  rax, (NIL_CLASS.u32());
+            ret;
+        true_:
+            movl  rax, (TRUE_CLASS.u32());
+            ret;
+        false_:
+            movl  rax, (FALSE_CLASS.u32());
+            ret;
+        );
+        label
+    }
+
+    pub(super) fn entry_panic(&mut self) -> DestLabel {
+        let label = self.label();
+        monoasm! {&mut self.jit,
+        label:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::_dump_stacktrace);
+            call rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::panic);
+            jmp rax;
+            leave;
+            ret;
+        }
+        label
+    }
+
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    /// - xmm0: f64
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - rcx
+    ///
+    pub(super) fn f64_to_val(&mut self) -> DestLabel {
+        let label = self.label();
+        let normal = self.label();
+        let heap_alloc = self.label();
+        monoasm! {&mut self.jit,
+        label:
+            xorps xmm1, xmm1;
+            ucomisd xmm0, xmm1;
+            jne normal;
+            jp normal;
+            movq rax, (FLOAT_ZERO);
+            ret;
+        normal:
+            movq rax, xmm0;
+            movq rcx, rax;
+            shrq rcx, 60;
+            addl rcx, 1;
+            andl rcx, 6;
+            cmpl rcx, 4;
+            jne heap_alloc;
+            rolq rax, 3;
+            andq rax, (-4);
+            orq rax, 2;
+            ret;
+        heap_alloc:
+        // we must save rdi for log_deoptimize.
+            subq rsp, 152;
+            movq [rsp + 144], r9;
+            movq [rsp + 136], r8;
+            movq [rsp + 128], rdx;
+            movq [rsp + 120], rsi;
+            movq [rsp + 112], rdi;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::float_heap);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
+            movq rsi, [rsp + 120];
+            movq rdx, [rsp + 128];
+            movq r8, [rsp + 136];
+            movq r9, [rsp + 144];
+            addq rsp, 152;
+            ret;
+        }
+        label
+    }
+
+    pub(super) fn unimplemented_inst(&mut self) -> CodePtr {
+        let label = self.get_current_address();
+        let f = unimplemented_inst as usize;
+        monoasm! { &mut self.jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movzxw rdx, [r13 - 10];
+                movq rax, (f);
+                call rax;
+                leave;
+                ret;
+        }
+        label
+    }
 }
 
-impl Codegen {
+extern "C" fn illegal_classid(v: Value) {
+    panic!("illegal Value for get_class(): {:016x}", v.id());
+}
+
+extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16) -> Option<Value> {
+    vm.set_error(MonorubyErr::runtimeerr(format!(
+        "unimplemented instruction. {:04x}",
+        opcode
+    )));
+    None
+    //panic!("unimplemented inst. {opcode:016x}");
+}
+
+impl JitModule {
     fn invoker_prologue(&mut self) {
         // rdi: &mut Interp
         // rsi: &mut Globals

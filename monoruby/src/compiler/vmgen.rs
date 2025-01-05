@@ -1,13 +1,9 @@
-#[cfg(feature = "perf")]
-use std::io::Write;
-
 use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
 mod definition;
 pub mod init_method;
-mod invoker;
 mod method_call;
 mod variables;
 
@@ -96,6 +92,10 @@ impl Codegen {
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
+        let entry_fetch = self.jit.label();
+        self.vm_fetch = entry_fetch;
+        self.vm_entry = vm_entry;
+
         //
         // VM entry
         //
@@ -111,13 +111,10 @@ impl Codegen {
         vm_entry:
             pushq rbp;
             movq rbp, rsp;
+        entry_fetch:
         };
-        let entry_fetch = self.jit.label();
-        self.jit.bind_label(entry_fetch);
         self.fetch_and_dispatch();
-        self.vm_fetch = entry_fetch;
 
-        self.vm_entry = vm_entry;
         self.jit_class_guard_fail = self.jit.label();
         self.jit.bind_label(self.jit_class_guard_fail);
         #[cfg(feature = "profile")]
@@ -396,7 +393,6 @@ impl Codegen {
         #[cfg(feature = "perf")]
         self.perf_info(pair, "monoruby-vm");
 
-        self.gen_invoker();
         let info = self.get_wrapper_info(pair);
         self.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
     }
@@ -488,57 +484,6 @@ impl Codegen {
         self.dispatch[207] = rem_rr;
         self.dispatch[208] = pow_rr;
         self.jit.finalize();
-    }
-
-    pub(crate) fn get_wrapper_info(
-        &mut self,
-        pair: (CodePtr, CodePtr),
-    ) -> (CodePtr, usize, CodePtr, usize) {
-        let (ptr0, ptr1) = pair;
-        assert_eq!(0, self.jit.get_page());
-        let size0 = self.jit.get_current_address() - ptr0;
-        self.jit.select_page(1);
-        let size1 = self.jit.get_current_address() - ptr1;
-        self.jit.select_page(0);
-        (ptr0, size0 as usize, ptr1, size1 as usize)
-    }
-
-    #[cfg(feature = "perf")]
-    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
-        let info = self.get_wrapper_info(pair);
-        self.perf_write(info, func_name);
-    }
-
-    #[cfg(feature = "perf")]
-    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
-            .unwrap();
-        self.perf_file
-            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
-            .unwrap();
-    }
-
-    fn push_callee_save(&mut self) {
-        monoasm! { &mut self.jit,
-            pushq r15;
-            pushq r14;
-            pushq r13;
-            pushq r12;
-            pushq rbx;
-            pushq rbp;
-        };
-    }
-
-    fn pop_callee_save(&mut self) {
-        monoasm! { &mut self.jit,
-            popq rbp;
-            popq rbx;
-            popq r12;
-            popq r13;
-            popq r14;
-            popq r15;
-        };
     }
 
     ///

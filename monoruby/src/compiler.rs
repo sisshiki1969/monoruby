@@ -3,6 +3,7 @@ use std::hash::Hash;
 use monoasm::*;
 use monoasm_macro::monoasm;
 
+mod invoker;
 pub mod jitgen;
 pub mod runtime;
 mod vmgen;
@@ -93,19 +94,253 @@ impl Xmm {
     }
 }
 
+pub struct JitModule {
+    pub(crate) jit: JitMemory,
+    class_version: DestLabel,
+    const_version: DestLabel,
+    bop_redefined_flags: DestLabel,
+    #[cfg(feature = "perf")]
+    perf_file: std::fs::File,
+}
+
+impl std::ops::Deref for JitModule {
+    type Target = JitMemory;
+    fn deref(&self) -> &Self::Target {
+        &self.jit
+    }
+}
+
+impl std::ops::DerefMut for JitModule {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.jit
+    }
+}
+
+impl JitModule {
+    fn new() -> Self {
+        let mut jit = JitMemory::new();
+        let class_version = jit.data_i32(1);
+        let bop_redefined_flags = jit.data_i32(0);
+        let const_version = jit.data_i64(1);
+        jit.finalize();
+        #[cfg(feature = "perf")]
+        let perf_file = {
+            let pid = std::process::id();
+            let temp_file = format!("/tmp/perf-{pid}.map");
+            let file = match std::fs::File::create(&temp_file) {
+                Err(why) => panic!("couldn't create {}: {}", temp_file, why),
+                Ok(file) => file,
+            };
+            file
+        };
+        Self {
+            jit,
+            class_version,
+            const_version,
+            bop_redefined_flags,
+            #[cfg(feature = "perf")]
+            perf_file,
+        }
+    }
+
+    pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
+        assert_eq!(0, self.jit.get_page());
+        let ptr0 = self.jit.get_current_address();
+        self.jit.select_page(1);
+        let ptr1 = self.jit.get_current_address();
+        self.jit.select_page(0);
+        (ptr0, ptr1)
+    }
+
+    pub(crate) fn get_wrapper_info(
+        &mut self,
+        pair: (CodePtr, CodePtr),
+    ) -> (CodePtr, usize, CodePtr, usize) {
+        let (ptr0, ptr1) = pair;
+        assert_eq!(0, self.jit.get_page());
+        let size0 = self.jit.get_current_address() - ptr0;
+        self.jit.select_page(1);
+        let size1 = self.jit.get_current_address() - ptr1;
+        self.jit.select_page(0);
+        (ptr0, size0 as usize, ptr1, size1 as usize)
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_write(&mut self, info: (CodePtr, usize, CodePtr, usize), desc: &str) {
+        use std::io::Write;
+        self.perf_file
+            .write_all(format!("{:x} {:x} {desc}\n", info.0.as_ptr() as usize, info.1).as_bytes())
+            .unwrap();
+        self.perf_file
+            .write_all(format!("{:x} {:x} {desc}\n", info.2.as_ptr() as usize, info.3).as_bytes())
+            .unwrap();
+    }
+
+    #[cfg(feature = "perf")]
+    pub(crate) fn perf_info(&mut self, pair: (CodePtr, CodePtr), func_name: &str) {
+        let info = self.get_wrapper_info(pair);
+        self.perf_write(info, func_name);
+    }
+}
+
+impl JitModule {
+    /// Set outer and self for block.
+    ///
+    /// ### in
+    /// - rax: outer_lfp
+    ///
+    /// ### destroy
+    /// - rsi
+    ///
+    fn set_block_self_outer(&mut self) {
+        self.set_block_outer();
+        monoasm! { &mut self.jit,
+            // set self
+            movq rsi, [rax - (LFP_SELF)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rsi;
+        };
+    }
+
+    /// Set outer for block.
+    ///
+    /// ### in
+    /// - rax: outer_lfp
+    ///
+    fn set_block_outer(&mut self) {
+        monoasm! { &mut self.jit,
+            // set outer
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
+        };
+    }
+
+    /// Set outer.
+    fn set_method_outer(&mut self) {
+        monoasm! { &mut self.jit,
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
+        };
+    }
+
+    ///
+    /// Set lfp(r14) for callee.
+    ///
+    /// the local frame MUST BE on the stack.
+    fn set_lfp(&mut self) {
+        monoasm!( &mut self.jit,
+            // set lfp
+            lea  r14, [rsp - (RSP_LOCAL_FRAME)];
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
+        );
+    }
+
+    /// Push control frame and set outer.
+    ///
+    /// ### destroy
+    /// - rdi, rsi
+    ///
+    fn push_frame(&mut self) {
+        monoasm!( &mut self.jit,
+            // push cfp
+            movq rdi, [rbx + (EXECUTOR_CFP)];
+            lea  rsi, [rsp - (RSP_CFP)];
+            movq [rsi], rdi;
+            movq [rbx + (EXECUTOR_CFP)], rsi;
+        );
+    }
+
+    fn restore_lfp(&mut self) {
+        monoasm!( &mut self.jit,
+            // restore lfp
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
+        );
+    }
+
+    /// Pop control frame
+    fn pop_frame(&mut self) {
+        monoasm!( &mut self.jit,
+            // pop cfp
+            lea  r14, [rbp - (BP_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], r14;
+        );
+        self.restore_lfp();
+    }
+
+    ///
+    /// Get FuncData.
+    ///
+    /// ### in
+    /// - r12: &Globals
+    /// - rdx: FuncId
+    ///
+    /// ### out
+    /// - r15: &FuncData
+    ///
+    fn get_func_data(&mut self) {
+        monoasm! { &mut self.jit,
+            movl rdx, rdx;
+            // assumes size_of::<FuncInfo>() is 64,
+            shlq rdx, 6;
+            addq rdx, [r12 + (GLOBALS_FUNCINFO)];
+            lea  r15, [rdx + (FUNCINFO_DATA)];
+        };
+    }
+
+    ///
+    /// Get ProcData.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &Globals
+    ///
+    /// ### out
+    /// - rax: outer_lfp: Option<LFP>
+    /// - rdx: func_id: Option<FuncId>
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn get_proc_data(&mut self) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::get_yield_data);
+            call rax;
+        }
+    }
+
+    fn push_callee_save(&mut self) {
+        monoasm! { &mut self.jit,
+            pushq r15;
+            pushq r14;
+            pushq r13;
+            pushq r12;
+            pushq rbx;
+            pushq rbp;
+        };
+    }
+
+    fn pop_callee_save(&mut self) {
+        monoasm! { &mut self.jit,
+            popq rbp;
+            popq rbx;
+            popq r12;
+            popq r13;
+            popq r14;
+            popq r15;
+        };
+    }
+}
+
 ///
 /// Bytecode compiler
 ///
 /// This generates x86-64 machine code from a bytecode.
 ///
 pub struct Codegen {
-    pub(crate) jit: JitMemory,
-    class_version: DestLabel,
+    pub(crate) jit: JitModule,
     class_version_addr: *mut u32,
-    const_version: DestLabel,
-    const_version_addr: *mut u32,
+    const_version_addr: *mut u64,
     alloc_flag: DestLabel,
-    bop_redefined_flags: DestLabel,
+
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
@@ -175,33 +410,49 @@ pub struct Codegen {
     pub(crate) startup_flag: bool,
     #[cfg(feature = "jit-log")]
     pub(crate) jit_compile_time: std::time::Duration,
-    #[cfg(feature = "perf")]
-    pub(crate) perf_file: std::fs::File,
+}
+
+impl std::ops::Deref for Codegen {
+    type Target = JitModule;
+    fn deref(&self) -> &Self::Target {
+        &self.jit
+    }
+}
+
+impl std::ops::DerefMut for Codegen {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.jit
+    }
 }
 
 impl Codegen {
     pub fn new(no_jit: bool) -> Self {
-        let mut jit = JitMemory::new();
-        let class_version = jit.data_i32(1);
-        let bop_redefined_flags = jit.data_i32(0);
-        let const_version = jit.data_i64(1);
+        let mut jit = JitModule::new();
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
-        let entry_panic = entry_panic(&mut jit);
-        let get_class = get_class(&mut jit);
-        let f64_to_val = f64_to_val(&mut jit);
-        let entry_unimpl = unimplemented_inst(&mut jit);
+        let class_version_addr = jit.get_label_address(jit.class_version).as_ptr() as *mut u32;
+        let const_version_addr = jit.get_label_address(jit.const_version).as_ptr() as *mut u64;
+        let entry_panic = jit.entry_panic();
+        let get_class = jit.get_class();
+        let f64_to_val = jit.f64_to_val();
+        let entry_unimpl = jit.unimplemented_inst();
+        let method_invoker = jit.method_invoker();
+        let method_invoker2 = jit.method_invoker2();
+        let block_invoker = jit.block_invoker();
+        let block_invoker_with_self = jit.block_invoker_with_self();
+        let binding_invoker = jit.binding_invoker();
+        let fiber_invoker = jit.fiber_invoker();
+        let fiber_invoker_with_self = jit.fiber_invoker_with_self();
+        let resume_fiber = jit.resume_fiber();
+        let yield_fiber = jit.yield_fiber();
 
         // dispatch table.
         let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,
-            class_version,
-            class_version_addr: std::ptr::null_mut(),
-            const_version,
-            const_version_addr: std::ptr::null_mut(),
+            class_version_addr,
+            const_version_addr,
             alloc_flag,
-            bop_redefined_flags,
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             entry_panic,
@@ -214,50 +465,22 @@ impl Codegen {
             div_by_zero: entry_panic,
             get_class,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
-            method_invoker: unsafe {
-                std::mem::transmute::<*mut u8, MethodInvoker>(entry_unimpl.as_ptr())
-            },
-            method_invoker2: unsafe {
-                std::mem::transmute::<*mut u8, MethodInvoker2>(entry_unimpl.as_ptr())
-            },
-            block_invoker: unsafe {
-                std::mem::transmute::<*mut u8, BlockInvoker>(entry_unimpl.as_ptr())
-            },
-            block_invoker_with_self: unsafe {
-                std::mem::transmute::<*mut u8, BlockInvoker>(entry_unimpl.as_ptr())
-            },
-            binding_invoker: unsafe {
-                std::mem::transmute::<*mut u8, BindingInvoker>(entry_unimpl.as_ptr())
-            },
-            fiber_invoker: unsafe {
-                std::mem::transmute::<*mut u8, FiberInvoker>(entry_unimpl.as_ptr())
-            },
-            fiber_invoker_with_self: unsafe {
-                std::mem::transmute::<*mut u8, FiberInvoker>(entry_unimpl.as_ptr())
-            },
-            resume_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            yield_fiber: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            method_invoker,
+            method_invoker2,
+            block_invoker,
+            block_invoker_with_self,
+            binding_invoker,
+            fiber_invoker,
+            fiber_invoker_with_self,
+            resume_fiber,
+            yield_fiber,
             startup_flag: false,
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
-            #[cfg(feature = "perf")]
-            perf_file: {
-                let pid = std::process::id();
-                let temp_file = format!("/tmp/perf-{pid}.map");
-                let file = match std::fs::File::create(&temp_file) {
-                    Err(why) => panic!("couldn't create {}: {}", temp_file, why),
-                    Ok(file) => file,
-                };
-                file
-            },
         };
         codegen.construct_vm(no_jit);
         codegen.jit.finalize();
 
-        codegen.class_version_addr =
-            codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
-        codegen.const_version_addr =
-            codegen.jit.get_label_address(const_version).as_ptr() as *mut u32;
         let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {
             alloc.borrow_mut().set_alloc_flag_address(address);
@@ -375,129 +598,6 @@ impl Codegen {
             jmp exit;
         }
         self.jit.select_page(0);
-    }
-
-    /// Push control frame and set outer.
-    ///
-    /// ### destroy
-    /// - rdi, rsi
-    ///
-    fn push_frame(&mut self) {
-        monoasm!( &mut self.jit,
-            // push cfp
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (RSP_CFP)];
-            movq [rsi], rdi;
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-        );
-    }
-
-    fn restore_lfp(&mut self) {
-        monoasm!( &mut self.jit,
-            // restore lfp
-            movq r14, [rbp - (BP_CFP + CFP_LFP)];
-        );
-    }
-
-    /// Pop control frame
-    fn pop_frame(&mut self) {
-        monoasm!( &mut self.jit,
-            // pop cfp
-            lea  r14, [rbp - (BP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], r14;
-        );
-        self.restore_lfp();
-    }
-
-    ///
-    /// Get ProcData.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &Globals
-    ///
-    /// ### out
-    /// - rax: outer_lfp: Option<LFP>
-    /// - rdx: func_id: Option<FuncId>
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn get_proc_data(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::get_yield_data);
-            call rax;
-        }
-    }
-
-    ///
-    /// Get FuncData.
-    ///
-    /// ### in
-    /// - r12: &Globals
-    /// - rdx: FuncId
-    ///
-    /// ### out
-    /// - r15: &FuncData
-    ///
-    fn get_func_data(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rdx, rdx;
-            // assumes size_of::<FuncInfo>() is 64,
-            shlq rdx, 6;
-            addq rdx, [r12 + (GLOBALS_FUNCINFO)];
-            lea  r15, [rdx + (FUNCINFO_DATA)];
-        };
-    }
-
-    /// Set outer and self for block.
-    ///
-    /// ### in
-    /// - rax: outer_lfp
-    ///
-    /// ### destroy
-    /// - rsi
-    ///
-    fn set_block_self_outer(&mut self) {
-        self.set_block_outer();
-        monoasm! { &mut self.jit,
-            // set self
-            movq rsi, [rax - (LFP_SELF)];
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rsi;
-        };
-    }
-
-    /// Set outer for block.
-    ///
-    /// ### in
-    /// - rax: outer_lfp
-    ///
-    fn set_block_outer(&mut self) {
-        monoasm! { &mut self.jit,
-            // set outer
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
-        };
-    }
-
-    /// Set outer.
-    fn set_method_outer(&mut self) {
-        monoasm! { &mut self.jit,
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
-        };
-    }
-
-    ///
-    /// Set lfp(r14) for callee.
-    ///
-    /// the local frame MUST BE on the stack.
-    fn set_lfp(&mut self) {
-        monoasm!( &mut self.jit,
-            // set lfp
-            lea  r14, [rsp - (RSP_LOCAL_FRAME)];
-            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
-        );
     }
 
     /// ## in
@@ -828,15 +928,6 @@ impl Codegen {
         };
     }
 
-    pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
-        assert_eq!(0, self.jit.get_page());
-        let ptr0 = self.jit.get_current_address();
-        self.jit.select_page(1);
-        let ptr1 = self.jit.get_current_address();
-        self.jit.select_page(0);
-        (ptr0, ptr1)
-    }
-
     #[cfg(feature = "emit-asm")]
     pub(crate) fn dump_disas(
         &mut self,
@@ -898,191 +989,6 @@ impl Codegen {
             eprintln!("  {:05x}: {}", i, text);
         }
     }
-}
-
-///
-/// Get *ClassId* of the *Value*.
-///
-/// #### in
-/// - rdi: Value
-///
-/// #### out
-/// - rax: ClassId
-///
-fn get_class(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    let l1 = jit.label();
-    let err = jit.label();
-    let fixnum = jit.label();
-    let flonum = jit.label();
-    let symbol = jit.label();
-    let nil = jit.label();
-    let true_ = jit.label();
-    let false_ = jit.label();
-    monoasm!(jit,
-    label:
-        testq rdi, 0b001;
-        jnz   fixnum;
-        testq rdi, 0b010;
-        jnz   flonum;
-        testq rdi, 0b111;
-        jnz   l1;
-        testq rdi, rdi;
-        jz    err;
-        movl  rax, [rdi + (RVALUE_OFFSET_CLASS)];
-        ret;
-    l1:
-        cmpb  rdi, (TAG_SYMBOL);
-        je    symbol;
-        cmpq  rdi, (NIL_VALUE);
-        je    nil;
-        cmpq  rdi, (TRUE_VALUE);
-        je    true_;
-        cmpq  rdi, (FALSE_VALUE);
-        je    false_;
-    err:
-        movq  rax, (runtime::illegal_classid);  // rdi: Value
-        call  rax;
-        // no return
-        ret;
-    fixnum:
-        movl  rax, (INTEGER_CLASS.u32());
-        ret;
-    flonum:
-        movl  rax, (FLOAT_CLASS.u32());
-        ret;
-    symbol:
-        movl  rax, (SYMBOL_CLASS.u32());
-        ret;
-    nil:
-        movl  rax, (NIL_CLASS.u32());
-        ret;
-    true_:
-        movl  rax, (TRUE_CLASS.u32());
-        ret;
-    false_:
-        movl  rax, (FALSE_CLASS.u32());
-        ret;
-    );
-    label
-}
-
-fn entry_panic(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    monoasm! {jit,
-    label:
-        movq rdi, rbx;
-        movq rsi, r12;
-        movq rax, (runtime::_dump_stacktrace);
-        call rax;
-        movq rdi, rbx;
-        movq rsi, r12;
-        movq rax, (runtime::panic);
-        jmp rax;
-        leave;
-        ret;
-    }
-    label
-}
-
-///
-/// Convert f64 to Value.
-///
-/// ### in
-/// - xmm0: f64
-///
-/// ### out
-/// - rax: Value
-///
-/// ### destroy
-/// - rcx
-///
-fn f64_to_val(jit: &mut JitMemory) -> DestLabel {
-    let label = jit.label();
-    let normal = jit.label();
-    let heap_alloc = jit.label();
-    monoasm! {jit,
-    label:
-        xorps xmm1, xmm1;
-        ucomisd xmm0, xmm1;
-        jne normal;
-        jp normal;
-        movq rax, (FLOAT_ZERO);
-        ret;
-    normal:
-        movq rax, xmm0;
-        movq rcx, rax;
-        shrq rcx, 60;
-        addl rcx, 1;
-        andl rcx, 6;
-        cmpl rcx, 4;
-        jne heap_alloc;
-        rolq rax, 3;
-        andq rax, (-4);
-        orq rax, 2;
-        ret;
-    heap_alloc:
-    // we must save rdi for log_deoptimize.
-        subq rsp, 152;
-        movq [rsp + 144], r9;
-        movq [rsp + 136], r8;
-        movq [rsp + 128], rdx;
-        movq [rsp + 120], rsi;
-        movq [rsp + 112], rdi;
-        movq [rsp + 104], xmm15;
-        movq [rsp + 96], xmm14;
-        movq [rsp + 88], xmm13;
-        movq [rsp + 80], xmm12;
-        movq [rsp + 72], xmm11;
-        movq [rsp + 64], xmm10;
-        movq [rsp + 56], xmm9;
-        movq [rsp + 48], xmm8;
-        movq [rsp + 40], xmm7;
-        movq [rsp + 32], xmm6;
-        movq [rsp + 24], xmm5;
-        movq [rsp + 16], xmm4;
-        movq [rsp + 8], xmm3;
-        movq [rsp + 0], xmm2;
-        movq rax, (Value::float_heap);
-        call rax;
-        movq xmm2, [rsp + 0];
-        movq xmm3, [rsp + 8];
-        movq xmm4, [rsp + 16];
-        movq xmm5, [rsp + 24];
-        movq xmm6, [rsp + 32];
-        movq xmm7, [rsp + 40];
-        movq xmm8, [rsp + 48];
-        movq xmm9, [rsp + 56];
-        movq xmm10, [rsp + 64];
-        movq xmm11, [rsp + 72];
-        movq xmm12, [rsp + 80];
-        movq xmm13, [rsp + 88];
-        movq xmm14, [rsp + 96];
-        movq xmm15, [rsp + 104];
-        movq rdi, [rsp + 112];
-        movq rsi, [rsp + 120];
-        movq rdx, [rsp + 128];
-        movq r8, [rsp + 136];
-        movq r9, [rsp + 144];
-        addq rsp, 152;
-        ret;
-    }
-    label
-}
-
-fn unimplemented_inst(jit: &mut JitMemory) -> CodePtr {
-    let label = jit.get_current_address();
-    let f = runtime::unimplemented_inst as usize;
-    monoasm! { jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movzxw rdx, [r13 - 10];
-            movq rax, (f);
-            call rax;
-            leave;
-            ret;
-    }
-    label
 }
 
 #[repr(C)]
