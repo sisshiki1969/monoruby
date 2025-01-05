@@ -227,6 +227,10 @@ pub(crate) extern "C" fn div_values(
         }
         (RV::Fixnum(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
         (RV::Fixnum(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
             let lhs = num::complex::Complex::from(Real::from(lhs));
             Value::complex_from(lhs.div(rhs))
         }
@@ -246,6 +250,10 @@ pub(crate) extern "C" fn div_values(
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
         (RV::BigInt(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
             let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
             Value::complex_from(lhs.div(rhs))
         }
@@ -259,6 +267,10 @@ pub(crate) extern "C" fn div_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
         (RV::Float(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
             let lhs = num::complex::Complex::from(Real::from(lhs));
             Value::complex_from(lhs.div(rhs))
         }
@@ -268,10 +280,18 @@ pub(crate) extern "C" fn div_values(
             return None;
         }
         (RV::Complex(lhs), RV::Fixnum(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
             let rhs = num::complex::Complex::from(Real::from(rhs));
             Value::complex_from((*lhs).div(rhs))
         }
         (RV::Complex(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
             let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
             Value::complex_from(lhs.div(rhs))
         }
@@ -279,7 +299,13 @@ pub(crate) extern "C" fn div_values(
             let rhs = num::complex::Complex::from(Real::from(rhs));
             Value::complex_from(lhs.div(rhs))
         }
-        (RV::Complex(lhs), RV::Complex(rhs)) => Value::complex_from(lhs.div(rhs)),
+        (RV::Complex(lhs), RV::Complex(rhs)) => {
+            if rhs.is_zero() {
+                vm.err_divide_by_zero();
+                return None;
+            }
+            Value::complex_from(lhs.div(rhs))
+        }
         (RV::Complex(_), _) => {
             let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Complex");
             vm.set_error(err);

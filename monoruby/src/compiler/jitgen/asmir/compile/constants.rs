@@ -47,7 +47,7 @@ impl Codegen {
         let const_version = self.const_version;
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
-          movq rdx, (id.0);  // name: IdentId
+          movq rdx, (id.0);  // name: ConstSiteId
           movq rcx, rax;  // val: Value
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals

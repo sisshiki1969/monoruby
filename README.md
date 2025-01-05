@@ -122,22 +122,31 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 ### micro benchmark
 
-- measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
+- measured by [yjit-bench](https://github.com/Shopify/yjit-bench) with '--harness=harness-warmup' option.
 - benchmark codes are in [the official repo](https://github.com/ruby/ruby/tree/master/benchmark) and [plb2](https://github.com/attractivechaos/plb2).
-- measurements are shown in iteration/sec (the higher, the better).
-- warm up cycles prior to measurement; 50 cycles for mandelbrot and 200 cycles for nbody. (see benchmark/so_mandelbrot.yml and so_nbody.yml)
 
-|             | 3.4-dev | 3.4-dev --yjit | truffleruby+graalvm-24.0.1 | truffleruby-24.0.1 | monoruby | monoruby --no-jit |
-| :---------- | ------: | -------------: | -------------------------: | -----------------: | -------: | ----------------: |
-| app_fib     |   5.473 |         41.195 |                      6.988 |             27.447 |   39.174 |             9.912 |
-| mandelbrot  |   0.980 |          1.983 |                      8.662 |             10.833 |   29.979 |             1.044 |
-| nbody       |   1.736 |          4.543 |                     80.551 |             90.610 |   15.966 |             1.301 |
-| app_aobench |   0.049 |          0.094 |                      0.276 |              0.346 |    0.305 |             0.044 |
-| nqueen      |   0.015 |          0.015 |                      0.206 |              0.193 |    0.150 |             0.021 |
-| sudoku      |   0.018 |          0.077 |                      0.207 |              0.238 |    0.133 |             0.020 |
-| matmul      |   0.010 |          0.023 |                      0.332 |              0.347 |    0.062 |             0.007 |
-| bedcov      |   0.033 |          0.049 |                      0.222 |              0.257 |    0.048 |             0.033 |
+#### Rubies
 
-ratio to CRuby 3.4-dev were shown in the graph below.
+- monoruby: monoruby 0.3.0
+- yjit: ruby 3.4.1 (2024-12-25 revision 48d4efcb85) +YJIT +PRISM [x86_64-linux]
+- truffleruby-24.1.1: truffleruby 24.1.1, like ruby 3.2.4, Oracle GraalVM Native [x86_64-linux]
 
-![micro_bench](./doc/benchmark.png)
+| bench         | monoruby (ms) | RSS (MiB) | yjit (ms) | RSS (MiB) | truffle (ms) | RSS (MiB) | monoruby/yjit | monoruby/truffle |
+| :------------ | ------------: | --------: | --------: | --------: | -----------: | --------: | ------------: | ---------------: |
+| bedcov        |        4412.0 |     234.3 |    4803.9 |     413.8 |       1881.8 |    1909.5 |         0.918 |            2.345 |
+| binarytrees   |         175.0 |      28.7 |     137.0 |      22.0 |         31.7 |    1126.4 |         1.278 |            5.525 |
+| matmul        |          39.7 |      35.0 |     121.8 |      22.8 |          1.4 |     803.2 |         0.326 |           29.059 |
+| nbody         |           8.5 |      27.7 |      21.9 |      14.0 |          1.1 |     690.2 |         0.389 |            7.473 |
+| nqueens       |          14.7 |      24.7 |      31.0 |      14.2 |          7.2 |     637.9 |         0.475 |            2.044 |
+| optcarrot     |         520.4 |      79.0 |     720.9 |      54.7 |        432.2 |    1506.3 |         0.722 |            1.204 |
+| rubykon       |         214.9 |      34.9 |     348.2 |      18.6 |         65.2 |    2279.9 |         0.617 |            3.298 |
+| so_mandelbrot |          39.9 |      22.9 |     509.5 |      14.5 |         26.3 |     548.8 |         0.078 |            1.517 |
+| sudoku        |          41.6 |      23.9 |      88.8 |      14.9 |         17.5 |    1165.2 |         0.469 |            2.381 |
+| fib           |          16.7 |      23.5 |      17.4 |      15.0 |          8.8 |     483.4 |         0.960 |            1.895 |
+
+Legend:
+
+- monoruby/yjit: ratio of monoruby/yjit time. Higher is better for yjit. Above 1 represents a speedup.
+- monoruby/truffle: ratio of monoruby/truffleruby-24.1.1 time. Higher is better for truffleruby. Above 1 represents a speedup.
+
+![micro_bench](./doc/chart.png)

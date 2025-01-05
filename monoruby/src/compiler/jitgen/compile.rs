@@ -1,12 +1,8 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile(
-        &mut self,
-        store: &Store,
-        iseq_id: ISeqId,
-        position: Option<BytecodePtr>,
-    ) {
+    pub(super) fn compile(&mut self, store: &Store, position: Option<BytecodePtr>) {
+        let iseq_id = self.iseq_id;
         let func = &store[iseq_id];
 
         for (loop_start, loop_end) in func.bb_info.loops() {
@@ -238,7 +234,7 @@ impl JitContext {
             TraceIr::LoopEnd => {
                 assert_ne!(0, self.loop_count);
                 self.loop_count -= 1;
-                if self.is_loop && self.loop_count == 0 {
+                if self.position.is_some() && self.loop_count == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }
