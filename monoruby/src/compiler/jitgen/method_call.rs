@@ -254,7 +254,18 @@ impl BBContext {
                 self.send(ir, store, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
             }
-            FuncKind::ISeq(..) => {
+            FuncKind::ISeq(iseq_id) => {
+                if self.inlining_level < 3 {
+                    let mut ctx = JitContext::new(
+                        store,
+                        iseq_id,
+                        None,
+                        self.class_version(),
+                        recv_class,
+                        self.inlining_level + 1,
+                    );
+                    ctx.compile(store);
+                }
                 let evict = ir.new_evict();
                 self.send(ir, store, pc, callid, fid, recv_class, evict);
                 return Some(Some(evict));
