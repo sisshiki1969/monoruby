@@ -1,9 +1,10 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile(&mut self, store: &Store, position: Option<BytecodePtr>) {
+    pub(super) fn compile(&mut self, store: &Store) {
         let iseq_id = self.iseq_id;
         let func = &store[iseq_id];
+        eprintln!("compile[{}]: {}", self.inlining_level, func.name());
 
         for (loop_start, loop_end) in func.bb_info.loops() {
             self.analyse_loop(store, func, *loop_start, *loop_end);
@@ -12,7 +13,7 @@ impl JitContext {
         let mut bbctx = BBContext::new(&self);
 
         let mut ir = AsmIr::new();
-        if let Some(pc) = position {
+        if let Some(pc) = self.position {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let deopt = ir.new_deopt(&bbctx, pc + 1);
@@ -35,7 +36,7 @@ impl JitContext {
 
         assert!(self.ir.is_empty());
         let mut ir = vec![ir];
-        let start_pos = func.get_pc_index(position);
+        let start_pos = func.get_pc_index(self.position);
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
@@ -61,7 +62,8 @@ impl JitContext {
         };
 
         ir.extend(
-            (bb_begin..=bb_end).map(|bbid| self.compile_basic_block(store, func, position, bbid)),
+            (bb_begin..=bb_end)
+                .map(|bbid| self.compile_basic_block(store, func, self.position, bbid)),
         );
         self.ir = ir;
 
@@ -96,7 +98,7 @@ impl JitContext {
             ir.bc_index(bc_pos);
             bbctx.next_sp = iseq.get_sp(bc_pos);
 
-            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
+            match dbg!(self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos)) {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile => {
@@ -225,7 +227,7 @@ impl JitContext {
         bc_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bc_pos);
-        let trace_ir = func.trace_ir(store, bc_pos);
+        let trace_ir = dbg!(func.trace_ir(store, bc_pos));
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {

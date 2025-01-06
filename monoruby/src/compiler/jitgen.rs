@@ -115,6 +115,14 @@ struct JitContext {
     ///
     ivar_heap_accessed: bool,
     ///
+    /// Level of inlining.
+    ///
+    inlining_level: usize,
+    ///
+    ///
+    ///
+    inlined_methods: Vec<JitContext>,
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
@@ -136,6 +144,7 @@ impl JitContext {
         position: Option<BytecodePtr>,
         class_version: u32,
         self_class: ClassId,
+        inlining_level: usize,
     ) -> Self {
         let func = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -168,6 +177,8 @@ impl JitContext {
             class_version,
             ir: vec![],
             ivar_heap_accessed: false,
+            inlining_level,
+            inlined_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -197,6 +208,8 @@ impl JitContext {
             class_version: 0,
             ir: vec![],
             ivar_heap_accessed: false,
+            inlining_level: 0,
+            inlined_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -322,6 +335,8 @@ impl ContinuationInfo {
 ///
 /// Compile result of the current instruction.
 ///
+///
+#[derive(Debug)]
 enum CompileResult {
     /// continue to the next instruction.
     Continue,
@@ -390,6 +405,7 @@ pub(crate) struct BBContext {
     inner: BBContextInner,
     self_class: ClassId,
     self_ty: Option<ObjTy>,
+    inlining_level: usize,
 }
 
 impl std::ops::Deref for BBContext {
@@ -416,6 +432,7 @@ impl BBContext {
             },
             self_class: cc.self_class,
             self_ty: cc.self_ty,
+            inlining_level: cc.inlining_level,
         }
     }
 
@@ -703,9 +720,15 @@ impl Codegen {
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
-        let mut ctx = JitContext::new(store, iseq_id, position, self.class_version(), self_class);
-
-        ctx.compile(store, position);
+        let mut ctx = JitContext::new(
+            store,
+            iseq_id,
+            position,
+            self.class_version(),
+            self_class,
+            0,
+        );
+        ctx.compile(store);
 
         self.gen_machine_code(&mut ctx, store, entry_label);
 
