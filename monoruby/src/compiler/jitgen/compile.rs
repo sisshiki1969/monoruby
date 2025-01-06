@@ -234,7 +234,7 @@ impl JitContext {
             TraceIr::LoopEnd => {
                 assert_ne!(0, self.loop_count);
                 self.loop_count -= 1;
-                if self.is_loop && self.loop_count == 0 {
+                if self.position.is_some() && self.loop_count == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }
