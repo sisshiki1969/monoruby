@@ -91,7 +91,7 @@ pub(crate) struct ProcData {
 /// - rsi: &mut Globals
 ///
 /// ### out
-/// - rax: outer
+/// - rax: outer Lfp
 /// - rdx: FuncId
 ///
 pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> ProcData {

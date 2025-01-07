@@ -829,10 +829,6 @@ impl FuncInfo {
         self.ext.params.total_args()
     }
 
-    pub(crate) fn is_native(&self) -> bool {
-        self.meta().is_native()
-    }
-
     pub(crate) fn get_offset(&self) -> usize {
         ((RSP_LOCAL_FRAME + LFP_ARG0) as usize + 8 * self.total_args() + 8) & !0xf
     }
