@@ -42,6 +42,10 @@ struct JitContext {
     ///
     iseq_id: ISeqId,
     ///
+    /// The block given to the method.
+    ///
+    block_fid: Option<FuncId>,
+    ///
     /// The start bytecode position of the loop to be compiled.
     ///
     /// None for method compilation.
@@ -123,9 +127,9 @@ struct JitContext {
     ///
     inlining_level: usize,
     ///
+    /// Information for inlined methods.
     ///
-    ///
-    inlined_methods: Vec<JitContext>,
+    inlined_methods: Vec<(JitLabel, JitContext)>,
     ///
     /// Source map for bytecode index and machine code position.
     ///
@@ -149,6 +153,7 @@ impl JitContext {
         class_version: u32,
         self_class: ClassId,
         inlining_level: usize,
+        block_fid: Option<FuncId>,
     ) -> Self {
         let func = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -164,6 +169,7 @@ impl JitContext {
         let local_num = func.local_num();
         Self {
             iseq_id,
+            block_fid,
             position,
             basic_block_labels,
             loop_info: HashMap::default(),
@@ -196,6 +202,7 @@ impl JitContext {
         let local_num = self.local_num;
         Self {
             iseq_id: self.iseq_id,
+            block_fid: self.block_fid,
             position: self.position,
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
@@ -386,8 +393,6 @@ pub(crate) struct BBContextInner {
     /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
-    /// the class version at compile time.
-    class_version: u32,
 }
 
 impl std::ops::Deref for BBContextInner {
@@ -409,9 +414,6 @@ impl std::ops::DerefMut for BBContextInner {
 #[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     inner: BBContextInner,
-    self_class: ClassId,
-    self_ty: Option<ObjTy>,
-    inlining_level: usize,
 }
 
 impl std::ops::Deref for BBContext {
@@ -434,16 +436,8 @@ impl BBContext {
                 slot_state: SlotContext::from(cc),
                 sp: SlotId(cc.local_num as u16),
                 next_sp: SlotId(cc.local_num as u16),
-                class_version: cc.class_version,
             },
-            self_class: cc.self_class,
-            self_ty: cc.self_ty,
-            inlining_level: cc.inlining_level,
         }
-    }
-
-    fn class_version(&self) -> u32 {
-        self.class_version
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {
@@ -733,10 +727,11 @@ impl Codegen {
             self.class_version(),
             self_class,
             0,
+            None,
         );
         ctx.compile(store);
 
-        self.gen_machine_code(&mut ctx, store, entry_label);
+        self.gen_machine_code(ctx, store, entry_label);
 
         if self.startup_flag {
             #[cfg(feature = "jit-log")]
@@ -759,7 +754,11 @@ impl Codegen {
         }
     }
 
-    fn gen_machine_code(&mut self, ctx: &mut JitContext, store: &Store, entry_label: DestLabel) {
+    fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {
+        for (inlined_entry, inlined_ctx) in std::mem::take(&mut ctx.inlined_methods) {
+            let entry = ctx.resolve_label(&mut self.jit, inlined_entry);
+            self.gen_machine_code(inlined_ctx, store, entry);
+        }
         self.jit.bind_label(entry_label);
         #[cfg(feature = "emit-asm")]
         {
@@ -770,13 +769,13 @@ impl Codegen {
 
         // generate machine code for a main context
         for ir in std::mem::take(&mut ctx.ir).into_iter() {
-            self.gen_asm(ir, store, ctx, None);
+            self.gen_asm(ir, store, &mut ctx, None);
         }
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, ctx, Some((entry, exit)));
+            self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }
         assert!(ctx.continuation_bridge.is_none());
 

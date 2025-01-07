@@ -164,8 +164,41 @@ impl Codegen {
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }
 
-        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
-        self.do_call(callee, iseq, codeptr, recv_class, pc)
+        self.do_call(store, callee, codeptr, recv_class, pc)
+    }
+
+    ///
+    /// ### in
+    /// rdi: numer of args.
+    ///
+    pub(super) fn send_cached_inlined(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        entry_label: DestLabel,
+        error: DestLabel,
+    ) -> CodePtr {
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
+        let (meta, _, _) = callee.get_data();
+        self.setup_frame(meta, caller);
+        self.copy_keyword_args(caller, callee);
+        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+            let offset = callee.get_offset();
+            self.handle_hash_splat_kw_rest(callid, meta, offset, error);
+        }
+
+        self.set_lfp();
+        self.push_frame();
+
+        monoasm! { &mut self.jit,
+            call entry_label;
+        }
+        let return_addr = self.jit.get_current_address();
+
+        self.pop_frame();
+        return_addr
     }
 
     ///
@@ -195,14 +228,13 @@ impl Codegen {
             pushq r13;
             addq rsp, 64;
         }
-        let iseq = callee.is_iseq().map(|iseq| &store[iseq]);
-        self.do_call(callee, iseq, codeptr, recv_class, pc)
+        self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
     fn do_call(
         &mut self,
+        store: &Store,
         callee: &FuncInfo,
-        iseq: Option<&ISeqInfo>,
         codeptr: CodePtr,
         recv_class: ClassId,
         pc: Option<BytecodePtr>,
@@ -210,10 +242,8 @@ impl Codegen {
         self.set_lfp();
         self.push_frame();
 
-        if callee.is_native() {
-            self.call_codeptr(codeptr)
-        } else {
-            match iseq.unwrap().get_jit_code(recv_class) {
+        if let Some(iseq) = callee.is_iseq() {
+            match store[iseq].get_jit_code(recv_class) {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE
@@ -227,6 +257,8 @@ impl Codegen {
                     self.call_codeptr(codeptr);
                 }
             };
+        } else {
+            self.call_codeptr(codeptr)
         }
         let return_addr = self.jit.get_current_address();
 
@@ -283,15 +315,26 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         using_xmm: UsingXmm,
+        block_fid: Option<FuncId>,
         error: DestLabel,
     ) -> CodePtr {
         self.xmm_save(using_xmm);
-        self.get_proc_data();
-        self.handle_error(error);
-        // rax <- outer, rdx <- FuncId
-        monoasm! { &mut self.jit,
-            movq rdi, rax;
+        if let Some(fid) = block_fid {
+            monoasm! { &mut self.jit,
+                movl rdx, (fid.get());
+                movq rdi, [rbx + (EXECUTOR_CFP)];
+                movq rdi, [rdi];
+                movq rdi, [rdi - (CFP_LFP)];
+            }
+        } else {
+            self.get_proc_data();
+            self.handle_error(error);
+            // rax <- outer, rdx <- FuncId
+            monoasm! { &mut self.jit,
+                movq rdi, rax;
+            }
         }
+        // rdi <- outer, rdx <- FuncId
         self.get_func_data();
         // rdi <- outer, r15 <- &FuncData
 

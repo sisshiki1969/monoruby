@@ -395,6 +395,19 @@ impl Codegen {
                 let return_addr = self.send_cached(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
+            AsmInst::SendInlined {
+                callid,
+                callee_fid,
+                inlined_entry,
+                error,
+                evict,
+            } => {
+                let error = labels[error];
+                let entry_label = ctx.resolve_label(&mut self.jit, inlined_entry);
+                let return_addr =
+                    self.send_cached_inlined(store, callid, callee_fid, entry_label, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+            }
             /*AsmInst::SendNotCached {
                 self_class,
                 callid,
@@ -409,11 +422,12 @@ impl Codegen {
             AsmInst::Yield {
                 callid,
                 using_xmm,
+                block_fid,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.gen_yield(store, callid, using_xmm, error);
+                let return_addr = self.gen_yield(store, callid, using_xmm, block_fid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 

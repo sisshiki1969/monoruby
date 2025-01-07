@@ -1,15 +1,16 @@
 use super::*;
 
-impl BBContext {
+impl JitContext {
     pub(in crate::compiler::jitgen) fn load_ivar(
         &mut self,
+        bbctx: &mut BBContext,
         ir: &mut AsmIr,
         dst: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        self.unlink(dst);
+        bbctx.unlink(dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
         let ivar_heap = if is_object_ty && ivarid.is_inline() {
@@ -23,19 +24,20 @@ impl BBContext {
             });
             true
         };
-        self.rax2acc(ir, dst);
+        bbctx.rax2acc(ir, dst);
         ivar_heap
     }
 
     pub(in crate::compiler::jitgen) fn store_ivar(
         &mut self,
+        bbctx: &mut BBContext,
         ir: &mut AsmIr,
         src: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        self.fetch_for_gpr(ir, src, GP::Rax);
+        bbctx.fetch_for_gpr(ir, src, GP::Rax);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let is_object_ty = self.self_ty == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
@@ -46,7 +48,7 @@ impl BBContext {
                 ivarid,
                 is_object_ty,
                 self_: true,
-                using_xmm: self.get_using_xmm(),
+                using_xmm: bbctx.get_using_xmm(),
             });
             true
         }

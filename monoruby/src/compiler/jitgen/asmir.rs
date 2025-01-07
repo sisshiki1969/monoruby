@@ -938,29 +938,33 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
-    BinopCached {
-        recv_class: ClassId,
-        callee_fid: FuncId,
-        evict: AsmEvict,
-    },
-    /*///
-    /// Send non-cached method
+    ///
+    /// Send inlined method
+    ///
+    /// ### in
+    /// - rdi: receiver: Value
     ///
     /// ### destroy
     /// - caller save registers
     /// - r15
     ///
-    SendNotCached {
+    SendInlined {
         callid: CallSiteId,
-        self_class: ClassId,
-        pc: BytecodePtr,
+        callee_fid: FuncId,
+        inlined_entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
-    },*/
+    },
+    BinopCached {
+        recv_class: ClassId,
+        callee_fid: FuncId,
+        evict: AsmEvict,
+    },
     Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
+        block_fid: Option<FuncId>,
         error: AsmError,
         evict: AsmEvict,
     },

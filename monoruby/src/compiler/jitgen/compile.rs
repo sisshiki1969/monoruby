@@ -330,7 +330,7 @@ impl JitContext {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    if bbctx.load_ivar(ir, dst, self_class, ivarid) {
+                    if self.load_ivar(bbctx, ir, dst, self_class, ivarid) {
                         self.ivar_heap_accessed = true;
                     }
                 } else {
@@ -345,7 +345,7 @@ impl JitContext {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    if bbctx.store_ivar(ir, src, self_class, ivarid) {
+                    if self.store_ivar(bbctx, ir, src, self_class, ivarid) {
                         self.ivar_heap_accessed = true;
                     }
                 } else {
@@ -598,13 +598,13 @@ impl JitContext {
             }
             TraceIr::MethodCall { callid, cache } => {
                 if let Some(cache) = cache {
-                    return bbctx.compile_call(ir, store, pc, callid, cache);
+                    return self.compile_call(bbctx, ir, store, pc, callid, cache);
                 } else {
                     return CompileResult::Recompile;
                 }
             }
             TraceIr::Yield { callid } => {
-                bbctx.compile_yield(ir, store, pc, callid);
+                bbctx.compile_yield(ir, store, pc, callid, self.block_fid);
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
