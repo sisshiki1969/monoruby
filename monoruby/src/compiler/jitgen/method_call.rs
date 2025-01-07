@@ -156,18 +156,8 @@ impl JitContext {
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 if self.inlining_level < 3 {
-                    let mut ctx = JitContext::new(
-                        store,
-                        iseq_id,
-                        None,
-                        self.class_version,
-                        recv_class,
-                        self.inlining_level + 1,
-                        block_fid,
-                    );
-                    ctx.compile(store);
-                    let inlined_entry = self.label();
-                    self.inlined_methods.push((inlined_entry, ctx));
+                    let inlined_entry =
+                        self.compile_inline_method(store, iseq_id, recv_class, block_fid);
                     self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
                     return Some(Some(evict));
                 } else {
@@ -177,6 +167,28 @@ impl JitContext {
             }
         };
         Some(None)
+    }
+
+    fn compile_inline_method(
+        &mut self,
+        store: &Store,
+        inlined_iseq_id: ISeqId,
+        inlined_self_class: ClassId,
+        block_fid: Option<FuncId>,
+    ) -> JitLabel {
+        let mut ctx = JitContext::new(
+            store,
+            inlined_iseq_id,
+            None,
+            self.class_version,
+            inlined_self_class,
+            self.inlining_level + 1,
+            block_fid,
+        );
+        ctx.compile(store);
+        let inlined_entry = self.label();
+        self.inlined_methods.push((inlined_entry, ctx));
+        inlined_entry
     }
 
     ///
