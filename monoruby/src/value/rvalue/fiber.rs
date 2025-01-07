@@ -21,7 +21,7 @@ pub struct FiberInner {
     stack: Option<std::ptr::NonNull<u8>>,
 }
 
-const FIBER_STACK_SIZE: usize = 4096 * 8;
+const FIBER_STACK_SIZE: usize = 1024 * 256;
 
 impl Drop for FiberInner {
     fn drop(&mut self) {

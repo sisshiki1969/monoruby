@@ -4,7 +4,7 @@ impl JitContext {
     pub(super) fn compile(&mut self, store: &Store) {
         let iseq_id = self.iseq_id;
         let func = &store[iseq_id];
-        eprintln!("compile[{}]: {}", self.inlining_level, func.name());
+        //eprintln!("compile[{}]: {}", self.inlining_level, func.name());
 
         for (loop_start, loop_end) in func.bb_info.loops() {
             self.analyse_loop(store, func, *loop_start, *loop_end);
@@ -98,7 +98,7 @@ impl JitContext {
             ir.bc_index(bc_pos);
             bbctx.next_sp = iseq.get_sp(bc_pos);
 
-            match dbg!(self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos)) {
+            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile => {
@@ -227,7 +227,7 @@ impl JitContext {
         bc_pos: BcIndex,
     ) -> CompileResult {
         let pc = func.get_pc(bc_pos);
-        let trace_ir = dbg!(func.trace_ir(store, bc_pos));
+        let trace_ir = func.trace_ir(store, bc_pos);
         match trace_ir {
             TraceIr::InitMethod { .. } => {}
             TraceIr::LoopStart { .. } => {
@@ -236,7 +236,7 @@ impl JitContext {
             TraceIr::LoopEnd => {
                 assert_ne!(0, self.loop_count);
                 self.loop_count -= 1;
-                if self.position.is_some() && self.loop_count == 0 {
+                if self.is_loop && self.loop_count == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }

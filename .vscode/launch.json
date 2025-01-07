@@ -7,12 +7,12 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug 'test.rb'",
+      "name": "Debug 'optcarrot'",
       "cargo": {
         "args": [
           "run",
           "--features",
-          "no-startup",
+          "jit-debug",
           "--bin=monoruby",
           "--package=monoruby",
         ],
@@ -22,7 +22,9 @@
         }
       },
       "args": [
-        "test.rb"
+        "../optcarrot/bin/optcarrot",
+        "-b",
+        "../optcarrot/examples/Lan_Master.nes"
       ],
       "cwd": "${workspaceFolder}"
     },
