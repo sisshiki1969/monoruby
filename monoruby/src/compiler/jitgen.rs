@@ -66,6 +66,10 @@ struct JitContext {
     ///
     loop_count: usize,
     ///
+    /// Flag whether this context is a loop.
+    ///
+    is_loop: bool,
+    ///
     /// Map for bytecode position and branches.
     ///
     branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
@@ -164,6 +168,7 @@ impl JitContext {
             basic_block_labels,
             loop_info: HashMap::default(),
             loop_count: 0,
+            is_loop: position.is_some(),
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -195,6 +200,7 @@ impl JitContext {
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
             loop_count: 0,
+            is_loop: self.is_loop,
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
