@@ -964,7 +964,14 @@ pub(super) enum AsmInst {
     Yield {
         callid: CallSiteId,
         using_xmm: UsingXmm,
-        block_fid: Option<FuncId>,
+        error: AsmError,
+        evict: AsmEvict,
+    },
+    YieldInlined {
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+        block_iseq: ISeqId,
+        block_entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
     },

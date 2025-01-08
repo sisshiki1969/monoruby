@@ -21,6 +21,35 @@ impl JitContext {
         self.call(bbctx, ir, store, cache, callid, pc)
     }
 
+    pub(super) fn compile_yield_inlined(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+        block_iseq: ISeqId,
+        block_self: ClassId,
+    ) {
+        let callinfo = &store[callid];
+        let dst = callinfo.dst;
+        bbctx.write_back_callargs_and_dst(ir, &callinfo);
+        bbctx.writeback_acc(ir);
+        let using_xmm = bbctx.get_using_xmm();
+        let error = ir.new_error(bbctx, pc);
+        let evict = ir.new_evict();
+        let block_entry = self.compile_inline_method(store, block_iseq, block_self, None);
+        ir.push(AsmInst::YieldInlined {
+            callid,
+            using_xmm,
+            block_iseq,
+            block_entry,
+            error,
+            evict,
+        });
+        bbctx.rax2acc(ir, dst);
+    }
+
     fn call(
         &mut self,
         bbctx: &mut BBContext,
@@ -156,8 +185,9 @@ impl JitContext {
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 if self.inlining_level < 3 {
+                    let block_info = block_fid.map(|fid| (fid, self.self_class));
                     let inlined_entry =
-                        self.compile_inline_method(store, iseq_id, recv_class, block_fid);
+                        self.compile_inline_method(store, iseq_id, recv_class, block_info);
                     self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
                     return Some(Some(evict));
                 } else {
@@ -174,7 +204,7 @@ impl JitContext {
         store: &Store,
         inlined_iseq_id: ISeqId,
         inlined_self_class: ClassId,
-        block_fid: Option<FuncId>,
+        block_info: Option<(FuncId, ClassId)>,
     ) -> JitLabel {
         let mut ctx = JitContext::new(
             store,
@@ -183,7 +213,7 @@ impl JitContext {
             self.class_version,
             inlined_self_class,
             self.inlining_level + 1,
-            block_fid,
+            block_info,
         );
         ctx.compile(store);
         let inlined_entry = self.label();
@@ -315,31 +345,6 @@ impl BBContext {
         CompileResult::Continue
     }
 
-    pub(in crate::compiler::jitgen) fn compile_yield(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        block_fid: Option<FuncId>,
-    ) {
-        let callinfo = &store[callid];
-        let dst = callinfo.dst;
-        self.write_back_callargs_and_dst(ir, &callinfo);
-        self.writeback_acc(ir);
-        let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
-        let evict = ir.new_evict();
-        ir.push(AsmInst::Yield {
-            callid,
-            using_xmm,
-            block_fid,
-            error,
-            evict,
-        });
-        self.rax2acc(ir, dst);
-    }
-
     fn inline_call(
         &mut self,
         ir: &mut AsmIr,
@@ -371,6 +376,29 @@ impl BBContext {
             ir.restore(ir_save);
             false
         }
+    }
+
+    pub(super) fn compile_yield(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+    ) {
+        let callinfo = &store[callid];
+        let dst = callinfo.dst;
+        self.write_back_callargs_and_dst(ir, &callinfo);
+        self.writeback_acc(ir);
+        let using_xmm = self.get_using_xmm();
+        let error = ir.new_error(self, pc);
+        let evict = ir.new_evict();
+        ir.push(AsmInst::Yield {
+            callid,
+            using_xmm,
+            error,
+            evict,
+        });
+        self.rax2acc(ir, dst);
     }
 
     /*fn send_not_cached(&self, ir: &mut AsmIr, pc: BytecodePtr, callid: CallSiteId) {

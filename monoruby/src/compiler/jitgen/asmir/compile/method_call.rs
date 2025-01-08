@@ -315,24 +315,14 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         using_xmm: UsingXmm,
-        block_fid: Option<FuncId>,
         error: DestLabel,
     ) -> CodePtr {
         self.xmm_save(using_xmm);
-        if let Some(fid) = block_fid {
-            monoasm! { &mut self.jit,
-                movl rdx, (fid.get());
-                movq rdi, [rbx + (EXECUTOR_CFP)];
-                movq rdi, [rdi];
-                movq rdi, [rdi - (CFP_LFP)];
-            }
-        } else {
-            self.get_proc_data();
-            self.handle_error(error);
-            // rax <- outer, rdx <- FuncId
-            monoasm! { &mut self.jit,
-                movq rdi, rax;
-            }
+        self.get_proc_data();
+        self.handle_error(error);
+        // rax <- outer, rdx <- FuncId
+        monoasm! { &mut self.jit,
+            movq rdi, rax;
         }
         // rdi <- outer, rdx <- FuncId
         self.get_func_data();
@@ -358,6 +348,83 @@ impl Codegen {
         };
 
         let return_addr = self.generic_call(callid, store[callid].args, error);
+        self.xmm_restore(using_xmm);
+        self.handle_error(error);
+        return_addr
+    }
+
+    pub(super) fn gen_yield_inlined(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+        block_iseq: ISeqId,
+        block_entry: DestLabel,
+        error: DestLabel,
+    ) -> CodePtr {
+        let block_fid = store[block_iseq].func_id();
+        monoasm! { &mut self.jit,
+            movl rdx, (block_fid.get());
+            movq rdi, [rbx + (EXECUTOR_CFP)];
+            movq rdi, [rdi];
+            movq rdi, [rdi - (CFP_LFP)];
+        }
+        // rdi <- outer, rdx <- FuncId
+        self.get_func_data();
+        // rdi <- outer, r15 <- &FuncData
+
+        monoasm! { &mut self.jit,
+            subq  rsp, 16;
+            // set prev_cfp
+            pushq [rbx + (EXECUTOR_CFP)];
+            // set lfp
+            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
+            pushq rax;
+            // set outer
+            pushq rdi;
+            // set meta
+            pushq [r15 + (FUNCDATA_META)];
+            // set block
+            xorq rax, rax;
+            pushq rax;
+            // set self
+            pushq [rdi - (LFP_SELF)];
+            addq  rsp, 64;
+        };
+
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movl r8, (callid.get()); // CallSiteId
+            lea  rdx, [r14 - (conv(store[callid].args))];
+        }
+        let stack_offset = store[block_fid].stack_offset() as usize * 16;
+        monoasm! { &mut self.jit,
+            // rcx <- callee LFP
+            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];
+            subq rsp, (stack_offset);
+            movq rdi, rbx;
+            movq rsi, r12;
+            // rdi: &mut Executor
+            // rsi: &mut Globals
+            // rdx: src: *const Value
+            // rcx: callee LFP
+            // r8: CallsiteId
+            movq rax, (runtime::jit_handle_arguments_no_block);
+            call rax;
+            addq rsp, (stack_offset);
+        };
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            // push cfp
+            lea  rsi, [rsp - (RSP_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rsi;
+        }
+        self.set_lfp();
+        monoasm! { &mut self.jit,
+            call block_entry;    // CALL_SITE
+        }
+        let return_addr = self.jit.get_current_address();
+        self.pop_frame();
         self.xmm_restore(using_xmm);
         self.handle_error(error);
         return_addr

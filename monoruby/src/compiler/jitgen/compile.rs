@@ -604,7 +604,15 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                bbctx.compile_yield(ir, store, pc, callid, self.block_fid);
+                if let Some((block_fid, block_self)) = self.block_info
+                    && let Some(block_iseq) = store[block_fid].is_iseq()
+                {
+                    self.compile_yield_inlined(
+                        bbctx, ir, store, pc, callid, block_iseq, block_self,
+                    );
+                } else {
+                    bbctx.compile_yield(ir, store, pc, callid);
+                }
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {

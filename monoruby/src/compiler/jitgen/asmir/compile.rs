@@ -422,12 +422,31 @@ impl Codegen {
             AsmInst::Yield {
                 callid,
                 using_xmm,
-                block_fid,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.gen_yield(store, callid, using_xmm, block_fid, error);
+                let return_addr = self.gen_yield(store, callid, using_xmm, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+            }
+            AsmInst::YieldInlined {
+                callid,
+                using_xmm,
+                block_iseq,
+                block_entry,
+                error,
+                evict,
+            } => {
+                let error = labels[error];
+                let block_entry = ctx.resolve_label(&mut self.jit, block_entry);
+                let return_addr = self.gen_yield_inlined(
+                    store,
+                    callid,
+                    using_xmm,
+                    block_iseq,
+                    block_entry,
+                    error,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 
