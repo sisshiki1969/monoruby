@@ -1,4 +1,15 @@
+prelude: |
+  def foo
+    block_given?
+  end
+
 benchmark:
   integer_times: |
     1000000.times do end
+  block_given: |
+    i = 0
+    while i < 1000000
+      foo
+      i += 1
+    end
 loop_count: 5
