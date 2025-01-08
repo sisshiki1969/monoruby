@@ -171,6 +171,19 @@ class Integer
   def succ
     self + 1
   end
+
+  #def times
+  #  if block_given?
+  #    i = 0
+  #    while i < self
+  #      yield i
+  #      i += 1
+  #    end
+  #    self
+  #  else
+  #    self.to_enum(:times)
+  #  end
+  #end
 end
 
 class Symbol

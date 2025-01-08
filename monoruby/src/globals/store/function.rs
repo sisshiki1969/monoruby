@@ -74,6 +74,10 @@ impl FuncData {
         self.codeptr = Some(codeptr);
     }
 
+    pub fn stack_offset(&self) -> u16 {
+        self.ofs
+    }
+
     pub fn meta(&self) -> Meta {
         self.meta
     }
@@ -750,6 +754,10 @@ impl FuncInfo {
             Meta::native(func_id, reg_num, true),
             params,
         )
+    }
+
+    pub(crate) fn stack_offset(&self) -> u16 {
+        self.data.stack_offset()
     }
 
     pub(crate) fn name(&self) -> Option<IdentId> {
