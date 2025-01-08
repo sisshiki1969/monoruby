@@ -2,9 +2,8 @@ use super::*;
 
 impl JitContext {
     pub(super) fn compile(&mut self, store: &Store) {
-        let iseq_id = self.iseq_id;
+        let iseq_id = self.iseq_id();
         let func = &store[iseq_id];
-        //eprintln!("compile[{}]: {}", self.inlining_level, func.name());
 
         for (loop_start, loop_end) in func.bb_info.loops() {
             self.analyse_loop(store, func, *loop_start, *loop_end);
@@ -13,17 +12,23 @@ impl JitContext {
         let mut bbctx = BBContext::new(&self);
 
         let mut ir = AsmIr::new();
-        if let Some(pc) = self.position {
+        if let Some(pc) = self.position() {
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let deopt = ir.new_deopt(&bbctx, pc + 1);
             ir.stack2reg(SlotId::self_(), GP::Rdi);
-            ir.guard_class(&mut bbctx, SlotId::self_(), GP::Rdi, self.self_class, deopt);
+            ir.guard_class(
+                &mut bbctx,
+                SlotId::self_(),
+                GP::Rdi,
+                self.self_class(),
+                deopt,
+            );
         } else {
-            for i in (1 + self.local_num)..self.total_reg_num {
+            for i in (1 + self.local_num())..self.total_reg_num() {
                 bbctx.store_concrete_value(SlotId(i as u16), Value::nil());
             }
-            bbctx.set_guard_class(SlotId::self_(), self.self_class);
+            bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
             match func.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
@@ -36,7 +41,7 @@ impl JitContext {
 
         assert!(self.ir.is_empty());
         let mut ir = vec![ir];
-        let start_pos = func.get_pc_index(self.position);
+        let start_pos = func.get_pc_index(self.position());
 
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
@@ -63,7 +68,7 @@ impl JitContext {
 
         ir.extend(
             (bb_begin..=bb_end)
-                .map(|bbid| self.compile_basic_block(store, func, self.position, bbid)),
+                .map(|bbid| self.compile_basic_block(store, func, self.position(), bbid)),
         );
         self.ir = ir;
 
@@ -81,7 +86,7 @@ impl JitContext {
         bbid: BasicBlockId,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
-        ir.push(AsmInst::Label(self.basic_block_labels[&bbid]));
+        ir.push(AsmInst::Label(self.get_bb_label(bbid)));
 
         let mut bbctx = match self.generate_entry_bb(&mut ir, iseq, bbid) {
             Some(bb) => bb,
@@ -125,8 +130,8 @@ impl JitContext {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
-        let mut ctx = JitContext::from(self);
-        let mut liveness = Liveness::new(self.total_reg_num);
+        let mut ctx = JitContext::from_ctx(self);
+        let mut liveness = Liveness::new(self.total_reg_num());
 
         let bbctx = BBContext::new(&ctx);
         let branch_dest = ctx.label();
@@ -236,7 +241,7 @@ impl JitContext {
             TraceIr::LoopEnd => {
                 assert_ne!(0, self.loop_count);
                 self.loop_count -= 1;
-                if self.is_loop && self.loop_count == 0 {
+                if self.is_loop() && self.loop_count == 0 {
                     ir.deopt(bbctx, pc);
                     return CompileResult::ExitLoop;
                 }
@@ -323,7 +328,7 @@ impl JitContext {
                 ir.block_arg(bbctx, pc, ret, outer);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
-                let self_class = self.self_class;
+                let self_class = self.self_class();
                 if let Some(ivarid) = store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class
@@ -338,7 +343,7 @@ impl JitContext {
                 }
             }
             TraceIr::StoreIvar(src, name, cache) => {
-                let self_class = self.self_class;
+                let self_class = self.self_class();
                 if let Some(ivarid) = store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class
@@ -452,7 +457,7 @@ impl JitContext {
             }
             TraceIr::GBinOp { kind, info } => {
                 let recv_class = info.lhs_class;
-                let class_version = self.class_version;
+                let class_version = self.class_version();
                 if let Some(entry) =
                     store.check_method_for_class(recv_class, kind.to_id(), class_version)
                     && let Some(fid) = entry.func_id()
@@ -485,7 +490,7 @@ impl JitContext {
             }
             TraceIr::GCmp { kind, info } => {
                 let recv_class = info.lhs_class;
-                let class_version = self.class_version;
+                let class_version = self.class_version();
                 if let Some(entry) = store.check_method_for_class(
                     recv_class,
                     Self::cmpkind_to_id(kind),
@@ -598,17 +603,31 @@ impl JitContext {
             }
             TraceIr::MethodCall { callid, cache } => {
                 if let Some(cache) = cache {
-                    return self.compile_call(bbctx, ir, store, pc, callid, cache);
+                    if store[callid].block_fid.is_none()
+                        && let Some(info) = store.inline_info.get_inline(cache.func_id)
+                    {
+                        let f = &info.inline_gen;
+                        if self.inline_asm(bbctx, ir, store, f, callid, &cache, pc) {
+                            return CompileResult::Continue;
+                        }
+                    }
+                    return self.call(bbctx, ir, store, cache, callid, pc);
                 } else {
                     return CompileResult::Recompile;
                 }
             }
             TraceIr::Yield { callid } => {
-                if let Some((block_fid, block_self)) = self.block_info
-                    && let Some(block_iseq) = store[block_fid].is_iseq()
+                if let Some((block_fid, block_self)) = self.block_info()
+                    && let Some(block_iseq) = store[*block_fid].is_iseq()
                 {
                     self.compile_yield_inlined(
-                        bbctx, ir, store, pc, callid, block_iseq, block_self,
+                        bbctx,
+                        ir,
+                        store,
+                        pc,
+                        callid,
+                        block_iseq,
+                        *block_self,
                     );
                 } else {
                     bbctx.compile_yield(ir, store, pc, callid);
@@ -748,10 +767,16 @@ impl JitContext {
                 }
             }
             TraceIr::NilBr(cond_, dest_idx) => {
-                let branch_dest = self.label();
-                bbctx.fetch_for_gpr(ir, cond_, GP::Rax);
-                ir.push(AsmInst::NilBr(branch_dest));
-                self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                if bbctx.is_nil(cond_) {
+                    self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                    return CompileResult::Branch;
+                } else if bbctx.is_not_nil(cond_) {
+                } else {
+                    let branch_dest = self.label();
+                    bbctx.fetch_for_gpr(ir, cond_, GP::Rax);
+                    ir.push(AsmInst::NilBr(branch_dest));
+                    self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                }
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => {

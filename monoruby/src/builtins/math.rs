@@ -98,9 +98,10 @@ fn log10(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 fn math_sqrt(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
@@ -124,9 +125,10 @@ fn math_sqrt(
 }
 
 fn math_cos(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
@@ -158,9 +160,10 @@ fn math_cos(
 }
 
 fn math_sin(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,

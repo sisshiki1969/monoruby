@@ -645,6 +645,16 @@ impl AsmIr {
         self.handle_error(error);
     }
 
+    ///
+    /// Array index assign operation with u16 index `idx`.
+    ///
+    /// ### in
+    /// - rdi: base: Array
+    /// - r15: result Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
@@ -1061,8 +1071,8 @@ pub(super) enum AsmInst {
     ///
     /// Integer comparison and conditional branch
     ///
-    /// Compare two values with *mode*, jump to *branch_dest* if the condition specified by *kind*
-    /// and *brkind* is met.
+    /// Compare two values with `mode``, jump to `branch_dest`` if the condition specified by `kind``
+    /// and `brkind`` is met.
     ///
     IntegerCmpBr {
         mode: OpMode,
@@ -1101,16 +1111,61 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
+    ///
+    /// Generic index operation.
+    ///
+    /// Execute `base`[[`idx`]] and store the result to *rax*.
+    ///
+    /// ### out
+    /// - rax: result Option<Value>
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
     GenericIndex {
         base: SlotId,
         idx: SlotId,
         pc: BytecodePtr,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Array index operation with u16 index `idx``.
+    ///
+    /// Execute *rdi*[[`idx`]] and store the result to *rax*.
+    ///
+    /// ### in
+    /// - rdi: base Array
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///
     ArrayU16Index {
         idx: u16,
     },
+    ///
+    /// Array index operation.
+    ///
+    /// ### in
+    /// - rdi: base Array
+    /// - rsi: index Fixnum
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///
     ArrayIndex,
+
+    ///
+    /// Generic index assign operation.
+    ///
+    /// Execute `base`[[`idx`]] = `src`.
+    ///
+    /// ### out
+    /// - rax: result Option<Value>
+    ///    
+    /// ### destroy
+    /// - caller save registers
+    ///
     GenericIndexAssign {
         src: SlotId,
         base: SlotId,
@@ -1118,26 +1173,63 @@ pub(super) enum AsmInst {
         pc: BytecodePtr,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Array index assign operation with u16 index `idx`.
+    ///
+    /// ### in
+    /// - rdi: base: Array
+    /// - r15: result Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     ArrayU16IndexAssign {
         idx: u16,
         using_xmm: UsingXmm,
         error: AsmError,
     },
+    ///
+    /// Aray index assign operation.
+    ///
+    /// ### in
+    /// - rdi: base Array
+    /// - rsi: index Fixnum
+    /// - r15: Value
+    ///    
+    /// ### destroy
+    /// - caller save registers
+    ///
     ArrayIndexAssign {
         using_xmm: UsingXmm,
         error: AsmError,
     },
 
-    /// create a new Array object and store it to rax
+    ///
+    /// Generate new Array object according to `callid`.
+    ///
+    /// ### out
+    ///
+    /// - rax: result Option<Value>
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
     NewArray {
         callid: CallSiteId,
         using_xmm: UsingXmm,
     },
-    /// create a new Array object and store it to rax
+    ///
+    /// Create a new Array object and store it to *rax*
+    ///
     NewLambda(FuncId, UsingXmm),
-    /// create a new Hash object and store it to rax
+    ///
+    /// Create a new Hash object and store it to *rax*
+    ///
     NewHash(SlotId, usize, UsingXmm),
-    /// create a new Range object and store it to rax
+    ///
+    /// Create a new Range object and store it to *rax*
+    ///
     NewRange {
         start: SlotId,
         end: SlotId,
@@ -1456,7 +1548,7 @@ impl Codegen {
         }
 
         if let Some((_, exit)) = entry_exit {
-            let exit = *ctx.basic_block_labels.get(&exit).unwrap();
+            let exit = ctx.get_bb_label(exit);
             let exit = ctx.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;

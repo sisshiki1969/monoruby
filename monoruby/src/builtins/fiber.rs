@@ -54,9 +54,10 @@ fn fiber_yield(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 }
 
 fn fiber_yield_inline(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,

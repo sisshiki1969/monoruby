@@ -30,9 +30,9 @@ impl Codegen {
                 self.init_func(&info);
             }
             AsmInst::Preparation => {
-                if !ctx.self_class.is_always_frozen() && ctx.ivar_heap_accessed {
-                    let ivar_len = store[ctx.self_class].ivar_len();
-                    let heap_len = if ctx.self_ty == Some(ObjTy::OBJECT) {
+                if !ctx.self_class().is_always_frozen() && ctx.ivar_heap_accessed {
+                    let ivar_len = store[ctx.self_class()].ivar_len();
+                    let heap_len = if ctx.self_ty() == Some(ObjTy::OBJECT) {
                         ivar_len - OBJECT_INLINE_IVAR
                     } else {
                         ivar_len
@@ -351,12 +351,12 @@ impl Codegen {
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
                 for bbid in branch_table.iter() {
-                    let dest_label = ctx.basic_block_labels.get(&bbid).cloned().unwrap();
+                    let dest_label = ctx.get_bb_label(*bbid);
                     let dest_label = ctx.resolve_label(&mut self.jit, dest_label);
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = ctx.basic_block_labels.get(&else_dest).cloned().unwrap();
+                let else_dest = ctx.get_bb_label(else_dest);
                 let else_dest = ctx.resolve_label(&mut self.jit, else_dest);
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
@@ -834,6 +834,17 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Generate new Array object according to `callid`.
+    ///
+    /// ### out
+    ///
+    /// - rax: result Option<Value>
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
     fn new_array(&mut self, callid: CallSiteId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,

@@ -1,26 +1,6 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile_call(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        cache: MethodCacheEntry,
-    ) -> CompileResult {
-        if store[callid].block_fid.is_none()
-            && let Some(info) = store.inline_info.get_inline(cache.func_id)
-        {
-            let f = &info.inline_gen;
-            if bbctx.inline_call(ir, store, f, callid, &cache, pc) {
-                return CompileResult::Continue;
-            }
-        }
-        self.call(bbctx, ir, store, cache, callid, pc)
-    }
-
     pub(super) fn compile_yield_inlined(
         &mut self,
         bbctx: &mut BBContext,
@@ -50,7 +30,7 @@ impl JitContext {
         bbctx.rax2acc(ir, dst);
     }
 
-    fn call(
+    pub(super) fn call(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -65,14 +45,15 @@ impl JitContext {
             mut func_id,
             mut version,
         } = cache;
-        if recv.is_self() && self.self_class != recv_class {
+        if recv.is_self() && self.self_class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
-            let class_version = self.class_version;
+            let class_version = self.class_version();
             let name = store[callid].name.unwrap();
-            if let Some(entry) = store.check_method_for_class(self.self_class, name, class_version)
+            if let Some(entry) =
+                store.check_method_for_class(self.self_class(), name, class_version)
                 && let Some(fid) = entry.func_id()
             {
-                recv_class = self.self_class;
+                recv_class = self.self_class();
                 func_id = fid;
                 version = class_version;
             } else {
@@ -184,8 +165,8 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if self.inlining_level < 3 {
-                    let block_info = block_fid.map(|fid| (fid, self.self_class));
+                if let Some(block_fid) = block_fid {
+                    let block_info = Some((block_fid, self.self_class()));
                     let inlined_entry =
                         self.compile_inline_method(store, iseq_id, recv_class, block_info);
                     self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
@@ -209,10 +190,10 @@ impl JitContext {
         let mut ctx = JitContext::new(
             store,
             inlined_iseq_id,
-            None,
-            self.class_version,
+            JitType::Inlined,
+            self.class_version(),
             inlined_self_class,
-            self.inlining_level + 1,
+            self.inlining_level() + 1,
             block_info,
         );
         ctx.compile(store);
@@ -290,6 +271,48 @@ impl JitContext {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
     }
+
+    pub(super) fn inline_asm(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        f: impl Fn(
+            &mut BBContext,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            BytecodePtr,
+        ) -> bool,
+        callid: CallSiteId,
+        cache: &MethodCacheEntry,
+        pc: BytecodePtr,
+    ) -> bool {
+        let mut ctx_save = bbctx.clone();
+        let ir_save = ir.save();
+        let recv = store[callid].recv;
+        bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
+        let (deopt, error) = ir.new_deopt_error(bbctx, pc);
+        let using_xmm = bbctx.get_using_xmm();
+        let MethodCacheEntry {
+            recv_class,
+            func_id,
+            version,
+        } = cache;
+        ir.guard_version(*func_id, *version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !bbctx.is_class(recv, *recv_class) {
+            ir.guard_class(bbctx, recv, GP::Rdi, *recv_class, deopt);
+        }
+        if f(bbctx, ir, self, store, callid, *recv_class, pc) {
+            true
+        } else {
+            std::mem::swap(bbctx, &mut ctx_save);
+            ir.restore(ir_save);
+            false
+        }
+    }
 }
 
 impl BBContext {
@@ -345,39 +368,6 @@ impl BBContext {
         CompileResult::Continue
     }
 
-    fn inline_call(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, ClassId, BytecodePtr) -> bool,
-        callid: CallSiteId,
-        cache: &MethodCacheEntry,
-        pc: BytecodePtr,
-    ) -> bool {
-        let mut ctx_save = self.clone();
-        let ir_save = ir.save();
-        let recv = store[callid].recv;
-        self.fetch_for_gpr(ir, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(self, pc);
-        let using_xmm = self.get_using_xmm();
-        let MethodCacheEntry {
-            recv_class,
-            func_id,
-            version,
-        } = cache;
-        ir.guard_version(*func_id, *version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !self.is_class(recv, *recv_class) {
-            ir.guard_class(self, recv, GP::Rdi, *recv_class, deopt);
-        }
-        if f(ir, store, self, callid, *recv_class, pc) {
-            true
-        } else {
-            std::mem::swap(self, &mut ctx_save);
-            ir.restore(ir_save);
-            false
-        }
-    }
-
     pub(super) fn compile_yield(
         &mut self,
         ir: &mut AsmIr,
@@ -417,383 +407,4 @@ impl BBContext {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
     }*/
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::tests::*;
-
-    #[test]
-    fn polymorphic() {
-        run_test_with_prelude(
-            r##"
-        res = []
-                
-        a = [C1.new, C1.new, C1.new, C1.new, C.new, C.new]
-        for i in 0..a.length - 1
-          res << a[i].f
-        end
-                
-        a = [C.new, C.new, C.new, C.new, C1.new, C1.new]
-        for i in 0..a.length - 1
-          res << a[i].f
-        end
-                
-        res
-        "##,
-            r##"
-        class C
-          attr_accessor :a
-          def initialize
-            @a=10
-          end
-          def f
-            @a
-          end
-        end
-
-        class C1 < C
-          attr_accessor :a
-          def initialize
-            @a=20
-          end
-        end
-        "##,
-        );
-    }
-
-    #[test]
-    fn yield_test() {
-        run_test(
-            r##"
-          def f(x,y)
-            yield x,y
-          end
-          
-          res = []
-          for i in 0..10
-            res << f(i,5) {|x,y| x+y}
-            res << f(i,8) {|x,y| x+y}
-          end
-          res
-        "##,
-        );
-    }
-
-    #[test]
-    fn iterator() {
-        run_test(
-            r##"
-        class Array
-          def iich
-            for i in 0...self.size
-              yield(self[i])
-            end
-          end
-        end
-
-        a = []
-        [2,5,7,10,2.2,7,9].iich do |x|
-          a << x*2
-        end
-        a
-        "##,
-        );
-    }
-
-    #[test]
-    fn attr_accessor() {
-        run_test_with_prelude(
-            r##"
-            x = [C.new, B.new, A.new]
-            res = []
-            for e in x
-                e.a += 1000.0
-                e.b += 1000.0
-                e.c += 1000.0
-                res << e.a
-                res << e.b
-                res << e.c
-            end
-            res
-            "##,
-            r##"
-            class C
-              def initialize
-                @a = 1
-                @b = 2
-                @c = 3
-              end
-              attr_accessor :a, :b, :c
-            end
-            class B < C
-              def initialize
-                @b = 10
-                @c = 20
-                @a = 30
-              end
-              attr_accessor :a, :b, :c
-            end
-            class A < B
-              def initialize
-                @c = 100
-                @a = 200
-                @b = 300
-              end
-              attr_accessor :a, :b, :c
-            end
-        "##,
-        );
-    }
-
-    #[test]
-    fn jit_attr_reader() {
-        run_test_with_prelude(
-            r###"
-        x = C.new
-        [x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h]
-        "###,
-            r###"
-        class C
-          attr_reader :a, :b, :c, :d, :e, :f, :g, :h
-          def initialize
-            @a = 1
-            @b = 2
-            @c = 3
-            @d = 4
-            @e = 5
-            @f = 6
-            @g = 7
-            @h = 8
-          end
-        end
-        "###,
-        );
-        run_test_with_prelude(
-            r###"
-        x = C.new
-        [x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h]
-        "###,
-            r###"
-        class C < Array
-          attr_reader :a, :b, :c, :d, :e, :f, :g, :h
-          def initialize
-            @a = 1
-            @b = 2
-            @c = 3
-            @d = 4
-            @e = 5
-            @f = 6
-            @g = 7
-            @h = 8
-          end
-        end
-        "###,
-        );
-    }
-
-    #[test]
-    fn deopt_method_recv_class() {
-        run_test_error(
-            r##"
-          class A
-            def w
-              42
-            end
-          end
-          class B
-          end
-          a = A.new
-          res = []
-          for i in 0..10
-            if i == 8
-              a = B.new
-            end
-            res << a.w
-          end
-          res
-        "##,
-        );
-    }
-
-    #[test]
-    fn deopt_reader_recv_class() {
-        run_test(
-            r##"
-            class A
-                attr_accessor :w
-            end
-            class B
-              def w
-                100
-              end
-            end
-            a = A.new
-            a.w = 42
-            res = []
-            for i in 0..10
-              if i == 8
-                a = B.new
-              end
-              res << a.w
-            end
-            res
-        "##,
-        );
-    }
-
-    #[test]
-    fn deopt_writer_recv_class() {
-        run_test(
-            r##"
-            class A
-              attr_accessor :w
-            end
-            class B
-              attr_reader :w
-              def w=(v)
-                @w = v * 2
-              end
-            end
-            a = A.new
-            res = []
-            for i in 0..10
-              if i == 8
-                a = B.new
-              end
-              a.w = 42
-              res << a.w
-            end
-            res
-        "##,
-        );
-    }
-
-    #[test]
-    fn deopt_reader_class_version() {
-        run_test(
-            r##"
-        class A
-          attr_accessor :w
-        end
-        a = A.new
-        a.w = 42
-        res = []
-        for i in 0..10
-          if i == 8
-            class A
-              def w
-                99
-              end
-            end
-          end
-          res << a.w
-        end
-        res
-        "##,
-        );
-    }
-
-    #[test]
-    fn deopt_writer_class_version() {
-        run_test_once(
-            r##"
-        class A
-          attr_accessor :w
-        end
-        a = A.new
-        res = []
-        for i in 0..10
-          if i == 8
-            class A
-              def w=(v)
-                @w = v * 2
-              end
-            end
-          end
-          a.w = 42
-          res << a.w
-        end
-        res
-        "##,
-        );
-    }
-
-    #[test]
-    fn attr_reader_in_different_class() {
-        run_test_with_prelude(
-            r##"
-            s = S.new
-            c = C.new
-            [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h, c.a, c.b, c.c, c.d, c.e, c.f, c.g, c.h]
-        "##,
-            r##"
-            class S
-                def initialize
-                    @a = 10
-                    @b = 20
-                    @c = 30
-                    @d = 40
-                    @e = 50
-                    @f = 60
-                    @g = 70
-                    @h = 80
-                end
-                attr_reader :a, :b, :c, :d, :e, :f, :g, :h
-            end
-
-            class C < S
-                def initialize
-                    @h = 8
-                    @g = 7
-                    @f = 6
-                    @e = 5
-                    @d = 4
-                    @c = 3
-                    @b = 2
-                    @a = 1
-                end
-                attr_reader :a, :b, :c, :c, :e, :f, :g, :h
-            end
-            
-            "##,
-        );
-        run_test_with_prelude(
-            r##"
-            s = S.new
-            c = C.new
-            [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h, c.a, c.b, c.c, c.d, c.e, c.f, c.g, c.h]
-        "##,
-            r##"
-            class S < Array
-                def initialize
-                    @a = 10
-                    @b = 20
-                    @c = 30
-                    @d = 40
-                    @e = 50
-                    @f = 60
-                    @g = 70
-                    @h = 80
-                end
-                attr_reader :a, :b, :c, :d, :e, :f, :g, :h
-            end
-
-            class C < S
-                def initialize
-                    @h = 8
-                    @g = 7
-                    @f = 6
-                    @e = 5
-                    @d = 4
-                    @c = 3
-                    @b = 2
-                    @a = 1
-                end
-                attr_reader :a, :b, :c, :c, :e, :f, :g, :h
-            end
-            
-            "##,
-        );
-    }
 }

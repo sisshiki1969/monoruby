@@ -5,11 +5,13 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
+pub use self::context::JitContext;
 use self::slot::Guarded;
 
 use super::*;
 //use analysis::{ExitType, SlotInfo};
 use asmir::*;
+use context::JitType;
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
@@ -18,6 +20,7 @@ pub mod asmir;
 mod basic_block;
 mod binary_op;
 mod compile;
+mod context;
 mod definition;
 mod guard;
 mod index;
@@ -28,304 +31,6 @@ mod read_slot;
 mod slot;
 pub mod trace_ir;
 mod variables;
-
-//
-// Just-in-time compiler module.
-//
-
-///
-/// Context for JIT compilation.
-///
-struct JitContext {
-    ///
-    /// IseqId of the method.
-    ///
-    iseq_id: ISeqId,
-    ///
-    /// The block given to the method and its `self` class.
-    ///
-    block_info: Option<(FuncId, ClassId)>,
-    ///
-    /// The start bytecode position of the loop to be compiled.
-    ///
-    /// None for method compilation.
-    ///
-    position: Option<BytecodePtr>,
-    ///
-    /// Destination labels for each BasicBlock.
-    ///
-    basic_block_labels: HashMap<BasicBlockId, JitLabel>,
-    ///
-    /// Loop information.
-    ///
-    /// ### key
-    /// the entry basic block of the loop.
-    ///
-    /// ### value
-    /// (the last basic block, liveness info)
-    ///
-    loop_info: HashMap<BasicBlockId, Liveness>,
-    ///
-    /// Nested loop count.
-    ///
-    loop_count: usize,
-    ///
-    /// Flag whether this context is a loop.
-    ///
-    is_loop: bool,
-    ///
-    /// Map for bytecode position and branches.
-    ///
-    branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
-    ///
-    /// Target `BBContext` for an each instruction.
-    ///
-    target_ctx: HashMap<BasicBlockId, BBContext>,
-    ///
-    /// Map for backward branches.
-    ///
-    backedge_map: HashMap<BasicBlockId, BackedgeInfo>,
-    ///
-    /// Number of slots.
-    ///
-    total_reg_num: usize,
-    ///
-    /// Number of local variables.
-    ///
-    local_num: usize,
-    ///
-    /// *self* for this loop/method.
-    ///
-    self_class: ClassId,
-    ///
-    /// Object type of *self*.
-    ///
-    self_ty: Option<ObjTy>,
-    ///
-    /// Information for bridges.
-    ///
-    bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
-    ///
-    /// Information for continuation bridge.
-    ///
-    continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
-    labels: Vec<Option<DestLabel>>,
-    ///
-    /// Class version at compile time.
-    ///
-    class_version: u32,
-    ///
-    /// Generated AsmIr.
-    ///
-    ir: Vec<AsmIr>,
-    ///
-    /// Flag whether ivar on the heap is accessed in this context.
-    ///
-    ivar_heap_accessed: bool,
-    ///
-    /// Level of inlining.
-    ///
-    inlining_level: usize,
-    ///
-    /// Information for inlined methods.
-    ///
-    inlined_methods: Vec<(JitLabel, JitContext)>,
-    ///
-    /// Source map for bytecode index and machine code position.
-    ///
-    #[cfg(feature = "emit-asm")]
-    sourcemap: Vec<(BcIndex, usize)>,
-    ///
-    /// Start offset of a machine code corresponding to the current basic block.
-    ///
-    #[cfg(feature = "emit-asm")]
-    start_codepos: usize,
-}
-
-impl JitContext {
-    ///
-    /// Create new JitContext.
-    ///
-    fn new(
-        store: &Store,
-        iseq_id: ISeqId,
-        position: Option<BytecodePtr>,
-        class_version: u32,
-        self_class: ClassId,
-        inlining_level: usize,
-        block_info: Option<(FuncId, ClassId)>,
-    ) -> Self {
-        let func = &store[iseq_id];
-        let self_ty = store[self_class].instance_ty();
-        let mut basic_block_labels = HashMap::default();
-        let mut labels = vec![];
-        for i in 0..func.bb_info.len() {
-            let idx = BasicBlockId(i);
-            basic_block_labels.insert(idx, JitLabel(labels.len()));
-            labels.push(None);
-        }
-
-        let total_reg_num = func.total_reg_num();
-        let local_num = func.local_num();
-        Self {
-            iseq_id,
-            block_info,
-            position,
-            basic_block_labels,
-            loop_info: HashMap::default(),
-            loop_count: 0,
-            is_loop: position.is_some(),
-            branch_map: HashMap::default(),
-            target_ctx: HashMap::default(),
-            backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
-            self_class,
-            self_ty,
-            bridges: vec![],
-            continuation_bridge: None,
-            labels,
-            class_version,
-            ir: vec![],
-            ivar_heap_accessed: false,
-            inlining_level,
-            inlined_methods: vec![],
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
-        }
-    }
-
-    fn from(&self) -> Self {
-        let total_reg_num = self.total_reg_num;
-        let local_num = self.local_num;
-        Self {
-            iseq_id: self.iseq_id,
-            block_info: self.block_info,
-            position: self.position,
-            basic_block_labels: HashMap::default(),
-            loop_info: HashMap::default(),
-            loop_count: 0,
-            is_loop: self.is_loop,
-            branch_map: HashMap::default(),
-            target_ctx: HashMap::default(),
-            backedge_map: HashMap::default(),
-            total_reg_num,
-            local_num,
-            self_class: NIL_CLASS,
-            self_ty: None,
-            bridges: vec![],
-            continuation_bridge: None,
-            labels: vec![],
-            class_version: 0,
-            ir: vec![],
-            ivar_heap_accessed: false,
-            inlining_level: 0,
-            inlined_methods: vec![],
-            #[cfg(feature = "emit-asm")]
-            sourcemap: vec![],
-            #[cfg(feature = "emit-asm")]
-            start_codepos: 0,
-        }
-    }
-
-    ///
-    /// Create a new *JitLabel*.
-    ///
-    fn label(&mut self) -> JitLabel {
-        let id = self.labels.len();
-        self.labels.push(None);
-        JitLabel(id)
-    }
-
-    ///
-    /// Resolve *JitLabel* and return *DestLabel*.
-    ///
-    fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match self.labels[label.0] {
-            Some(l) => l,
-            None => {
-                let l = jit.label();
-                self.labels[label.0] = Some(l);
-                l
-            }
-        }
-    }
-
-    fn loop_info(&self, entry_bb: BasicBlockId) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        match self.loop_info.get(&entry_bb) {
-            Some(liveness) => (liveness.get_loop_used_as_float(), liveness.get_unused()),
-            None => (vec![], vec![]),
-        }
-    }
-
-    ///
-    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
-    ///
-    fn new_branch(
-        &mut self,
-        func: &ISeqInfo,
-        src_idx: BcIndex,
-        dest: BasicBlockId,
-        mut bbctx: BBContext,
-        branch_dest: JitLabel,
-    ) {
-        bbctx.sp = func.get_sp(src_idx);
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
-        self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_idx,
-            bbctx,
-            branch_dest,
-            cont: false,
-        });
-    }
-
-    ///
-    /// Add new continuation branch from *src_idx* to *dest* with the context *bbctx*.
-    ///
-    fn new_continue(
-        &mut self,
-        func: &ISeqInfo,
-        src_idx: BcIndex,
-        dest: BasicBlockId,
-        mut bbctx: BBContext,
-        branch_dest: JitLabel,
-    ) {
-        bbctx.sp = func.get_sp(src_idx);
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest);
-        self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_idx,
-            bbctx,
-            branch_dest,
-            cont: true,
-        })
-    }
-
-    ///
-    /// Add new backward branch from *src_idx* to *dest* with the context *bbctx*.
-    ///
-    fn new_backedge(
-        &mut self,
-        func: &ISeqInfo,
-        bb: &mut BBContext,
-        bb_pos: BasicBlockId,
-        unused: Vec<SlotId>,
-    ) {
-        bb.sp = func.get_sp(func.bb_info[bb_pos].begin);
-        #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:[{:?}] {:?}", bb.sp, bb_pos);
-        self.backedge_map.insert(
-            bb_pos,
-            BackedgeInfo {
-                target_ctx: MergeContext::new(bb),
-                unused,
-            },
-        );
-    }
-}
 
 #[derive(Debug)]
 struct BackedgeInfo {
@@ -434,8 +139,8 @@ impl BBContext {
         Self {
             inner: BBContextInner {
                 slot_state: SlotContext::from(cc),
-                sp: SlotId(cc.local_num as u16),
-                next_sp: SlotId(cc.local_num as u16),
+                sp: SlotId(cc.local_num() as u16),
+                next_sp: SlotId(cc.local_num() as u16),
             },
         }
     }
@@ -540,7 +245,6 @@ impl BBContext {
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
-    alias: Vec<(SlotId, Vec<SlotId>)>,
     r15: Option<SlotId>,
 }
 
@@ -556,12 +260,6 @@ impl std::fmt::Debug for WriteBack {
         for (val, slot) in &self.literal {
             s.push_str(&format!(" {:?}->{:?}", val, slot));
         }
-        for (slot, slots) in &self.alias {
-            s.push_str(&format!(" {:?}->", slot));
-            for slot in slots {
-                s.push_str(&format!("{:?}", slot));
-            }
-        }
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
@@ -573,15 +271,9 @@ impl WriteBack {
     fn new(
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
-        alias: Vec<(SlotId, Vec<SlotId>)>,
         r15: Option<SlotId>,
     ) -> Self {
-        Self {
-            xmm,
-            literal,
-            alias,
-            r15,
-        }
+        Self { xmm, literal, r15 }
     }
 }
 
@@ -720,10 +412,15 @@ impl Codegen {
         #[cfg(feature = "jit-log")]
         let now = std::time::Instant::now();
 
+        let jit_type = if let Some(pos) = position {
+            JitType::Loop(pos)
+        } else {
+            JitType::Method
+        };
         let mut ctx = JitContext::new(
             store,
             iseq_id,
-            position,
+            jit_type,
             self.class_version(),
             self_class,
             0,
@@ -760,10 +457,27 @@ impl Codegen {
             self.gen_machine_code(inlined_ctx, store, entry);
         }
         self.jit.bind_label(entry_label);
+        #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+        {
+            if self.startup_flag {
+                let iseq = &store[ctx.iseq_id()];
+                let name = store.func_description(iseq.func_id());
+                eprintln!(
+                    ">>>{:?}[{}] {:?} <{}> self_class: {}",
+                    ctx.jit_type(),
+                    ctx.inlining_level(),
+                    iseq.func_id(),
+                    name,
+                    store.debug_class_name(ctx.self_class()),
+                );
+            }
+        }
+
         #[cfg(feature = "emit-asm")]
         {
             ctx.start_codepos = self.jit.get_current();
         }
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
 
@@ -783,13 +497,14 @@ impl Codegen {
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
-            let iseq_id = ctx.iseq_id;
+            let iseq_id = ctx.iseq_id();
             self.dump_disas(store, &ctx.sourcemap, iseq_id);
+            eprintln!("<<<");
         }
 
         #[cfg(feature = "perf")]
         {
-            let iseq_id = ctx.iseq_id;
+            let iseq_id = ctx.iseq_id();
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);
@@ -967,14 +682,6 @@ impl Codegen {
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
-        }
-        for (origin, v) in &wb.alias {
-            if !v.is_empty() {
-                self.load_rax(*origin);
-                for reg in v {
-                    self.store_rax(*reg);
-                }
-            }
         }
     }
 

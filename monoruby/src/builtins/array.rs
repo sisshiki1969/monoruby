@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::JitContext;
 use smallvec::smallvec;
 use std::cmp::Ordering;
 
@@ -204,9 +205,10 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn array_size(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     _pc: BytecodePtr,
@@ -447,9 +449,10 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
 }
 
 fn array_shl(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     recv_class: ClassId,
     _pc: BytecodePtr,

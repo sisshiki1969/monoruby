@@ -9,6 +9,10 @@ impl Codegen {
     /// ### out
     /// - rax: result Option<Value>
     ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
     pub(super) fn generic_index(
         &mut self,
         using: UsingXmm,
@@ -30,7 +34,7 @@ impl Codegen {
     }
 
     ///
-    /// Array index operation with u16 idx.
+    /// Array index operation with u16 index `idx``.
     ///
     /// Execute *rdi*[[`idx`]] and store the result to *rax*.
     ///
@@ -81,6 +85,17 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
+    ///
+    /// Generic index assign operation.
+    ///
+    /// `base`[[`idx`]] = `src`
+    ///
+    /// ### out
+    /// - rax: result Value
+    ///    
+    /// ### destroy
+    /// - caller save registers
+    ///
     pub(super) fn generic_index_assign(
         &mut self,
         using: UsingXmm,
@@ -103,6 +118,16 @@ impl Codegen {
         self.xmm_restore(using);
     }
 
+    ///
+    /// Array index assign operation with u16 index `idx`.
+    ///
+    /// ### in
+    /// - rdi: base: Array
+    /// - r15: result Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     pub(super) fn gen_array_u16_index_assign(
         &mut self,
         using_xmm: UsingXmm,
@@ -123,6 +148,9 @@ impl Codegen {
     /// - rdi: base Array
     /// - rsi: index Fixnum
     /// - r15: Value
+    ///    
+    /// ### destroy
+    /// - caller save registers
     ///
     pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: DestLabel) {
         let generic = self.jit.label();
