@@ -979,7 +979,6 @@ pub(super) enum AsmInst {
     },
     YieldInlined {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
         block_iseq: ISeqId,
         block_entry: JitLabel,
         error: AsmError,

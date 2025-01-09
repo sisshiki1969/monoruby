@@ -1,36 +1,7 @@
 use super::*;
 
 impl JitContext {
-    pub(super) fn compile_yield_inlined(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-        block_iseq: ISeqId,
-        block_self: ClassId,
-    ) {
-        let callinfo = &store[callid];
-        let dst = callinfo.dst;
-        bbctx.write_back_callargs_and_dst(ir, &callinfo);
-        bbctx.writeback_acc(ir);
-        let using_xmm = bbctx.get_using_xmm();
-        let error = ir.new_error(bbctx, pc);
-        let evict = ir.new_evict();
-        let block_entry = self.compile_inline_method(store, block_iseq, block_self, None);
-        ir.push(AsmInst::YieldInlined {
-            callid,
-            using_xmm,
-            block_iseq,
-            block_entry,
-            error,
-            evict,
-        });
-        bbctx.rax2acc(ir, dst);
-    }
-
-    pub(super) fn call(
+    pub(super) fn compile_call(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -272,7 +243,46 @@ impl JitContext {
         ir.handle_error(error);
     }
 
-    pub(super) fn inline_asm(
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    pub(super) fn compile_yield_inlined(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        pc: BytecodePtr,
+        callid: CallSiteId,
+        block_iseq: ISeqId,
+        block_self: ClassId,
+    ) {
+        let evict = ir.new_evict();
+        let dst = store[callid].dst;
+        ir.exec_gc(bbctx.get_register());
+        let using_xmm = bbctx.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        ir.set_arguments(store, bbctx, callid, store[block_iseq].func_id(), pc);
+        bbctx.unlink(dst);
+        bbctx.clear();
+        let error = ir.new_error(bbctx, pc);
+        bbctx.writeback_acc(ir);
+        let block_entry = self.compile_inline_method(store, block_iseq, block_self, None);
+        ir.push(AsmInst::YieldInlined {
+            callid,
+            block_iseq,
+            block_entry,
+            error,
+            evict,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        bbctx.rax2acc(ir, dst);
+        ir.push(AsmInst::ImmediateEvict { evict });
+        ir[evict] = SideExit::Evict(Some((pc + 2, bbctx.get_write_back())));
+    }
+
+    pub(super) fn compile_inline_asm(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,

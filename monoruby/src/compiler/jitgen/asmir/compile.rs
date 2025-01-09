@@ -381,7 +381,7 @@ impl Codegen {
                 recv_class,
                 evict,
             } => {
-                let return_addr = self.binop_cached(store, callee_fid, recv_class);
+                let return_addr = self.gen_binop_cached(store, callee_fid, recv_class);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::Send {
@@ -392,7 +392,7 @@ impl Codegen {
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.send_cached(store, callid, callee_fid, recv_class, error);
+                let return_addr = self.gen_send(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::SendInlined {
@@ -405,7 +405,7 @@ impl Codegen {
                 let error = labels[error];
                 let entry_label = ctx.resolve_label(&mut self.jit, inlined_entry);
                 let return_addr =
-                    self.send_cached_inlined(store, callid, callee_fid, entry_label, error);
+                    self.gen_send_inlined(store, callid, callee_fid, entry_label, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             /*AsmInst::SendNotCached {
@@ -431,7 +431,6 @@ impl Codegen {
             }
             AsmInst::YieldInlined {
                 callid,
-                using_xmm,
                 block_iseq,
                 block_entry,
                 error,
@@ -439,14 +438,8 @@ impl Codegen {
             } => {
                 let error = labels[error];
                 let block_entry = ctx.resolve_label(&mut self.jit, block_entry);
-                let return_addr = self.gen_yield_inlined(
-                    store,
-                    callid,
-                    using_xmm,
-                    block_iseq,
-                    block_entry,
-                    error,
-                );
+                let return_addr =
+                    self.gen_yield_inlined(store, callid, block_iseq, block_entry, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 

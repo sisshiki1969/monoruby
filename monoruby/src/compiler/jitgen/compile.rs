@@ -607,11 +607,11 @@ impl JitContext {
                         && let Some(info) = store.inline_info.get_inline(cache.func_id)
                     {
                         let f = &info.inline_gen;
-                        if self.inline_asm(bbctx, ir, store, f, callid, &cache, pc) {
+                        if self.compile_inline_asm(bbctx, ir, store, f, callid, &cache, pc) {
                             return CompileResult::Continue;
                         }
                     }
-                    return self.call(bbctx, ir, store, cache, callid, pc);
+                    return self.compile_call(bbctx, ir, store, cache, callid, pc);
                 } else {
                     return CompileResult::Recompile;
                 }
