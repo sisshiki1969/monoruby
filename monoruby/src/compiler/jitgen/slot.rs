@@ -268,7 +268,7 @@ impl SlotContext {
     ///
     /// Link the slot *reg* to a concrete value *v*.
     ///
-    pub(super) fn store_concrete_value(&mut self, slot: SlotId, v: Value) {
+    pub(crate) fn store_concrete_value(&mut self, slot: SlotId, v: Value) {
         let guarded = Guarded::from_concrete_value(v);
         self.set_slot(slot, LinkMode::ConcreteValue(v), guarded);
     }

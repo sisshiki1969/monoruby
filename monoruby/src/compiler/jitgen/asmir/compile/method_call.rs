@@ -363,17 +363,12 @@ impl Codegen {
         error: DestLabel,
     ) -> CodePtr {
         let block_fid = store[block_iseq].func_id();
+        let meta = store[block_fid].meta();
         monoasm! { &mut self.jit,
-            movl rdx, (block_fid.get());
             movq rdi, [rbx + (EXECUTOR_CFP)];
             movq rdi, [rdi];
             movq rdi, [rdi - (CFP_LFP)];
-        }
-        // rdi <- outer, rdx <- FuncId
-        self.get_func_data();
-        // rdi <- outer, r15 <- &FuncData
-
-        monoasm! { &mut self.jit,
+            // rdi <- outer LFP
             subq  rsp, 16;
             // set prev_cfp
             pushq [rbx + (EXECUTOR_CFP)];
@@ -383,7 +378,8 @@ impl Codegen {
             // set outer
             pushq rdi;
             // set meta
-            pushq [r15 + (FUNCDATA_META)];
+            movq  rax, (meta.get());
+            pushq rax;
             // set block
             xorq rax, rax;
             pushq rax;

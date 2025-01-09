@@ -598,7 +598,15 @@ impl JitContext {
             }
             TraceIr::MethodCall { callid, cache } => {
                 if let Some(cache) = cache {
-                    return self.compile_call(bbctx, ir, store, pc, callid, cache);
+                    if store[callid].block_fid.is_none()
+                        && let Some(info) = store.inline_info.get_inline(cache.func_id)
+                    {
+                        let f = &info.inline_gen;
+                        if bbctx.inline_asm(ir, store, f, callid, &cache, pc) {
+                            return CompileResult::Continue;
+                        }
+                    }
+                    return self.call(bbctx, ir, store, cache, callid, pc);
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -748,10 +756,16 @@ impl JitContext {
                 }
             }
             TraceIr::NilBr(cond_, dest_idx) => {
-                let branch_dest = self.label();
-                bbctx.fetch_for_gpr(ir, cond_, GP::Rax);
-                ir.push(AsmInst::NilBr(branch_dest));
-                self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                if bbctx.is_nil(cond_) {
+                    self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                    return CompileResult::Branch;
+                } else if bbctx.is_not_nil(cond_) {
+                } else {
+                    let branch_dest = self.label();
+                    bbctx.fetch_for_gpr(ir, cond_, GP::Rax);
+                    ir.push(AsmInst::NilBr(branch_dest));
+                    self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                }
             }
             TraceIr::CondBr(_, _, true, _) => {}
             TraceIr::CheckLocal(local, dest_idx) => {

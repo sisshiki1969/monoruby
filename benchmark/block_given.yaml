@@ -1,0 +1,13 @@
+prelude: |
+  def foo
+    i = 0
+    while i < 1000000
+      x = block_given?
+      i += 1
+    end
+  end
+
+benchmark:
+  block_given: |
+    foo
+loop_count: 5

@@ -10,7 +10,7 @@ use std::{io::Write, mem::transmute};
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(object_nil), 0);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(kernel_nil), 0);
     globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
@@ -20,7 +20,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with(kernel_class, "raise", raise, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "fail", raise, 1, 2, false);
-    globals.define_builtin_module_func(kernel_class, "block_given?", block_given, 0);
+    globals.define_builtin_module_inline_func(
+        kernel_class,
+        "block_given?",
+        block_given,
+        Box::new(kernel_block_given),
+        0,
+    );
     globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "Integer", kernel_integer, 1);
@@ -77,7 +83,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-fn object_nil(
+fn kernel_nil(
     ir: &mut AsmIr,
     store: &Store,
     bb: &mut BBContext,
@@ -89,17 +95,25 @@ fn object_nil(
         return false;
     }
     if bb.is_nil(store[callid].recv) {
+        //if let Some(dst) = store[callid].dst {
+        //    bb.store_concrete_value(dst, Value::bool(true));
+        //}
         ir.inline(|gen, _| {
             monoasm! { &mut gen.jit,
                 movq rax, (TRUE_VALUE);
             }
         });
+        bb.rax2acc(ir, store[callid].dst);
     } else if bb.is_not_nil(store[callid].recv) {
+        //if let Some(dst) = store[callid].dst {
+        //    bb.store_concrete_value(dst, Value::bool(false));
+        //}
         ir.inline(|gen, _| {
             monoasm! { &mut gen.jit,
                 movq rax, (FALSE_VALUE);
             }
         });
+        bb.rax2acc(ir, store[callid].dst);
     } else {
         ir.inline(|gen, _| {
             monoasm! { &mut gen.jit,
@@ -109,8 +123,35 @@ fn object_nil(
                 cmoveqq rax, rsi;
             }
         });
+        bb.rax2acc(ir, store[callid].dst);
     }
-    bb.rax2acc(ir, store[callid].dst);
+    true
+}
+
+fn kernel_block_given(
+    ir: &mut AsmIr,
+    store: &Store,
+    bb: &mut BBContext,
+    callid: CallSiteId,
+    _: ClassId,
+    _pc: BytecodePtr,
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
+    let dst = store[callid].dst;
+
+    ir.inline(|gen, _| {
+        monoasm! { &mut gen.jit,
+            movq rax, [r14 - (LFP_BLOCK)];
+            testq rax, rax;
+            movq rax, (TRUE_VALUE);
+            movq rdi, (FALSE_VALUE);
+            cmoveqq rax, rdi;
+        }
+    });
+    bb.rax2acc(ir, dst);
+
     true
 }
 
@@ -972,6 +1013,25 @@ mod tests {
         run_test(r##":x.nil?"##);
         run_test(r##"nil.nil?"##);
         run_test(r##"false.nil?"##);
+    }
+
+    #[test]
+    fn block_given() {
+        run_test_with_prelude(
+            r##"
+        $x = []
+        p = Proc.new {}
+        f {}
+        f(&p)
+        f
+        $x
+            "##,
+            r##"
+        def f
+          $x << block_given?
+        end
+        "##,
+        );
     }
 
     #[test]
