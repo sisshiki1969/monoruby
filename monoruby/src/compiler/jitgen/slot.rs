@@ -33,7 +33,7 @@ impl std::fmt::Debug for SlotContext {
 
 impl SlotContext {
     pub(super) fn from(cc: &JitContext) -> Self {
-        Self::new(cc.total_reg_num, cc.local_num)
+        Self::new(cc.total_reg_num(), cc.local_num())
     }
 
     pub(super) fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {

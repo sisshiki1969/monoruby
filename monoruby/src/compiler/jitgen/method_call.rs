@@ -45,14 +45,15 @@ impl JitContext {
             mut func_id,
             mut version,
         } = cache;
-        if recv.is_self() && self.self_class != recv_class {
+        if recv.is_self() && self.self_class() != recv_class {
             // the inline method cache is invalid because the receiver class is not matched.
-            let class_version = self.class_version;
+            let class_version = self.class_version();
             let name = store[callid].name.unwrap();
-            if let Some(entry) = store.check_method_for_class(self.self_class, name, class_version)
+            if let Some(entry) =
+                store.check_method_for_class(self.self_class(), name, class_version)
                 && let Some(fid) = entry.func_id()
             {
-                recv_class = self.self_class;
+                recv_class = self.self_class();
                 func_id = fid;
                 version = class_version;
             } else {
@@ -164,8 +165,8 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if self.inlining_level < 3 {
-                    let block_info = block_fid.map(|fid| (fid, self.self_class));
+                if self.inlining_level() < 3 {
+                    let block_info = block_fid.map(|fid| (fid, self.self_class()));
                     let inlined_entry =
                         self.compile_inline_method(store, iseq_id, recv_class, block_info);
                     self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
@@ -189,10 +190,10 @@ impl JitContext {
         let mut ctx = JitContext::new(
             store,
             inlined_iseq_id,
-            None,
-            self.class_version,
+            JitType::Inlined,
+            self.class_version(),
             inlined_self_class,
-            self.inlining_level + 1,
+            self.inlining_level() + 1,
             block_info,
         );
         ctx.compile(store);

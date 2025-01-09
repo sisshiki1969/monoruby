@@ -9,6 +9,10 @@ impl Codegen {
     /// ### out
     /// - rax: result Option<Value>
     ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
     pub(super) fn generic_index(
         &mut self,
         using: UsingXmm,
@@ -30,7 +34,7 @@ impl Codegen {
     }
 
     ///
-    /// Array index operation with u16 idx.
+    /// Array index operation with u16 index `idx``.
     ///
     /// Execute *rdi*[[`idx`]] and store the result to *rax*.
     ///
