@@ -1,4 +1,20 @@
 benchmark:
   integer_times: |
     1000000.times do end
+  integer_ruby_times: |
+    class Integer
+      def times
+        if block_given?
+          i = 0
+          while i < self
+            yield i
+            i += 1
+          end
+          self
+        else
+          self.to_enum(:times)
+        end
+      end
+    end
+    1000000.times do end
 loop_count: 5

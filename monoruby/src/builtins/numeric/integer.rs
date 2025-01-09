@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::JitContext;
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 
@@ -230,9 +231,10 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_tof(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     _pc: BytecodePtr,
@@ -392,9 +394,10 @@ fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_shr(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,
@@ -426,9 +429,10 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn integer_shl(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,

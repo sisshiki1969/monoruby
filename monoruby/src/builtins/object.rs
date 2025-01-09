@@ -76,9 +76,10 @@ fn object_id(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn object_object_id(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     _pc: BytecodePtr,
@@ -119,9 +120,10 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 }
 
 pub fn object_send(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     pc: BytecodePtr,

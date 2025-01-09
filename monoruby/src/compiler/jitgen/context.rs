@@ -4,7 +4,7 @@
 
 use super::*;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method.
     Method,
@@ -17,7 +17,7 @@ pub(super) enum JitType {
 ///
 /// Context for JIT compilation.
 ///
-pub(super) struct JitContext {
+pub struct JitContext {
     ///
     /// IseqId of the method.
     ///
@@ -70,31 +70,31 @@ pub(super) struct JitContext {
     /// ### value
     /// (the last basic block, liveness info)
     ///
-    pub loop_info: HashMap<BasicBlockId, Liveness>,
+    pub(super) loop_info: HashMap<BasicBlockId, Liveness>,
     ///
     /// Nested loop count.
     ///
-    pub loop_count: usize,
+    pub(super) loop_count: usize,
     ///
     /// Map for bytecode position and branches.
     ///
-    pub branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
+    pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
     /// Target `BBContext` for an each instruction.
     ///
-    pub target_ctx: HashMap<BasicBlockId, BBContext>,
+    pub(super) target_ctx: HashMap<BasicBlockId, BBContext>,
     ///
     /// Map for backward branches.
     ///
-    pub backedge_map: HashMap<BasicBlockId, BackedgeInfo>,
+    pub(super) backedge_map: HashMap<BasicBlockId, BackedgeInfo>,
     ///
     /// Information for bridges.
     ///
-    pub bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+    pub(super) bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
-    pub continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
+    pub(super) continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -102,7 +102,7 @@ pub(super) struct JitContext {
     ///
     /// Generated AsmIr.
     ///
-    pub ir: Vec<AsmIr>,
+    pub(super) ir: Vec<AsmIr>,
     ///
     /// Flag whether ivar on the heap is accessed in this context.
     ///
@@ -110,17 +110,17 @@ pub(super) struct JitContext {
     ///
     /// Information for inlined methods.
     ///
-    pub inlined_methods: Vec<(JitLabel, JitContext)>,
+    pub(super) inlined_methods: Vec<(JitLabel, JitContext)>,
     ///
     /// Source map for bytecode index and machine code position.
     ///
     #[cfg(feature = "emit-asm")]
-    pub sourcemap: Vec<(BcIndex, usize)>,
+    pub(crate) sourcemap: Vec<(BcIndex, usize)>,
     ///
     /// Start offset of a machine code corresponding to the current basic block.
     ///
     #[cfg(feature = "emit-asm")]
-    pub start_codepos: usize,
+    pub(crate) start_codepos: usize,
 }
 
 impl JitContext {
@@ -219,6 +219,10 @@ impl JitContext {
 
     pub(super) fn block_info(&self) -> &Option<(FuncId, ClassId)> {
         &self.block_info
+    }
+
+    pub fn has_block_info(&self) -> bool {
+        self.block_info.is_some()
     }
 
     pub(super) fn local_num(&self) -> usize {

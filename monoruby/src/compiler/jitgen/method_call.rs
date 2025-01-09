@@ -165,8 +165,8 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if self.inlining_level() < 3 {
-                    let block_info = block_fid.map(|fid| (fid, self.self_class()));
+                if let Some(block_fid) = block_fid {
+                    let block_info = Some((block_fid, self.self_class()));
                     let inlined_entry =
                         self.compile_inline_method(store, iseq_id, recv_class, block_info);
                     self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
@@ -271,6 +271,48 @@ impl JitContext {
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
     }
+
+    pub(super) fn inline_asm(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        f: impl Fn(
+            &mut BBContext,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            BytecodePtr,
+        ) -> bool,
+        callid: CallSiteId,
+        cache: &MethodCacheEntry,
+        pc: BytecodePtr,
+    ) -> bool {
+        let mut ctx_save = bbctx.clone();
+        let ir_save = ir.save();
+        let recv = store[callid].recv;
+        bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
+        let (deopt, error) = ir.new_deopt_error(bbctx, pc);
+        let using_xmm = bbctx.get_using_xmm();
+        let MethodCacheEntry {
+            recv_class,
+            func_id,
+            version,
+        } = cache;
+        ir.guard_version(*func_id, *version, callid, using_xmm, deopt, error);
+        if !recv.is_self() && !bbctx.is_class(recv, *recv_class) {
+            ir.guard_class(bbctx, recv, GP::Rdi, *recv_class, deopt);
+        }
+        if f(bbctx, ir, self, store, callid, *recv_class, pc) {
+            true
+        } else {
+            std::mem::swap(bbctx, &mut ctx_save);
+            ir.restore(ir_save);
+            false
+        }
+    }
 }
 
 impl BBContext {
@@ -324,39 +366,6 @@ impl BBContext {
         ir.push(AsmInst::ImmediateEvict { evict });
         ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
         CompileResult::Continue
-    }
-
-    pub(super) fn inline_asm(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        f: impl Fn(&mut AsmIr, &Store, &mut BBContext, CallSiteId, ClassId, BytecodePtr) -> bool,
-        callid: CallSiteId,
-        cache: &MethodCacheEntry,
-        pc: BytecodePtr,
-    ) -> bool {
-        let mut ctx_save = self.clone();
-        let ir_save = ir.save();
-        let recv = store[callid].recv;
-        self.fetch_for_gpr(ir, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(self, pc);
-        let using_xmm = self.get_using_xmm();
-        let MethodCacheEntry {
-            recv_class,
-            func_id,
-            version,
-        } = cache;
-        ir.guard_version(*func_id, *version, callid, using_xmm, deopt, error);
-        if !recv.is_self() && !self.is_class(recv, *recv_class) {
-            ir.guard_class(self, recv, GP::Rdi, *recv_class, deopt);
-        }
-        if f(ir, store, self, callid, *recv_class, pc) {
-            true
-        } else {
-            std::mem::swap(self, &mut ctx_save);
-            ir.restore(ir_save);
-            false
-        }
     }
 
     pub(super) fn compile_yield(

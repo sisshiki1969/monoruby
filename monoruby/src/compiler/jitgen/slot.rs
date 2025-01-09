@@ -27,7 +27,7 @@ impl std::fmt::Debug for SlotContext {
         for (i, state) in self.slots.iter().enumerate() {
             write!(f, "\n[%{i}: {:?}]", state)?;
         }
-        Ok(())
+        write!(f, "\nr15={:?}", self.r15)
     }
 }
 
@@ -37,9 +37,17 @@ impl SlotContext {
     }
 
     pub(super) fn set_slot(&mut self, slot: SlotId, mode: LinkMode, guarded: Guarded) {
-        self[slot].link = mode;
+        if self[slot].link == LinkMode::Accumulator {
+            assert_eq!(self.r15, Some(slot));
+            self.r15 = None;
+        }
         self[slot].guarded = guarded;
         self[slot].is_used.kill();
+        if mode == LinkMode::Accumulator {
+            assert!(self.r15.is_none());
+            self.r15 = Some(slot);
+        }
+        self[slot].link = mode;
     }
 
     pub(super) fn slot(&self, slot: SlotId) -> LinkMode {
@@ -218,6 +226,7 @@ impl SlotContext {
             .slots
             .iter()
             .any(|SlotState { link, .. }| matches!(link, LinkMode::Accumulator)));
+        assert!(self.r15.is_none());
         res
     }
 
@@ -297,9 +306,6 @@ impl SlotContext {
 
     fn set_guarded(&mut self, slot: SlotId, guarded: Guarded) {
         self[slot].guarded = guarded;
-        self[slot].alias.clone().into_iter().for_each(|slot| {
-            self[slot].guarded = guarded;
-        });
     }
 
     fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
@@ -380,35 +386,19 @@ impl SlotContext {
             .collect()
     }
 
-    fn wb_alias(&self, f: impl Fn(SlotId) -> bool) -> Vec<(SlotId, Vec<SlotId>)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, SlotState { alias, .. })| {
-                let v: Vec<_> = alias.iter().filter(|slot| f(**slot)).cloned().collect();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some((SlotId(idx as u16), v))
-                }
-            })
-            .collect()
-    }
-
     pub(super) fn get_register(&self) -> WriteBack {
-        WriteBack::new(vec![], vec![], vec![], self.r15)
+        WriteBack::new(vec![], vec![], self.r15)
     }
 
     pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
         let f = |reg: SlotId| reg < sp;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
-        let alias = self.wb_alias(f);
         let r15 = match self.r15 {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, alias, r15)
+        WriteBack::new(xmm, literal, r15)
     }
 
     fn get_locals_write_back(&self) -> WriteBack {
@@ -416,12 +406,11 @@ impl SlotContext {
         let f = |reg: SlotId| reg.0 as usize <= local_num;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
-        let alias = self.wb_alias(f);
         let r15 = match self.r15 {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, alias, r15)
+        WriteBack::new(xmm, literal, r15)
     }
 
     pub(super) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
@@ -462,9 +451,7 @@ impl SlotContext {
                     self.xmm_mut(xmm).retain(|e| *e != slot);
                 }
                 LinkMode::ConcreteValue(_) => {}
-                LinkMode::Accumulator => {
-                    self.r15 = None;
-                }
+                LinkMode::Accumulator => {}
                 LinkMode::Stack => {}
             }
             self.set_slot(slot, LinkMode::Stack, Guarded::Value)
@@ -476,10 +463,8 @@ impl SlotContext {
     ///
     pub(super) fn store_r15(&mut self, slot: impl Into<Option<SlotId>>, guarded: Guarded) {
         if let Some(slot) = slot.into() {
-            assert!(self.r15.is_none());
             self.unlink(slot);
             self.set_slot(slot, LinkMode::Accumulator, guarded);
-            self.r15 = Some(slot);
         }
     }
 }
@@ -554,7 +539,6 @@ impl Liveness {
 pub(crate) struct SlotState {
     link: LinkMode,
     guarded: Guarded,
-    alias: Vec<SlotId>,
     is_used: IsUsed,
 }
 
@@ -562,7 +546,7 @@ impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}{}{}",
+            "{:?}{}",
             self.link,
             match self.guarded {
                 Guarded::Value => "".to_string(),
@@ -570,11 +554,6 @@ impl std::fmt::Debug for SlotState {
                 Guarded::Float => " <Float>".to_string(),
                 Guarded::Class(class) => format!(" <{:?}>", class),
             },
-            if self.alias.is_empty() {
-                "".to_string()
-            } else {
-                format!(" alias {:?}", self.alias)
-            }
         )
     }
 }
@@ -805,6 +784,9 @@ impl BBContext {
         src: SlotId,
         dst: SlotId,
     ) {
+        if src == dst {
+            return;
+        }
         let guarded = self.guarded(src);
         match self[src].link {
             LinkMode::Xmm(x) => {

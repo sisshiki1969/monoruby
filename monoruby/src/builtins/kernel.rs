@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::JitContext;
 use num::ToPrimitive;
 use num::Zero;
 use std::{io::Write, mem::transmute};
@@ -84,9 +85,10 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 fn kernel_nil(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     _pc: BytecodePtr,
@@ -95,25 +97,13 @@ fn kernel_nil(
         return false;
     }
     if bb.is_nil(store[callid].recv) {
-        //if let Some(dst) = store[callid].dst {
-        //    bb.store_concrete_value(dst, Value::bool(true));
-        //}
-        ir.inline(|gen, _| {
-            monoasm! { &mut gen.jit,
-                movq rax, (TRUE_VALUE);
-            }
-        });
-        bb.rax2acc(ir, store[callid].dst);
+        if let Some(dst) = store[callid].dst {
+            bb.store_concrete_value(dst, Value::bool(true));
+        }
     } else if bb.is_not_nil(store[callid].recv) {
-        //if let Some(dst) = store[callid].dst {
-        //    bb.store_concrete_value(dst, Value::bool(false));
-        //}
-        ir.inline(|gen, _| {
-            monoasm! { &mut gen.jit,
-                movq rax, (FALSE_VALUE);
-            }
-        });
-        bb.rax2acc(ir, store[callid].dst);
+        if let Some(dst) = store[callid].dst {
+            bb.store_concrete_value(dst, Value::bool(false));
+        }
     } else {
         ir.inline(|gen, _| {
             monoasm! { &mut gen.jit,
@@ -129,9 +119,10 @@ fn kernel_nil(
 }
 
 fn kernel_block_given(
-    ir: &mut AsmIr,
-    store: &Store,
     bb: &mut BBContext,
+    ir: &mut AsmIr,
+    jitctx: &JitContext,
+    store: &Store,
     callid: CallSiteId,
     _: ClassId,
     _pc: BytecodePtr,
@@ -140,17 +131,22 @@ fn kernel_block_given(
         return false;
     }
     let dst = store[callid].dst;
-
-    ir.inline(|gen, _| {
-        monoasm! { &mut gen.jit,
-            movq rax, [r14 - (LFP_BLOCK)];
-            testq rax, rax;
-            movq rax, (TRUE_VALUE);
-            movq rdi, (FALSE_VALUE);
-            cmoveqq rax, rdi;
+    if jitctx.has_block_info() {
+        if let Some(dst) = dst {
+            bb.store_concrete_value(dst, Value::bool(true));
         }
-    });
-    bb.rax2acc(ir, dst);
+    } else {
+        ir.inline(|gen, _| {
+            monoasm! { &mut gen.jit,
+                movq rax, [r14 - (LFP_BLOCK)];
+                testq rax, rax;
+                movq rax, (TRUE_VALUE);
+                movq rdi, (FALSE_VALUE);
+                cmoveqq rax, rdi;
+            }
+        });
+        bb.rax2acc(ir, dst);
+    }
 
     true
 }

@@ -5,12 +5,13 @@ use ruruby_parse::CmpKind;
 use crate::bytecodegen::{BcIndex, UnOpK};
 
 pub(crate) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId, BasicBlockInfo};
+pub use self::context::JitContext;
 use self::slot::Guarded;
 
 use super::*;
 //use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use context::{JitContext, JitType};
+use context::JitType;
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
@@ -244,7 +245,6 @@ impl BBContext {
 pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
-    alias: Vec<(SlotId, Vec<SlotId>)>,
     r15: Option<SlotId>,
 }
 
@@ -260,12 +260,6 @@ impl std::fmt::Debug for WriteBack {
         for (val, slot) in &self.literal {
             s.push_str(&format!(" {:?}->{:?}", val, slot));
         }
-        for (slot, slots) in &self.alias {
-            s.push_str(&format!(" {:?}->", slot));
-            for slot in slots {
-                s.push_str(&format!("{:?}", slot));
-            }
-        }
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
@@ -277,15 +271,9 @@ impl WriteBack {
     fn new(
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
-        alias: Vec<(SlotId, Vec<SlotId>)>,
         r15: Option<SlotId>,
     ) -> Self {
-        Self {
-            xmm,
-            literal,
-            alias,
-            r15,
-        }
+        Self { xmm, literal, r15 }
     }
 }
 
@@ -469,13 +457,13 @@ impl Codegen {
             self.gen_machine_code(inlined_ctx, store, entry);
         }
         self.jit.bind_label(entry_label);
-        #[cfg(feature = "emit-asm")]
+        #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
         {
             if self.startup_flag {
                 let iseq = &store[ctx.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    ">>>{}[{}] {:?} <{}> self_class: {}",
+                    ">>>{:?}[{}] {:?} <{}> self_class: {}",
                     ctx.jit_type(),
                     ctx.inlining_level(),
                     iseq.func_id(),
@@ -483,8 +471,13 @@ impl Codegen {
                     store.debug_class_name(ctx.self_class()),
                 );
             }
+        }
+
+        #[cfg(feature = "emit-asm")]
+        {
             ctx.start_codepos = self.jit.get_current();
         }
+
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
 
@@ -689,14 +682,6 @@ impl Codegen {
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
-        }
-        for (origin, v) in &wb.alias {
-            if !v.is_empty() {
-                self.load_rax(*origin);
-                for reg in v {
-                    self.store_rax(*reg);
-                }
-            }
         }
     }
 
