@@ -2,5 +2,5 @@
 
 cargo install --path monoruby
 #cd ../yjit-bench && ./run_benchmarks.rb rubykon -e "monoruby" -e "yjit::ruby --yjit"
-cd ../yjit-bench && ./run_benchmarks.rb --rss so_mandelbrot bf fib binarytrees rubykon nbody optcarrot matmul nqueens sudoku bedcov -e "monoruby" -e "yjit::ruby --yjit"
+cd ../yjit-bench && ./run_benchmarks.rb --rss --graph so_mandelbrot fib binarytrees rubykon nbody optcarrot matmul nqueens sudoku bedcov -e "monoruby" -e "yjit::ruby --yjit" #--chruby "truffleruby-24.1.1"
 #cd ../yjit-bench && ./run_benchmarks.rb --harness=harness-warmup --rss -e "monoruby" -e "yjit::ruby --yjit"
