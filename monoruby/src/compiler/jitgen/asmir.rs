@@ -483,7 +483,7 @@ impl AsmIr {
             && !ex_positional
             && !single_arg_expand
             && !callee.is_rest()
-            && pos_num <= callee.max_positional_args()
+            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
             && callee.req_num() <= pos_num
         {
             // write back keyword arguments.
