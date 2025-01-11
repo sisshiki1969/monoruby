@@ -92,19 +92,16 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 
 pub(super) fn gen_class_new(
     f: extern "C" fn(Value) -> Value,
-) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId, BytecodePtr) -> bool
-{
+) -> impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId) -> bool {
     move |bb: &mut BBContext,
           ir: &mut AsmIr,
           _: &JitContext,
-          store: &Store,
-          callid: CallSiteId,
-          _: ClassId,
-          pc: BytecodePtr| {
-        if !store[callid].is_simple() {
+          _: &Store,
+          callsite: &CallSiteInfo,
+          _: ClassId| {
+        if !callsite.is_simple() {
             return false;
         }
-        let callsite = &store[callid];
         let CallSiteInfo {
             recv,
             args,
@@ -116,9 +113,9 @@ pub(super) fn gen_class_new(
         bb.write_back_callargs_and_dst(ir, callsite);
         ir.stack2reg(recv, GP::Rdi);
         let using_xmm = bb.get_using_xmm();
-        let error = ir.new_error(bb, pc);
+        let error = ir.new_error(bb);
         ir.xmm_save(using_xmm);
-        ir.inline(move |gen, _| {
+        ir.inline(move |gen, _, _| {
             let cached_version = gen.jit.data_i32(-1);
             let cached_funcid = gen.jit.data_i32(-1);
             let class_version = gen.class_version_label();
@@ -184,21 +181,19 @@ fn class_allocate(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let callsite = &store[callid];
     let CallSiteInfo { recv, dst, .. } = *callsite;
     bb.write_back_callargs_and_dst(ir, callsite);
     ir.stack2reg(recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _| {
+    ir.inline(move |gen, _, _| {
         monoasm!( &mut gen.jit,
             movq rax, (allocate_object);
             call rax;

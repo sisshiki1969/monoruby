@@ -1,0 +1,68 @@
+prelude: |
+  a = [*(0..10000)]
+  h = {}
+  for i in 0..10000
+    h[i] = i
+  end
+benchmark:
+  ary_index: |
+    i = 0
+    while i < 100000
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      res = a[i]
+      i += 1
+    end
+  ary_index_assign: |
+    i = 0
+    while i < 100000
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      a[i] = 100
+      i += 1
+    end
+  hash_index: |
+    i = 0
+    while i < 100000
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      res = h[i]
+      i += 1
+    end
+  hash_index_assign: |
+    i = 0
+    while i < 100000
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      h[i] = 100
+      i += 1
+    end
+loop_count: 10

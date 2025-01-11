@@ -57,35 +57,32 @@ fn fiber_yield_inline(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let callsite = &store[callid];
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
-    bb.write_back_callargs_and_dst(ir, callsite);
     let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
+    let error = ir.new_error(bb);
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _| {
-        let fiber_yield = gen.yield_fiber;
-        // TODO: we must check if the parent fiber exits.
-
-        if pos_num == 0 {
+    if pos_num == 0 {
+        ir.inline(move |gen, _, _| {
+            // TODO: we must check if the parent fiber exits.
             monoasm! { &mut gen.jit,
                 movq rsi, (Value::nil().id());
             }
-        } else if pos_num == 1 {
-            monoasm! { &mut gen.jit,
-                movq rsi, [r14 - (jitgen::conv(args))];
-            }
-        } else {
+        });
+    } else if pos_num == 1 {
+        bb.fetch_for_gpr(ir, args, GP::Rsi);
+    } else {
+        bb.write_back_callargs_and_dst(ir, callsite);
+        ir.inline(move |gen, _, _| {
+            // TODO: we must check if the parent fiber exits.
             monoasm! { &mut gen.jit,
                 lea rdi, [r14 - (jitgen::conv(args))];
                 movq rsi, (pos_num);
@@ -93,8 +90,10 @@ fn fiber_yield_inline(
                 call rax;
                 movq rsi, rax;
             }
-        }
-
+        });
+    }
+    ir.inline(move |gen, _, _| {
+        let fiber_yield = gen.yield_fiber;
         monoasm! { &mut gen.jit,
             movq rdi, rbx;
             movq rax, (fiber_yield);

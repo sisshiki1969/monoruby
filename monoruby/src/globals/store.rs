@@ -370,6 +370,7 @@ impl Store {
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
+            id,
             name,
             pos_num,
             kw_pos,
@@ -685,6 +686,8 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub struct CallSiteInfo {
+    /// Call site id.
+    pub id: CallSiteId,
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Position of the receiver.

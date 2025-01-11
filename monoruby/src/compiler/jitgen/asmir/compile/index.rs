@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    ///
+    /*///
     /// Generic index operation.
     ///
     /// Execute `base`[[`idx`]] and store the result to *rax*.
@@ -31,7 +31,7 @@ impl Codegen {
             call rax;
         }
         self.xmm_restore(using);
-    }
+    }*/
 
     ///
     /// Array index operation with u16 index `idx``.
@@ -123,7 +123,7 @@ impl Codegen {
     ///
     /// ### in
     /// - rdi: base: Array
-    /// - r15: result Value
+    /// - rdx: result Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -147,7 +147,7 @@ impl Codegen {
     /// ### in
     /// - rdi: base Array
     /// - rsi: index Fixnum
-    /// - r15: Value
+    /// - rdx: Value
     ///    
     /// ### destroy
     /// - caller save registers
@@ -228,7 +228,7 @@ impl Codegen {
     /// ### in
     /// - rdi: base: Array
     /// - rsi: index non-negative i64
-    /// - r15: result Value
+    /// - rdx: result Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -246,7 +246,7 @@ impl Codegen {
             cmpq rax, rsi;
             // upper bound check
             jle  generic;
-            movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], r15;
+            movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rdx;
         exit:
         };
 
@@ -258,15 +258,15 @@ impl Codegen {
             cmpq rax, rsi;
             jle generic;
             movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-            movq [rdi + rsi * 8], r15;
+            movq [rdi + rsi * 8], rdx;
             jmp  exit;
         };
         self.jit.bind_label(generic);
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
+            movq r8, rdx;
             movq rdx, rbx;
             movq rcx, r12;
-            movq r8, r15;
             movq rax, (set_array_integer_index);
             call rax;
         };

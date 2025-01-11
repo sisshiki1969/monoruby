@@ -25,9 +25,8 @@ pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::asmir::AsmIr,
     &crate::jitgen::JitContext,
     &Store,
-    CallSiteId,
+    &CallSiteInfo,
     ClassId,
-    BytecodePtr,
 ) -> bool;
 
 #[derive(Debug, Clone, PartialEq)]

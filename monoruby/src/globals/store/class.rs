@@ -438,14 +438,12 @@ impl ClassInfoTable {
     /// Check whether a method *name* of class *class_id* exists.
     ///
     pub(crate) fn check_super(
-        &mut self,
-        self_val: Value,
+        &self,
+        self_class: ClassId,
         class_context: ClassId,
         name: IdentId,
     ) -> Option<FuncId> {
-        let class_id = self_val.class();
-
-        let mut module = self.get_module(class_id);
+        let mut module = self.get_module(self_class);
         loop {
             if module.id() == class_context {
                 module = module.superclass().unwrap();

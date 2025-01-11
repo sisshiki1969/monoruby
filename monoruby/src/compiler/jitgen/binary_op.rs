@@ -16,14 +16,13 @@ impl BBContext {
     pub(super) fn gen_binop_integer(
         &mut self,
         ir: &mut AsmIr,
-        pc: BytecodePtr,
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
     ) {
         match kind {
             BinOpK::Add | BinOpK::Mul | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
-                let deopt = ir.new_deopt(self, pc);
+                let deopt = ir.new_deopt(self);
                 match mode {
                     OpMode::RR(lhs, rhs) => {
                         self.fetch_fixnum(ir, lhs, GP::Rdi, deopt);
@@ -33,60 +32,53 @@ impl BBContext {
                         self.fetch_fixnum(ir, slot, GP::Rdi, deopt);
                     }
                 }
-                self.integer_binop(ir, pc, kind, mode);
+                self.integer_binop(ir, kind, mode);
                 self.reg2acc_fixnum(ir, GP::Rdi, dst);
             }
             BinOpK::Sub => {
-                self.fetch_fixnum_binary(ir, pc, &mode);
-                self.integer_binop(ir, pc, kind, mode);
+                self.fetch_fixnum_binary(ir, &mode);
+                self.integer_binop(ir, kind, mode);
                 self.reg2acc_fixnum(ir, GP::Rdi, dst);
             }
             BinOpK::Exp => {
-                self.fetch_fixnum_mode(ir, &mode, pc);
-                self.unlink(dst);
-                self.integer_binop(ir, pc, kind, mode);
+                self.fetch_fixnum_mode(ir, &mode);
+                self.clear(dst);
+                self.integer_binop(ir, kind, mode);
                 self.reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
-                self.fetch_fixnum_mode(ir, &mode, pc);
-                self.unlink(dst);
-                self.integer_binop(ir, pc, kind, mode);
+                self.fetch_fixnum_mode(ir, &mode);
+                self.clear(dst);
+                self.integer_binop(ir, kind, mode);
                 self.reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    let deopt = ir.new_deopt(self, pc);
+                    let deopt = ir.new_deopt(self);
                     self.fetch_fixnum(ir, lhs, GP::Rdi, deopt);
-                    self.unlink(dst);
-                    self.integer_binop(ir, pc, kind, mode);
+                    self.clear(dst);
+                    self.integer_binop(ir, kind, mode);
                     self.reg2acc_fixnum(ir, GP::Rdi, dst);
                 }
                 _ => {
-                    self.fetch_fixnum_mode(ir, &mode, pc);
-                    self.unlink(dst);
-                    self.integer_binop(ir, pc, kind, mode);
+                    self.fetch_fixnum_mode(ir, &mode);
+                    self.clear(dst);
+                    self.integer_binop(ir, kind, mode);
                     self.reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
         }
     }
 
-    pub(super) fn gen_cmp_generic(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        kind: CmpKind,
-        info: BinOpInfo,
-    ) {
+    pub(super) fn gen_cmp_generic(&mut self, ir: &mut AsmIr, kind: CmpKind, info: BinOpInfo) {
         self.fetch_binary(ir, info.mode);
-        self.generic_cmp(ir, pc, kind);
+        self.generic_cmp(ir, kind);
         self.rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmpbr_generic(
         &mut self,
         ir: &mut AsmIr,
-        pc: BytecodePtr,
         kind: CmpKind,
         mode: OpMode,
         dst: Option<SlotId>,
@@ -94,17 +86,17 @@ impl BBContext {
         branch_dest: JitLabel,
     ) {
         self.fetch_binary(ir, mode);
-        self.unlink(dst);
-        self.clear();
-        self.generic_cmp(ir, pc, kind);
+        self.clear(dst);
+        self.clear_above_next_sp();
+        self.generic_cmp(ir, kind);
         ir.push(AsmInst::GenericCondBr {
             brkind,
             branch_dest,
         });
     }
 
-    pub(super) fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, pc: BytecodePtr, mode: &OpMode) {
-        let deopt = ir.new_deopt(self, pc);
+    pub(super) fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, mode: &OpMode) {
+        let deopt = ir.new_deopt(self);
         match mode {
             OpMode::RR(l, r) => {
                 self.fetch_fixnum(ir, *l, GP::Rdi, deopt);
@@ -119,8 +111,8 @@ impl BBContext {
         }
     }
 
-    fn fetch_fixnum_mode(&mut self, ir: &mut AsmIr, mode: &OpMode, pc: BytecodePtr) {
-        let deopt = ir.new_deopt(self, pc);
+    fn fetch_fixnum_mode(&mut self, ir: &mut AsmIr, mode: &OpMode) {
+        let deopt = ir.new_deopt(self);
         match mode {
             OpMode::RR(lhs, rhs) => {
                 self.fetch_fixnum(ir, *lhs, GP::Rdi, deopt);
@@ -151,9 +143,9 @@ impl BBContext {
     /// - caller save registers
     /// - stack
     ///
-    fn integer_binop(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: BinOpK, mode: OpMode) {
+    fn integer_binop(&self, ir: &mut AsmIr, kind: BinOpK, mode: OpMode) {
         let using_xmm = self.get_using_xmm();
-        let (deopt, error) = ir.new_deopt_error(self, pc);
+        let (deopt, error) = ir.new_deopt_error(self);
         ir.push(AsmInst::IntegerBinOp {
             kind,
             mode,
@@ -177,16 +169,16 @@ impl BBContext {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn generic_binop(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: BinOpK) {
+    pub(super) fn generic_binop(&self, ir: &mut AsmIr, kind: BinOpK) {
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::GenericBinOp { kind, using_xmm });
         ir.handle_error(error);
     }
 
-    pub(super) fn generic_cmp(&self, ir: &mut AsmIr, pc: BytecodePtr, kind: CmpKind) {
+    pub(super) fn generic_cmp(&self, ir: &mut AsmIr, kind: CmpKind) {
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::GenericCmp { kind, using_xmm });
         ir.handle_error(error);
     }
@@ -248,8 +240,8 @@ impl BBContext {
         }
     }
 
-    pub(super) fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo, pc: BytecodePtr) -> FMode {
-        let deopt = ir.new_deopt(self, pc);
+    pub(super) fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo) -> FMode {
+        let deopt = ir.new_deopt(self);
         let BinOpInfo {
             mode,
             lhs_class,
