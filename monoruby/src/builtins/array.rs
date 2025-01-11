@@ -208,16 +208,15 @@ fn array_size(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let dst = store[callid].dst;
-    ir.inline(move |gen, _| {
+    let dst = callsite.dst;
+    ir.inline(move |gen, _, _| {
         gen.get_array_length();
         monoasm! { &mut gen.jit,
             salq  rax, 1;
@@ -452,19 +451,18 @@ fn array_shl(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     recv_class: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, args, .. } = store[callid];
+    let CallSiteInfo { dst, args, .. } = *callsite;
     bb.fetch_for_gpr(ir, args, GP::Rsi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _| {
+    ir.inline(move |gen, _, _| {
         monoasm!( &mut gen.jit,
             movq rax, (ary_shl);
             call rax;

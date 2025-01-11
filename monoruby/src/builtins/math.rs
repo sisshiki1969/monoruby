@@ -101,21 +101,19 @@ fn math_sqrt(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _| {
+        ir.inline(move |gen, _, _| {
             monoasm!( &mut gen.jit,
                 sqrtsd xmm(fret), xmm(fsrc);
             );
@@ -128,22 +126,20 @@ fn math_cos(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
-        ir.inline(move |gen, _| {
+        ir.inline(move |gen, _, _| {
             gen.xmm_save(using_xmm);
             monoasm!( &mut gen.jit,
                 movq xmm0, xmm(fsrc);
@@ -163,22 +159,20 @@ fn math_sin(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let callsite = &store[callid];
     let CallSiteInfo { args, dst: ret, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = bb.xmm_write_enc(ret);
         let using_xmm = bb.get_using_xmm();
-        ir.inline(move |gen, _| {
+        ir.inline(move |gen, _, _| {
             gen.xmm_save(using_xmm);
             monoasm! { &mut gen.jit,
                 movq xmm0, xmm(fsrc);

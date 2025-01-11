@@ -79,19 +79,18 @@ fn object_object_id(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { recv, dst: ret, .. } = store[callid];
+    let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     bb.fetch_for_gpr(ir, recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |gen, _| {
+    ir.inline(move |gen, _, _| {
         monoasm! {&mut gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
@@ -123,36 +122,25 @@ pub fn object_send(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
-    if !callsite.is_simple() && !callsite.object_send_single_splat() {
+    if !callsite.is_simple() && no_splat {
         return false;
     }
-    let CallSiteInfo {
-        recv,
-        dst,
-        args,
-        pos_num,
-        block_fid,
-        block_arg,
-        ..
-    } = *callsite;
+
     bb.write_back_callargs_and_dst(ir, callsite);
     bb.writeback_acc(ir);
     let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
-    ir.inline(move |gen, labels| {
+    let error = ir.new_error(bb);
+    let callid = callsite.id;
+    ir.inline(move |gen, store, labels| {
         let error = labels[error];
-        gen.object_send_inline(
-            callid, recv, args, pos_num, block_fid, block_arg, using_xmm, error, no_splat,
-        );
+        gen.object_send_inline(callid, store, using_xmm, error, no_splat);
     });
-    bb.reg2acc(ir, GP::Rax, dst);
+    bb.reg2acc(ir, GP::Rax, callsite.dst);
     true
 }
 

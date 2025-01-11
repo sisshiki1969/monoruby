@@ -14,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["===", "eql?"], eq, 1);
-    globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
+    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
@@ -213,6 +213,52 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let key = lfp.arg(0);
     let h = Hashmap::new(lfp.self_val());
     h.index(vm, globals, key)
+}
+
+fn hash_index(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    _: ClassId,
+) -> bool {
+    if !callsite.is_simple() {
+        return false;
+    }
+    if callsite.pos_num != 1 {
+        return false;
+    }
+    bb.fetch_for_gpr(ir, callsite.args, GP::Rcx);
+    ir.inline(|gen, _, _| {
+        monoasm! {&mut gen.jit,
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (hashindex);
+            call rax;
+        }
+    });
+    let error = ir.new_error(bb);
+    ir.handle_error(error);
+    bb.rax2acc(ir, callsite.dst);
+    true
+}
+
+extern "C" fn hashindex(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+) -> Option<Value> {
+    let h = base.as_hash();
+    match h.index(vm, globals, key) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 ///

@@ -213,6 +213,7 @@ impl JitContext {
         self.iseq_id
     }
 
+    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn jit_type(&self) -> &JitType {
         &self.jit_type
     }
@@ -357,5 +358,49 @@ impl JitContext {
                 unused,
             },
         );
+    }
+
+    ///
+    /// Check whether a method or `super` of class *class_id* exists in compile time.
+    ///
+    pub(super) fn jit_check_call(
+        &mut self,
+        store: &Store,
+        recv_class: ClassId,
+        name: Option<IdentId>,
+    ) -> Option<FuncId> {
+        if let Some(name) = name {
+            // for method call
+            self.jit_check_method(store, recv_class, name)
+        } else {
+            // for super
+            self.jit_check_super(store, recv_class)
+        }
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists in compile time.
+    ///
+    pub(super) fn jit_check_method(
+        &self,
+        store: &Store,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        let class_version = self.class_version;
+        store
+            .check_method_for_class(class_id, name, class_version)?
+            .func_id()
+    }
+
+    ///
+    /// Check whether `super` of class *class_id* exists in compile time.
+    ///
+    fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
+        // for super
+        let fid = store[self.iseq_id()].func_id();
+        let class_context = store[fid].owner_class().unwrap();
+        let func_name = store[fid].name().unwrap();
+        store.check_super(recv_class, class_context, func_name)
     }
 }

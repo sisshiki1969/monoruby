@@ -74,9 +74,9 @@ impl FuncData {
         self.codeptr = Some(codeptr);
     }
 
-    pub fn stack_offset(&self) -> u16 {
+    /*pub fn stack_offset(&self) -> u16 {
         self.ofs
-    }
+    }*/
 
     pub fn meta(&self) -> Meta {
         self.meta
@@ -756,9 +756,9 @@ impl FuncInfo {
         )
     }
 
-    pub(crate) fn stack_offset(&self) -> u16 {
+    /*pub(crate) fn stack_offset(&self) -> u16 {
         self.data.stack_offset()
-    }
+    }*/
 
     pub(crate) fn name(&self) -> Option<IdentId> {
         self.ext.name

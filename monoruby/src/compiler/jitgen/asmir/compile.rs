@@ -208,7 +208,7 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
-            AsmInst::GuardClassVersionWithRecovery(
+            /*AsmInst::GuardClassVersionWithRecovery(
                 fid,
                 cached_version,
                 callid,
@@ -226,7 +226,7 @@ impl Codegen {
                     deopt,
                     error,
                 );
-            }
+            }*/
             AsmInst::GuardClassVersion(cached_version, deopt) => {
                 let deopt = labels[deopt];
                 self.guard_class_version(cached_version, deopt);
@@ -548,14 +548,14 @@ impl Codegen {
                 self.store_constant(id, using_xmm);
             }
 
-            AsmInst::GenericIndex {
+            /*AsmInst::GenericIndex {
                 base,
                 idx,
                 pc,
                 using_xmm,
             } => {
                 self.generic_index(using_xmm, base, idx, pc);
-            }
+            }*/
             AsmInst::ArrayU16Index { idx } => {
                 self.gen_array_u16_index(idx);
             }
@@ -577,11 +577,9 @@ impl Codegen {
                 error,
             } => {
                 self.gen_array_u16_index_assign(using_xmm, labels[error], idx);
-                //self.handle_error(labels[error]);
             }
             AsmInst::ArrayIndexAssign { using_xmm, error } => {
                 self.gen_array_index_assign(using_xmm, labels[error]);
-                //self.handle_error(labels[error]);
             }
 
             AsmInst::NewArray { callid, using_xmm } => {
@@ -786,7 +784,7 @@ impl Codegen {
                 self.cond_br(branch_dest, brkind);
             }
 
-            AsmInst::Inline(proc) => (proc.proc)(self, labels),
+            AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
         }
     }
 

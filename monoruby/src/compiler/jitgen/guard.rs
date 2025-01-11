@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    ///
+    /*///
     /// Class version guard for JIT.
     ///
     /// Check the cached class version, and if the version is changed, call `find_method` and
@@ -70,19 +70,13 @@ impl Codegen {
             jmp  deopt;
         }
         self.jit.select_page(0);
-    }
+    }*/
 
     ///
     /// Class version guard for JIT.
     ///
     /// Check the cached class version.
     /// If different, jump to `deopt`.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
     ///
     /// ### destroy
     /// - rax
@@ -129,65 +123,65 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, deopt: DestLabel) {
+    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: DestLabel) {
         assert_eq!(self.jit.get_page(), 0);
         self.jit.select_page(1);
 
-        let deopt = if reg != GP::Rdi {
+        let fail = if reg != GP::Rdi {
             let label = self.jit.label();
             monoasm!( &mut self.jit,
             label:
                 movq rdi, R(reg as _);
-                jmp deopt;
+                jmp fail;
             );
             label
         } else {
-            deopt
+            fail
         };
         self.jit.select_page(0);
         match class_id {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,
                     testq R(reg as _), 0b001;
-                    jz deopt;
+                    jz fail;
                 );
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
                     testq R(reg as _), 0b001;
-                    jnz deopt;
+                    jnz fail;
                     testq R(reg as _), 0b010;
                     jnz exit;
                 );
-                self.guard_rvalue(reg, FLOAT_CLASS, deopt);
+                self.guard_rvalue(reg, FLOAT_CLASS, fail);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
                 monoasm!( &mut self.jit,
                     cmpq R(reg as _), (NIL_VALUE);
-                    jnz deopt;
+                    jnz fail;
                 );
             }
             SYMBOL_CLASS => {
                 monoasm!( &mut self.jit,
                     cmpb R(reg as _), (TAG_SYMBOL);
-                    jnz deopt;
+                    jnz fail;
                 );
             }
             TRUE_CLASS => {
                 monoasm!( &mut self.jit,
                     cmpq R(reg as _), (TRUE_VALUE);
-                    jnz deopt;
+                    jnz fail;
                 );
             }
             FALSE_CLASS => {
                 monoasm!( &mut self.jit,
                     cmpq R(reg as _), (FALSE_VALUE);
-                    jnz deopt;
+                    jnz fail;
                 );
             }
-            _ => self.guard_rvalue(reg, class_id, deopt),
+            _ => self.guard_rvalue(reg, class_id, fail),
         }
         //if reg != GP::Rdi {
         //    monoasm!( &mut self.jit,

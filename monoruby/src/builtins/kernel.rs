@@ -88,24 +88,24 @@ fn kernel_nil(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    if bb.is_nil(store[callid].recv) {
-        if let Some(dst) = store[callid].dst {
-            bb.store_concrete_value(dst, Value::bool(true));
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+    if bb.is_nil(recv) {
+        if let Some(dst) = dst {
+            bb.def_concrete_value(dst, Value::bool(true));
         }
-    } else if bb.is_not_nil(store[callid].recv) {
-        if let Some(dst) = store[callid].dst {
-            bb.store_concrete_value(dst, Value::bool(false));
+    } else if bb.is_not_nil(recv) {
+        if let Some(dst) = dst {
+            bb.def_concrete_value(dst, Value::bool(false));
         }
     } else {
-        ir.inline(|gen, _| {
+        ir.inline(|gen, _, _| {
             monoasm! { &mut gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rsi, (TRUE_VALUE);
@@ -113,7 +113,7 @@ fn kernel_nil(
                 cmoveqq rax, rsi;
             }
         });
-        bb.rax2acc(ir, store[callid].dst);
+        bb.rax2acc(ir, dst);
     }
     true
 }
@@ -122,21 +122,20 @@ fn kernel_block_given(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     jitctx: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let dst = store[callid].dst;
+    let dst = callsite.dst;
     if jitctx.has_block_info() {
         if let Some(dst) = dst {
-            bb.store_concrete_value(dst, Value::bool(true));
+            bb.def_concrete_value(dst, Value::bool(true));
         }
     } else {
-        ir.inline(|gen, _| {
+        ir.inline(|gen, _, _| {
             monoasm! { &mut gen.jit,
                 movq rax, [r14 - (LFP_BLOCK)];
                 testq rax, rax;

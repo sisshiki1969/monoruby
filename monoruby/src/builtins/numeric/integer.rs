@@ -234,18 +234,17 @@ fn integer_tof(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, .. } = store[callid];
+    let CallSiteInfo { dst, .. } = *callsite;
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ret);
-        ir.inline(move |gen, _| {
+        ir.inline(move |gen, _, _| {
             monoasm! { &mut gen.jit,
                 sarq  rdi, 1;
                 cvtsi2sdq xmm(fret), rdi;
@@ -397,21 +396,20 @@ fn integer_shr(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { dst, args, .. } = store[callid];
-    let deopt = ir.new_deopt(bb, pc);
+    let CallSiteInfo { dst, args, .. } = *callsite;
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args) {
-        ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
+        ir.inline(move |gen, _, _| gen.gen_shr_imm(rhs));
     } else {
         bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
-        ir.inline(move |gen, labels| gen.gen_shr(labels[deopt]));
+        ir.inline(move |gen, _, labels| gen.gen_shr(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -432,28 +430,27 @@ fn integer_shl(
     bb: &mut BBContext,
     ir: &mut AsmIr,
     _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
+    _: &Store,
+    callsite: &CallSiteInfo,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
-    if !store[callid].is_simple() {
+    if !callsite.is_simple() {
         return false;
     }
     let CallSiteInfo {
         dst, args, recv, ..
-    } = store[callid];
-    let deopt = ir.new_deopt(bb, pc);
+    } = *callsite;
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {
-        ir.inline(move |gen, labels| gen.gen_shl_rhs_imm(rhs, labels[deopt]));
+        ir.inline(move |gen, _, labels| gen.gen_shl_rhs_imm(rhs, labels[deopt]));
     } else if let Some(lhs) = bb.is_fixnum_literal(recv) {
         bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
-        ir.inline(move |gen, labels| gen.gen_shl_lhs_imm(lhs, labels[deopt]));
+        ir.inline(move |gen, _, labels| gen.gen_shl_lhs_imm(lhs, labels[deopt]));
     } else {
         bb.fetch_fixnum(ir, args, GP::Rcx, deopt);
-        ir.inline(move |gen, labels| gen.gen_shl(labels[deopt]));
+        ir.inline(move |gen, _, labels| gen.gen_shl(labels[deopt]));
     }
     bb.reg2acc_fixnum(ir, GP::Rdi, dst);
     true

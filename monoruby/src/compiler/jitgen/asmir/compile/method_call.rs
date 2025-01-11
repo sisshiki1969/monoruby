@@ -626,15 +626,19 @@ impl Codegen {
     pub(crate) fn object_send_inline(
         &mut self,
         callid: CallSiteId,
-        recv: SlotId,
-        args: SlotId,
-        pos_num: usize,
-        block_fid: Option<FuncId>,
-        block_arg: Option<SlotId>,
+        store: &Store,
         using_xmm: UsingXmm,
         error: DestLabel,
         no_splat: bool,
     ) {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            block_fid,
+            block_arg,
+            ..
+        } = store[callid];
         let cache = self.jit.data(std::mem::size_of::<Cache>());
 
         self.check_version(cache);

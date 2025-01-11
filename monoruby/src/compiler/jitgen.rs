@@ -91,58 +91,48 @@ pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
 
+///
+/// Context of an each basic block.
+///
 #[derive(Debug, Clone)]
-pub(crate) struct BBContextInner {
+pub(crate) struct BBContext {
     /// state stack slots.
     slot_state: SlotContext,
     /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
+    pc: Option<BytecodePtr>,
 }
 
-impl std::ops::Deref for BBContextInner {
+impl std::ops::Deref for BBContext {
     type Target = SlotContext;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
 }
 
-impl std::ops::DerefMut for BBContextInner {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.slot_state
-    }
-}
-
-///
-/// Context of an each basic block.
-///
-#[derive(Debug, Clone)]
-pub(crate) struct BBContext {
-    inner: BBContextInner,
-}
-
-impl std::ops::Deref for BBContext {
-    type Target = BBContextInner;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
 impl std::ops::DerefMut for BBContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        &mut self.slot_state
     }
 }
 
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            inner: BBContextInner {
-                slot_state: SlotContext::from(cc),
-                sp: SlotId(cc.local_num() as u16),
-                next_sp: SlotId(cc.local_num() as u16),
-            },
+            slot_state: SlotContext::from(cc),
+            sp: SlotId(cc.local_num() as u16),
+            next_sp: SlotId(cc.local_num() as u16),
+            pc: None,
         }
+    }
+
+    fn pc(&self) -> BytecodePtr {
+        self.pc.unwrap()
+    }
+
+    fn set_pc(&mut self, pc: BytecodePtr) {
+        self.pc = Some(pc);
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {
@@ -215,24 +205,18 @@ impl BBContext {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            self.clear();
-            if let Some(acc) = self.clear_r15()
-                && acc < self.sp
-                && acc != dst
-            {
-                ir.acc2stack(acc);
+            self.clear_above_next_sp();
+            if !self.is_r15(dst) {
+                self.writeback_acc(ir);
             }
-            self.store_r15(dst, guarded);
+            self.def_acc(dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
     }
 
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.clear_r15()
-            && slot < self.sp
-        {
-            ir.acc2stack(slot);
-        }
+        let sp = self.sp;
+        self.slot_state.write_back_acc(ir, sp);
     }
 }
 
@@ -371,7 +355,7 @@ impl MergeContext {
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.unlink(*reg));
+        unused.iter().for_each(|reg| self.clear(*reg));
     }
 }
 
