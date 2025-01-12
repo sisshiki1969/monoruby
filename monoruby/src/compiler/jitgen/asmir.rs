@@ -427,7 +427,7 @@ impl AsmIr {
         cached_version: usize,
         deopt: AsmDeopt,
     ) {
-        let fdst = bbctx.store_new_both_float(dst);
+        let fdst = bbctx.def_new_both_float(dst);
         self.push(AsmInst::LoadFloatConstant {
             fdst,
             f,
@@ -494,7 +494,7 @@ impl AsmIr {
             if let Some(block_arg) = caller.block_arg {
                 bb.write_back_slot(self, block_arg);
             }
-            let ofs = if (args..args + pos_num).any(|reg| matches!(bb.slot(reg), LinkMode::Xmm(_)))
+            let ofs = if (args..args + pos_num).any(|reg| matches!(bb.mode(reg), LinkMode::Xmm(_)))
             {
                 (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
             } else {
@@ -536,7 +536,7 @@ impl AsmIr {
         // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
         let xmm_flag = match mode {
             OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
-                matches!(bb.slot(rhs), LinkMode::Xmm(_))
+                matches!(bb.mode(rhs), LinkMode::Xmm(_))
             }
             OpMode::RI(_, _) => false,
         };
@@ -650,7 +650,7 @@ impl AsmIr {
     ///
     /// ### in
     /// - rdi: base: Array
-    /// - r15: result Value
+    /// - rdx: result Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -665,6 +665,17 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Aray index assign operation.
+    ///
+    /// ### in
+    /// - rdi: base Array
+    /// - rsi: index Fixnum
+    /// - rdx: result Value
+    ///    
+    /// ### destroy
+    /// - caller save registers
+    ///
     pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BytecodePtr) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb, pc);
@@ -1177,7 +1188,7 @@ pub(super) enum AsmInst {
     ///
     /// ### in
     /// - rdi: base: Array
-    /// - r15: result Value
+    /// - rdx: result Value
     ///
     /// ### destroy
     /// - caller save registers
@@ -1193,7 +1204,7 @@ pub(super) enum AsmInst {
     /// ### in
     /// - rdi: base Array
     /// - rsi: index Fixnum
-    /// - r15: Value
+    /// - rdx: Value
     ///    
     /// ### destroy
     /// - caller save registers

@@ -10,7 +10,7 @@ impl JitContext {
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        bbctx.unlink(dst);
+        bbctx.clear(dst);
         ir.stack2reg(SlotId(0), GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         let ivar_heap = if is_object_ty && ivarid.is_inline() {
@@ -57,7 +57,7 @@ impl JitContext {
 
 impl BBContext {
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
-        self.unlink(dst);
+        self.clear(dst);
         let using_xmm = self.get_using_xmm();
         ir.push(AsmInst::LoadGVar { name, using_xmm });
         self.rax2acc(ir, dst);
@@ -80,7 +80,7 @@ impl BBContext {
         name: IdentId,
         dst: SlotId,
     ) {
-        self.unlink(dst);
+        self.clear(dst);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self, pc);
         ir.push(AsmInst::LoadCVar { name, using_xmm });
@@ -89,7 +89,7 @@ impl BBContext {
     }
 
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
-        self.unlink(dst);
+        self.clear(dst);
         let using_xmm = self.get_using_xmm();
         ir.push(AsmInst::CheckCVar { name, using_xmm });
         self.rax2acc(ir, dst);

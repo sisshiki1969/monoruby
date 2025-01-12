@@ -26,7 +26,7 @@ impl JitContext {
             );
         } else {
             for i in (1 + self.local_num())..self.total_reg_num() {
-                bbctx.store_concrete_value(SlotId(i as u16), Value::nil());
+                bbctx.def_concrete_value(SlotId(i as u16), Value::nil());
             }
             bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
@@ -114,7 +114,7 @@ impl JitContext {
                 CompileResult::ExitLoop => break,
             }
 
-            bbctx.clear();
+            bbctx.clear_above_next_sp();
             bbctx.sp = bbctx.next_sp;
         }
 
@@ -247,21 +247,21 @@ impl JitContext {
                 }
             }
             TraceIr::Integer(dst, i) => {
-                bbctx.unlink(dst);
-                bbctx.store_concrete_value(dst, Value::i32(i));
+                bbctx.clear(dst);
+                bbctx.def_concrete_value(dst, Value::i32(i));
             }
             TraceIr::Symbol(dst, id) => {
-                bbctx.unlink(dst);
-                bbctx.store_concrete_value(dst, Value::symbol(id));
+                bbctx.clear(dst);
+                bbctx.def_concrete_value(dst, Value::symbol(id));
             }
             TraceIr::Nil(dst) => {
-                bbctx.unlink(dst);
-                bbctx.store_concrete_value(dst, Value::nil());
+                bbctx.clear(dst);
+                bbctx.def_concrete_value(dst, Value::nil());
             }
             TraceIr::Literal(dst, val) => {
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 if val.is_packed_value() || val.is_float() {
-                    bbctx.store_concrete_value(dst, val);
+                    bbctx.def_concrete_value(dst, val);
                 } else {
                     ir.deep_copy_lit(bbctx, val);
                     bbctx.reg2acc_concrete_value(ir, GP::Rax, dst, val);
@@ -270,18 +270,18 @@ impl JitContext {
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = store[callid];
                 bbctx.write_back_range(ir, args, pos_num as u16);
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 ir.new_array(bbctx, callid);
                 bbctx.reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { dst, func_id } => {
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 ir.new_lambda(bbctx, func_id);
                 bbctx.rax2acc(ir, dst);
             }
             TraceIr::Hash { dst, args, len } => {
                 bbctx.write_back_range(ir, args, len * 2);
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 ir.new_hash(bbctx, args, len as _);
                 bbctx.rax2acc(ir, dst);
             }
@@ -292,13 +292,13 @@ impl JitContext {
                 exclude_end,
             } => {
                 bbctx.write_back_slots(ir, &[start, end]);
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 ir.new_range(bbctx, pc, start, end, exclude_end);
                 bbctx.rax2acc(ir, dst);
             }
 
             TraceIr::LoadConst(dst, id) => {
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
 
                 if let Some(cache) = &store[id].cache {
                     let base_slot = store[id].base;
@@ -320,11 +320,11 @@ impl JitContext {
                 ir.push(AsmInst::StoreConstant { id, using_xmm });
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                bbctx.unlink(ret);
+                bbctx.clear(ret);
                 ir.block_arg_proxy(ret, outer);
             }
             TraceIr::BlockArg(ret, outer) => {
-                bbctx.unlink(ret);
+                bbctx.clear(ret);
                 ir.block_arg(bbctx, pc, ret, outer);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
@@ -373,12 +373,12 @@ impl JitContext {
                 bbctx.jit_store_gvar(ir, name, val);
             }
             TraceIr::LoadSvar { dst, id } => {
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 ir.load_svar(bbctx, id);
                 bbctx.rax2acc(ir, dst);
             }
             TraceIr::LoadDynVar(dst, src) => {
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 if !dst.is_self() {
                     ir.push(AsmInst::LoadDynVar { src });
                     bbctx.rax2acc(ir, dst);
@@ -390,14 +390,14 @@ impl JitContext {
             }
             TraceIr::Not { dst, src, .. } => {
                 if bbctx.is_truthy(src) {
-                    bbctx.unlink(dst);
-                    bbctx.store_concrete_value(dst, Value::bool(false));
+                    bbctx.clear(dst);
+                    bbctx.def_concrete_value(dst, Value::bool(false));
                 } else if bbctx.is_falsy(src) {
-                    bbctx.unlink(dst);
-                    bbctx.store_concrete_value(dst, Value::bool(true));
+                    bbctx.clear(dst);
+                    bbctx.def_concrete_value(dst, Value::bool(true));
                 } else {
                     bbctx.fetch_for_gpr(ir, src, GP::Rdi);
-                    bbctx.unlink(dst);
+                    bbctx.clear(dst);
                     ir.push(AsmInst::Not);
                     bbctx.rax2acc(ir, dst);
                 }
@@ -473,12 +473,12 @@ impl JitContext {
             TraceIr::FCmp { kind, info } => {
                 if kind != CmpKind::Cmp {
                     let mode = bbctx.fmode(ir, info, pc);
-                    bbctx.unlink(info.dst);
-                    bbctx.clear();
+                    bbctx.clear(info.dst);
+                    bbctx.clear_above_next_sp();
                     ir.push(AsmInst::FloatCmp { kind, mode });
                 } else {
                     bbctx.fetch_binary(ir, info.mode);
-                    bbctx.unlink(info.dst);
+                    bbctx.clear(info.dst);
                     bbctx.generic_cmp(ir, pc, kind);
                 }
                 bbctx.rax2acc(ir, info.dst);
@@ -512,8 +512,8 @@ impl JitContext {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
                 let mode = bbctx.fmode(ir, info, pc);
-                bbctx.unlink(info.dst);
-                bbctx.clear();
+                bbctx.clear(info.dst);
+                bbctx.clear_above_next_sp();
                 ir.float_cmp_br(mode, kind, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
@@ -527,8 +527,8 @@ impl JitContext {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
                 bbctx.fetch_fixnum_binary(ir, pc, &mode);
-                bbctx.unlink(dst);
-                bbctx.clear();
+                bbctx.clear(dst);
+                bbctx.clear_above_next_sp();
                 ir.integer_cmp_br(mode, kind, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
@@ -574,7 +574,7 @@ impl JitContext {
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 bbctx.write_back_range(ir, arg, len);
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 let error = ir.new_error(bbctx, pc);
                 ir.concat_str(bbctx, arg, len);
                 ir.handle_error(error);
@@ -582,7 +582,7 @@ impl JitContext {
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 bbctx.write_back_range(ir, arg, len);
-                bbctx.unlink(dst);
+                bbctx.clear(dst);
                 let error = ir.new_error(bbctx, pc);
                 ir.concat_regexp(bbctx, arg, len);
                 ir.handle_error(error);
@@ -594,7 +594,7 @@ impl JitContext {
             } => {
                 bbctx.fetch_for_gpr(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
-                    bbctx.unlink(SlotId(reg));
+                    bbctx.clear(SlotId(reg));
                 }
                 ir.expand_array(bbctx, dst, len);
             }

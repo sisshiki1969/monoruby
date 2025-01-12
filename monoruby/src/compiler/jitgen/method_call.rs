@@ -193,8 +193,8 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         ir.set_arguments(store, bbctx, callid, callee_fid, pc);
-        bbctx.unlink(store[callid].dst);
-        bbctx.clear();
+        bbctx.clear(store[callid].dst);
+        bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::Send {
@@ -228,8 +228,8 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         ir.set_arguments(store, bbctx, callid, callee_fid, pc);
-        bbctx.unlink(store[callid].dst);
-        bbctx.clear();
+        bbctx.clear(store[callid].dst);
+        bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::SendInlined {
@@ -263,8 +263,8 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
         ir.set_arguments(store, bbctx, callid, store[block_iseq].func_id(), pc);
-        bbctx.unlink(dst);
-        bbctx.clear();
+        bbctx.clear(dst);
+        bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx, pc);
         bbctx.writeback_acc(ir);
         let block_entry = self.compile_inline_method(store, block_iseq, block_self, None);
@@ -361,8 +361,8 @@ impl BBContext {
 
         ir.set_binop_arguments(store, self, fid, mode);
 
-        self.unlink(dst);
-        self.clear();
+        self.clear(dst);
+        self.clear_above_next_sp();
         let error = ir.new_error(self, pc);
         self.writeback_acc(ir);
         ir.push(AsmInst::BinopCached {

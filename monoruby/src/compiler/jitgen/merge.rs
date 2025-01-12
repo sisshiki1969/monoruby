@@ -98,18 +98,18 @@ impl JitContext {
 
         let mut bbctx = BBContext::new(self);
         for (slot, coerced) in use_set {
-            match target.slot(slot) {
+            match target.mode(slot) {
                 LinkMode::Stack => {}
                 LinkMode::ConcreteValue(v) => {
                     if v.is_float() {
-                        bbctx.store_new_xmm(slot);
+                        bbctx.def_new_xmm(slot);
                     }
                 }
                 LinkMode::Xmm(r) if !coerced => {
-                    bbctx.store_xmm(slot, r);
+                    bbctx.def_xmm(slot, r);
                 }
                 LinkMode::Both(r) | LinkMode::Xmm(r) => {
-                    bbctx.store_both(slot, r, Guarded::Value);
+                    bbctx.def_both(slot, r, Guarded::Value);
                 }
                 LinkMode::Accumulator => unreachable!(),
             };
@@ -194,7 +194,7 @@ impl BBContext {
     ///
     fn remove_unused(&mut self, unused: &[SlotId]) {
         for r in unused {
-            self.unlink(*r);
+            self.clear(*r);
         }
     }
 
@@ -211,84 +211,14 @@ impl BBContext {
 
         for i in 0..len {
             let slot = SlotId(i as u16);
-            let guarded = target.guarded(slot);
-            if target.slot(slot) == LinkMode::Stack {
+            if target.mode(slot) == LinkMode::Stack {
                 self.write_back_slot(ir, slot);
-                self.set_slot(slot, LinkMode::Stack, guarded);
             };
         }
 
         for i in 0..len {
             let slot = SlotId(i as u16);
-            let guarded = target.guarded(slot);
-            match (self.slot(slot), target.slot(slot)) {
-                (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
-                    if l != r {
-                        self.to_xmm(ir, slot, l, r);
-                    }
-                }
-                (LinkMode::Both(l), LinkMode::Xmm(r)) => {
-                    let deopt = ir.new_deopt(&self, pc + 1);
-                    ir.stack2reg(slot, GP::Rax);
-                    ir.guard_float(GP::Rax, deopt);
-                    if l == r {
-                        // Both(l) -> Xmm(l)
-                        self.set_xmm(slot, l);
-                    } else {
-                        self.to_xmm(ir, slot, l, r);
-                    }
-                }
-                (LinkMode::Stack, LinkMode::Stack) => {}
-                (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    ir.xmm2stack(l, slot);
-                    if l == r {
-                        self.set_both_float(slot, l);
-                    } else {
-                        self.to_both(ir, slot, l, r, guarded);
-                    }
-                }
-                (LinkMode::Both(l), LinkMode::Both(r)) => {
-                    if l != r {
-                        self.to_both(ir, slot, l, r, guarded);
-                    }
-                }
-                (LinkMode::Stack, LinkMode::Both(r)) => {
-                    let deopt = ir.new_deopt(&self, pc + 1);
-                    ir.stack2reg(slot, GP::Rax);
-                    ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
-                    self.store_both(slot, r, guarded);
-                }
-                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
-                (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
-                    if let Some(f) = l.try_float() {
-                        self.store_xmm(slot, r);
-                        ir.f64toxmm(f, r);
-                    } else {
-                        unreachable!()
-                    }
-                }
-                (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
-            }
-        }
-    }
-
-    /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Xmm.
-    fn to_xmm(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm) {
-        if self.is_xmm_vacant(r) {
-            self.store_xmm(slot, r);
-            ir.xmm_move(l, r);
-        } else {
-            self.xmm_swap(ir, l, r);
-        }
-    }
-
-    /// Generate bridge AsmIr from LinkMode::Xmm/Both to LinkMode::Both.
-    fn to_both(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: Guarded) {
-        if self.is_xmm_vacant(r) {
-            self.store_both(slot, r, guarded);
-            ir.xmm_move(l, r);
-        } else {
-            self.xmm_swap(ir, l, r);
+            self.gen_bridge(ir, target, slot, pc);
         }
     }
 }

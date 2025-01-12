@@ -98,11 +98,11 @@ fn kernel_nil(
     }
     if bb.is_nil(store[callid].recv) {
         if let Some(dst) = store[callid].dst {
-            bb.store_concrete_value(dst, Value::bool(true));
+            bb.def_concrete_value(dst, Value::bool(true));
         }
     } else if bb.is_not_nil(store[callid].recv) {
         if let Some(dst) = store[callid].dst {
-            bb.store_concrete_value(dst, Value::bool(false));
+            bb.def_concrete_value(dst, Value::bool(false));
         }
     } else {
         ir.inline(|gen, _| {
@@ -133,7 +133,7 @@ fn kernel_block_given(
     let dst = store[callid].dst;
     if jitctx.has_block_info() {
         if let Some(dst) = dst {
-            bb.store_concrete_value(dst, Value::bool(true));
+            bb.def_concrete_value(dst, Value::bool(true));
         }
     } else {
         ir.inline(|gen, _| {

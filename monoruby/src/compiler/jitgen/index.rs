@@ -16,7 +16,7 @@ impl BBContext {
             let deopt = ir.new_deopt(self, pc);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
-                self.unlink(dst);
+                self.clear(dst);
                 ir.array_u16_index(idx);
             } else {
                 self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
@@ -24,7 +24,7 @@ impl BBContext {
             }
         } else {
             self.write_back_slots(ir, &[base, idx]);
-            self.unlink(dst);
+            self.clear(dst);
             ir.generic_index(self, base, idx, pc);
         }
         self.rax2acc(ir, dst);
@@ -45,11 +45,11 @@ impl BBContext {
             let deopt = ir.new_deopt(self, pc);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
-                self.fetch_for_gpr(ir, src, GP::R15);
+                self.fetch_for_gpr(ir, src, GP::Rdx);
                 ir.array_u16_index_assign(self, idx, pc);
             } else {
                 self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
-                self.fetch_for_gpr(ir, src, GP::R15);
+                self.fetch_for_gpr(ir, src, GP::Rdx);
                 ir.array_index_assign(self, pc);
             }
         } else {
