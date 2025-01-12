@@ -82,7 +82,6 @@ fn object_object_id(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
@@ -126,7 +125,6 @@ pub fn object_send(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -145,7 +143,7 @@ pub fn object_send(
     bb.write_back_callargs_and_dst(ir, callsite);
     bb.writeback_acc(ir);
     let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
+    let error = ir.new_error(bb);
     ir.inline(move |gen, labels| {
         let error = labels[error];
         gen.object_send_inline(

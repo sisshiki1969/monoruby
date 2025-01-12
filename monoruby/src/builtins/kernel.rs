@@ -91,7 +91,6 @@ fn kernel_nil(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
@@ -125,7 +124,6 @@ fn kernel_block_given(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;

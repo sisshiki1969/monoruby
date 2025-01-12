@@ -60,7 +60,6 @@ fn fiber_yield_inline(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
@@ -71,7 +70,7 @@ fn fiber_yield_inline(
     } = *callsite;
     bb.write_back_callargs_and_dst(ir, callsite);
     let using_xmm = bb.get_using_xmm();
-    let error = ir.new_error(bb, pc);
+    let error = ir.new_error(bb);
     ir.xmm_save(using_xmm);
     ir.inline(move |gen, _| {
         let fiber_yield = gen.yield_fiber;

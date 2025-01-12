@@ -358,4 +358,19 @@ impl JitContext {
             },
         );
     }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(crate) fn check_method_for_class(
+        &self,
+        store: &Store,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        let class_version = self.class_version;
+        store
+            .check_method_for_class(class_id, name, class_version)?
+            .func_id()
+    }
 }

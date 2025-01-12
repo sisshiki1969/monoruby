@@ -104,14 +104,13 @@ fn math_sqrt(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
     }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
@@ -131,14 +130,13 @@ fn math_cos(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
     }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ret);
@@ -166,14 +164,13 @@ fn math_sin(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
     }
     let callsite = &store[callid];
     let CallSiteInfo { args, dst: ret, .. } = *callsite;
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = bb.xmm_write_enc(ret);

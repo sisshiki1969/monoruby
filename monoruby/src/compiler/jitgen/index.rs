@@ -10,10 +10,9 @@ impl BBContext {
         idx: SlotId,
         base_class: ClassId,
         idx_class: ClassId,
-        pc: BytecodePtr,
     ) {
         if store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
-            let deopt = ir.new_deopt(self, pc);
+            let deopt = ir.new_deopt(self);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
                 self.clear(dst);
@@ -25,7 +24,7 @@ impl BBContext {
         } else {
             self.write_back_slots(ir, &[base, idx]);
             self.clear(dst);
-            ir.generic_index(self, base, idx, pc);
+            ir.generic_index(self, base, idx);
         }
         self.rax2acc(ir, dst);
     }
@@ -39,22 +38,21 @@ impl BBContext {
         idx: SlotId,
         base_class: ClassId,
         idx_class: ClassId,
-        pc: BytecodePtr,
     ) {
         if store[base_class].is_array_ty_instance() && idx_class == INTEGER_CLASS {
-            let deopt = ir.new_deopt(self, pc);
+            let deopt = ir.new_deopt(self);
             self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
             if let Some(idx) = self.is_u16_literal(idx) {
                 self.fetch_for_gpr(ir, src, GP::Rdx);
-                ir.array_u16_index_assign(self, idx, pc);
+                ir.array_u16_index_assign(self, idx);
             } else {
                 self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
                 self.fetch_for_gpr(ir, src, GP::Rdx);
-                ir.array_index_assign(self, pc);
+                ir.array_index_assign(self);
             }
         } else {
             self.write_back_slots(ir, &[base, idx, src]);
-            ir.generic_index_assign(self, pc, base, idx, src);
+            ir.generic_index_assign(self, base, idx, src);
         }
     }
 }

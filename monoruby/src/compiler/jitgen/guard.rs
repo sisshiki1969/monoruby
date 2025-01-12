@@ -78,12 +78,6 @@ impl Codegen {
     /// Check the cached class version.
     /// If different, jump to `deopt`.
     ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
     /// ### destroy
     /// - rax
     ///

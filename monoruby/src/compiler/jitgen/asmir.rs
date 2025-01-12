@@ -93,12 +93,18 @@ impl AsmIr {
         self.side_exit.truncate(side_exit);
     }
 
-    pub(crate) fn new_deopt(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
+    pub(crate) fn new_deopt(&mut self, bb: &BBContext) -> AsmDeopt {
+        let pc = bb.pc();
+        self.new_deopt_with_pc(bb, pc)
+    }
+
+    pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmError {
+    pub(crate) fn new_error(&mut self, bb: &BBContext) -> AsmError {
+        let pc = bb.pc();
         let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
         AsmError(i)
     }
@@ -108,11 +114,8 @@ impl AsmIr {
         AsmEvict(i)
     }
 
-    pub(crate) fn new_deopt_error(
-        &mut self,
-        bb: &BBContext,
-        pc: BytecodePtr,
-    ) -> (AsmDeopt, AsmError) {
+    pub(crate) fn new_deopt_error(&mut self, bb: &BBContext) -> (AsmDeopt, AsmError) {
+        let pc = bb.pc();
         let wb = bb.get_write_back();
         let deopt = self.new_label(SideExit::Deoptimize(pc, wb.clone()));
         let error = self.new_label(SideExit::Error(pc, wb));
@@ -134,23 +137,18 @@ impl AsmIr {
         label
     }
 
-    pub(super) fn deopt(&mut self, bb: &BBContext, pc: BytecodePtr) {
-        let exit = self.new_deopt(bb, pc);
+    pub(super) fn deopt(&mut self, bb: &BBContext) {
+        let exit = self.new_deopt(bb);
         self.push(AsmInst::Deopt(exit));
     }
 
-    pub(super) fn check_bop(&mut self, bb: &BBContext, pc: BytecodePtr) {
-        let deopt = self.new_deopt(bb, pc);
+    pub(super) fn check_bop(&mut self, bb: &BBContext) {
+        let deopt = self.new_deopt(bb);
         self.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn recompile_and_deopt(
-        &mut self,
-        bb: &BBContext,
-        pc: BytecodePtr,
-        position: Option<BytecodePtr>,
-    ) {
-        let deopt = self.new_deopt(bb, pc);
+    pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, position: Option<BytecodePtr>) {
+        let deopt = self.new_deopt(bb);
         self.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
@@ -390,28 +388,16 @@ impl AsmIr {
         });
     }
 
-    pub fn guard_base_class(
-        &mut self,
-        bbctx: &mut BBContext,
-        slot: SlotId,
-        base_class: Value,
-        pc: BytecodePtr,
-    ) {
+    pub fn guard_base_class(&mut self, bbctx: &mut BBContext, slot: SlotId, base_class: Value) {
         bbctx.fetch_for_gpr(self, slot, GP::Rax);
-        let deopt = self.new_deopt(bbctx, pc);
+        let deopt = self.new_deopt(bbctx);
         self.inst
             .push(AsmInst::GuardBaseClass { base_class, deopt });
     }
 
-    pub fn load_constant(
-        &mut self,
-        bbctx: &mut BBContext,
-        dst: SlotId,
-        cache: &ConstCache,
-        pc: BytecodePtr,
-    ) {
+    pub fn load_constant(&mut self, bbctx: &mut BBContext, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = self.new_deopt(bbctx, pc);
+        let deopt = self.new_deopt(bbctx);
         if let Some(f) = value.try_float() {
             self.load_float_constant(bbctx, f, dst, *version, deopt);
         } else {
@@ -468,7 +454,6 @@ impl AsmIr {
         bb: &mut BBContext,
         callid: CallSiteId,
         callee_fid: FuncId,
-        pc: BytecodePtr,
     ) {
         let caller = &store[callid];
         let callee = &store[callee_fid];
@@ -518,7 +503,7 @@ impl AsmIr {
         } else {
             bb.write_back_args(self, caller);
 
-            let error = self.new_error(bb, pc);
+            let error = self.new_error(bb);
             self.push(AsmInst::SetArguments { callid, callee_fid });
             self.handle_error(error);
         }
@@ -562,9 +547,9 @@ impl AsmIr {
         self.reg_add(GP::Rsp, ofs);
     }
 
-    pub(super) fn generic_unop(&mut self, bb: &BBContext, pc: BytecodePtr, func: UnaryOpFn) {
+    pub(super) fn generic_unop(&mut self, bb: &BBContext, func: UnaryOpFn) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.push(AsmInst::GenericUnOp { func, using_xmm });
         self.handle_error(error);
     }
@@ -599,15 +584,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_index(
-        &mut self,
-        bb: &BBContext,
-        base: SlotId,
-        idx: SlotId,
-        pc: BytecodePtr,
-    ) {
+    pub(super) fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
+        let pc = bb.pc();
         self.push(AsmInst::GenericIndex {
             base,
             idx,
@@ -628,13 +608,13 @@ impl AsmIr {
     pub(super) fn generic_index_assign(
         &mut self,
         bb: &BBContext,
-        pc: BytecodePtr,
         base: SlotId,
         idx: SlotId,
         src: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
+        let pc = bb.pc();
         self.push(AsmInst::GenericIndexAssign {
             src,
             base,
@@ -655,9 +635,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16, pc: BytecodePtr) {
+    pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -676,9 +656,9 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn array_index_assign(&mut self, bb: &BBContext, pc: BytecodePtr) {
+    pub(super) fn array_index_assign(&mut self, bb: &BBContext) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
@@ -701,13 +681,12 @@ impl AsmIr {
     pub(super) fn new_range(
         &mut self,
         bb: &BBContext,
-        pc: BytecodePtr,
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.push(AsmInst::NewRange {
             start,
             end,
@@ -721,9 +700,9 @@ impl AsmIr {
         self.push(AsmInst::BlockArgProxy { ret, outer });
     }
 
-    pub(super) fn block_arg(&mut self, bb: &BBContext, pc: BytecodePtr, ret: SlotId, outer: usize) {
+    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -765,15 +744,9 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn alias_method(
-        &mut self,
-        bb: &BBContext,
-        pc: BytecodePtr,
-        new: IdentId,
-        old: IdentId,
-    ) {
+    pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb, pc);
+        let error = self.new_error(bb);
         self.push(AsmInst::AliasMethod {
             new,
             old,
@@ -874,6 +847,15 @@ pub(super) enum AsmInst {
     /// - stack
     ///
     GuardClassVersionWithRecovery(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),
+    ///
+    /// Class version guard for JIT.
+    ///
+    /// Check the cached class version.
+    /// If different, jump to `deopt`.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     GuardClassVersion(u32, AsmDeopt),
     ///
     /// Type guard.

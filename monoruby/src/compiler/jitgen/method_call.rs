@@ -8,7 +8,6 @@ impl JitContext {
         store: &Store,
         cache: MethodCacheEntry,
         callid: CallSiteId,
-        pc: BytecodePtr,
     ) -> CompileResult {
         let CallSiteInfo { dst, recv, .. } = store[callid];
         let MethodCacheEntry {
@@ -36,7 +35,7 @@ impl JitContext {
             bbctx.write_back_locals(ir);
         }
         bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(bbctx, pc);
+        let (deopt, error) = ir.new_deopt_error(bbctx);
         let using_xmm = bbctx.get_using_xmm();
         ir.guard_version(func_id, version, callid, using_xmm, deopt, error);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -44,10 +43,11 @@ impl JitContext {
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
             ir.guard_class(bbctx, recv, GP::Rdi, recv_class, deopt);
         }
-        if let Some(evict) = self.call_cached(bbctx, ir, store, callid, func_id, recv_class, pc) {
+        if let Some(evict) = self.call_cached(bbctx, ir, store, callid, func_id, recv_class) {
             bbctx.rax2acc(ir, dst);
             if let Some(evict) = evict {
                 ir.push(AsmInst::ImmediateEvict { evict });
+                let pc = bbctx.pc();
                 ir[evict] = SideExit::Evict(Some((pc + 2, bbctx.get_write_back())));
             }
         } else {
@@ -74,7 +74,6 @@ impl JitContext {
         callid: CallSiteId,
         fid: FuncId,
         recv_class: ClassId,
-        pc: BytecodePtr,
     ) -> Option<Option<AsmEvict>> {
         let CallSiteInfo {
             args,
@@ -131,7 +130,7 @@ impl JitContext {
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send(bbctx, ir, store, pc, callid, fid, recv_class, evict);
+                self.send(bbctx, ir, store, callid, fid, recv_class, evict);
                 return Some(Some(evict));
             }
             FuncKind::ISeq(iseq_id) => {
@@ -140,10 +139,10 @@ impl JitContext {
                     let block_info = Some((block_fid, self.self_class()));
                     let inlined_entry =
                         self.compile_inline_method(store, iseq_id, recv_class, block_info);
-                    self.send_inlined(bbctx, ir, store, pc, callid, fid, inlined_entry, evict);
+                    self.send_inlined(bbctx, ir, store, callid, fid, inlined_entry, evict);
                     return Some(Some(evict));
                 } else {
-                    self.send(bbctx, ir, store, pc, callid, fid, recv_class, evict);
+                    self.send(bbctx, ir, store, callid, fid, recv_class, evict);
                     return Some(Some(evict));
                 }
             }
@@ -182,7 +181,6 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        pc: BytecodePtr,
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
@@ -192,10 +190,10 @@ impl JitContext {
         ir.exec_gc(bbctx.get_register());
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, callid, callee_fid, pc);
+        ir.set_arguments(store, bbctx, callid, callee_fid);
         bbctx.clear(store[callid].dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::Send {
             callid,
@@ -217,7 +215,6 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        pc: BytecodePtr,
         callid: CallSiteId,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
@@ -227,10 +224,10 @@ impl JitContext {
         ir.exec_gc(bbctx.get_register());
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, callid, callee_fid, pc);
+        ir.set_arguments(store, bbctx, callid, callee_fid);
         bbctx.clear(store[callid].dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::SendInlined {
             callid,
@@ -252,7 +249,6 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        pc: BytecodePtr,
         callid: CallSiteId,
         block_iseq: ISeqId,
         block_self: ClassId,
@@ -262,10 +258,10 @@ impl JitContext {
         ir.exec_gc(bbctx.get_register());
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, callid, store[block_iseq].func_id(), pc);
+        ir.set_arguments(store, bbctx, callid, store[block_iseq].func_id());
         bbctx.clear(dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx, pc);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         let block_entry = self.compile_inline_method(store, block_iseq, block_self, None);
         ir.push(AsmInst::YieldInlined {
@@ -279,6 +275,7 @@ impl JitContext {
         ir.handle_error(error);
         bbctx.rax2acc(ir, dst);
         ir.push(AsmInst::ImmediateEvict { evict });
+        let pc = bbctx.pc();
         ir[evict] = SideExit::Evict(Some((pc + 2, bbctx.get_write_back())));
     }
 
@@ -287,24 +284,15 @@ impl JitContext {
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
         store: &Store,
-        f: impl Fn(
-            &mut BBContext,
-            &mut AsmIr,
-            &JitContext,
-            &Store,
-            CallSiteId,
-            ClassId,
-            BytecodePtr,
-        ) -> bool,
+        f: impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
         callid: CallSiteId,
         cache: &MethodCacheEntry,
-        pc: BytecodePtr,
     ) -> bool {
         let mut ctx_save = bbctx.clone();
         let ir_save = ir.save();
         let recv = store[callid].recv;
         bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
-        let (deopt, error) = ir.new_deopt_error(bbctx, pc);
+        let (deopt, error) = ir.new_deopt_error(bbctx);
         let using_xmm = bbctx.get_using_xmm();
         let MethodCacheEntry {
             recv_class,
@@ -315,7 +303,7 @@ impl JitContext {
         if !recv.is_self() && !bbctx.is_class(recv, *recv_class) {
             ir.guard_class(bbctx, recv, GP::Rdi, *recv_class, deopt);
         }
-        if f(bbctx, ir, self, store, callid, *recv_class, pc) {
+        if f(bbctx, ir, self, store, callid, *recv_class) {
             true
         } else {
             std::mem::swap(bbctx, &mut ctx_save);
@@ -333,7 +321,6 @@ impl BBContext {
         fid: FuncId,
         version: u32,
         info: BinOpInfo,
-        pc: BytecodePtr,
     ) -> CompileResult {
         assert!(matches!(
             store[fid].kind,
@@ -349,10 +336,10 @@ impl BBContext {
             lhs_class,
             ..
         } = info;
-        let deopt = ir.new_deopt(self, pc);
+        let deopt = ir.new_deopt(self);
+        ir.push(AsmInst::GuardClassVersion(version, deopt));
         self.fetch_lhs(ir, mode);
         ir.guard_lhs_class_for_mode(self, mode, lhs_class, deopt);
-        ir.push(AsmInst::GuardClassVersion(version, deopt));
 
         let evict = ir.new_evict();
         ir.reg_move(GP::Rdi, GP::R13);
@@ -363,7 +350,7 @@ impl BBContext {
 
         self.clear(dst);
         self.clear_above_next_sp();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         self.writeback_acc(ir);
         ir.push(AsmInst::BinopCached {
             callee_fid: fid,
@@ -374,23 +361,18 @@ impl BBContext {
         ir.handle_error(error);
         self.rax2acc(ir, dst);
         ir.push(AsmInst::ImmediateEvict { evict });
+        let pc = self.pc();
         ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
         CompileResult::Continue
     }
 
-    pub(super) fn compile_yield(
-        &mut self,
-        ir: &mut AsmIr,
-        store: &Store,
-        pc: BytecodePtr,
-        callid: CallSiteId,
-    ) {
+    pub(super) fn compile_yield(&mut self, ir: &mut AsmIr, store: &Store, callid: CallSiteId) {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_callargs_and_dst(ir, &callinfo);
         self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         let evict = ir.new_evict();
         ir.push(AsmInst::Yield {
             callid,

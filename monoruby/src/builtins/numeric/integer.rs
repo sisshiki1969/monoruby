@@ -237,7 +237,6 @@ fn integer_tof(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
@@ -400,13 +399,12 @@ fn integer_shr(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
     }
     let CallSiteInfo { dst, args, .. } = store[callid];
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |gen, _| gen.gen_shr_imm(rhs));
     } else {
@@ -435,7 +433,6 @@ fn integer_shl(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    pc: BytecodePtr,
 ) -> bool {
     if !store[callid].is_simple() {
         return false;
@@ -443,7 +440,7 @@ fn integer_shl(
     let CallSiteInfo {
         dst, args, recv, ..
     } = store[callid];
-    let deopt = ir.new_deopt(bb, pc);
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {

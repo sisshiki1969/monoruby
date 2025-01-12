@@ -1006,7 +1006,7 @@ impl BBContext {
                 }
             }
             (LinkMode::Both(l), LinkMode::Xmm(r)) => {
-                let deopt = ir.new_deopt(&self, pc + 1);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 ir.guard_float(GP::Rax, deopt);
                 if l == r {
@@ -1039,7 +1039,7 @@ impl BBContext {
                 }
             }
             (LinkMode::Stack, LinkMode::Both(r)) => {
-                let deopt = ir.new_deopt(&self, pc + 1);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                 self.def_both(slot, r, guarded);

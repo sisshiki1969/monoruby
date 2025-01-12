@@ -119,6 +119,7 @@ impl std::ops::DerefMut for BBContextInner {
 #[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     inner: BBContextInner,
+    pc: Option<BytecodePtr>,
 }
 
 impl std::ops::Deref for BBContext {
@@ -142,7 +143,16 @@ impl BBContext {
                 sp: SlotId(cc.local_num() as u16),
                 next_sp: SlotId(cc.local_num() as u16),
             },
+            pc: None,
         }
+    }
+
+    fn pc(&self) -> BytecodePtr {
+        self.pc.unwrap()
+    }
+
+    fn set_pc(&mut self, pc: BytecodePtr) {
+        self.pc = Some(pc);
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {

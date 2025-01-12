@@ -73,16 +73,10 @@ impl BBContext {
         });
     }
 
-    pub(super) fn jit_load_cvar(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        name: IdentId,
-        dst: SlotId,
-    ) {
+    pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.clear(dst);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::LoadCVar { name, using_xmm });
         ir.handle_error(error);
         self.rax2acc(ir, dst);
@@ -95,16 +89,10 @@ impl BBContext {
         self.rax2acc(ir, dst);
     }
 
-    pub(super) fn jit_store_cvar(
-        &mut self,
-        ir: &mut AsmIr,
-        pc: BytecodePtr,
-        name: IdentId,
-        src: SlotId,
-    ) {
+    pub(super) fn jit_store_cvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self, pc);
+        let error = ir.new_error(self);
         ir.push(AsmInst::StoreCVar {
             name,
             src,

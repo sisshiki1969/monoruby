@@ -27,7 +27,6 @@ pub(crate) type InlineGen = dyn Fn(
     &Store,
     CallSiteId,
     ClassId,
-    BytecodePtr,
 ) -> bool;
 
 #[derive(Debug, Clone, PartialEq)]
