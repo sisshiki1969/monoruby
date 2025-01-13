@@ -101,6 +101,7 @@ pub(crate) struct BBContext {
     /// stack top register.
     sp: SlotId,
     next_sp: SlotId,
+    class_version_guarded: bool,
     pc: Option<BytecodePtr>,
 }
 
@@ -123,6 +124,7 @@ impl BBContext {
             slot_state: SlotContext::from(cc),
             sp: SlotId(cc.local_num() as u16),
             next_sp: SlotId(cc.local_num() as u16),
+            class_version_guarded: false,
             pc: None,
         }
     }
@@ -133,6 +135,14 @@ impl BBContext {
 
     fn set_pc(&mut self, pc: BytecodePtr) {
         self.pc = Some(pc);
+    }
+
+    fn set_class_version_guard(&mut self) {
+        self.class_version_guarded = true;
+    }
+
+    fn unset_class_version_guard(&mut self) {
+        self.class_version_guarded = false;
     }
 
     fn union(entries: &[BranchEntry]) -> MergeContext {

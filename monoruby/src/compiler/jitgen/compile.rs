@@ -309,6 +309,7 @@ impl JitContext {
                         }
                     }
                     ir.load_constant(bbctx, dst, cache);
+                    bbctx.unset_class_version_guard();
                 } else {
                     return CompileResult::Recompile;
                 }
@@ -399,6 +400,7 @@ impl JitContext {
                     bbctx.clear(dst);
                     ir.push(AsmInst::Not);
                     bbctx.rax2acc(ir, dst);
+                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::BitNot {
@@ -415,6 +417,7 @@ impl JitContext {
                     bbctx.fetch_for_gpr(ir, src, GP::Rdi);
                     ir.generic_unop(bbctx, bitnot_value);
                     bbctx.rax2acc(ir, dst);
+                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::FUnOp { kind, dst, src } => {
@@ -440,6 +443,7 @@ impl JitContext {
                 bbctx.fetch_for_gpr(ir, src, GP::Rdi);
                 ir.generic_unop(bbctx, kind.generic_func());
                 bbctx.rax2acc(ir, dst);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::IBinOp {
                 kind, dst, mode, ..
@@ -463,6 +467,7 @@ impl JitContext {
                     bbctx.fetch_binary(ir, info.mode);
                     bbctx.generic_binop(ir, kind);
                     bbctx.rax2acc(ir, info.dst);
+                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::GBinOpNotrace { .. } => return CompileResult::Recompile,
@@ -476,6 +481,7 @@ impl JitContext {
                     bbctx.fetch_binary(ir, info.mode);
                     bbctx.clear(info.dst);
                     bbctx.generic_cmp(ir, kind);
+                    bbctx.unset_class_version_guard();
                 }
                 bbctx.rax2acc(ir, info.dst);
             }
@@ -491,6 +497,7 @@ impl JitContext {
                     return self.compile_binop_call(bbctx, ir, store, fid, info);
                 } else {
                     bbctx.gen_cmp_generic(ir, kind, info);
+                    bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::GCmpNotrace { .. } => return CompileResult::Recompile,
@@ -534,6 +541,7 @@ impl JitContext {
                 let branch_dest = self.label();
                 bbctx.gen_cmpbr_generic(ir, kind, info.mode, info.dst, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::GCmpBrNotrace { .. } => return CompileResult::Recompile,
             TraceIr::Index {
@@ -567,6 +575,7 @@ impl JitContext {
                     } else {
                         bbctx.write_back_slots(ir, &[base, idx, src]);
                         ir.generic_index_assign(bbctx, base, idx, src);
+                        bbctx.unset_class_version_guard();
                     }
                 } else {
                     return CompileResult::Recompile;
@@ -603,6 +612,7 @@ impl JitContext {
             }
             TraceIr::AliasMethod { new, old } => {
                 ir.alias_method(bbctx, new, old);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::MethodCall { callid, cache } => {
                 if let Some(cache) = cache {
@@ -619,6 +629,7 @@ impl JitContext {
                 } else {
                     bbctx.compile_yield(ir, store, callid);
                 }
+                bbctx.unset_class_version_guard();
             }
             TraceIr::InlineCache => {}
             TraceIr::MethodDef { name, func_id } => {
@@ -629,6 +640,7 @@ impl JitContext {
                     using_xmm,
                 });
                 ir.check_bop(bbctx);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 bbctx.write_back_slots(ir, &[obj]);
@@ -640,6 +652,7 @@ impl JitContext {
                     using_xmm,
                 });
                 ir.check_bop(bbctx);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::ClassDef {
                 dst,
@@ -649,6 +662,7 @@ impl JitContext {
                 func_id,
             } => {
                 bbctx.class_def(ir, dst, base, superclass, name, func_id, false);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::ModuleDef {
                 dst,
@@ -657,9 +671,11 @@ impl JitContext {
                 func_id,
             } => {
                 bbctx.class_def(ir, dst, base, None, name, func_id, true);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::SingletonClassDef { dst, base, func_id } => {
                 bbctx.singleton_class_def(ir, dst, base, func_id);
+                bbctx.unset_class_version_guard();
             }
             TraceIr::DefinedYield { dst } => {
                 bbctx.write_back_slots(ir, &[dst]);
