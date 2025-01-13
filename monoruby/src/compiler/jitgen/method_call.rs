@@ -12,14 +12,6 @@ impl JitContext {
         cache: MethodCacheEntry,
         callsite: &CallSiteInfo,
     ) -> CompileResult {
-        if callsite.block_fid.is_none()
-            && let Some(info) = store.inline_info.get_inline(cache.func_id)
-        {
-            let f = &info.inline_gen;
-            if self.inline_asm(bbctx, ir, store, f, callsite, &cache) {
-                return CompileResult::Continue;
-            }
-        }
         let recv = callsite.recv;
         let MethodCacheEntry {
             mut recv_class,
@@ -36,21 +28,21 @@ impl JitContext {
                 return CompileResult::Recompile;
             }
         }
+
         // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
         if callsite.block_fid.is_some() || store[func_id].meta().is_eval() {
             bbctx.write_back_locals(ir);
         }
 
-        // class version guard
-        let deopt = ir.new_deopt(bbctx);
-        ir.guard_class_version(self.class_version(), deopt);
+        self.recv_version_guard(bbctx, ir, recv, recv_class);
 
-        // receiver class guard
-        bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
-        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-        // Thus, we can omit a class guard.
-        if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
-            ir.guard_class(bbctx, recv, GP::Rdi, recv_class, deopt);
+        if callsite.block_fid.is_none()
+            && let Some(info) = store.inline_info.get_inline(func_id)
+        {
+            let f = &info.inline_gen;
+            if self.inline_asm(bbctx, ir, store, f, callsite, recv_class) {
+                return CompileResult::Continue;
+            }
         }
 
         self.call(bbctx, ir, store, callsite, func_id, recv_class)
@@ -81,41 +73,87 @@ impl JitContext {
             kw_pos: idx,
             kw_args: Default::default(),
         };
-        let cache = MethodCacheEntry {
-            recv_class,
-            func_id,
-            version: self.class_version(),
-        };
+
+        let recv = callsite.recv;
+        self.recv_version_guard(bbctx, ir, recv, recv_class);
+
         if let Some(info) = store.inline_info.get_inline(func_id) {
             let f = &info.inline_gen;
-            if self.inline_asm(bbctx, ir, store, f, &callsite, &cache) {
+            if self.inline_asm(bbctx, ir, store, f, &callsite, recv_class) {
                 return CompileResult::Continue;
             }
         }
-        let recv = callsite.recv;
-        let MethodCacheEntry {
-            mut recv_class,
-            mut func_id,
-            version,
-        } = cache;
-        if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
-        {
-            // the inline method cache is invalid because the receiver class is not matched.
-            recv_class = self.self_class();
-            if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
-                func_id = fid;
-            } else {
-                return CompileResult::Recompile;
-            }
-        }
-        // We must write back and unlink all local vars when they are possibly accessed from inner blocks.
-        if callsite.block_fid.is_some() || store[func_id].meta().is_eval() {
-            bbctx.write_back_locals(ir);
+
+        self.call(bbctx, ir, store, &callsite, func_id, recv_class)
+    }
+
+    pub(super) fn compile_binop_call(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        fid: FuncId,
+        info: BinOpInfo,
+    ) -> CompileResult {
+        assert!(matches!(
+            store[fid].kind,
+            FuncKind::Builtin { .. } | FuncKind::ISeq(_)
+        ));
+        let callee = &store[fid];
+        if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
+            return CompileResult::Recompile;
         }
 
         // class version guard
+        let class_version = self.class_version();
         let deopt = ir.new_deopt(bbctx);
-        ir.guard_class_version(self.class_version(), deopt);
+        ir.guard_class_version(bbctx, class_version, deopt);
+
+        // receiver class guard
+        let BinOpInfo {
+            dst,
+            mode,
+            lhs_class,
+            ..
+        } = info;
+        bbctx.fetch_lhs(ir, mode);
+        ir.guard_lhs_class_for_mode(bbctx, mode, lhs_class, deopt);
+
+        ir.reg_move(GP::Rdi, GP::R13);
+        let using_xmm = bbctx.get_using_xmm();
+        ir.xmm_save(using_xmm);
+
+        ir.set_binop_arguments(store, bbctx, fid, mode);
+
+        bbctx.clear(dst);
+        bbctx.clear_above_next_sp();
+        let error = ir.new_error(bbctx);
+        bbctx.writeback_acc(ir);
+        let evict = ir.new_evict();
+        ir.push(AsmInst::BinopCached {
+            callee_fid: fid,
+            recv_class: lhs_class,
+            evict,
+        });
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        bbctx.rax2acc(ir, dst);
+        bbctx.immediate_evict(ir, evict);
+        CompileResult::Continue
+    }
+
+    fn recv_version_guard(
+        &self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        recv: SlotId,
+        recv_class: ClassId,
+    ) {
+        let version = self.class_version();
+
+        // class version guard
+        let deopt = ir.new_deopt(bbctx);
+        ir.guard_class_version(bbctx, version, deopt);
 
         // receiver class guard
         bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
@@ -124,8 +162,6 @@ impl JitContext {
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
             ir.guard_class(bbctx, recv, GP::Rdi, recv_class, deopt);
         }
-
-        self.call(bbctx, ir, store, &callsite, func_id, recv_class)
     }
 
     ///
@@ -250,6 +286,7 @@ impl JitContext {
                 self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 bbctx.rax2acc(ir, dst);
                 bbctx.immediate_evict(ir, evict);
+                bbctx.unset_class_version_guard();
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
@@ -262,6 +299,7 @@ impl JitContext {
                 }
                 bbctx.rax2acc(ir, dst);
                 bbctx.immediate_evict(ir, evict);
+                bbctx.unset_class_version_guard();
             }
         };
         CompileResult::Continue
@@ -364,84 +402,17 @@ impl JitContext {
         store: &Store,
         f: impl Fn(&mut BBContext, &mut AsmIr, &JitContext, &Store, &CallSiteInfo, ClassId) -> bool,
         callsite: &CallSiteInfo,
-        cache: &MethodCacheEntry,
+        recv_class: ClassId,
     ) -> bool {
         let mut ctx_save = bbctx.clone();
         let ir_save = ir.save();
-        let recv = callsite.recv;
-        bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
-        let deopt = ir.new_deopt(bbctx);
-        let MethodCacheEntry {
-            recv_class,
-            version,
-            ..
-        } = cache;
-        ir.guard_class_version(*version, deopt);
-        if !recv.is_self() && !bbctx.is_class(recv, *recv_class) {
-            ir.guard_class(bbctx, recv, GP::Rdi, *recv_class, deopt);
-        }
-        if f(bbctx, ir, self, store, callsite, *recv_class) {
+        if f(bbctx, ir, self, store, callsite, recv_class) {
             true
         } else {
             std::mem::swap(bbctx, &mut ctx_save);
             ir.restore(ir_save);
             false
         }
-    }
-
-    pub(super) fn compile_binop_call(
-        &mut self,
-        bbctx: &mut BBContext,
-        ir: &mut AsmIr,
-        store: &Store,
-        fid: FuncId,
-        info: BinOpInfo,
-    ) -> CompileResult {
-        assert!(matches!(
-            store[fid].kind,
-            FuncKind::Builtin { .. } | FuncKind::ISeq(_)
-        ));
-        let callee = &store[fid];
-        if (!callee.is_rest() && callee.max_positional_args() < 1) || callee.req_num() > 1 {
-            return CompileResult::Recompile;
-        }
-
-        // class version guard
-        let class_version = self.class_version();
-        let deopt = ir.new_deopt(bbctx);
-        ir.guard_class_version(class_version, deopt);
-
-        // receiver class guard
-        let BinOpInfo {
-            dst,
-            mode,
-            lhs_class,
-            ..
-        } = info;
-        bbctx.fetch_lhs(ir, mode);
-        ir.guard_lhs_class_for_mode(bbctx, mode, lhs_class, deopt);
-
-        ir.reg_move(GP::Rdi, GP::R13);
-        let using_xmm = bbctx.get_using_xmm();
-        ir.xmm_save(using_xmm);
-
-        ir.set_binop_arguments(store, bbctx, fid, mode);
-
-        bbctx.clear(dst);
-        bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
-        bbctx.writeback_acc(ir);
-        let evict = ir.new_evict();
-        ir.push(AsmInst::BinopCached {
-            callee_fid: fid,
-            recv_class: lhs_class,
-            evict,
-        });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
-        bbctx.rax2acc(ir, dst);
-        bbctx.immediate_evict(ir, evict);
-        CompileResult::Continue
     }
 }
 
@@ -461,6 +432,7 @@ impl BBContext {
             evict,
         });
         self.rax2acc(ir, dst);
+        self.unset_class_version_guard();
     }
 
     fn immediate_evict(&self, ir: &mut AsmIr, evict: AsmEvict) {

@@ -323,8 +323,17 @@ impl AsmIr {
     /// ### destroy
     /// - rax
     ///
-    pub(super) fn guard_class_version(&mut self, cached_version: u32, deopt: AsmDeopt) {
+    pub(super) fn guard_class_version(
+        &mut self,
+        bb: &mut BBContext,
+        cached_version: u32,
+        deopt: AsmDeopt,
+    ) {
+        if bb.class_version_guarded {
+            return;
+        }
         self.push(AsmInst::GuardClassVersion(cached_version, deopt));
+        bb.set_class_version_guard();
     }
 
     ///
