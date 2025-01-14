@@ -64,11 +64,7 @@ impl BBContext {
     }
 
     pub(crate) fn fetch_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP, deopt: AsmDeopt) {
-        let is_fixnum = self.is_fixnum(slot);
         self.fetch_for_gpr(ir, slot, dst);
-        if !is_fixnum {
-            ir.guard_fixnum(dst, deopt);
-            self.set_guard_fixnum(slot);
-        }
+        self.guard_class(ir, slot, dst, INTEGER_CLASS, deopt);
     }
 }

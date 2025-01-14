@@ -504,14 +504,16 @@ impl SlotContext {
                 // -> Both
                 let x = self.def_new_both_integer(slot);
                 ir.stack2reg(slot, GP::Rdi);
-                ir.int2xmm(GP::Rdi, x, deopt);
+                self.guard_class(ir, slot, GP::Rdi, INTEGER_CLASS, deopt);
+                ir.int2xmm(GP::Rdi, x);
                 x
             }
             LinkMode::Accumulator => {
                 // -> Both
                 let x = self.def_new_both_integer(slot);
                 ir.reg2stack(GP::R15, slot);
-                ir.int2xmm(GP::R15, x, deopt);
+                self.guard_class(ir, slot, GP::R15, INTEGER_CLASS, deopt);
+                ir.int2xmm(GP::R15, x);
                 x
             }
             LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
@@ -570,6 +572,65 @@ impl SlotContext {
             x
         } else {
             unreachable!()
+        }
+    }
+
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
+    pub(crate) fn guard_class(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        r: GP,
+        class: ClassId,
+        deopt: AsmDeopt,
+    ) {
+        match class {
+            INTEGER_CLASS => {
+                if self.is_fixnum(slot) {
+                    return;
+                }
+                self.set_guard_fixnum(slot);
+            }
+            FLOAT_CLASS => {
+                if self.is_float(slot) {
+                    return;
+                }
+                self.set_guard_float(slot);
+            }
+            class => {
+                if self.is_class(slot, class) {
+                    return;
+                }
+                self.set_guard_class(slot, class);
+            }
+        }
+        ir.push(AsmInst::GuardClass(r, class, deopt));
+    }
+
+    pub(crate) fn guard_lhs_class_for_mode(
+        &mut self,
+        ir: &mut AsmIr,
+        mode: OpMode,
+        lhs_class: ClassId,
+        deopt: AsmDeopt,
+    ) {
+        match mode {
+            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
+                self.guard_class(ir, lhs, GP::Rdi, lhs_class, deopt);
+            }
+            OpMode::IR(_, _) => {
+                if lhs_class != INTEGER_CLASS {
+                    ir.push(AsmInst::Deopt(deopt));
+                }
+            }
         }
     }
 }
@@ -1063,9 +1124,9 @@ impl BBContext {
                 }
             }
             (LinkMode::Both(l), LinkMode::Xmm(r)) => {
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                let deopt = self.new_deopt_with_pc(ir, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
-                ir.guard_float(GP::Rax, deopt);
+                self.guard_class(ir, slot, GP::Rax, FLOAT_CLASS, deopt);
                 if l == r {
                     // Both(l) -> Xmm(l)
                     self.set_xmm(slot, l);
@@ -1086,7 +1147,7 @@ impl BBContext {
             }
             (LinkMode::Stack, LinkMode::Stack) => {}
             (LinkMode::Stack, LinkMode::Both(r)) => {
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                let deopt = self.new_deopt_with_pc(ir, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                 self.set_both(slot, r, guarded);

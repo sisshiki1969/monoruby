@@ -93,33 +93,19 @@ impl AsmIr {
         self.side_exit.truncate(side_exit);
     }
 
-    pub(crate) fn new_deopt(&mut self, bb: &BBContext) -> AsmDeopt {
-        let pc = bb.pc();
-        self.new_deopt_with_pc(bb, pc)
-    }
-
-    pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
+    pub(super) fn new_deopt(&mut self, pc: BytecodePtr, wb: WriteBack) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(pc, wb));
         AsmDeopt(i)
     }
 
-    pub(crate) fn new_error(&mut self, bb: &BBContext) -> AsmError {
-        let pc = bb.pc();
-        let i = self.new_label(SideExit::Error(pc, bb.get_write_back()));
+    pub(super) fn new_error(&mut self, pc: BytecodePtr, wb: WriteBack) -> AsmError {
+        let i = self.new_label(SideExit::Error(pc, wb));
         AsmError(i)
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
         let i = self.new_label(SideExit::Evict(None));
         AsmEvict(i)
-    }
-
-    pub(crate) fn new_deopt_error(&mut self, bb: &BBContext) -> (AsmDeopt, AsmError) {
-        let pc = bb.pc();
-        let wb = bb.get_write_back();
-        let deopt = self.new_label(SideExit::Deoptimize(pc, wb.clone()));
-        let error = self.new_label(SideExit::Error(pc, wb));
-        (AsmDeopt(deopt), AsmError(error))
     }
 }
 
@@ -135,21 +121,6 @@ impl AsmIr {
         let label = self.side_exit.len();
         self.side_exit.push(side_exit);
         label
-    }
-
-    pub(super) fn deopt(&mut self, bb: &BBContext) {
-        let exit = self.new_deopt(bb);
-        self.push(AsmInst::Deopt(exit));
-    }
-
-    pub(super) fn check_bop(&mut self, bb: &BBContext) {
-        let deopt = self.new_deopt(bb);
-        self.push(AsmInst::CheckBOP { deopt });
-    }
-
-    pub(super) fn recompile_and_deopt(&mut self, bb: &BBContext, position: Option<BytecodePtr>) {
-        let deopt = self.new_deopt(bb);
-        self.push(AsmInst::RecompileDeopt { position, deopt });
     }
 
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
@@ -243,10 +214,29 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
-    pub fn int2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
-        self.push(AsmInst::IntToXmm(reg, x, deopt));
+    pub fn int2xmm(&mut self, reg: GP, x: Xmm) {
+        self.push(AsmInst::IntToXmm(reg, x));
     }
 
+    ///
+    /// Float guard and unboxing.
+    ///
+    /// Unbox a Float Value and return f64.
+    ///
+    /// If the input Value was not Float, go to *deopt*.
+    ///
+    /// ### in
+    ///
+    /// - R(*reg*): Value
+    ///
+    /// ### out
+    ///
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rdi
+    ///
     pub fn float2xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
@@ -260,17 +250,8 @@ impl AsmIr {
     }
 
     /// rax = val
-    pub(super) fn deep_copy_lit(&mut self, bb: &BBContext, val: Value) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn deep_copy_lit(&mut self, using_xmm: UsingXmm, val: Value) {
         self.push(AsmInst::DeepCopyLit(val, using_xmm));
-    }
-
-    pub fn guard_fixnum(&mut self, r: GP, deopt: AsmDeopt) {
-        self.push(AsmInst::GuardFixnum(r, deopt));
-    }
-
-    pub fn guard_float(&mut self, r: GP, deopt: AsmDeopt) {
-        self.push(AsmInst::GuardFloat(r, deopt));
     }
 
     pub fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
@@ -314,87 +295,6 @@ impl AsmIr {
         ));
     }*/
 
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version.
-    /// If different, jump to `deopt`.
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn guard_class_version(
-        &mut self,
-        bb: &mut BBContext,
-        cached_version: u32,
-        deopt: AsmDeopt,
-    ) {
-        if bb.class_version_guarded {
-            return;
-        }
-        self.push(AsmInst::GuardClassVersion(cached_version, deopt));
-        bb.set_class_version_guard();
-    }
-
-    ///
-    /// Type guard.
-    ///
-    /// Generate type guard for *class_id*.
-    /// If the type was not matched, go to *deopt*.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    pub(crate) fn guard_class(
-        &mut self,
-        bb: &mut BBContext,
-        slot: SlotId,
-        r: GP,
-        class: ClassId,
-        deopt: AsmDeopt,
-    ) {
-        match class {
-            INTEGER_CLASS => {
-                if bb.is_fixnum(slot) {
-                    return;
-                }
-                bb.set_guard_fixnum(slot);
-            }
-            FLOAT_CLASS => {
-                if bb.is_float(slot) {
-                    return;
-                }
-                bb.set_guard_float(slot);
-            }
-            class => {
-                if bb.is_class(slot, class) {
-                    return;
-                }
-                bb.set_guard_class(slot, class);
-            }
-        }
-        self.push(AsmInst::GuardClass(r, class, deopt));
-    }
-
-    pub(crate) fn guard_lhs_class_for_mode(
-        &mut self,
-        bb: &mut BBContext,
-        mode: OpMode,
-        lhs_class: ClassId,
-        deopt: AsmDeopt,
-    ) {
-        match mode {
-            OpMode::RR(lhs, _) | OpMode::RI(lhs, _) => {
-                self.guard_class(bb, lhs, GP::Rdi, lhs_class, deopt);
-            }
-            OpMode::IR(_, _) => {
-                if lhs_class != INTEGER_CLASS {
-                    self.push(AsmInst::Deopt(deopt));
-                }
-            }
-        }
-    }
-
     pub(super) fn opt_case(
         &mut self,
         max: u16,
@@ -412,14 +312,14 @@ impl AsmIr {
 
     pub fn guard_base_class(&mut self, bbctx: &mut BBContext, slot: SlotId, base_class: Value) {
         bbctx.fetch_for_gpr(self, slot, GP::Rax);
-        let deopt = self.new_deopt(bbctx);
+        let deopt = bbctx.new_deopt(self);
         self.inst
             .push(AsmInst::GuardBaseClass { base_class, deopt });
     }
 
     pub fn load_constant(&mut self, bbctx: &mut BBContext, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = self.new_deopt(bbctx);
+        let deopt = bbctx.new_deopt(self);
         if let Some(f) = value.try_float() {
             self.load_float_constant(bbctx, f, dst, *version, deopt);
         } else {
@@ -524,7 +424,7 @@ impl AsmIr {
         } else {
             bb.write_back_args(self, callsite);
 
-            let error = self.new_error(bb);
+            let error = self.new_error(bb.pc(), bb.get_write_back());
             self.push(AsmInst::SetArguments {
                 callid: callsite.id,
                 callee_fid,
@@ -573,7 +473,7 @@ impl AsmIr {
 
     pub(super) fn generic_unop(&mut self, bb: &BBContext, func: UnaryOpFn) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         self.push(AsmInst::GenericUnOp { func, using_xmm });
         self.handle_error(error);
     }
@@ -658,7 +558,7 @@ impl AsmIr {
         src: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         let pc = bb.pc();
         self.push(AsmInst::GenericIndexAssign {
             src,
@@ -682,7 +582,7 @@ impl AsmIr {
     ///
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -703,35 +603,31 @@ impl AsmIr {
     ///
     pub(super) fn array_index_assign(&mut self, bb: &BBContext) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
 
-    pub(super) fn new_array(&mut self, bb: &BBContext, callid: CallSiteId) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn new_array(&mut self, using_xmm: UsingXmm, callid: CallSiteId) {
         self.push(AsmInst::NewArray { callid, using_xmm });
     }
 
-    pub(super) fn new_lambda(&mut self, bb: &BBContext, func_id: FuncId) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn new_lambda(&mut self, using_xmm: UsingXmm, func_id: FuncId) {
         self.push(AsmInst::NewLambda(func_id, using_xmm));
     }
 
-    pub(super) fn new_hash(&mut self, bb: &BBContext, args: SlotId, len: usize) {
-        let using_xmm = bb.get_using_xmm();
+    pub(super) fn new_hash(&mut self, using_xmm: UsingXmm, args: SlotId, len: usize) {
         self.push(AsmInst::NewHash(args, len, using_xmm));
     }
 
     pub(super) fn new_range(
         &mut self,
-        bb: &BBContext,
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
+        using_xmm: UsingXmm,
+        error: AsmError,
     ) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
         self.push(AsmInst::NewRange {
             start,
             end,
@@ -747,7 +643,7 @@ impl AsmIr {
 
     pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         self.push(AsmInst::BlockArg {
             ret,
             outer,
@@ -791,7 +687,7 @@ impl AsmIr {
 
     pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
+        let error = self.new_error(bb.pc(), bb.get_write_back());
         self.push(AsmInst::AliasMethod {
             new,
             old,
@@ -832,6 +728,7 @@ pub(super) enum AsmInst {
     RegSub(GP, i32),
     RegToRSPOffset(GP, i32),
     I32ToRSPOffset(i32, i32),
+
     RSPOffsetToArray(i32),
 
     XmmMove(Xmm, Xmm),
@@ -868,14 +765,28 @@ pub(super) enum AsmInst {
     LitToStack(Value, SlotId),
     DeepCopyLit(Value, UsingXmm),
     NumToXmm(GP, Xmm, AsmDeopt),
-    IntToXmm(GP, Xmm, AsmDeopt),
-    /// move a Flonum Value in a reg to xmm reg, and deoptimize if it is not a Flonum.
+    IntToXmm(GP, Xmm),
+    ///
+    /// Float guard and unboxing.
+    ///
+    /// Unbox a Float Value and return f64.
+    ///
+    /// If the input Value was not Float, go to *deopt*.
+    ///
+    /// ### in
+    ///
+    /// - R(*reg*): Value
+    ///
+    /// ### out
+    ///
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rdi
+    ///
     FloatToXmm(GP, Xmm, AsmDeopt),
 
-    /// check whether a Value in a stack slot is a Flonum, and if not, deoptimize.
-    GuardFloat(GP, AsmDeopt),
-    GuardFixnum(GP, AsmDeopt),
-    GuardArrayTy(GP, AsmDeopt),
     /*///
     /// Class version guard fro JIT.
     ///
@@ -915,6 +826,7 @@ pub(super) enum AsmInst {
     /// - R(*reg*): Value
     ///
     GuardClass(GP, ClassId, AsmDeopt),
+    GuardArrayTy(GP, AsmDeopt),
 
     Ret,
     BlockBreak,
@@ -976,12 +888,10 @@ pub(super) enum AsmInst {
     /// Send method
     ///
     /// ### in
-    /// - rdi: receiver: Value
+    /// - r13: receiver: Value.
     ///
     /// ### destroy
     /// - caller save registers
-    /// - r15
-    ///
     Send {
         callid: CallSiteId,
         recv_class: ClassId,

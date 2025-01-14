@@ -918,6 +918,7 @@ impl Codegen {
     /// gen code for shift-left of integer (lhs must be a Fixnum).
     ///
     /// ### in
+    /// - rdi: lhs:Fixnum
     /// - rcx: rhs:Value
     ///
     /// ### out
@@ -938,7 +939,7 @@ impl Codegen {
             js shr;
             cmpq rcx, (lzcnt);
             jgt deopt;
-            movq rdi, (lhs.id() - 1);
+            subq rdi, 1;
             salq rdi, rcx;
         after:
             orq rdi, 1;

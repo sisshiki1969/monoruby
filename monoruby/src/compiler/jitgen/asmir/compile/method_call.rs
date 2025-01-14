@@ -144,7 +144,7 @@ impl Codegen {
 
     ///
     /// ### in
-    /// rdi: numer of args.
+    /// - r13: receiver: Value.
     ///
     pub(super) fn gen_send(
         &mut self,
@@ -348,6 +348,12 @@ impl Codegen {
         };
     }
 
+    ///
+    /// Set up keyword arguments for callee.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     fn setup_keyword_args(
         &mut self,
         callid: CallSiteId,
@@ -494,6 +500,12 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Handle hash splat arguments and a keyword rest parameter.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     fn handle_hash_splat_kw_rest(
         &mut self,
         callid: CallSiteId,
@@ -537,6 +549,19 @@ impl Codegen {
 
 ///
 /// Handle hash splat arguments and a keyword rest parameter.
+///
+/// ### in
+/// - rdi: &mut Executor
+/// - rsi: &mut Globals
+/// - rdx: CallSiteId
+/// - rcx: Meta
+/// - r8: callee_lfp
+///
+/// ### out
+/// - rax: Option<Value>
+///
+/// ### destroy
+/// - caller save registers
 ///
 extern "C" fn jit_handle_hash_splat_kw_rest(
     vm: &mut Executor,
