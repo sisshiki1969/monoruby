@@ -98,6 +98,9 @@ impl SlotContext {
         self.xmm[xmm.0 as usize].retain(|e| *e != slot);
     }
 
+    ///
+    /// Xmm/Both(_) -> Xmm(xmm)
+    ///
     fn set_xmm(&mut self, slot: SlotId, xmm: Xmm) {
         if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
             self.xmm_remove(slot, old_xmm);
@@ -107,6 +110,18 @@ impl SlotContext {
         self.set_guarded(slot, Guarded::Float);
     }
 
+    ///
+    /// ConcreteValue(Float) -> Xmm(new xmm)
+    ///
+    fn set_new_xmm(&mut self, slot: SlotId) -> Xmm {
+        let x = self.alloc_xmm();
+        self.set_xmm(slot, x);
+        x
+    }
+
+    ///
+    /// Xmm/Both(_) -> Both(xmm)
+    ///
     fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
         if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
             self.xmm_remove(slot, old_xmm);
@@ -116,8 +131,40 @@ impl SlotContext {
         self.set_guarded(slot, guarded);
     }
 
+    ///
+    /// ConcreteValue(Float) -> Both(new xmm)
+    ///
+    fn set_new_both(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
+        let x = self.alloc_xmm();
+        self.set_both(slot, x, guarded);
+        x
+    }
+
+    ///
+    /// Xmm(_) -> Both(xmm)
+    ///
     fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_both(slot, xmm, Guarded::Float)
+    }
+
+    ///
+    /// _ -> Stack
+    ///
+    fn set_stack(&mut self, slot: SlotId, guarded: Guarded) {
+        match self.mode(slot) {
+            LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
+                assert!(self.xmm(xmm).contains(&slot));
+                self.xmm_remove(slot, xmm);
+            }
+            LinkMode::ConcreteValue(_) => {}
+            LinkMode::Accumulator => {
+                assert_eq!(self.r15, Some(slot));
+                self.r15 = None;
+            }
+            LinkMode::Stack => {}
+        }
+        self.set_mode(slot, LinkMode::Stack);
+        self.set_guarded(slot, guarded);
     }
 
     ///
@@ -1005,6 +1052,16 @@ impl BBContext {
                     self.to_xmm(ir, slot, l, r);
                 }
             }
+            (LinkMode::Xmm(l), LinkMode::Both(r)) => {
+                ir.xmm2stack(l, slot);
+                if l == r {
+                    // Xmm(l) -> Both(l)
+                    self.set_both_float(slot, l);
+                } else {
+                    // Xmm(l) -> Both(r)
+                    self.to_both(ir, slot, l, r, guarded);
+                }
+            }
             (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                 let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
@@ -1017,38 +1074,38 @@ impl BBContext {
                     self.to_xmm(ir, slot, l, r);
                 }
             }
-            (LinkMode::Both(l), LinkMode::Stack) => {
-                self.xmm_remove(slot, l);
-                self.set_mode(slot, LinkMode::Stack);
-            }
-            (LinkMode::Stack, LinkMode::Stack) => {}
-            (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                ir.xmm2stack(l, slot);
-                if l == r {
-                    // Xmm(l) -> Both(l)
-                    self.set_both_float(slot, l);
-                } else {
-                    // Xmm(l) -> Both(r)
-                    self.to_both(ir, slot, l, r, guarded);
-                }
-            }
             (LinkMode::Both(l), LinkMode::Both(r)) => {
                 if l != r {
                     // Both(l) -> Both(r)
                     self.to_both(ir, slot, l, r, guarded);
                 }
             }
+            (LinkMode::Both(l), LinkMode::Stack) => {
+                self.xmm_remove(slot, l);
+                self.set_mode(slot, LinkMode::Stack);
+            }
+            (LinkMode::Stack, LinkMode::Stack) => {}
             (LinkMode::Stack, LinkMode::Both(r)) => {
                 let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
-                self.def_both(slot, r, guarded);
+                self.set_both(slot, r, guarded);
             }
             (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
             (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
                 if let Some(f) = l.try_float() {
-                    self.def_xmm(slot, r);
+                    self.set_xmm(slot, r);
                     ir.f64toxmm(f, r);
+                } else {
+                    unreachable!()
+                }
+            }
+            (LinkMode::ConcreteValue(l), LinkMode::Both(r)) => {
+                if let Some(f) = l.try_float() {
+                    self.set_both_float(slot, r);
+                    ir.f64toxmm(f, r);
+                    ir.lit2reg(Value::float(f), GP::Rax);
+                    ir.reg2stack(GP::Rax, slot);
                 } else {
                     unreachable!()
                 }
@@ -1123,34 +1180,59 @@ impl BBContext {
 }
 
 impl MergeContext {
+    ///
+    /// ~~~text
+    ///                Xmm     Both  Const(f64) Const
+    ///             +-------+--------+--------+-------+
+    ///    Xmm      |  Xmm  |  Both  |   Xmm  |       |
+    ///             +-------+--------+--------+-------+
+    ///    Both     |  Both |  Both  |  Both  |       |
+    ///             +-------+--------+--------+-------|
+    /// Const(f64)  |  Xmm  |  Both  |   Xmm  |       |
+    ///             +-------+--------+--------+-------|
+    ///   Const     |       |        |        |       |
+    ///             +-------+--------+--------+-------+
+    ///
     pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotContext) {
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self.is_used_mut(i).merge(other.is_used(i));
+            if !self.class_version_guarded {
+                self.unset_class_version_guard();
+            }
             match (self.mode(i), other.mode(i)) {
-                (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
-                | (LinkMode::Xmm(l), LinkMode::Both(_)) => {
+                (LinkMode::Xmm(_), LinkMode::Xmm(_)) => {}
+                (LinkMode::Xmm(_), LinkMode::ConcreteValue(r)) if r.is_float() => {}
+                (LinkMode::Xmm(l), LinkMode::Both(_))
+                | (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_)) => {
                     let guarded = self.guarded(i).union(&other.guarded(i));
-                    self.def_both(i, l, guarded);
+                    self.set_both(i, l, guarded);
                 }
                 (LinkMode::Both(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
-                    self.def_both(i, l, Guarded::Float)
+                    let guarded = self.guarded(i).union(&other.guarded(i));
+                    self.set_both(i, l, guarded)
+                }
+                /*(LinkMode::Both(l), LinkMode::ConcreteValue(r)) if r.is_fixnum() => {
+                    let guarded = self.guarded(i).union(&other.guarded(i));
+                    self.set_both(i, l, guarded)
+                }*/
+                (LinkMode::ConcreteValue(l), LinkMode::Xmm(_)) if l.is_float() => {
+                    self.set_new_xmm(i);
                 }
                 (LinkMode::ConcreteValue(l), LinkMode::Both(_)) if l.is_float() => {
-                    self.def_new_both_float(i);
+                    let guarded = self.guarded(i).union(&other.guarded(i));
+                    self.set_new_both(i, guarded);
                 }
-                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.def_xmm(i, l),
-                (LinkMode::Xmm(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
-                    self.def_xmm(i, l)
+                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
+                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r))
+                    if l.is_float() && r.is_float() =>
+                {
+                    self.set_new_xmm(i);
                 }
-                (LinkMode::ConcreteValue(l), LinkMode::Xmm(_)) if l.is_float() => {
-                    self.def_new_xmm(i);
+                _ => {
+                    let guarded = self.guarded(i).union(&other.guarded(i));
+                    self.set_stack(i, guarded);
                 }
-                (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {
-                    self.clear(i);
-                    self.def_concrete_value(i, l)
-                }
-                _ => self.clear(i),
             };
         }
     }
