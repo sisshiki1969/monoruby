@@ -113,7 +113,7 @@ pub(super) fn gen_class_new(
         bb.write_back_callargs_and_dst(ir, callsite);
         ir.stack2reg(recv, GP::Rdi);
         let using_xmm = bb.get_using_xmm();
-        let error = ir.new_error(bb);
+        let error = bb.new_error(ir);
         ir.xmm_save(using_xmm);
         ir.inline(move |gen, _, _| {
             let cached_version = gen.jit.data_i32(-1);

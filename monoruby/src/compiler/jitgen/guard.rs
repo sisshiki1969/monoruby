@@ -190,33 +190,6 @@ impl Codegen {
         //}
     }
 
-    ///
-    /// Float guard.
-    ///
-    /// Generate type guard for Float.
-    /// If the type was not matched, go to *deopt*.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    pub(super) fn guard_float(&mut self, reg: GP, deopt: DestLabel) {
-        self.guard_class(reg, FLOAT_CLASS, deopt)
-    }
-
-    ///
-    /// Fixnum guard.
-    ///
-    /// Generate type guard for Fixnum(i63).
-    /// If the type was not matched, go to *deopt*.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    pub(super) fn guard_fixnum(&mut self, r: GP, deopt: DestLabel) {
-        let label = self.set_rdi_for_deopt(r, deopt);
-        self.guard_class(r, INTEGER_CLASS, label)
-    }
-
     pub(super) fn guard_array_ty(&mut self, r: GP, deopt: DestLabel) {
         let label = self.set_rdi_for_deopt(r, deopt);
         monoasm! { &mut self.jit,
@@ -260,7 +233,7 @@ impl Codegen {
     ///
     /// ### destroy
     ///
-    /// - rdi, rax
+    /// - rax, rdi
     ///
     pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
         let l1 = self.jit.label();
@@ -315,14 +288,19 @@ impl Codegen {
     ///
     /// Copy the value(f64) of Float to *xmm*.
     ///
+    /// If the input Value was not Float, go to *side_exit*.
+    ///
     /// ### in
-    /// - R(*reg*): Value (must be a flonum or heap-allocated Float)
+    /// - R(*reg*): Value
     ///
     /// ### out
     /// - xmm(*xmm*)
     ///
     /// ### destroy
     /// - rax, rdi
+    ///
+    /// ### Safety
+    /// - if *reg* is Fixnum, cause UB.
     ///
     fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
         let heap = self.jit.label();

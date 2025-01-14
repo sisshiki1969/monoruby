@@ -106,8 +106,8 @@ impl JitContext {
 
         // class version guard
         let class_version = self.class_version();
-        let deopt = ir.new_deopt(bbctx);
-        ir.guard_class_version(bbctx, class_version, deopt);
+        let deopt = bbctx.new_deopt(ir);
+        bbctx.guard_class_version(ir, class_version, deopt);
 
         // receiver class guard
         let BinOpInfo {
@@ -117,7 +117,7 @@ impl JitContext {
             ..
         } = info;
         bbctx.fetch_lhs(ir, mode);
-        ir.guard_lhs_class_for_mode(bbctx, mode, lhs_class, deopt);
+        bbctx.guard_lhs_class_for_mode(ir, mode, lhs_class, deopt);
 
         ir.reg_move(GP::Rdi, GP::R13);
         let using_xmm = bbctx.get_using_xmm();
@@ -127,7 +127,7 @@ impl JitContext {
 
         bbctx.clear(dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
+        let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
         let evict = ir.new_evict();
         ir.push(AsmInst::BinopCached {
@@ -152,15 +152,15 @@ impl JitContext {
         let version = self.class_version();
 
         // class version guard
-        let deopt = ir.new_deopt(bbctx);
-        ir.guard_class_version(bbctx, version, deopt);
+        let deopt = bbctx.new_deopt(ir);
+        bbctx.guard_class_version(ir, version, deopt);
 
         // receiver class guard
         bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
-            ir.guard_class(bbctx, recv, GP::Rdi, recv_class, deopt);
+            bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
         }
     }
 
@@ -184,7 +184,7 @@ impl JitContext {
         ir.set_arguments(store, bbctx, &store[callid], store[block_iseq].func_id());
         bbctx.clear(dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
+        let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
         let block_entry = self.inlined_method(store, block_iseq, block_self, None);
         let evict = ir.new_evict();
@@ -348,7 +348,7 @@ impl JitContext {
         ir.set_arguments(store, bbctx, callsite, callee_fid);
         bbctx.clear(callsite.dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
+        let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::Send {
             callid: callsite.id,
@@ -382,7 +382,7 @@ impl JitContext {
         ir.set_arguments(store, bbctx, callsite, callee_fid);
         bbctx.clear(callsite.dst);
         bbctx.clear_above_next_sp();
-        let error = ir.new_error(bbctx);
+        let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::SendInlined {
             callid: callsite.id,
@@ -423,7 +423,7 @@ impl BBContext {
         self.write_back_callargs_and_dst(ir, &callinfo);
         self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
-        let error = ir.new_error(self);
+        let error = self.new_error(ir);
         let evict = ir.new_evict();
         ir.push(AsmInst::Yield {
             callid,

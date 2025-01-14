@@ -228,10 +228,65 @@ impl BBContext {
         let sp = self.sp;
         self.slot_state.write_back_acc(ir, sp);
     }
+
+    pub(crate) fn new_deopt(&self, ir: &mut AsmIr) -> AsmDeopt {
+        ir.new_deopt(self.pc(), self.get_write_back())
+    }
+
+    pub(crate) fn new_deopt_with_pc(&self, ir: &mut AsmIr, pc: BytecodePtr) -> AsmDeopt {
+        ir.new_deopt(pc, self.get_write_back())
+    }
+
+    pub(crate) fn new_error(&self, ir: &mut AsmIr) -> AsmError {
+        ir.new_error(self.pc(), self.get_write_back())
+    }
+
+    pub(crate) fn new_deopt_error(&self, ir: &mut AsmIr) -> (AsmDeopt, AsmError) {
+        let pc = self.pc();
+        let wb = self.get_write_back();
+        (ir.new_deopt(pc, wb.clone()), ir.new_error(pc, wb))
+    }
+
+    pub(super) fn deopt(&self, ir: &mut AsmIr) {
+        let exit = self.new_deopt(ir);
+        ir.push(AsmInst::Deopt(exit));
+    }
+
+    pub(super) fn check_bop(&mut self, ir: &mut AsmIr) {
+        let deopt = self.new_deopt(ir);
+        ir.push(AsmInst::CheckBOP { deopt });
+    }
+
+    pub(super) fn recompile_and_deopt(&mut self, ir: &mut AsmIr, position: Option<BytecodePtr>) {
+        let deopt = self.new_deopt(ir);
+        ir.push(AsmInst::RecompileDeopt { position, deopt });
+    }
+
+    ///
+    /// Class version guard for JIT.
+    ///
+    /// Check the cached class version.
+    /// If different, jump to `deopt`.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(super) fn guard_class_version(
+        &mut self,
+        ir: &mut AsmIr,
+        cached_version: u32,
+        deopt: AsmDeopt,
+    ) {
+        if self.class_version_guarded {
+            return;
+        }
+        ir.push(AsmInst::GuardClassVersion(cached_version, deopt));
+        self.set_class_version_guard();
+    }
 }
 
 ///
-/// The strust holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
+/// The struct holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
 ///
 /// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
 ///
@@ -821,14 +876,13 @@ fn float_test() {
 fn float_test2() {
     let mut gen = Codegen::new(false);
 
-    let panic = gen.entry_panic;
     let assume_int_to_f64 = gen.jit.label();
     let x = Xmm(0);
     monoasm!(&mut gen.jit,
     assume_int_to_f64:
         pushq rbp;
     );
-    gen.integer_val_to_f64(GP::Rdi, x, panic);
+    gen.integer_val_to_f64(GP::Rdi, x);
     monoasm!(&mut gen.jit,
         movq xmm0, xmm(x.enc());
         popq rbp;

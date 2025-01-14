@@ -239,7 +239,7 @@ fn hash_index(
             call rax;
         }
     });
-    let error = ir.new_error(bb);
+    let error = bb.new_error(ir);
     ir.handle_error(error);
     bb.rax2acc(ir, callsite.dst);
     true

@@ -171,11 +171,11 @@ impl Codegen {
                     movq  xmm(x.enc()), [rip + f];
                 );
             }
-            AsmInst::IntToXmm(r, x, side_exit) => {
-                self.integer_val_to_f64(r, x, labels[side_exit]);
+            AsmInst::IntToXmm(r, x) => {
+                self.integer_val_to_f64(r, x);
             }
-            AsmInst::FloatToXmm(reg, x, side_exit) => {
-                self.float_to_f64(reg, x, labels[side_exit]);
+            AsmInst::FloatToXmm(reg, x, deopt) => {
+                self.float_to_f64(reg, x, labels[deopt]);
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
@@ -196,37 +196,6 @@ impl Codegen {
                 self.xmm_restore(using_xmm);
             }
 
-            AsmInst::GuardFloat(r, deopt) => {
-                let deopt = labels[deopt];
-                self.guard_float(r, deopt);
-            }
-            AsmInst::GuardFixnum(r, deopt) => {
-                let deopt = labels[deopt];
-                self.guard_fixnum(r, deopt)
-            }
-            AsmInst::GuardArrayTy(r, deopt) => {
-                let deopt = labels[deopt];
-                self.guard_array_ty(r, deopt)
-            }
-            /*AsmInst::GuardClassVersionWithRecovery(
-                fid,
-                cached_version,
-                callid,
-                using_xmm,
-                deopt,
-                error,
-            ) => {
-                let deopt = labels[deopt];
-                let error = labels[error];
-                self.guard_class_version_with_recovery(
-                    fid,
-                    cached_version,
-                    callid,
-                    using_xmm,
-                    deopt,
-                    error,
-                );
-            }*/
             AsmInst::GuardClassVersion(cached_version, deopt) => {
                 let deopt = labels[deopt];
                 self.guard_class_version(cached_version, deopt);
@@ -234,6 +203,10 @@ impl Codegen {
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
                 self.guard_class(r, class, deopt);
+            }
+            AsmInst::GuardArrayTy(r, deopt) => {
+                let deopt = labels[deopt];
+                self.guard_array_ty(r, deopt)
             }
 
             AsmInst::HandleError(error) => {
