@@ -358,6 +358,27 @@ impl JitModule {
         label
     }
 
+    pub(super) fn exec_gc(&mut self) -> DestLabel {
+        let label = self.label();
+        monoasm! { &mut self.jit,
+        label:
+            subq rsp, 8;
+        }
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movq rsi, rbx;
+            movq rax, (execute_gc);
+            call rax;
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            ret;
+        }
+        label
+    }
+
     pub(super) fn entry_panic(&mut self) -> DestLabel {
         let label = self.label();
         monoasm! {&mut self.jit,

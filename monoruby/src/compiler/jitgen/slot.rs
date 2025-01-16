@@ -48,7 +48,7 @@ impl SlotContext {
     ///
     /// *reg* is set to LinkMode::Stack / Guarded::Value.
     ///
-    pub(crate) fn clear(&mut self, slot: impl Into<Option<SlotId>>) {
+    pub(crate) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
         if let Some(slot) = slot.into() {
             match self.mode(slot) {
                 LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
@@ -187,16 +187,24 @@ impl SlotContext {
     // APIs for 'def'
 
     ///
-    /// Link the slot *reg* to the given xmm register *xmm*.
+    /// Link *slot* to stack.
+    ///
+    pub(super) fn def_stack(&mut self, slot: SlotId, guarded: Guarded) {
+        self.discard(slot);
+        self.set_guarded(slot, guarded);
+    }
+
+    ///
+    /// Link *slot* to the given xmm register *xmm*.
     ///
     pub(super) fn def_xmm(&mut self, slot: SlotId, xmm: Xmm) {
-        self.clear(slot);
+        self.discard(slot);
         self.set_xmm(slot, xmm);
         self.xmm_add(slot, xmm);
     }
 
     ///
-    /// Link the slot *reg* to a new xmm register.
+    /// Link *slot* to a new xmm register.
     ///
     pub(super) fn def_new_xmm(&mut self, slot: SlotId) -> Xmm {
         let xmm = self.alloc_xmm();
@@ -205,16 +213,16 @@ impl SlotContext {
     }
 
     ///
-    /// Link the slot *reg* to both of the stack and the given xmm register *xmm*.
+    /// Link *slot* to both of the stack and the given xmm register *xmm*.
     ///
     pub(super) fn def_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
-        self.clear(slot);
+        self.discard(slot);
         self.set_both(slot, xmm, guarded);
         self.xmm_add(slot, xmm);
     }
 
     ///
-    /// Link the slot *reg* to both of the stack and a new xmm register.
+    /// Link *slot* to both of the stack and a new xmm register.
     ///
     fn def_new_both(&mut self, slot: SlotId, guarded: Guarded) -> Xmm {
         let x = self.alloc_xmm();
@@ -231,21 +239,21 @@ impl SlotContext {
     }
 
     ///
-    /// Link the slot *reg* to a concrete value *v*.
+    /// Link *slot* to a concrete value *v*.
     ///
     pub(crate) fn def_concrete_value(&mut self, slot: SlotId, v: Value) {
         let guarded = Guarded::from_concrete_value(v);
-        self.clear(slot);
+        self.discard(slot);
         self.set_mode(slot, LinkMode::ConcreteValue(v));
         self.set_guarded(slot, guarded);
     }
 
     ///
-    /// Link the slot *reg* to the accumulator.
+    /// Link *slot* to the accumulator.
     ///
     pub(super) fn def_acc(&mut self, slot: impl Into<Option<SlotId>>, guarded: Guarded) {
         if let Some(slot) = slot.into() {
-            self.clear(slot);
+            self.discard(slot);
             self.set_mode(slot, LinkMode::Accumulator);
             self.set_guarded(slot, guarded);
             self.r15 = Some(slot);
@@ -636,10 +644,6 @@ impl SlotContext {
 }
 
 impl SlotContext {
-    pub(super) fn get_register(&self) -> WriteBack {
-        WriteBack::new(vec![], vec![], self.r15)
-    }
-
     pub(super) fn get_using_xmm(&self, sp: SlotId) -> UsingXmm {
         let mut b = UsingXmm::new();
         self.xmm.iter().enumerate().for_each(|(i, v)| {
@@ -648,6 +652,11 @@ impl SlotContext {
             }
         });
         b
+    }
+
+    pub(super) fn get_gc_write_back(&self) -> WriteBack {
+        let literal = self.wb_literal(|_| true);
+        WriteBack::new(vec![], literal, self.r15)
     }
 
     pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
@@ -1031,7 +1040,7 @@ impl BBContext {
     pub(in crate::compiler::jitgen) fn clear_above_next_sp(&mut self) {
         let sp = self.next_sp;
         for i in sp..SlotId(self.slots.len() as u16) {
-            self.clear(i)
+            self.discard(i)
         }
     }
 
@@ -1057,16 +1066,15 @@ impl BBContext {
             }
             LinkMode::Stack => {
                 ir.stack2reg(src, GP::Rax);
-                self.clear(dst);
                 ir.reg2stack(GP::Rax, dst);
+                self.def_stack(dst, guarded);
             }
             LinkMode::ConcreteValue(v) => {
-                self.clear(dst);
                 self.def_concrete_value(dst, v);
             }
             LinkMode::Accumulator => {
                 ir.reg2stack(GP::R15, src);
-                self.clear(src);
+                self.set_stack(src, guarded);
                 self.def_acc(dst, guarded)
             }
         }
@@ -1095,7 +1103,7 @@ impl BBContext {
 
     fn release_locals(&mut self) {
         for i in 1..1 + self.local_num as u16 {
-            self.clear(SlotId(i));
+            self.discard(SlotId(i));
         }
     }
 
@@ -1215,7 +1223,7 @@ impl BBContext {
         let CallSiteInfo { recv, dst, .. } = callsite;
         self.write_back_slot(ir, *recv);
         self.write_back_args(ir, callsite);
-        self.clear(*dst);
+        self.discard(*dst);
     }
 
     pub(super) fn write_back_args(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {

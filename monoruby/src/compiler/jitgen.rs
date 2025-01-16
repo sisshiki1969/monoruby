@@ -283,6 +283,227 @@ impl BBContext {
         ir.push(AsmInst::GuardClassVersion(cached_version, deopt));
         self.set_class_version_guard();
     }
+
+    pub fn guard_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
+        self.fetch_for_gpr(ir, slot, GP::Rax);
+        let deopt = self.new_deopt(ir);
+        ir.inst.push(AsmInst::GuardBaseClass { base_class, deopt });
+    }
+
+    pub fn exec_gc(&self, ir: &mut AsmIr) {
+        let wb = self.get_gc_write_back();
+        ir.exec_gc(wb);
+    }
+
+    pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
+        let ConstCache { version, value, .. } = cache;
+        let deopt = self.new_deopt(ir);
+        if let Some(f) = value.try_float() {
+            self.load_float_constant(ir, f, dst, *version, deopt);
+        } else {
+            self.load_generic_constant(ir, *value, dst, *version, deopt);
+        }
+    }
+
+    fn load_float_constant(
+        &mut self,
+        ir: &mut AsmIr,
+        f: f64,
+        dst: SlotId,
+        cached_version: usize,
+        deopt: AsmDeopt,
+    ) {
+        let fdst = self.def_new_both_float(dst);
+        ir.push(AsmInst::LoadFloatConstant {
+            fdst,
+            f,
+            cached_version,
+            deopt,
+        });
+        ir.reg2stack(GP::Rax, dst);
+    }
+
+    fn load_generic_constant(
+        &mut self,
+        ir: &mut AsmIr,
+        cached_val: Value,
+        dst: SlotId,
+        cached_version: usize,
+        deopt: AsmDeopt,
+    ) {
+        ir.push(AsmInst::LoadGenericConstant {
+            cached_val,
+            cached_version,
+            deopt,
+        });
+        self.rax2acc(ir, dst);
+    }
+
+    pub(super) fn block_arg(&self, ir: &mut AsmIr, ret: SlotId, outer: usize) {
+        let using_xmm = self.get_using_xmm();
+        let error = self.new_error(ir);
+        ir.push(AsmInst::BlockArg {
+            ret,
+            outer,
+            using_xmm,
+            error,
+        });
+    }
+
+    pub(super) fn load_svar(&mut self, ir: &mut AsmIr, id: u32) {
+        let using_xmm = self.get_using_xmm();
+        ir.push(AsmInst::LoadSVar { id, using_xmm });
+    }
+
+    pub(super) fn concat_str(&mut self, ir: &mut AsmIr, arg: SlotId, len: u16) {
+        let using_xmm = self.get_using_xmm();
+        ir.push(AsmInst::ConcatStr {
+            arg,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn concat_regexp(&mut self, ir: &mut AsmIr, arg: SlotId, len: u16) {
+        let using_xmm = self.get_using_xmm();
+        ir.push(AsmInst::ConcatRegexp {
+            arg,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn expand_array(&mut self, ir: &mut AsmIr, dst: SlotId, len: u16) {
+        let using_xmm = self.get_using_xmm();
+        let len = len as _;
+        ir.push(AsmInst::ExpandArray {
+            dst,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn alias_method(&self, ir: &mut AsmIr, new: IdentId, old: IdentId) {
+        let using_xmm = self.get_using_xmm();
+        let error = self.new_error(ir);
+        ir.push(AsmInst::AliasMethod {
+            new,
+            old,
+            using_xmm,
+        });
+        ir.handle_error(error);
+    }
+
+    ///
+    /// Set positional arguments for callee.
+    ///
+    pub(super) fn set_arguments(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+    ) {
+        let callee = &store[callee_fid];
+        let args = callsite.args;
+        let pos_num = callsite.pos_num;
+        let kw_pos = callsite.kw_pos;
+        let kw_num = callsite.kw_len();
+        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
+        let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
+        if !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !ex_positional
+            && !single_arg_expand
+            && !callee.is_rest()
+            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
+            && callee.req_num() <= pos_num
+        {
+            // write back keyword arguments.
+            for arg in kw_pos..kw_pos + kw_num {
+                self.write_back_slot(ir, arg);
+            }
+            // write back block argument.
+            if let Some(block_arg) = callsite.block_arg {
+                self.write_back_slot(ir, block_arg);
+            }
+            let ofs =
+                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
+                    (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
+                } else {
+                    0
+                };
+
+            ir.reg_sub(GP::Rsp, ofs);
+            for i in 0..pos_num {
+                let reg = args + i;
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, offset);
+            }
+            if pos_num != callee.max_positional_args() {
+                ir.push(AsmInst::I32ToReg(0, GP::Rax));
+                for i in pos_num..callee.max_positional_args() {
+                    let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+                    ir.reg2rsp_offset(GP::Rax, offset);
+                }
+            }
+            ir.reg_add(GP::Rsp, ofs);
+        } else {
+            self.write_back_args(ir, callsite);
+
+            let error = self.new_error(ir);
+            ir.push(AsmInst::SetArguments {
+                callid: callsite.id,
+                callee_fid,
+            });
+            ir.handle_error(error);
+        }
+    }
+
+    pub(super) fn set_binop_arguments(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callee_fid: FuncId,
+        mode: OpMode,
+    ) {
+        let callee = &store[callee_fid];
+        // callee.req_num() <= 1 at this point.
+        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
+        let xmm_flag = match mode {
+            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
+                matches!(self.mode(rhs), LinkMode::Xmm(_))
+            }
+            OpMode::RI(_, _) => false,
+        };
+        let ofs = if xmm_flag || callee.is_rest() {
+            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
+        } else {
+            0
+        };
+
+        ir.reg_sub(GP::Rsp, ofs);
+        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
+        self.fetch_rhs_for_callee(ir, mode, offset);
+        if 1 < callee.max_positional_args() {
+            ir.push(AsmInst::I32ToReg(0, GP::Rax));
+            for i in 1..callee.max_positional_args() {
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+                ir.reg2rsp_offset(GP::Rax, offset);
+            }
+        }
+        if callee.is_rest() {
+            ir.push(AsmInst::RSPOffsetToArray(offset));
+        }
+        ir.reg_add(GP::Rsp, ofs);
+    }
+
+    pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
+        let using_xmm = self.get_using_xmm();
+        let error = self.new_error(ir);
+        ir.push(AsmInst::GenericUnOp { func, using_xmm });
+        ir.handle_error(error);
+    }
 }
 
 ///
@@ -420,7 +641,7 @@ impl MergeContext {
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.clear(*reg));
+        unused.iter().for_each(|reg| self.discard(*reg));
     }
 }
 
@@ -619,6 +840,9 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Save floating point registers in use.
+    ///
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
         if using_xmm.not_any() {
             return;
@@ -639,6 +863,9 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Restore floating point registers in use.
+    ///
     pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
         if using_xmm.not_any() {
             return;

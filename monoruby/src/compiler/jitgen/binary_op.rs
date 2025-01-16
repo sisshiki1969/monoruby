@@ -42,13 +42,13 @@ impl BBContext {
             }
             BinOpK::Exp => {
                 self.fetch_fixnum_mode(ir, &mode);
-                self.clear(dst);
+                self.discard(dst);
                 self.integer_binop(ir, kind, mode);
                 self.reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
                 self.fetch_fixnum_mode(ir, &mode);
-                self.clear(dst);
+                self.discard(dst);
                 self.integer_binop(ir, kind, mode);
                 self.reg2acc_fixnum(ir, GP::Rax, dst);
             }
@@ -56,13 +56,13 @@ impl BBContext {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
                     let deopt = self.new_deopt(ir);
                     self.fetch_fixnum(ir, lhs, GP::Rdi, deopt);
-                    self.clear(dst);
+                    self.discard(dst);
                     self.integer_binop(ir, kind, mode);
                     self.reg2acc_fixnum(ir, GP::Rdi, dst);
                 }
                 _ => {
                     self.fetch_fixnum_mode(ir, &mode);
-                    self.clear(dst);
+                    self.discard(dst);
                     self.integer_binop(ir, kind, mode);
                     self.reg2acc_fixnum(ir, GP::Rax, dst);
                 }
@@ -86,7 +86,7 @@ impl BBContext {
         branch_dest: JitLabel,
     ) {
         self.fetch_binary(ir, mode);
-        self.clear(dst);
+        self.discard(dst);
         self.clear_above_next_sp();
         self.generic_cmp(ir, kind);
         ir.push(AsmInst::GenericCondBr {

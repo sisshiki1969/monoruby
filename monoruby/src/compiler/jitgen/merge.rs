@@ -194,7 +194,7 @@ impl BBContext {
     ///
     fn remove_unused(&mut self, unused: &[SlotId]) {
         for r in unused {
-            self.clear(*r);
+            self.discard(*r);
         }
     }
 
