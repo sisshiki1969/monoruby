@@ -72,10 +72,12 @@ impl Codegen {
                 self.store_r15(r);
             }
             AsmInst::RegToAcc(r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq r15, R(r);
-                );
+                if r != GP::R15 {
+                    let r = r as u64;
+                    monoasm!( &mut self.jit,
+                        movq r15, R(r);
+                    );
+                }
             }
             AsmInst::RegToStack(r, slot) => {
                 let r = r as u64;
@@ -122,6 +124,12 @@ impl Codegen {
                     monoasm! { &mut self.jit,
                         subq R(r), (i);
                     }
+                }
+            }
+            AsmInst::RegAnd(r, i) => {
+                let r = r as u64;
+                monoasm! { &mut self.jit,
+                    andq R(r), (i);
                 }
             }
             AsmInst::RegToRSPOffset(r, ofs) => {
@@ -171,7 +179,7 @@ impl Codegen {
                     movq  xmm(x.enc()), [rip + f];
                 );
             }
-            AsmInst::IntToXmm(r, x) => {
+            AsmInst::FixnumToXmm(r, x) => {
                 self.integer_val_to_f64(r, x);
             }
             AsmInst::FloatToXmm(reg, x, deopt) => {
@@ -186,15 +194,7 @@ impl Codegen {
             }
             AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &[slots]),
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
-            AsmInst::DeepCopyLit(v, using_xmm) => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                  movq rdi, (v.id());
-                  movq rax, (Value::value_deep_copy);
-                  call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
+            AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
             AsmInst::GuardClassVersion(cached_version, deopt) => {
                 let deopt = labels[deopt];
@@ -450,28 +450,37 @@ impl Codegen {
             }
             AsmInst::IntegerBinOp {
                 kind,
+                lhs,
+                rhs,
                 mode,
-                using_xmm,
                 deopt,
-                error,
             } => {
                 let deopt = labels[deopt];
-                let error = labels[error];
-                self.integer_binop(&mode, kind, deopt, error, using_xmm);
+                self.integer_binop(lhs, rhs, &mode, kind, deopt);
+            }
+            AsmInst::IntegerExp { using_xmm } => {
+                self.integer_exp(using_xmm);
             }
 
             AsmInst::GenericCmp { kind, using_xmm } => {
                 self.generic_cmp(&kind, using_xmm);
             }
-            AsmInst::IntegerCmp { kind, mode } => self.integer_cmp(kind, mode),
+            AsmInst::IntegerCmp {
+                mode,
+                kind,
+                lhs,
+                rhs,
+            } => self.integer_cmp(kind, mode, lhs, rhs),
             AsmInst::IntegerCmpBr {
                 mode,
                 kind,
+                lhs,
+                rhs,
                 brkind,
                 branch_dest,
             } => {
                 let branch_dest = ctx.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_integer(&mode);
+                self.cmp_integer(&mode, lhs, rhs);
                 self.condbr_int(kind, branch_dest, brkind);
             }
             AsmInst::FloatCmp { kind, mode } => {
@@ -492,7 +501,7 @@ impl Codegen {
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
-            AsmInst::GuardBaseClass { base_class, deopt } => {
+            AsmInst::GuardConstBaseClass { base_class, deopt } => {
                 let deopt = labels[deopt];
                 let cached_base_class = self.jit.const_i64(base_class.id() as _);
                 monoasm! { &mut self.jit,
@@ -500,22 +509,12 @@ impl Codegen {
                     jne  deopt;
                 }
             }
-            AsmInst::LoadFloatConstant {
-                fdst,
-                f,
-                cached_version,
+            AsmInst::GuardConstVersion {
+                const_version,
                 deopt,
             } => {
                 let deopt = labels[deopt];
-                self.load_float_constant(fdst, deopt, f, cached_version);
-            }
-            AsmInst::LoadGenericConstant {
-                cached_val,
-                cached_version,
-                deopt,
-            } => {
-                let deopt = labels[deopt];
-                self.load_generic_constant(deopt, cached_val, cached_version);
+                self.guard_const_version(const_version, deopt);
             }
             AsmInst::StoreConstant { id, using_xmm } => {
                 self.store_constant(id, using_xmm);

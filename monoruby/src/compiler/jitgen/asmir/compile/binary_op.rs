@@ -17,26 +17,28 @@ use super::*;
 impl Codegen {
     pub(super) fn integer_binop(
         &mut self,
+        lhs: GP,
+        rhs: GP,
         mode: &OpMode,
         kind: BinOpK,
         deopt: DestLabel,
-        error: DestLabel,
-        using_xmm: UsingXmm,
     ) {
+        let lhs_r = lhs as u64;
+        let rhs_r = rhs as u64;
         match kind {
             BinOpK::Add => {
                 let overflow = self.jit.label();
                 match mode {
                     OpMode::RR(_, _) => {
                         monoasm!( &mut self.jit,
-                            subq rdi, 1;
-                            addq rdi, rsi;
+                            subq R(lhs_r), 1;
+                            addq R(lhs_r), R(rhs_r);
                             jo overflow;
                         );
                     }
                     OpMode::RI(_, i) | OpMode::IR(i, _) => {
                         monoasm!( &mut self.jit,
-                            addq rdi, (Value::i32(*i as i32).id() - 1);
+                            addq  R(lhs_r), (Value::i32(*i as i32).id() - 1);
                             jo overflow;
                         );
                     }
@@ -54,23 +56,21 @@ impl Codegen {
                 match mode {
                     OpMode::RR(_, _) => {
                         monoasm!( &mut self.jit,
-                            subq rdi, 1;
-                            sarq rsi,1;
-                            imul rdi, rsi;
-                            jo overflow;
-                            orq  rdi, 1;
+                            sarq R(rhs_r),1;
                         );
                     }
                     OpMode::RI(_, i) | OpMode::IR(i, _) => {
                         monoasm!( &mut self.jit,
-                            subq rdi, 1;
-                            movq rsi, (*i as i64);
-                            imul rdi, rsi;
-                            jo overflow;
-                            orq  rdi, 1;
+                            movq R(rhs_r), (*i as i64);
                         );
                     }
                 }
+                monoasm!( &mut self.jit,
+                    subq R(lhs_r), 1;
+                    imul R(lhs_r), R(rhs_r);
+                    jo overflow;
+                    orq  R(lhs_r), 1;
+                );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
@@ -84,23 +84,23 @@ impl Codegen {
                 match mode {
                     OpMode::RR(_, _) => {
                         monoasm!( &mut self.jit,
-                            subq rdi, rsi;
+                            subq R(lhs_r), R(rhs_r);
                             jo overflow;
-                            addq rdi, 1;
+                            addq R(lhs_r), 1;
                         );
                     }
                     OpMode::RI(_, rhs) => {
                         monoasm!( &mut self.jit,
-                            subq rdi, (Value::i32(*rhs as i32).id() - 1);
+                            subq R(lhs_r), (Value::i32(*rhs as i32).id() - 1);
                             jo overflow;
                         );
                     }
                     OpMode::IR(lhs, _) => {
                         monoasm!( &mut self.jit,
-                            movq rdi, (Value::i32(*lhs as i32).id());
-                            subq rdi, rsi;
+                            movq R(lhs_r), (Value::i32(*lhs as i32).id());
+                            subq R(lhs_r), R(rhs_r);
                             jo overflow;
-                            addq rdi, 1;
+                            addq R(lhs_r), 1;
                         );
                     }
                 }
@@ -112,110 +112,99 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Exp => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    sarq rdi, 1;
-                    sarq rsi, 1;
-                    movq rax, (pow_ii as u64);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
             BinOpK::Div => {
                 let zero_div = self.jit.label();
                 monoasm!( &mut self.jit,
-                    sarq rsi, 1;
-                    testq rsi, rsi;
+                    sarq R(rhs_r), 1;
+                    testq R(rhs_r), R(rhs_r);
                     jeq  zero_div;
-                    movq rax, rdi;
+                    movq rax, R(lhs_r);
                     sarq rax, 1;
                     cqo;
-                    idiv rsi;
+                    idiv R(rhs_r);
                     salq rax, 1;
                     orq  rax, 1;
                 );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 zero_div:
-                    movq rdi, rbx;
-                    movq rax, (runtime::err_divide_by_zero);
-                    call rax;
-                    xorq rax, rax;
-                    jmp error;
+                    movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
+                    jmp deopt;
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Rem => match mode {
-                OpMode::RI(_, rhs) if *rhs > 0 && (*rhs as u64).is_power_of_two() => {
-                    monoasm!( &mut self.jit,
-                        andq rdi, (*rhs * 2 - 1);
-                    );
-                }
-                _ => {
-                    let zero_div = self.jit.label();
-                    monoasm!( &mut self.jit,
-                        sarq rsi, 1;
-                        testq rsi, rsi;
-                        jeq  zero_div;
-                        movq rax, rdi;
-                        sarq rax, 1;
-                        cqo;
-                        idiv rsi;
-                        movq rax, rdx;
-                        salq rax, 1;
-                        orq  rax, 1;
-                    );
-                    self.jit.select_page(1);
-                    monoasm!( &mut self.jit,
-                    zero_div:
-                        movq rdi, rbx;
-                        movq rax, (runtime::err_divide_by_zero);
-                        call rax;
-                        xorq rax, rax;
-                        jmp error;
-                    );
-                    self.jit.select_page(0);
-                }
-            },
+            BinOpK::Rem => {
+                let zero_div = self.jit.label();
+                monoasm!( &mut self.jit,
+                    sarq R(rhs_r), 1;
+                    testq R(rhs_r), R(rhs_r);
+                    jeq  zero_div;
+                    movq rax, R(lhs_r);
+                    sarq rax, 1;
+                    cqo;
+                    idiv R(rhs_r);
+                    movq rax, rdx;
+                    salq rax, 1;
+                    orq  rax, 1;
+                );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                zero_div:
+                    movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
+                    jmp deopt;
+                );
+                self.jit.select_page(0);
+            }
             BinOpK::BitOr => match mode {
                 OpMode::RR(_, _) => {
                     monoasm!( &mut self.jit,
-                        orq rdi, rsi;
+                        orq R(lhs as u64), R(rhs as u64);
                     );
                 }
                 OpMode::RI(_, i) | OpMode::IR(i, _) => {
                     monoasm!( &mut self.jit,
-                        orq rdi, (Value::i32(*i as i32).id());
+                        orq R(lhs as u64), (Value::i32(*i as i32).id());
                     );
                 }
             },
             BinOpK::BitAnd => match mode {
                 OpMode::RR(_, _) => {
                     monoasm!( &mut self.jit,
-                        andq rdi, rsi;
+                        andq R(lhs as u64), R(rhs as u64);
                     );
                 }
                 OpMode::RI(_, i) | OpMode::IR(i, _) => {
                     monoasm!( &mut self.jit,
-                        andq rdi, (Value::i32(*i as i32).id());
+                        andq R(lhs as u64), (Value::i32(*i as i32).id());
                     );
                 }
             },
             BinOpK::BitXor => match mode {
                 OpMode::RR(_, _) => {
                     monoasm!( &mut self.jit,
-                        xorq rdi, rsi;
-                        addq rdi, 1;
+                        xorq R(lhs as u64), R(rhs as u64);
+                        addq R(lhs as u64), 1;
                     );
                 }
                 OpMode::RI(_, i) | OpMode::IR(i, _) => {
                     monoasm!( &mut self.jit,
-                        xorq rdi, (Value::i32(*i as i32).id() - 1);
+                        xorq R(lhs as u64), (Value::i32(*i as i32).id() - 1);
                     );
                 }
             },
+            _ => unreachable!(),
         }
+    }
+
+    pub(super) fn integer_exp(&mut self, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            sarq rdi, 1;
+            sarq rsi, 1;
+            movq rax, (pow_ii as u64);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
     }
 
     ///
@@ -659,27 +648,34 @@ impl Codegen {
 
     cmp_main!(eq, ne, lt, le, gt, ge);
 
-    pub(super) fn integer_cmp(&mut self, kind: CmpKind, mode: OpMode) {
+    pub(super) fn integer_cmp(&mut self, kind: CmpKind, mode: OpMode, lhs: GP, rhs: GP) {
         if matches!(kind, CmpKind::Cmp) {
             match mode {
                 OpMode::RR(..) => {}
                 OpMode::RI(_, r) => {
                     monoasm!( &mut self.jit,
-                        movq rsi, (Value::i32(r as i32).id());
+                        movq R(rhs as u64), (Value::i32(r as i32).id());
                     );
                 }
                 OpMode::IR(l, _) => {
                     monoasm!( &mut self.jit,
-                        movq rdi, (Value::i32(l as i32).id());
+                        movq R(lhs as u64), (Value::i32(l as i32).id());
                     );
                 }
             }
-            self.icmp_cmp();
+            monoasm! { &mut self.jit,
+                movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());
+                movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
+                cmpq R(lhs as u64), R(rhs as u64);
+                cmovgtq rax, rdx;
+                movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
+                cmovltq rax, rdx;
+            };
         } else {
             monoasm! { &mut self.jit,
                 xorq rax, rax;
             };
-            self.cmp_integer(&mode);
+            self.cmp_integer(&mode, lhs, rhs);
             self.flag_to_bool(kind);
         }
     }
@@ -769,22 +765,22 @@ impl Codegen {
     ///
     /// - rdi
     ///
-    pub(super) fn cmp_integer(&mut self, mode: &OpMode) {
+    pub(super) fn cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
         match mode {
             OpMode::RR(..) => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, rsi;
+                    cmpq R(lhs as u64), R(rhs as u64);
                 );
             }
             OpMode::RI(_, r) => {
                 monoasm!( &mut self.jit,
-                    cmpq rdi, (Value::i32(*r as i32).id());
+                    cmpq R(lhs as u64), (Value::i32(*r as i32).id());
                 );
             }
             OpMode::IR(l, _) => {
                 monoasm!( &mut self.jit,
-                    movq rdi, (Value::i32(*l as i32).id());
-                    cmpq rdi, rsi;
+                    movq R(lhs as u64), (Value::i32(*l as i32).id());
+                    cmpq R(lhs as u64), R(rhs as u64);
                 );
             }
         }

@@ -11,7 +11,7 @@ impl JitContext {
     ) -> bool {
         assert!(!self_class.is_always_frozen());
         bbctx.discard(dst);
-        ir.stack2reg(SlotId(0), GP::Rdi);
+        ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         let ivar_heap = if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::LoadIVarInline { ivarid });
@@ -37,8 +37,8 @@ impl JitContext {
         ivarid: IvarId,
     ) -> bool {
         assert!(!self_class.is_always_frozen());
-        bbctx.fetch_for_gpr(ir, src, GP::Rax);
-        ir.stack2reg(SlotId(0), GP::Rdi);
+        bbctx.fetch(ir, src, GP::Rax);
+        ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { ivarid });

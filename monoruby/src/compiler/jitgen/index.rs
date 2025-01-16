@@ -31,11 +31,11 @@ impl BBContext {
         let deopt = self.new_deopt(ir);
         self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
         if let Some(idx) = self.is_u16_literal(idx) {
-            self.fetch_for_gpr(ir, src, GP::Rdx);
+            self.fetch(ir, src, GP::Rdx);
             ir.array_u16_index_assign(self, idx);
         } else {
             self.fetch_fixnum(ir, idx, GP::Rsi, deopt);
-            self.fetch_for_gpr(ir, src, GP::Rdx);
+            self.fetch(ir, src, GP::Rdx);
             ir.array_index_assign(self);
         }
     }

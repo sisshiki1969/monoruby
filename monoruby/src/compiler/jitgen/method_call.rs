@@ -156,7 +156,7 @@ impl JitContext {
         bbctx.guard_class_version(ir, version, deopt);
 
         // receiver class guard
-        bbctx.fetch_for_gpr(ir, recv, GP::Rdi);
+        bbctx.fetch(ir, recv, GP::Rdi);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
@@ -266,7 +266,7 @@ impl JitContext {
                 } else {
                     return CompileResult::Recompile;
                 };
-                bbctx.fetch_for_gpr(ir, args, GP::Rax);
+                bbctx.fetch(ir, args, GP::Rax);
                 let is_object_ty = store[recv_class].is_object_ty_instance();
                 let using_xmm = bbctx.get_using_xmm();
                 if is_object_ty && ivarid.is_inline() {

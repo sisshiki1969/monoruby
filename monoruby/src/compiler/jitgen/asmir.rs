@@ -155,6 +155,10 @@ impl AsmIr {
         self.push(AsmInst::RegSub(r, i));
     }
 
+    pub(super) fn reg_and(&mut self, r: GP, i: u64) {
+        self.push(AsmInst::RegAnd(r, i));
+    }
+
     pub(super) fn reg2rsp_offset(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegToRSPOffset(r, i));
     }
@@ -171,6 +175,10 @@ impl AsmIr {
 
     pub(crate) fn stack2reg(&mut self, src: SlotId, dst: GP) {
         self.push(AsmInst::StackToReg(src, dst));
+    }
+
+    pub(crate) fn self2reg(&mut self, dst: GP) {
+        self.push(AsmInst::StackToReg(SlotId::self_(), dst));
     }
 
     pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
@@ -220,8 +228,20 @@ impl AsmIr {
         self.push(AsmInst::AccToStack(reg));
     }
 
-    pub fn int2xmm(&mut self, reg: GP, x: Xmm) {
-        self.push(AsmInst::IntToXmm(reg, x));
+    ///
+    /// Convert Fixnum to f64.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    /// - R(*reg*)
+    ///
+    pub fn fixnum2xmm(&mut self, reg: GP, x: Xmm) {
+        self.push(AsmInst::FixnumToXmm(reg, x));
     }
 
     ///
@@ -247,15 +267,29 @@ impl AsmIr {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
+    ///
+    /// Move *f*(f64) to Xmm(*x*).
+    ///
     pub fn f64toxmm(&mut self, f: f64, x: Xmm) {
         self.push(AsmInst::F64ToXmm(f, x));
     }
 
-    pub fn i64toboth(&mut self, i: i64, reg: SlotId, x: Xmm) {
-        self.push(AsmInst::I64ToBoth(i, reg, x));
+    ///
+    /// Move *i*(i63) to the stack *slot* and Xmm(*x*).
+    ///
+    pub fn i64toboth(&mut self, i: i64, slot: SlotId, x: Xmm) {
+        self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
-    /// rax = val
+    ///
+    /// Deep copy *v* and store it to `rax`.
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     pub(super) fn deep_copy_lit(&mut self, using_xmm: UsingXmm, val: Value) {
         self.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
@@ -326,12 +360,16 @@ impl AsmIr {
         &mut self,
         mode: OpMode,
         kind: CmpKind,
+        lhs: GP,
+        rhs: GP,
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
         self.push(AsmInst::IntegerCmpBr {
             mode,
             kind,
+            lhs,
+            rhs,
             brkind,
             branch_dest,
         });
@@ -515,6 +553,7 @@ pub(super) enum AsmInst {
     RegMove(GP, GP),
     RegAdd(GP, i32),
     RegSub(GP, i32),
+    RegAnd(GP, u64),
     RegToRSPOffset(GP, i32),
     I32ToRSPOffset(i32, i32),
 
@@ -533,9 +572,13 @@ pub(super) enum AsmInst {
         dst: Xmm,
     },
 
-    /// move f64 to xmm
+    ///
+    /// Move f64 to xmm.
+    ///
     F64ToXmm(f64, Xmm),
-    /// move i64 to both of xmm and a stack slot
+    ///
+    /// Move *i*(i63) to the stack slot *reg* and Xmm(*x*).
+    ///
     I64ToBoth(i64, SlotId, Xmm),
     ///
     /// Generate convert code from Xmm to Both.
@@ -548,13 +591,53 @@ pub(super) enum AsmInst {
     ///
     XmmToStack(Xmm, SlotId),
     ///
+    /// Move Value *v* to stack slot *reg*.
+    ///
     /// ### destroy
     /// - rax
     ///
     LitToStack(Value, SlotId),
+    ///
+    /// Deep copy *v* and store it to `rax`.
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
     DeepCopyLit(Value, UsingXmm),
+    ///
+    /// Convert Value to f64.
+    ///
+    /// go to *deopt* if *reg* was neither Float nor Fixnum(i63).
+    ///
+    /// ### in
+    ///
+    /// - R(*reg*): Value
+    ///
+    /// ### out
+    ///
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rdi, R(*reg*)
+    ///
     NumToXmm(GP, Xmm, AsmDeopt),
-    IntToXmm(GP, Xmm),
+    ///
+    /// Convert Fixnum to f64.
+    ///
+    /// ### in
+    /// - R(*reg*): Value
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    /// - R(*reg*)
+    ///
+    FixnumToXmm(GP, Xmm),
     ///
     /// Float guard and unboxing.
     ///
@@ -576,25 +659,6 @@ pub(super) enum AsmInst {
     ///
     FloatToXmm(GP, Xmm, AsmDeopt),
 
-    /*///
-    /// Class version guard fro JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    GuardClassVersionWithRecovery(FuncId, u32, CallSiteId, UsingXmm, AsmDeopt, AsmError),*/
     ///
     /// Class version guard for JIT.
     ///
@@ -647,9 +711,13 @@ pub(super) enum AsmInst {
 
     Preparation,
     Init(FnInitInfo),
-    /// deoptimize
+    ///
+    /// Deoptimize and fallback to interpreter.
+    ///
     Deopt(AsmDeopt),
-    /// recompile and deoptimize
+    ///
+    /// Deoptimize and after several times, recompile whole method or loop..
+    ///
     RecompileDeopt {
         position: Option<BytecodePtr>,
         deopt: AsmDeopt,
@@ -690,6 +758,7 @@ pub(super) enum AsmInst {
     ///
     /// ### destroy
     /// - caller save registers
+    ///
     Send {
         callid: CallSiteId,
         recv_class: ClassId,
@@ -787,10 +856,13 @@ pub(super) enum AsmInst {
     ///
     IntegerBinOp {
         kind: BinOpK,
+        lhs: GP,
+        rhs: GP,
         mode: OpMode,
-        using_xmm: UsingXmm,
         deopt: AsmDeopt,
-        error: AsmError,
+    },
+    IntegerExp {
+        using_xmm: UsingXmm,
     },
 
     ///
@@ -815,6 +887,8 @@ pub(super) enum AsmInst {
     IntegerCmp {
         mode: OpMode,
         kind: CmpKind,
+        lhs: GP,
+        rhs: GP,
     },
     ///
     /// Integer comparison and conditional branch
@@ -825,6 +899,8 @@ pub(super) enum AsmInst {
     IntegerCmpBr {
         mode: OpMode,
         kind: CmpKind,
+        lhs: GP,
+        rhs: GP,
         brkind: BrKind,
         branch_dest: JitLabel,
     },
@@ -839,19 +915,24 @@ pub(super) enum AsmInst {
         branch_dest: JitLabel,
     },
 
-    GuardBaseClass {
+    ///
+    /// Guard for the base class of the constant.
+    ///
+    /// ### in
+    /// - rax: Class
+    ///
+    GuardConstBaseClass {
         base_class: Value,
         deopt: AsmDeopt,
     },
-    LoadFloatConstant {
-        fdst: Xmm,
-        f: f64,
-        cached_version: usize,
-        deopt: AsmDeopt,
-    },
-    LoadGenericConstant {
-        cached_val: Value,
-        cached_version: usize,
+    ///
+    /// Guard for constant version.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    GuardConstVersion {
+        const_version: usize,
         deopt: AsmDeopt,
     },
     StoreConstant {
