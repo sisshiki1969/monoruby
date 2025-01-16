@@ -27,7 +27,6 @@ mod index;
 mod init_method;
 mod merge;
 mod method_call;
-mod read_slot;
 mod slot;
 pub mod trace_ir;
 mod variables;
@@ -216,10 +215,7 @@ impl BBContext {
     ) {
         if let Some(dst) = dst.into() {
             self.clear_above_next_sp();
-            if !self.is_r15(dst) {
-                self.writeback_acc(ir);
-            }
-            self.def_acc(dst, guarded);
+            self.def_acc(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
     }
@@ -239,12 +235,6 @@ impl BBContext {
 
     pub(crate) fn new_error(&self, ir: &mut AsmIr) -> AsmError {
         ir.new_error(self.pc(), self.get_write_back())
-    }
-
-    pub(crate) fn new_deopt_error(&self, ir: &mut AsmIr) -> (AsmDeopt, AsmError) {
-        let pc = self.pc();
-        let wb = self.get_write_back();
-        (ir.new_deopt(pc, wb.clone()), ir.new_error(pc, wb))
     }
 
     pub(super) fn deopt(&self, ir: &mut AsmIr) {
@@ -284,10 +274,17 @@ impl BBContext {
         self.set_class_version_guard();
     }
 
-    pub fn guard_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
-        self.fetch_for_gpr(ir, slot, GP::Rax);
+    ///
+    /// Guard for the base class object of the constant in *slot*.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
+        self.fetch(ir, slot, GP::Rax);
         let deopt = self.new_deopt(ir);
-        ir.inst.push(AsmInst::GuardBaseClass { base_class, deopt });
+        ir.inst
+            .push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
 
     pub fn exec_gc(&self, ir: &mut AsmIr) {
@@ -298,45 +295,18 @@ impl BBContext {
     pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
         let deopt = self.new_deopt(ir);
+        ir.push(AsmInst::GuardConstVersion {
+            const_version: *version,
+            deopt,
+        });
+        ir.lit2reg(*value, GP::Rax);
         if let Some(f) = value.try_float() {
-            self.load_float_constant(ir, f, dst, *version, deopt);
+            let fdst = self.def_new_both_float(dst);
+            ir.f64toxmm(f, fdst);
+            ir.reg2stack(GP::Rax, dst);
         } else {
-            self.load_generic_constant(ir, *value, dst, *version, deopt);
+            self.reg2acc(ir, GP::Rax, dst);
         }
-    }
-
-    fn load_float_constant(
-        &mut self,
-        ir: &mut AsmIr,
-        f: f64,
-        dst: SlotId,
-        cached_version: usize,
-        deopt: AsmDeopt,
-    ) {
-        let fdst = self.def_new_both_float(dst);
-        ir.push(AsmInst::LoadFloatConstant {
-            fdst,
-            f,
-            cached_version,
-            deopt,
-        });
-        ir.reg2stack(GP::Rax, dst);
-    }
-
-    fn load_generic_constant(
-        &mut self,
-        ir: &mut AsmIr,
-        cached_val: Value,
-        dst: SlotId,
-        cached_version: usize,
-        deopt: AsmDeopt,
-    ) {
-        ir.push(AsmInst::LoadGenericConstant {
-            cached_val,
-            cached_version,
-            deopt,
-        });
-        self.rax2acc(ir, dst);
     }
 
     pub(super) fn block_arg(&self, ir: &mut AsmIr, ret: SlotId, outer: usize) {
@@ -962,7 +932,7 @@ impl Codegen {
     }
 
     ///
-    /// Generate convert code from xmm to stack slots.
+    /// Convert xmm to stack slots *v*.
     ///
     /// ### out
     /// - rax: Value
@@ -987,6 +957,8 @@ impl Codegen {
     }
 
     ///
+    /// Move Value *v* to stack slot *reg*.
+    ///
     /// ### destroy
     /// - rax
     ///
@@ -1002,6 +974,25 @@ impl Codegen {
                 movq [r14 - (conv(reg))], rax;
             }
         }
+    }
+
+    ///
+    /// Deep copy *v* and store it to `rax`.
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn deepcopy_literal(&mut self, v: Value, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+          movq rdi, (v.id());
+          movq rax, (Value::value_deep_copy);
+          call rax;
+        );
+        self.xmm_restore(using_xmm);
     }
 
     ///

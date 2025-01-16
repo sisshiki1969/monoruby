@@ -1,5 +1,7 @@
 use super::*;
 
+mod read_slot;
+
 #[derive(Clone)]
 pub(crate) struct SlotContext {
     slots: Vec<SlotState>,
@@ -42,31 +44,6 @@ impl SlotContext {
     pub(super) fn guarded(&self, slot: SlotId) -> Guarded {
         self.slots[slot.0 as usize].guarded
     }
-
-    ///
-    /// Discard slot *reg*.
-    ///
-    /// *reg* is set to LinkMode::Stack / Guarded::Value.
-    ///
-    pub(crate) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
-        if let Some(slot) = slot.into() {
-            match self.mode(slot) {
-                LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
-                    assert!(self.xmm(xmm).contains(&slot));
-                    self.xmm_remove(slot, xmm);
-                }
-                LinkMode::ConcreteValue(_) => {}
-                LinkMode::Accumulator => {
-                    assert_eq!(self.r15, Some(slot));
-                    self.r15 = None;
-                }
-                LinkMode::Stack => {}
-            }
-            self.set_guarded(slot, Guarded::Value);
-            self.is_used_mut(slot).kill();
-            self.set_mode(slot, LinkMode::Stack);
-        }
-    }
 }
 
 impl SlotContext {
@@ -99,15 +76,82 @@ impl SlotContext {
     }
 
     ///
+    /// Allocate a new xmm register.
+    ///
+    /// ### Panics
+    /// If there is no vacant xmm register.
+    ///
+    fn alloc_xmm(&mut self) -> Xmm {
+        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
+            if xmm.is_empty() {
+                return Xmm(flhs as u16);
+            }
+        }
+        panic!("no xmm reg is vacant.")
+    }
+
+    fn clear(&mut self, slot: SlotId) {
+        match self.mode(slot) {
+            LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
+                assert!(self.xmm(xmm).contains(&slot));
+                self.xmm_remove(slot, xmm);
+            }
+            LinkMode::ConcreteValue(_) => {}
+            LinkMode::Accumulator => {
+                assert_eq!(self.r15, Some(slot));
+                self.r15 = None;
+            }
+            LinkMode::Stack => {}
+        }
+    }
+
+    ///
+    /// Discard slot *reg*.
+    ///
+    /// *reg* is set to LinkMode::Stack / Guarded::Value.
+    ///
+    pub(crate) fn discard(&mut self, slot: impl Into<Option<SlotId>>) {
+        if let Some(slot) = slot.into() {
+            self.clear(slot);
+            self.set_guarded(slot, Guarded::Value);
+            self.is_used_mut(slot).kill();
+            self.set_mode(slot, LinkMode::Stack);
+        }
+    }
+
+    ///
+    /// _ -> Stack
+    ///
+    fn set_stack(&mut self, slot: SlotId, guarded: Guarded) {
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::Stack);
+        self.set_guarded(slot, guarded);
+    }
+
+    ///
     /// Xmm/Both(_) -> Xmm(xmm)
     ///
     fn set_xmm(&mut self, slot: SlotId, xmm: Xmm) {
-        if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
-            self.xmm_remove(slot, old_xmm);
-        }
+        //if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
+        //    self.xmm_remove(slot, old_xmm);
+        //}
+        self.clear(slot);
         self.set_mode(slot, LinkMode::Xmm(xmm));
         self.xmm_add(slot, xmm);
         self.set_guarded(slot, Guarded::Float);
+    }
+
+    ///
+    /// Xmm/Both(_) -> Both(xmm)
+    ///
+    fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
+        //if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
+        //    self.xmm_remove(slot, old_xmm);
+        //}
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::Both(xmm));
+        self.xmm_add(slot, xmm);
+        self.set_guarded(slot, guarded);
     }
 
     ///
@@ -117,18 +161,6 @@ impl SlotContext {
         let x = self.alloc_xmm();
         self.set_xmm(slot, x);
         x
-    }
-
-    ///
-    /// Xmm/Both(_) -> Both(xmm)
-    ///
-    fn set_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
-        if let LinkMode::Xmm(old_xmm) | LinkMode::Both(old_xmm) = self.mode(slot) {
-            self.xmm_remove(slot, old_xmm);
-        }
-        self.set_mode(slot, LinkMode::Both(xmm));
-        self.xmm_add(slot, xmm);
-        self.set_guarded(slot, guarded);
     }
 
     ///
@@ -145,41 +177,6 @@ impl SlotContext {
     ///
     fn set_both_float(&mut self, slot: SlotId, xmm: Xmm) {
         self.set_both(slot, xmm, Guarded::Float)
-    }
-
-    ///
-    /// _ -> Stack
-    ///
-    fn set_stack(&mut self, slot: SlotId, guarded: Guarded) {
-        match self.mode(slot) {
-            LinkMode::Both(xmm) | LinkMode::Xmm(xmm) => {
-                assert!(self.xmm(xmm).contains(&slot));
-                self.xmm_remove(slot, xmm);
-            }
-            LinkMode::ConcreteValue(_) => {}
-            LinkMode::Accumulator => {
-                assert_eq!(self.r15, Some(slot));
-                self.r15 = None;
-            }
-            LinkMode::Stack => {}
-        }
-        self.set_mode(slot, LinkMode::Stack);
-        self.set_guarded(slot, guarded);
-    }
-
-    ///
-    /// Allocate a new xmm register.
-    ///
-    /// ### Panics
-    /// If there is no vacant xmm register.
-    ///
-    fn alloc_xmm(&mut self) -> Xmm {
-        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
-            if xmm.is_empty() {
-                return Xmm(flhs as u16);
-            }
-        }
-        panic!("no xmm reg is vacant.")
     }
 }
 
@@ -200,7 +197,6 @@ impl SlotContext {
     pub(super) fn def_xmm(&mut self, slot: SlotId, xmm: Xmm) {
         self.discard(slot);
         self.set_xmm(slot, xmm);
-        self.xmm_add(slot, xmm);
     }
 
     ///
@@ -218,7 +214,6 @@ impl SlotContext {
     pub(super) fn def_both(&mut self, slot: SlotId, xmm: Xmm, guarded: Guarded) {
         self.discard(slot);
         self.set_both(slot, xmm, guarded);
-        self.xmm_add(slot, xmm);
     }
 
     ///
@@ -228,10 +223,6 @@ impl SlotContext {
         let x = self.alloc_xmm();
         self.def_both(slot, x, guarded);
         x
-    }
-
-    fn def_new_both_integer(&mut self, slot: SlotId) -> Xmm {
-        self.def_new_both(slot, Guarded::Fixnum)
     }
 
     pub(super) fn def_new_both_float(&mut self, slot: SlotId) -> Xmm {
@@ -246,18 +237,6 @@ impl SlotContext {
         self.discard(slot);
         self.set_mode(slot, LinkMode::ConcreteValue(v));
         self.set_guarded(slot, guarded);
-    }
-
-    ///
-    /// Link *slot* to the accumulator.
-    ///
-    pub(super) fn def_acc(&mut self, slot: impl Into<Option<SlotId>>, guarded: Guarded) {
-        if let Some(slot) = slot.into() {
-            self.discard(slot);
-            self.set_mode(slot, LinkMode::Accumulator);
-            self.set_guarded(slot, guarded);
-            self.r15 = Some(slot);
-        }
     }
 
     // APIs for 'use'
@@ -427,7 +406,9 @@ impl SlotContext {
     }
 
     ///
-    /// Clear the LinkMode::R15 slot.
+    /// Write back acc(`r15``) to the stack slot.
+    ///
+    /// The slot is set to LinkMode::Stack.
     ///
     pub(super) fn write_back_acc(&mut self, ir: &mut AsmIr, sp: SlotId) {
         if let Some(slot) = self.r15 {
@@ -446,143 +427,6 @@ impl SlotContext {
 }
 
 impl SlotContext {
-    ///
-    /// fetch *slot* and store in *dst*.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    pub(super) fn fetch_gpr(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
-        assert_ne!(dst, GP::R15);
-        self.use_as_value(slot);
-        match self.mode(slot) {
-            LinkMode::Xmm(xmm) => {
-                // Xmm(x) -> Both(x)
-                ir.xmm2stack(xmm, slot);
-                ir.reg_move(GP::Rax, dst);
-                self.set_both_float(slot, xmm);
-            }
-            LinkMode::ConcreteValue(v) => {
-                ir.lit2reg(v, dst);
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                ir.stack2reg(slot, dst);
-            }
-            LinkMode::Accumulator => {
-                ir.reg_move(GP::R15, dst);
-            }
-        }
-    }
-
-    ///
-    /// fetch *slot* and store in callee stack with `offset`.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    ///
-    pub(super) fn fetch_for_callee_stack(&mut self, ir: &mut AsmIr, slot: SlotId, offset: i32) {
-        match self.mode(slot) {
-            LinkMode::Accumulator => {
-                self.use_as_value(slot);
-                ir.reg2rsp_offset(GP::R15, offset);
-            }
-            _ => {
-                self.fetch_gpr(ir, slot, GP::Rax);
-                ir.reg2rsp_offset(GP::Rax, offset);
-            }
-        }
-    }
-
-    ///
-    /// Read from a *slot* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi
-    ///
-    pub(super) fn fetch_integer_for_xmm(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        deopt: AsmDeopt,
-    ) -> Xmm {
-        self.use_as_float(slot);
-        match self.mode(slot) {
-            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.def_new_both_integer(slot);
-                ir.stack2reg(slot, GP::Rdi);
-                self.guard_class(ir, slot, GP::Rdi, INTEGER_CLASS, deopt);
-                ir.int2xmm(GP::Rdi, x);
-                x
-            }
-            LinkMode::Accumulator => {
-                // -> Both
-                let x = self.def_new_both_integer(slot);
-                ir.reg2stack(GP::R15, slot);
-                self.guard_class(ir, slot, GP::R15, INTEGER_CLASS, deopt);
-                ir.int2xmm(GP::R15, x);
-                x
-            }
-            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
-        }
-    }
-
-    ///
-    /// Fetch *reg* as f64, and store in xmm register.
-    ///
-    /// ### destroy
-    /// - rdi, rax
-    ///
-    ///
-    pub(crate) fn fetch_float_for_xmm(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        deopt: AsmDeopt,
-    ) -> Xmm {
-        self.use_as_float(slot);
-        match self.mode(slot) {
-            LinkMode::Both(x) | LinkMode::Xmm(x) => x,
-            LinkMode::Stack => {
-                // -> Both
-                let x = self.def_new_both_float(slot);
-                ir.stack2reg(slot, GP::Rdi);
-                ir.float2xmm(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::Accumulator => {
-                // -> Both
-                let x = self.def_new_both_float(slot);
-                ir.reg2stack(GP::R15, slot);
-                ir.float2xmm(GP::R15, x, deopt);
-                x
-            }
-            LinkMode::ConcreteValue(v) => self.fetch_float_concrete_value_for_xmm(ir, slot, v),
-        }
-    }
-
-    fn fetch_float_concrete_value_for_xmm(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        v: Value,
-    ) -> Xmm {
-        if let Some(f) = v.try_float() {
-            // -> Xmm
-            let x = self.def_new_xmm(slot);
-            ir.f64toxmm(f, x);
-            x
-        } else if let Some(i) = v.try_fixnum() {
-            // -> Both
-            let x = self.def_new_both_integer(slot);
-            ir.i64toboth(i, slot, x);
-            x
-        } else {
-            unreachable!()
-        }
-    }
-
     ///
     /// Type guard.
     ///
@@ -621,6 +465,10 @@ impl SlotContext {
             }
         }
         ir.push(AsmInst::GuardClass(r, class, deopt));
+    }
+
+    pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, deopt: AsmDeopt) {
+        self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
     }
 
     pub(crate) fn guard_lhs_class_for_mode(
@@ -1045,6 +893,16 @@ impl BBContext {
     }
 
     ///
+    /// Discard slots above *sp*.
+    ///
+    pub(in crate::compiler::jitgen) fn clear_above_sp(&mut self) {
+        let sp = self.sp;
+        for i in sp..SlotId(self.slots.len() as u16) {
+            self.discard(i)
+        }
+    }
+
+    ///
     /// Copy *src* to *dst*.
     ///
     /// ### destroy
@@ -1075,8 +933,26 @@ impl BBContext {
             LinkMode::Accumulator => {
                 ir.reg2stack(GP::R15, src);
                 self.set_stack(src, guarded);
-                self.def_acc(dst, guarded)
+                self.def_acc(ir, dst, guarded)
             }
+        }
+    }
+
+    ///
+    /// Link *slot* to the accumulator.
+    ///
+    pub(super) fn def_acc(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: impl Into<Option<SlotId>>,
+        guarded: Guarded,
+    ) {
+        if let Some(slot) = slot.into() {
+            self.writeback_acc(ir);
+            self.discard(slot);
+            self.set_mode(slot, LinkMode::Accumulator);
+            self.set_guarded(slot, guarded);
+            self.r15 = Some(slot);
         }
     }
 

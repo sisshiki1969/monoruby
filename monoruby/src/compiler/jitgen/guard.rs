@@ -252,7 +252,7 @@ impl Codegen {
     }
 
     ///
-    /// Convert the Value to f64.
+    /// Convert Value to f64.
     ///
     /// go to *deopt* if *reg* was neither Float nor Fixnum(i63).
     ///
@@ -264,9 +264,9 @@ impl Codegen {
     ///
     /// - xmm(*xmm*)
     ///
-    /// ### registers destroyed
+    /// ### destroy
     ///
-    /// - rdi, rax
+    /// - rax, rdi, R(*reg*)
     ///
     pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
         let integer = self.jit.label();
@@ -279,10 +279,9 @@ impl Codegen {
         monoasm! {&mut self.jit,
             jmp  exit;
         integer:
-            sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
-        exit:
         };
+        self.integer_val_to_f64(reg, xmm);
+        self.jit.bind_label(exit);
     }
 
     ///

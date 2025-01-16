@@ -31,6 +31,28 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "Debug 'bedcov'",
+      "cargo": {
+        "args": [
+          "run",
+          "--features",
+          "emit-asm",
+          "--bin=monoruby",
+          "--package=monoruby",
+        ],
+        "filter": {
+          "name": "monoruby",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "benchmark/plb2/bedcov.rb",
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "Debug unit tests in executable 'monoruby'",
       "cargo": {
         "args": [

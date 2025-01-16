@@ -87,7 +87,7 @@ fn object_object_id(
         return false;
     }
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
-    bb.fetch_for_gpr(ir, recv, GP::Rdi);
+    bb.fetch(ir, recv, GP::Rdi);
     let using_xmm = bb.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |gen, _, _| {

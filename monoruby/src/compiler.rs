@@ -861,7 +861,7 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value is Integer, and convert to f64.
+    /// Convert Fixnum to f64.
     ///
     /// ### in
     /// - R(*reg*): Value
