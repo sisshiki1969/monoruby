@@ -123,9 +123,9 @@ impl JitContext {
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
 
-        ir.set_binop_arguments(store, bbctx, fid, mode);
+        bbctx.set_binop_arguments(store, ir, fid, mode);
 
-        bbctx.clear(dst);
+        bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
@@ -178,11 +178,11 @@ impl JitContext {
         block_self: ClassId,
     ) {
         let dst = store[callid].dst;
-        ir.exec_gc(bbctx.get_register());
+        bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, &store[callid], store[block_iseq].func_id());
-        bbctx.clear(dst);
+        bbctx.set_arguments(store, ir, &store[callid], store[block_iseq].func_id());
+        bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
@@ -342,11 +342,11 @@ impl JitContext {
         evict: AsmEvict,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
-        ir.exec_gc(bbctx.get_register());
+        bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, callsite, callee_fid);
-        bbctx.clear(callsite.dst);
+        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
@@ -376,11 +376,11 @@ impl JitContext {
         evict: AsmEvict,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
-        ir.exec_gc(bbctx.get_register());
+        bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        ir.set_arguments(store, bbctx, callsite, callee_fid);
-        bbctx.clear(callsite.dst);
+        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
