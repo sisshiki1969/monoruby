@@ -1543,7 +1543,7 @@ impl BinOpK {
         }
     }
 
-    pub(crate) fn generic_func(&self) -> BinaryOpFn {
+    /*pub(crate) fn generic_func(&self) -> BinaryOpFn {
         match self {
             BinOpK::Add => add_values,
             BinOpK::Sub => sub_values,
@@ -1555,7 +1555,7 @@ impl BinOpK {
             BinOpK::Rem => rem_values,
             BinOpK::Exp => pow_values,
         }
-    }
+    }*/
 
     pub(crate) fn to_id(&self) -> IdentId {
         match self {

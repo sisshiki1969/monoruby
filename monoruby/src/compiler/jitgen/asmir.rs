@@ -356,6 +356,22 @@ impl AsmIr {
 }
 
 impl AsmIr {
+    ///
+    /// Integer comparison
+    ///
+    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
+    ///
+    /// If error occurs in comparison operation, raise error.
+    ///
+    pub(super) fn integer_cmp(&mut self, mode: OpMode, kind: CmpKind, lhs: GP, rhs: GP) {
+        self.push(AsmInst::IntegerCmp {
+            kind,
+            mode,
+            lhs,
+            rhs,
+        });
+    }
+
     pub(super) fn integer_cmp_br(
         &mut self,
         mode: OpMode,
@@ -687,9 +703,6 @@ pub(super) enum AsmInst {
     MethodRet(BytecodePtr),
     EnsureEnd,
     Br(JitLabel),
-    CondBr(BrKind, JitLabel),
-    NilBr(JitLabel),
-    CheckLocal(JitLabel),
     ///
     /// Conditional branch
     ///
@@ -698,10 +711,9 @@ pub(super) enum AsmInst {
     /// ### in
     /// - rax: Value
     ///
-    GenericCondBr {
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    },
+    CondBr(BrKind, JitLabel),
+    NilBr(JitLabel),
+    CheckLocal(JitLabel),
     OptCase {
         max: u16,
         min: u16,
@@ -802,6 +814,11 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
+    ///
+    /// Imnmediate eviction.
+    ///
+    /// When BOPs are re-defined, this palce will be overwritten by the code causes deoptimization.
+    ///
     ImmediateEvict {
         evict: AsmEvict,
     },
@@ -822,7 +839,7 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
-    ///
+    /*///
     /// Generic integer operation.
     ///
     /// ### in
@@ -839,7 +856,7 @@ pub(super) enum AsmInst {
     GenericBinOp {
         kind: BinOpK,
         using_xmm: UsingXmm,
-    },
+    },*/
     ///
     /// Integer binary operation.
     ///
@@ -880,7 +897,7 @@ pub(super) enum AsmInst {
     ///
     /// Integer comparison
     ///
-    /// Compare two Values in `rdi` and `rsi` with *kind*, and return the result in `rax` as Value.
+    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
     ///
     /// If error occurs in comparison operation, raise error.
     ///
@@ -1093,7 +1110,7 @@ pub(super) enum AsmInst {
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - rax: Value
+    /// - r15: Value
     ///
     /// #### destroy
     /// - rdi, rsi
@@ -1103,26 +1120,45 @@ pub(super) enum AsmInst {
         is_object_ty: bool,
         self_: bool,
     },
+    ///
+    /// Load ivar embedded to RValue. (only for object type)
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    /// #### out
+    /// - r15: Value
+    ///
+    /// #### destroy
+    /// - rdi
+    ///
     LoadIVarInline {
         ivarid: IvarId,
     },
     ///
-    /// Store the object *rax* in an instance var *ivarid* of the object *rdi*.
+    /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
-    /// - rax: Value
     /// - rdi: &RValue
     ///
     /// #### destroy
     /// - caller-save registers
     ///
     StoreIVarHeap {
+        src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
     StoreIVarInline {
+        src: GP,
         ivarid: IvarId,
     },
 

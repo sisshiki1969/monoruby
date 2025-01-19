@@ -207,7 +207,7 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
-    ///
+    /*///
     /// Generic integer operation.
     ///
     /// ### in
@@ -226,7 +226,7 @@ impl Codegen {
         self.xmm_save(using_xmm);
         self.call_binop(func);
         self.xmm_restore(using_xmm);
-    }
+    }*/
 }
 
 impl Codegen {

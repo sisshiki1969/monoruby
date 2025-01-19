@@ -8,18 +8,18 @@ impl Codegen {
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - rax: Value
+    /// - r15: Value
     ///
     /// #### destroy
     /// - rdi
     ///
     pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
         monoasm! {&mut self.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
+            movq r15, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
             // We must check whether the ivar slot is None.
             movq rdi, (NIL_VALUE);
-            testq rax, rax;
-            cmoveqq rax, rdi;
+            testq r15, r15;
+            cmoveqq r15, rdi;
         }
     }
 
@@ -30,13 +30,12 @@ impl Codegen {
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - rax: Value
+    /// - r15: Value
     ///
     /// #### destroy
     /// - rdi, rsi, rdx
     ///
     pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, self_: bool) {
-        let exit = self.jit.label();
         let ivar = ivarid.get() as i32;
         let idx = if is_object_ty {
             ivar - OBJECT_INLINE_IVAR as i32
@@ -47,15 +46,15 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-                movq rax, [rdi + (idx * 8)];
-                testq rax, rax;
-                jnz  exit;
-                movq rax, (NIL_VALUE);
-            exit:
+                movq r15, [rdi + (idx * 8)];
+                movq rdi, (NIL_VALUE);
+                testq r15, r15;
+                cmoveqq r15, rdi;
             }
         } else {
+            let exit = self.jit.label();
             monoasm! { &mut self.jit,
-                movq rax, (NIL_VALUE);
+                movq r15, (NIL_VALUE);
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
             }
             self.check_len(idx, exit);
@@ -63,40 +62,41 @@ impl Codegen {
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
                 movq rdx, [rdi + (idx * 8)];
                 testq rdx, rdx;
-                jz  exit;
-                movq rax, rdx;
+                cmovneq r15, rdx;
             exit:
             }
+        }
+        monoasm! { &mut self.jit,
+
         }
     }
 }
 
 impl Codegen {
     ///
-    /// Store ivar embedded to RValue. (only for object type)
+    /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
     ///
     /// #### in
-    /// - rax: Value
     /// - rdi: &RValue
     ///
-    pub(super) fn store_ivar_object_inline(&mut self, ivarid: IvarId) {
+    pub(super) fn store_ivar_object_inline(&mut self, src: GP, ivarid: IvarId) {
         monoasm!( &mut self.jit,
-            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], rax;
+            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], R(src as _);
         );
     }
 
     ///
-    /// Store ivar on `var_table`.
+    /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
     /// - rdi: &RValue
-    /// - rax: src: Value
     ///
     /// #### destroy
     /// - caller-save registers
     ///
     pub(super) fn store_ivar_heap(
         &mut self,
+        src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
@@ -118,9 +118,7 @@ impl Codegen {
         }
         monoasm! { &mut self.jit,
             movq rdx, [rdx + (MONOVEC_PTR)]; // ptr
-            movq [rdx + (idx * 8)], rax;
-        }
-        monoasm! { &mut self.jit,
+            movq [rdx + (idx * 8)], R(src as _);
         exit:
         }
 
@@ -129,7 +127,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
             generic:
                 movl rsi, (ivar);
-                movq rdx, rax;
+                movq rdx, R(src as _);
             );
             self.xmm_save(using);
             monoasm!( &mut self.jit,
