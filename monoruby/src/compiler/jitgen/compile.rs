@@ -393,10 +393,8 @@ impl JitContext {
             }
             TraceIr::Not { dst, src, .. } => {
                 if bbctx.is_truthy(src) {
-                    bbctx.discard(dst);
                     bbctx.def_concrete_value(dst, Value::bool(false));
                 } else if bbctx.is_falsy(src) {
-                    bbctx.discard(dst);
                     bbctx.def_concrete_value(dst, Value::bool(true));
                 } else {
                     bbctx.fetch(ir, src, GP::Rdi);
@@ -467,10 +465,11 @@ impl JitContext {
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     return self.compile_binop_call(bbctx, ir, store, fid, info);
                 } else {
-                    bbctx.fetch_binary(ir, info.mode);
-                    bbctx.generic_binop(ir, kind);
-                    bbctx.rax2acc(ir, info.dst);
-                    bbctx.unset_class_version_guard();
+                    return CompileResult::Recompile;
+                    //bbctx.fetch_binary(ir, info.mode);
+                    //bbctx.generic_binop(ir, kind);
+                    //bbctx.rax2acc(ir, info.dst);
+                    //bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::GBinOpNotrace { .. } => return CompileResult::Recompile,
@@ -495,8 +494,9 @@ impl JitContext {
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     return self.compile_binop_call(bbctx, ir, store, fid, info);
                 } else {
-                    bbctx.gen_cmp_generic(ir, kind, info);
-                    bbctx.unset_class_version_guard();
+                    return CompileResult::Recompile;
+                    //bbctx.gen_cmp_generic(ir, kind, info);
+                    //bbctx.unset_class_version_guard();
                 }
             }
             TraceIr::GCmpNotrace { .. } => return CompileResult::Recompile,
@@ -516,14 +516,14 @@ impl JitContext {
             }
             TraceIr::ICmpBr {
                 kind,
-                dst,
+                dst: _,
                 mode,
                 dest,
                 brkind,
             } => {
                 let index = bc_pos + 1;
                 let branch_dest = self.label();
-                bbctx.gen_cmpbr_integer(ir, kind, mode, dst, brkind, branch_dest);
+                bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, branch_dest);
                 self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
             }
             TraceIr::GCmpBr {
@@ -531,13 +531,24 @@ impl JitContext {
                 info,
                 dest,
                 brkind,
-                ..
             } => {
-                let index = bc_pos + 1;
-                let branch_dest = self.label();
-                bbctx.gen_cmpbr_generic(ir, kind, info.mode, info.dst, brkind, branch_dest);
-                self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
-                bbctx.unset_class_version_guard();
+                let recv_class = info.lhs_class;
+                let name = Self::cmpkind_to_id(kind);
+                if let Some(fid) = self.jit_check_method(store, recv_class, name) {
+                    match self.compile_binop_call(bbctx, ir, store, fid, info) {
+                        CompileResult::Continue => {
+                            let index = bc_pos + 1;
+                            bbctx.unset_class_version_guard();
+                            self.gen_cond_br(bbctx, ir, func, index, dest, brkind);
+                            //let branch_dest = self.label();
+                            //ir.push(AsmInst::CondBr(brkind, branch_dest));
+                            //self.new_branch(func, index, dest, bbctx.clone(), branch_dest);
+                        }
+                        res => return res,
+                    }
+                } else {
+                    return CompileResult::Recompile;
+                }
             }
             TraceIr::GCmpBrNotrace { .. } => return CompileResult::Recompile,
             TraceIr::Index {
@@ -753,17 +764,19 @@ impl JitContext {
                     if brkind == BrKind::BrIf {
                         self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Branch;
+                    } else {
+                        return CompileResult::Continue;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
                         self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
                         return CompileResult::Branch;
+                    } else {
+                        return CompileResult::Continue;
                     }
                 } else {
-                    let branch_dest = self.label();
                     bbctx.fetch(ir, cond_, GP::Rax);
-                    ir.push(AsmInst::CondBr(brkind, branch_dest));
-                    self.new_branch(func, bc_pos, dest_idx, bbctx.clone(), branch_dest);
+                    self.gen_cond_br(bbctx, ir, func, bc_pos, dest_idx, brkind);
                 }
             }
             TraceIr::NilBr(cond_, dest_idx) => {
@@ -804,6 +817,20 @@ impl JitContext {
             }
         }
         CompileResult::Continue
+    }
+
+    fn gen_cond_br(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        func: &ISeqInfo,
+        src_idx: BcIndex,
+        dest: BasicBlockId,
+        brkind: BrKind,
+    ) {
+        let branch_dest = self.label();
+        ir.push(AsmInst::CondBr(brkind, branch_dest));
+        self.new_branch(func, src_idx, dest, bbctx.clone(), branch_dest);
     }
 
     fn cmpkind_to_id(kind: CmpKind) -> IdentId {

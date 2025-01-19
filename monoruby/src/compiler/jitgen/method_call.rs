@@ -233,6 +233,8 @@ impl JitContext {
                 assert!(!callsite.kw_may_exists());
                 assert!(block_fid.is_none());
                 assert!(callsite.block_arg.is_none());
+                bbctx.discard(dst);
+                bbctx.writeback_acc(ir);
                 if recv_class.is_always_frozen() {
                     if dst.is_some() {
                         ir.lit2reg(Value::nil(), GP::Rax);
@@ -254,7 +256,7 @@ impl JitContext {
                         });
                     }
                 }
-                bbctx.rax2acc(ir, dst);
+                bbctx.reg2acc(ir, GP::R15, dst);
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, pos_num);
@@ -266,13 +268,14 @@ impl JitContext {
                 } else {
                     return CompileResult::Recompile;
                 };
-                bbctx.fetch(ir, args, GP::Rax);
+                let src = bbctx.fetch_or_reg(ir, args, GP::Rax);
                 let is_object_ty = store[recv_class].is_object_ty_instance();
                 let using_xmm = bbctx.get_using_xmm();
                 if is_object_ty && ivarid.is_inline() {
-                    ir.push(AsmInst::StoreIVarInline { ivarid })
+                    ir.push(AsmInst::StoreIVarInline { src, ivarid })
                 } else {
                     ir.push(AsmInst::StoreIVarHeap {
+                        src,
                         ivarid,
                         using_xmm,
                         self_: false,

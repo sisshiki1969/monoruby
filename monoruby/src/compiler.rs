@@ -971,10 +971,10 @@ impl Codegen {
                 )
                 .for_each(|bc_pos| {
                     if iseq.bb_info.is_bb_head(bc_pos).is_some() {
-                        eprintln!("{:?}", iseq.bb_info.get_bb_id(bc_pos));
+                        eprintln!("  {:?}", iseq.bb_info.get_bb_id(bc_pos));
                     }
                     eprintln!(
-                        "{bc_pos} {}",
+                        "    {bc_pos} {}",
                         match iseq.trace_ir(store, bc_pos).format(store) {
                             Some(s) => s,
                             None => "".to_string(),
@@ -982,7 +982,7 @@ impl Codegen {
                     );
                 });
 
-            eprintln!("  {:05x}: {}", i, text);
+            eprintln!("      {:06x}: {}", i, text);
         }
     }
 }

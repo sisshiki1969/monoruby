@@ -405,6 +405,22 @@ impl SlotContext {
         self.r15 == Some(slot)
     }
 
+    pub(super) fn on_reg(&self, slot: SlotId) -> Option<GP> {
+        if self.is_r15(slot) {
+            Some(GP::R15)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn on_reg_or(&self, slot: SlotId, optb: GP) -> GP {
+        if self.is_r15(slot) {
+            GP::R15
+        } else {
+            optb
+        }
+    }
+
     ///
     /// Write back acc(`r15``) to the stack slot.
     ///
@@ -948,8 +964,8 @@ impl BBContext {
         guarded: Guarded,
     ) {
         if let Some(slot) = slot.into() {
-            self.writeback_acc(ir);
             self.discard(slot);
+            self.writeback_acc(ir);
             self.set_mode(slot, LinkMode::Accumulator);
             self.set_guarded(slot, guarded);
             self.r15 = Some(slot);

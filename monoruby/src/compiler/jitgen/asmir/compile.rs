@@ -291,15 +291,8 @@ impl Codegen {
                 );
             }
             AsmInst::CondBr(brkind, dest) => {
-                let dest = ctx.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    orq rax, 0x10;
-                    cmpq rax, (FALSE_VALUE);
-                );
-                match brkind {
-                    BrKind::BrIf => monoasm!( &mut self.jit, jne dest;),
-                    BrKind::BrIfNot => monoasm!( &mut self.jit, jeq dest;),
-                }
+                let branch_dest = ctx.resolve_label(&mut self.jit, dest);
+                self.cond_br(branch_dest, brkind);
             }
             AsmInst::NilBr(dest) => {
                 let dest = ctx.resolve_label(&mut self.jit, dest);
@@ -445,9 +438,9 @@ impl Codegen {
                 self.xmm_restore(using_xmm);
             }
 
-            AsmInst::GenericBinOp { kind, using_xmm } => {
+            /*AsmInst::GenericBinOp { kind, using_xmm } => {
                 self.generic_binop(kind, using_xmm);
-            }
+            }*/
             AsmInst::IntegerBinOp {
                 kind,
                 lhs,
@@ -601,14 +594,13 @@ impl Codegen {
             } => self.load_ivar_heap(ivarid, is_object_ty, self_),
             AsmInst::LoadIVarInline { ivarid } => self.load_ivar_inline(ivarid),
             AsmInst::StoreIVarHeap {
-                ivarid: cached_ivarid,
+                src,
+                ivarid,
                 is_object_ty,
                 self_,
                 using_xmm,
-            } => self.store_ivar_heap(cached_ivarid, is_object_ty, self_, using_xmm),
-            AsmInst::StoreIVarInline {
-                ivarid: cached_ivarid,
-            } => self.store_ivar_object_inline(cached_ivarid),
+            } => self.store_ivar_heap(src, ivarid, is_object_ty, self_, using_xmm),
+            AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
 
             AsmInst::LoadCVar { name, using_xmm } => {
                 self.load_cvar(name, using_xmm);
@@ -747,14 +739,6 @@ impl Codegen {
                 name,
                 using_xmm,
             } => self.defined_ivar(dst, name, using_xmm),
-
-            AsmInst::GenericCondBr {
-                brkind,
-                branch_dest,
-            } => {
-                let branch_dest = ctx.resolve_label(&mut self.jit, branch_dest);
-                self.cond_br(branch_dest, brkind);
-            }
 
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
         }

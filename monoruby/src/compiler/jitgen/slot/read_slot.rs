@@ -2,26 +2,26 @@ use super::*;
 
 impl BBContext {
     ///
-    /// fetch *slot* and store in *dst*.
+    /// fetch *slot* and store in *r*.
     ///
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(crate) fn fetch(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
+    pub(crate) fn fetch(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
+        //assert_ne!(r, GP::R15);
         let sp = self.sp;
         if slot >= sp {
             unreachable!("{:?} >= {:?} in fetch_for_gpr()", slot, self.sp);
         };
-        if dst == GP::R15 {
-            if !matches!(self.mode(slot), LinkMode::Accumulator) {
-                self.writeback_acc(ir);
-            }
-        }
-        self.fetch_gpr(ir, slot, dst);
-        if dst == GP::R15 {
-            if matches!(self.mode(slot), LinkMode::Accumulator) {
-                self.writeback_acc(ir);
-            }
+        self.fetch_gpr(ir, slot, r);
+    }
+
+    pub(crate) fn fetch_or_reg(&mut self, ir: &mut AsmIr, slot: SlotId, opt: GP) -> GP {
+        if let Some(r) = self.on_reg(slot) {
+            r
+        } else {
+            self.fetch(ir, slot, opt);
+            opt
         }
     }
 
@@ -84,9 +84,9 @@ impl BBContext {
         }
     }
 
-    pub(crate) fn fetch_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP, deopt: AsmDeopt) {
-        self.fetch(ir, slot, dst);
-        self.guard_fixnum(ir, slot, dst, deopt);
+    pub(crate) fn fetch_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, deopt: AsmDeopt) {
+        self.fetch(ir, slot, r);
+        self.guard_fixnum(ir, slot, r, deopt);
     }
 }
 
