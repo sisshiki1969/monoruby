@@ -507,11 +507,11 @@ impl Store {
         for i in 0..func.bytecode().len() {
             let bc_pos = BcIndex::from(i);
             if let Some(bbid) = func.bb_info.is_bb_head(bc_pos) {
-                eprintln!("{:?}", bbid);
+                eprintln!("  {:?}", bbid);
             };
             let trace_ir = func.trace_ir(self, bc_pos);
             if let Some(fmt) = trace_ir.format(self) {
-                eprintln!("{bc_pos} [{:02}] {fmt}", func.sp[i].0);
+                eprintln!("    {bc_pos} [{:02}] {fmt}", func.sp[i].0);
             };
         }
         eprintln!("------------------------------------");

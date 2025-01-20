@@ -24,17 +24,24 @@ Presentation movie and slides for [RubyKaigi2024](https://rubykaigi.org/2024/pre
 
 Currently, only x86-64/linux is supported.
 
-### Build
+## Build and run
 
-To build monoruby, You'll need installation of Rust.
-Please be aware that **only nightly Rust works** for monoruby.
+(1) Install nightly Rust.
 
-[Check here to install Rust](https://www.rust-lang.org/ja/tools/install),
-and [see here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
+First of all, install Rust nightly.
+[Check here to install Rust](https://www.rust-lang.org/ja/tools/install)
 
-## How to run
+_Caution!!_ **only nightly Rust works** for monoruby.
+[See here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
 
-To run ruby program file on monoruby,
+(2) Clone this repository.
+
+```sh
+> git clone https://github.com/sisshiki1969/monoruby.git
+> cd monoruby
+```
+
+(3) Build and run monoruby with Ruby script file.
 
 ```sh
 > cargo run test.rb
@@ -46,13 +53,15 @@ or
 > cargo run --release -- test.rb
 ```
 
+for release build.
+
 one liner.
 
 ```sh
 > cargo run -- -e "puts 100"
 ```
 
-And also, you can launch REPL.
+(4) Launch REPL.
 
 ```sh
 > cargo run --bin irm
@@ -64,7 +73,7 @@ or
 > bin/irm
 ```
 
-## How to install
+## Install
 
 To install monoruby,
 
@@ -86,20 +95,9 @@ and its REPL.
 
 ## Benchmark
 
-### machine spec
+### 1. optcarrot banechmark
 
-- Architecture: x86_64
-- CPU(s): 32
-  - Model name: 13th Gen Intel(R) Core(TM) i9-13900HX
-  - Thread(s) per core: 2
-  - Core(s) per socket: 16
-- Caches (sum of all):
-  - L1d: 768 KiB (16 instances)
-  - L1i: 512 KiB (16 instances)
-  - L2: 32 MiB (16 instances)
-  - L3: 36 MiB (1 instance)
-
-### optcarrot
+Please see wiki for details. (https://github.com/sisshiki1969/monoruby/wiki/optcarrot_benchmark)
 
 Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
 
@@ -116,16 +114,14 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 ![optcarrot_fps_history](./doc/optcarrot_fps_history.png)
 
-##### with --opt option (self-rewriting optimization mode)
+### 2. micro benchmark
 
-![optcarrot_fps_history](./doc/optcarrot_fps_history_opt.png)
-
-### micro benchmark
+please see wiki for details. (https://github.com/sisshiki1969/monoruby/wiki/micro_benchmark)
 
 - measured by [yjit-bench](https://github.com/Shopify/yjit-bench) with '--harness=harness-warmup' option.
 - benchmark codes are in [the official repo](https://github.com/ruby/ruby/tree/master/benchmark) and [plb2](https://github.com/attractivechaos/plb2).
 
-#### Rubies
+#### Version of used Rubies
 
 - monoruby: monoruby 0.3.0
 - yjit: ruby 3.4.1 (2024-12-25 revision 48d4efcb85) +YJIT +PRISM [x86_64-linux]

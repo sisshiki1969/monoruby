@@ -6,7 +6,6 @@
 *.jpg
 *.perf
 *.dot
-*.png
 perf
 perf.data
 .quine
