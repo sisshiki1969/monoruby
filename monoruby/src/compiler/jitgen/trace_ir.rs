@@ -189,6 +189,7 @@ pub(crate) enum TraceIr {
     },
     ICmpBr {
         kind: ruruby_parse::CmpKind,
+        #[allow(dead_code)]
         dst: Option<SlotId>,
         mode: OpMode,
         dest: BasicBlockId,
