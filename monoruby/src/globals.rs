@@ -210,7 +210,16 @@ impl Globals {
             .unwrap()
             .join(".monoruby")
             .join("library_path");
-        let path_list = std::fs::read_to_string(&load_path).unwrap();
+        let path_list = match std::fs::read_to_string(&load_path) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!(
+                    "Warning: failed to read library path file: {:?}. Ruby may not be installed.",
+                    load_path
+                );
+                String::new()
+            }
+        };
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
 

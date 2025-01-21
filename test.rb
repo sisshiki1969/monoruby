@@ -1,7 +1,20 @@
-30.times do
-  f = 1.1
-  for i in 0..50
-    f += i
+class Integer
+  def times
+    if block_given?
+      i = 0
+      while i < self
+        yield i
+        i += 1
+      end
+      self
+    else
+      self.to_enum(:times)
+    end
   end
-  puts f
 end
+
+50.times {
+  5.times {|i|
+    puts i*2
+  }
+}

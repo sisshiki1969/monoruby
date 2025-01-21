@@ -1,4 +1,4 @@
-### native method definition
+### native method definition with optional / rest / keyword parameters
 
 ```rust
 globals.define_builtin_class_func_with_kw(klass, "xxx", xxx, min: 1, max: 2, rest: true, kw: &["base", "sort"]);
@@ -9,8 +9,10 @@ globals.define_builtin_class_func_with_kw(klass, "xxx", xxx, min: 1, max: 2, res
 - rest: rest argument
 - kw: keyword arguments
 
+```text
 arg0: rewuired ----+
-arg1: optional +-- poritional
-arg2: rest ----+
+arg1: optional ----+-- positional
+arg2: rest --------+
 arg3: keyword("base")
 arg4: keyword("sort")
+```
