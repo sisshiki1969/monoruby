@@ -124,21 +124,31 @@ impl Codegen {
     /// - R(*reg*): Value
     ///
     pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: DestLabel) {
-        assert_eq!(self.jit.get_page(), 0);
-        self.jit.select_page(1);
-
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
-            monoasm!( &mut self.jit,
-            label:
-                movq rdi, R(reg as _);
-                jmp fail;
-            );
+            if self.jit.get_page() == 0 {
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                label:
+                    movq rdi, R(reg as _);
+                    jmp fail;
+                );
+                self.jit.select_page(0);
+            } else {
+                let label = self.jit.label();
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    jmp exit;
+                label:
+                    movq rdi, R(reg as _);
+                    jmp fail;
+                exit:
+                );
+            }
             label
         } else {
             fail
         };
-        self.jit.select_page(0);
         match class_id {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,
@@ -202,6 +212,7 @@ impl Codegen {
 
     fn set_rdi_for_deopt(&mut self, r: GP, deopt: DestLabel) -> DestLabel {
         if r != GP::Rdi {
+            assert_eq!(0, self.jit.get_page());
             self.jit.select_page(1);
             let label = self.jit.label();
             monoasm! { &mut self.jit,
@@ -242,6 +253,7 @@ impl Codegen {
             jnz l1;
         );
         self.float_val_to_f64(reg, xmm, deopt);
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         l1:
@@ -324,6 +336,7 @@ impl Codegen {
         exit:
         }
 
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(heap);
         self.guard_rvalue(reg, FLOAT_CLASS, side_exit);

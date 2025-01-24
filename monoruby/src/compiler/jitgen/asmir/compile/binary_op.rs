@@ -25,6 +25,7 @@ impl Codegen {
     ) {
         let lhs_r = lhs as u64;
         let rhs_r = rhs as u64;
+        assert_eq!(0, self.jit.get_page());
         match kind {
             BinOpK::Add => {
                 let overflow = self.jit.label();

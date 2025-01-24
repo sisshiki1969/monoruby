@@ -31,12 +31,6 @@ mod slot;
 pub mod trace_ir;
 mod variables;
 
-#[derive(Debug)]
-struct BackedgeInfo {
-    target_ctx: MergeContext,
-    unused: Vec<SlotId>,
-}
-
 struct ContinuationInfo {
     from: BBContext,
     to: MergeContext,
@@ -126,6 +120,10 @@ impl BBContext {
             class_version_guarded: false,
             pc: None,
         }
+    }
+
+    fn set_guard_from(&mut self, merger: &MergeContext) {
+        self.slot_state.set_guard_from(&merger.0)
     }
 
     fn pc(&self) -> BytecodePtr {
@@ -871,6 +869,7 @@ impl Codegen {
             jmp deopt;
         );
 
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         recompile:
@@ -902,6 +901,7 @@ impl Codegen {
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
         let raise = self.entry_raise;
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         entry:

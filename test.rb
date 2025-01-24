@@ -15,6 +15,6 @@ end
 
 50.times {
   5.times {|i|
-    puts i*2
+    i*2
   }
 }

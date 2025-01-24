@@ -7,10 +7,8 @@ impl JitContext {
     pub(super) fn backedge_branches(&mut self, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
-            let BackedgeInfo {
-                mut target_ctx,
-                unused,
-            } = self.backedge_map.remove(&bbid).unwrap();
+            let mut target_ctx = self.backedge_map.remove(&bbid).unwrap();
+            let unused = self.loop_info(bbid).1;
             let pc = func.get_bb_pc(bbid);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
@@ -86,7 +84,7 @@ impl JitContext {
     fn incoming_context_loop(&mut self, func: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let (use_set, unused) = self.loop_info(bbid);
+        let (use_set, unused, merger) = self.loop_info(bbid);
 
         #[cfg(feature = "jit-debug")]
         {
@@ -94,9 +92,13 @@ impl JitContext {
             eprintln!("  not used: {:?}", unused);
         }
 
-        let target = BBContext::union(&entries);
+        let mut target = BBContext::union(&entries);
+        if let Some(merger) = merger {
+            target.merge(&merger.slot_state);
+        }
 
         let mut bbctx = BBContext::new(self);
+        bbctx.set_guard_from(&target);
         for (slot, coerced) in use_set {
             match target.mode(slot) {
                 LinkMode::Stack => {}
@@ -120,7 +122,7 @@ impl JitContext {
         let pc = func.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&MergeContext::new(&bbctx), entries, bbid, pc + 1, &unused);
 
-        self.new_backedge(func, &mut bbctx, bbid, unused);
+        self.new_backedge(func, &mut bbctx, bbid);
 
         Some(bbctx)
     }

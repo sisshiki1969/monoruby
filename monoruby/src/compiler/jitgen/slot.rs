@@ -13,10 +13,12 @@ pub(crate) struct SlotContext {
 
 impl std::fmt::Debug for SlotContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{ ")?;
         for (i, state) in self.slots.iter().enumerate() {
-            write!(f, "\n[%{i}: {:?}]", state)?;
+            write!(f, "[%{i}: {state:?}] ")?;
         }
-        write!(f, "\nr15={:?}", self.r15)
+        write!(f, "}}")?;
+        Ok(())
     }
 }
 
@@ -34,6 +36,12 @@ impl SlotContext {
             },
             r15: None,
             local_num,
+        }
+    }
+
+    pub(super) fn set_guard_from(&mut self, other: &Self) {
+        for (i, state) in self.slots.iter_mut().enumerate() {
+            state.guarded = other.slots[i].guarded;
         }
     }
 
@@ -626,19 +634,17 @@ pub(crate) struct Liveness(Vec<IsUsed>);
 
 impl std::fmt::Debug for Liveness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s: String = self
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, is_used)| match is_used {
+        write!(f, "Liveness {{ ")?;
+        for (i, is_used) in self.0.iter().enumerate() {
+            match is_used {
                 IsUsed::Used(UsedAs { ty, .. }) => {
-                    Some(format!("[{:?}: {:?}] ", SlotId(i as u16), ty))
+                    write!(f, "[{:?}: UsedAs {:?}] ", SlotId(i as u16), ty)?
                 }
-                IsUsed::Killed => Some(format!("[{:?}: Killed] ", SlotId(i as u16))),
-                _ => None,
-            })
-            .collect();
-        write!(f, "Liveness {{{s}}}")
+                IsUsed::Killed => write!(f, "[{:?}: Killed] ", SlotId(i as u16))?,
+                IsUsed::ND => {}
+            }
+        }
+        write!(f, "}}")
     }
 }
 
@@ -1002,7 +1008,7 @@ impl BBContext {
     pub(super) fn gen_bridge(
         &mut self,
         ir: &mut AsmIr,
-        target: &Self,
+        target: &MergeContext,
         slot: SlotId,
         pc: BytecodePtr,
     ) {
@@ -1045,7 +1051,24 @@ impl BBContext {
                 self.xmm_remove(slot, l);
                 self.set_mode(slot, LinkMode::Stack);
             }
-            (LinkMode::Stack, LinkMode::Stack) => {}
+            (LinkMode::Stack, LinkMode::Stack) => {
+                let deopt = self.new_deopt_with_pc(ir, pc + 1);
+                match guarded {
+                    Guarded::Fixnum => {
+                        ir.stack2reg(slot, GP::Rax);
+                        self.guard_fixnum(ir, slot, GP::Rax, deopt);
+                    }
+                    Guarded::Float => {
+                        ir.stack2reg(slot, GP::Rax);
+                        self.guard_class(ir, slot, GP::Rax, FLOAT_CLASS, deopt);
+                    }
+                    Guarded::Class(class) => {
+                        ir.stack2reg(slot, GP::Rax);
+                        self.guard_class(ir, slot, GP::Rax, class, deopt);
+                    }
+                    Guarded::Value => {}
+                }
+            }
             (LinkMode::Stack, LinkMode::Both(r)) => {
                 let deopt = self.new_deopt_with_pc(ir, pc + 1);
                 ir.stack2reg(slot, GP::Rax);

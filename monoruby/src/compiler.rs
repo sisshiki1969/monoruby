@@ -653,6 +653,7 @@ impl Codegen {
             jne  gc;
         exit:
         };
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(gc);
         if let Some(wb) = wb {
@@ -790,6 +791,7 @@ impl Codegen {
             jmp jit_entry;
         }
 
+        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         let cont = self.jit.label();
         monoasm! { &mut self.jit,

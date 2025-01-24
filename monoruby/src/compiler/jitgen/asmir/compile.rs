@@ -54,6 +54,7 @@ impl Codegen {
                         jlt  fail;
                     exit:
                     );
+                    assert_eq!(0, self.jit.get_page());
                     self.jit.select_page(1);
                     monoasm!( &mut self.jit,
                     fail:
@@ -227,6 +228,7 @@ impl Codegen {
                 let deopt = labels[deopt];
                 let bop_flag = self.bop_redefined_flags;
                 let l1 = self.jit.label();
+                assert_eq!(0, self.jit.get_page());
                 monoasm!(
                     &mut self.jit,
                     cmpl [rip + bop_flag], 0;

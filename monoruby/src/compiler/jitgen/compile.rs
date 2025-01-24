@@ -142,15 +142,27 @@ impl JitContext {
             ctx.analyse_basic_block(store, func, &mut liveness, bbid);
         }
 
+        let mut backedge_merger: Option<MergeContext> = None;
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
-            for entry in branches {
-                liveness.merge(entry.bbctx);
+            for BranchEntry { src_idx, bbctx, .. } in branches {
+                let src_bb = func.bb_info.get_bb_id(src_idx);
+                if src_bb > loop_start {
+                    // backegde
+                    if let Some(merger) = &mut backedge_merger {
+                        merger.merge(&bbctx);
+                    } else {
+                        backedge_merger = Some(MergeContext::new(&bbctx));
+                    }
+                }
+                liveness.merge(bbctx);
             }
         }
 
-        //dbg!(loop_start, loop_end, &liveness);
+        //dbg!(backedge_merger);
+        //dbg!(&liveness);
 
-        self.loop_info.insert(loop_start, liveness);
+        self.loop_info
+            .insert(loop_start, (liveness, backedge_merger));
     }
 
     fn analyse_basic_block(
@@ -170,13 +182,8 @@ impl JitContext {
         for bc_pos in begin..=end {
             bbctx.next_sp = func.get_sp(bc_pos);
 
-            #[cfg(feature = "jit-debug")]
-            eprintln!("{:?} pre  {:?}", bc_pos, bbctx);
-
             let result = self.compile_instruction(&mut ir, &mut bbctx, store, func, bc_pos);
 
-            #[cfg(feature = "jit-debug")]
-            eprintln!("{:?} post {:?}", bc_pos, bbctx);
             match result {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
