@@ -207,12 +207,12 @@ impl BytecodeGen {
         {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
-                let local = self.refer_local(ident).unwrap().into();
+                let local = self.refer_local(ident).unwrap();
                 return Ok((local, 1, vec![]));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
-                    let local = self.refer_local(ident).unwrap().into();
+                    let local = self.refer_local(ident).unwrap();
                     return Ok((local, 1, vec![0]));
                 }
             }
@@ -252,7 +252,7 @@ impl BytecodeGen {
             NodeKind::LocalVar(0, proc_local) => {
                 let dst = self.push().into();
                 if let Some(local) = self.refer_local(&proc_local) {
-                    self.emit_mov(dst, local.into());
+                    self.emit_mov(dst, local);
                 } else {
                     self.emit(BytecodeInst::BlockArgProxy(dst, 0), loc);
                 }

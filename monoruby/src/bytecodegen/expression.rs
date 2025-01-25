@@ -179,7 +179,7 @@ impl BytecodeGen {
             }
             NodeKind::LocalVar(0, ident) => {
                 if let Some(local2) = self.refer_local(&ident) {
-                    self.emit_mov(dst, local2.into());
+                    self.emit_mov(dst, local2);
                 } else {
                     self.emit(BytecodeInst::BlockArg(dst, 0), loc);
                 }
@@ -338,7 +338,6 @@ impl BytecodeGen {
         match expr.kind {
             NodeKind::Nil
             | NodeKind::Bool(_)
-            | NodeKind::SelfValue
             | NodeKind::Integer(_)
             | NodeKind::Symbol(_)
             | NodeKind::Bignum(_)
@@ -415,9 +414,13 @@ impl BytecodeGen {
                     return self.gen_mul_assign(mlhs, mrhs, use_mode);
                 }
             }
+            NodeKind::SelfValue => {
+                self.handle_mode(use_mode, BcReg::Self_)?;
+                return Ok(());
+            }
             NodeKind::LocalVar(0, ident) => {
                 if let Some(local) = self.refer_local(&ident) {
-                    self.handle_mode(use_mode, local.into())?;
+                    self.handle_mode(use_mode, local)?;
                     return Ok(());
                 } else {
                     let ret = self.push().into();
@@ -1145,7 +1148,7 @@ impl BytecodeGen {
 
     fn gen_method_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodeInst::MethodRet(local.into()), Loc::default());
+            self.emit(BytecodeInst::MethodRet(local), Loc::default());
         } else {
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.pop().into();
@@ -1159,7 +1162,7 @@ impl BytecodeGen {
 
     fn gen_block_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodeInst::BlockBreak(local.into()), Loc::default());
+            self.emit(BytecodeInst::BlockBreak(local), Loc::default());
         } else {
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.pop().into();

@@ -58,7 +58,7 @@ impl BytecodeGen {
                 } else if self.is_refer_block_arg(&receiver) {
                     self.push_expr(receiver)?.into()
                 } else if let Some(local) = self.is_refer_local(&receiver) {
-                    local.into()
+                    local
                 } else {
                     self.push_expr(receiver)?.into()
                 }
@@ -153,7 +153,7 @@ impl BytecodeGen {
         let recv_kind = if iter.kind == NodeKind::SelfValue {
             RecvKind::SelfValue
         } else if let Some(local) = self.is_refer_local(&iter) {
-            RecvKind::Local(local.into())
+            RecvKind::Local(local)
         } else {
             self.push_expr(iter)?;
             RecvKind::Temp

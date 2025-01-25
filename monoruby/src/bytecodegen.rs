@@ -719,10 +719,10 @@ impl BytecodeGen {
         }
     }
 
-    fn refer_local(&mut self, ident: &str) -> Option<BcLocal> {
+    fn refer_local(&mut self, ident: &str) -> Option<BcReg> {
         let name = IdentId::get_id(ident);
         match self.locals.get(&name) {
-            Some(r) => Some(*r),
+            Some(r) => Some((*r).into()),
             None => {
                 assert_eq!(Some(name), self.block_param);
                 None
@@ -753,8 +753,10 @@ impl BytecodeGen {
         }
     }
 
-    fn is_refer_local(&mut self, node: &Node) -> Option<BcLocal> {
-        if let NodeKind::LocalVar(0, name) = &node.kind {
+    fn is_refer_local(&mut self, node: &Node) -> Option<BcReg> {
+        if node.kind == NodeKind::SelfValue {
+            Some(BcReg::Self_)
+        } else if let NodeKind::LocalVar(0, name) = &node.kind {
             self.refer_local(name)
         } else {
             None
@@ -1023,7 +1025,6 @@ impl BytecodeGen {
 
     fn emit_pos(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
-            let rhs = rhs.into();
             self.emit(BytecodeInst::Pos { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
@@ -1034,7 +1035,6 @@ impl BytecodeGen {
 
     fn emit_neg(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
-            let rhs = rhs.into();
             self.emit(BytecodeInst::Neg { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
@@ -1045,7 +1045,6 @@ impl BytecodeGen {
 
     fn emit_not(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
-            let rhs = rhs.into();
             self.emit(BytecodeInst::Not { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
@@ -1056,7 +1055,6 @@ impl BytecodeGen {
 
     fn emit_bitnot(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
-            let rhs = rhs.into();
             self.emit(BytecodeInst::BitNot { ret, src: rhs }, loc);
         } else {
             self.gen_store_expr(ret, rhs)?;
@@ -1314,11 +1312,8 @@ impl BytecodeGen {
     /// otherwise, push the result and return the register. `temp` moves to  +1.
     ///
     fn gen_expr_reg(&mut self, expr: Node) -> Result<BcReg> {
-        if expr.kind == NodeKind::SelfValue {
-            return Ok(BcReg::Self_);
-        }
         Ok(match self.is_refer_local(&expr) {
-            Some(lhs) => lhs.into(),
+            Some(lhs) => lhs,
             None => self.push_expr(expr)?.into(),
         })
     }
@@ -1333,7 +1328,7 @@ impl BytecodeGen {
     ///
     fn gen_temp_expr(&mut self, expr: Node) -> Result<BcReg> {
         Ok(match self.is_refer_local(&expr) {
-            Some(lhs) => lhs.into(),
+            Some(lhs) => lhs,
             None => {
                 self.push_expr(expr)?;
                 self.pop().into()
