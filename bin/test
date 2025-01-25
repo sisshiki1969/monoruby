@@ -1,5 +1,5 @@
 #!/bin/bash
-
+cargo clean
 cargo install --features gc-stress --path monoruby
 
 monoruby benchmark/app_fib.rb > monoruby.log

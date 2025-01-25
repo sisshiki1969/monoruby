@@ -17,7 +17,7 @@ impl JitContext {
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let deopt = bbctx.new_deopt_with_pc(&mut ir, pc + 1);
             ir.self2reg(GP::Rdi);
-            bbctx.guard_class(&mut ir, SlotId::self_(), GP::Rdi, self.self_class(), deopt);
+            ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
         } else {
             for i in (1 + self.local_num())..self.total_reg_num() {
                 bbctx.def_concrete_value(SlotId(i as u16), Value::nil());
@@ -142,27 +142,24 @@ impl JitContext {
             ctx.analyse_basic_block(store, func, &mut liveness, bbid);
         }
 
-        let mut backedge_merger: Option<MergeContext> = None;
+        let mut backedge: Option<MergeContext> = None;
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_idx, bbctx, .. } in branches {
                 let src_bb = func.bb_info.get_bb_id(src_idx);
                 if src_bb > loop_start {
                     // backegde
-                    if let Some(merger) = &mut backedge_merger {
+                    if let Some(merger) = &mut backedge {
                         merger.merge(&bbctx);
                     } else {
-                        backedge_merger = Some(MergeContext::new(&bbctx));
+                        backedge = Some(MergeContext::new(&bbctx));
                     }
                 }
                 liveness.merge(bbctx);
             }
         }
 
-        //dbg!(backedge_merger);
-        //dbg!(&liveness);
-
         self.loop_info
-            .insert(loop_start, (liveness, backedge_merger));
+            .insert(loop_start, (liveness, backedge));
     }
 
     fn analyse_basic_block(

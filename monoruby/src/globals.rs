@@ -237,7 +237,7 @@ impl Globals {
             .join("ruby_version");
         let ruby_version = std::fs::read_to_string(&version_path).unwrap();
 
-        let val = Value::string(ruby_version);
+        let val = Value::string_from_str(&ruby_version.trim());
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals

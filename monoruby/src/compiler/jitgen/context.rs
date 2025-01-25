@@ -68,7 +68,7 @@ pub struct JitContext {
     /// the entry basic block of the loop.
     ///
     /// ### value
-    /// liveness info in the loop head.
+    /// liveness and backedge info in the loop head.
     ///
     pub(super) loop_info: HashMap<BasicBlockId, (Liveness, Option<MergeContext>)>,
     ///

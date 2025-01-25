@@ -24,7 +24,9 @@ impl std::fmt::Debug for SlotContext {
 
 impl SlotContext {
     pub(super) fn from(cc: &JitContext) -> Self {
-        Self::new(cc.total_reg_num(), cc.local_num())
+        let mut ctx = Self::new(cc.total_reg_num(), cc.local_num());
+        ctx.set_guard_class(SlotId::self_(), cc.self_class());
+        ctx
     }
 
     fn new(total_reg_num: usize, local_num: usize) -> Self {
@@ -259,16 +261,14 @@ impl SlotContext {
 
     // APIs for 'guard'
 
-    pub(super) fn set_guard_fixnum(&mut self, slot: SlotId) {
-        self.set_guarded(slot, Guarded::Fixnum)
-    }
-
-    pub(super) fn set_guard_float(&mut self, slot: SlotId) {
-        self.set_guarded(slot, Guarded::Float)
-    }
-
     pub(super) fn set_guard_class(&mut self, slot: SlotId, class: ClassId) {
-        self.set_guarded(slot, Guarded::Class(class))
+        if class == INTEGER_CLASS {
+            self.set_guarded(slot, Guarded::Fixnum)
+        } else if class == FLOAT_CLASS {
+            self.set_guarded(slot, Guarded::Float)
+        } else {
+            self.set_guarded(slot, Guarded::Class(class))
+        }
     }
 }
 
@@ -468,31 +468,41 @@ impl SlotContext {
         class: ClassId,
         deopt: AsmDeopt,
     ) {
-        match class {
-            INTEGER_CLASS => {
-                if self.is_fixnum(slot) {
-                    return;
-                }
-                self.set_guard_fixnum(slot);
-            }
-            FLOAT_CLASS => {
-                if self.is_float(slot) {
-                    return;
-                }
-                self.set_guard_float(slot);
-            }
-            class => {
-                if self.is_class(slot, class) {
-                    return;
-                }
-                self.set_guard_class(slot, class);
-            }
+        if self.is_class(slot, class) {
+            return;
         }
+        self.set_guard_class(slot, class);
         ir.push(AsmInst::GuardClass(r, class, deopt));
     }
 
     pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP, deopt: AsmDeopt) {
         self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
+    }
+
+    ///
+    /// Type guard for stack slot.
+    ///
+    /// Generate slot type guard for *class_id*.
+    /// If the type was not matched, go to *deopt*.
+    ///
+    /// The content of the *slot* must be on stack.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(crate) fn guard_class_stack_slot(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        class: ClassId,
+        deopt: AsmDeopt,
+    ) {
+        if self.is_class(slot, class) {
+            return;
+        }
+        ir.stack2reg(slot, GP::Rax);
+        self.set_guard_class(slot, class);
+        ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
     }
 
     pub(crate) fn guard_lhs_class_for_mode(
@@ -742,6 +752,14 @@ impl Guarded {
         } else {
             Guarded::Value
         }
+    }
+    pub fn class(&self) -> Option<ClassId> {
+        Some(match self {
+            Guarded::Value => return None,
+            Guarded::Fixnum => INTEGER_CLASS,
+            Guarded::Float => FLOAT_CLASS,
+            Guarded::Class(c) => *c,
+        })
     }
 }
 
@@ -1052,21 +1070,9 @@ impl BBContext {
                 self.set_mode(slot, LinkMode::Stack);
             }
             (LinkMode::Stack, LinkMode::Stack) => {
-                let deopt = self.new_deopt_with_pc(ir, pc + 1);
-                match guarded {
-                    Guarded::Fixnum => {
-                        ir.stack2reg(slot, GP::Rax);
-                        self.guard_fixnum(ir, slot, GP::Rax, deopt);
-                    }
-                    Guarded::Float => {
-                        ir.stack2reg(slot, GP::Rax);
-                        self.guard_class(ir, slot, GP::Rax, FLOAT_CLASS, deopt);
-                    }
-                    Guarded::Class(class) => {
-                        ir.stack2reg(slot, GP::Rax);
-                        self.guard_class(ir, slot, GP::Rax, class, deopt);
-                    }
-                    Guarded::Value => {}
+                if let Some(class) = guarded.class() {
+                    let deopt = self.new_deopt_with_pc(ir, pc + 1);
+                    self.guard_class_stack_slot(ir, slot, class, deopt);
                 }
             }
             (LinkMode::Stack, LinkMode::Both(r)) => {

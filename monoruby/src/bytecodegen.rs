@@ -1309,11 +1309,14 @@ impl BytecodeGen {
     ///
     /// Evaluate *expr* and return the register which the result is stored.
     ///
-    /// if *expr* is a local variable, return it. `temp` is not moved.
+    /// if *expr* is `self` or a local variable, return it. `temp` is not moved.
     ///
     /// otherwise, push the result and return the register. `temp` moves to  +1.
     ///
     fn gen_expr_reg(&mut self, expr: Node) -> Result<BcReg> {
+        if expr.kind == NodeKind::SelfValue {
+            return Ok(BcReg::Self_);
+        }
         Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
             None => self.push_expr(expr)?.into(),
