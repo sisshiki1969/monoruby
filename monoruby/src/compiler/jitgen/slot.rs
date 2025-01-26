@@ -1047,18 +1047,18 @@ impl BBContext {
                     self.to_both(ir, slot, l, r, guarded);
                 }
             }
-            (LinkMode::Both(l), LinkMode::Xmm(r)) => {
+            /*(LinkMode::Both(l), LinkMode::Xmm(r)) => {
                 let deopt = self.new_deopt_with_pc(ir, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 self.guard_class(ir, slot, GP::Rax, FLOAT_CLASS, deopt);
                 if l == r {
                     // Both(l) -> Xmm(l)
                     self.set_xmm(slot, l);
-                } else {
+                    } else {
                     // Xmm/Both(l) -> Xmm(r)
                     self.to_xmm(ir, slot, l, r);
                 }
-            }
+            }*/
             (LinkMode::Both(l), LinkMode::Both(r)) => {
                 if l != r {
                     // Both(l) -> Both(r)
@@ -1075,12 +1075,12 @@ impl BBContext {
                     self.guard_class_stack_slot(ir, slot, class, deopt);
                 }
             }
-            (LinkMode::Stack, LinkMode::Both(r)) => {
+            /*(LinkMode::Stack, LinkMode::Both(r)) => {
                 let deopt = self.new_deopt_with_pc(ir, pc + 1);
                 ir.stack2reg(slot, GP::Rax);
                 ir.push(AsmInst::NumToXmm(GP::Rax, r, deopt));
                 self.set_both(slot, r, guarded);
-            }
+            }*/
             (LinkMode::ConcreteValue(l), LinkMode::ConcreteValue(r)) if l == r => {}
             (LinkMode::ConcreteValue(l), LinkMode::Xmm(r)) => {
                 if let Some(f) = l.try_float() {
@@ -1099,6 +1099,9 @@ impl BBContext {
                 } else {
                     unreachable!()
                 }
+            }
+            (_, LinkMode::Stack) => {
+                self.write_back_slot(ir, slot);
             }
             (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
         }
@@ -1172,22 +1175,31 @@ impl BBContext {
 impl MergeContext {
     ///
     /// ~~~text
-    ///                Xmm     Both  Const(f64) Const
-    ///             +-------+--------+--------+-------+
-    ///    Xmm      |  Xmm  |  Both  |   Xmm  |       |
-    ///             +-------+--------+--------+-------+
-    ///    Both     |  Both |  Both  |  Both  |       |
-    ///             +-------+--------+--------+-------|
-    /// Const(f64)  |  Xmm  |  Both  |   Xmm  |       |
-    ///             +-------+--------+--------+-------|
-    ///   Const     |       |        |        |       |
-    ///             +-------+--------+--------+-------+
     ///
-    pub(in crate::compiler::jitgen) fn merge(&mut self, other: &SlotContext) {
+    ///                              other
+    ///       
+    ///                  Xmm     Both      f64     i63    Const
+    ///               +-------+--------+--------+-------+-------+
+    ///         Xmm   |  Xmm  |  Both  |   Xmm  | Stack | Stack |
+    ///               +-------+--------+--------+-------+-------+
+    ///         Both  |  Both |  Both  |  Both  | Both  | Stack |
+    ///  self         +-------+--------+--------+-------+-------|
+    ///         f64   |  Xmm  |  Both  |  Xmm*1 | Stack | Stack |
+    ///               +-------+--------+--------+-------+-------|
+    ///         i63   | Stack |  Both  |  Stack | Stack | Stack |
+    ///               +-------+--------+--------+-------+-------|
+    ///        Const  | Stack |  Stack |  Stack | Stack |Stack*2|
+    ///               +-------+--------+--------+-------+-------+
+    ///
+    ///  *1: if self == other, f64.
+    ///  *2: if self == other, Const.
+    ///
+    /// ~~~
+    pub(in crate::compiler::jitgen) fn merge(&mut self, other: &BBContext) {
         for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
             self.is_used_mut(i).merge(other.is_used(i));
-            if !self.class_version_guarded {
+            if !other.class_version_guarded {
                 self.unset_class_version_guard();
             }
             match (self.mode(i), other.mode(i)) {
@@ -1198,7 +1210,9 @@ impl MergeContext {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_both(i, l, guarded);
                 }
-                (LinkMode::Both(l), LinkMode::ConcreteValue(r)) if r.is_float() => {
+                (LinkMode::Both(l), LinkMode::ConcreteValue(r))
+                    if r.is_float() || r.is_fixnum() =>
+                {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_both(i, l, guarded)
                 }
@@ -1209,7 +1223,9 @@ impl MergeContext {
                 (LinkMode::ConcreteValue(l), LinkMode::Xmm(_)) if l.is_float() => {
                     self.set_new_xmm(i);
                 }
-                (LinkMode::ConcreteValue(l), LinkMode::Both(_)) if l.is_float() => {
+                (LinkMode::ConcreteValue(l), LinkMode::Both(_))
+                    if l.is_float() || l.is_fixnum() =>
+                {
                     let guarded = self.guarded(i).union(&other.guarded(i));
                     self.set_new_both(i, guarded);
                 }

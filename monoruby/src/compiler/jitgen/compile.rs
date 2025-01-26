@@ -149,11 +149,13 @@ impl JitContext {
                 let src_bb = func.bb_info.get_bb_id(src_idx);
                 if src_bb > loop_start {
                     // backegde
-                    if let Some(merger) = &mut backedge {
-                        merger.merge(&bbctx);
+                    if let Some(ctx) = &mut backedge {
+                        ctx.merge(&bbctx);
                     } else {
                         backedge = Some(MergeContext::new(&bbctx));
                     }
+                } else {
+                    panic!()
                 }
                 liveness.merge(bbctx);
             }

@@ -8,9 +8,6 @@ impl JitContext {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
             let mut target_ctx = self.backedge_map.remove(&bbid).unwrap();
-            /*for BranchEntry { bbctx, .. } in &entries {
-                target_ctx.merge(&bbctx.slot_state);
-            }*/
             let unused = self.loop_info(bbid).1;
             let pc = func.get_bb_pc(bbid);
             target_ctx.remove_unused(&unused);
@@ -81,23 +78,22 @@ impl JitContext {
     ///      entries       
     ///                    
     ///     \   |   /              
-    ///      \  |  /               
-    ///       v v v                
-    ///  +------------+      +------------+
-    ///  |   target   |      |   bbctx    |
-    ///  +------------+      +-----+------+
-    ///          \                 |
-    ///           \--------------  |
-    ///                          \ |
-    ///                           v+
-    ///                            |
-    ///                           bbid
+    ///      \  |  /  /======== backedge             
+    ///       v v v  /              
+    ///  +------------+      
+    ///  |   target   |      
+    ///  +------------+      
+    ///         |
+    ///         v
+    ///  +------------+
+    ///  |    bbid    |
+    ///  +------------+
     /// ```
     ///
     fn incoming_context_loop(&mut self, func: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
-        let (use_set, unused, merger) = self.loop_info(bbid);
+        let (use_set, unused, backedge) = self.loop_info(bbid);
 
         #[cfg(feature = "jit-debug")]
         {
@@ -106,8 +102,8 @@ impl JitContext {
         }
 
         let mut target = BBContext::union(&entries);
-        if let Some(merger) = merger {
-            target.merge(&merger.slot_state);
+        if let Some(backedge) = backedge {
+            target.merge(&backedge);
         }
 
         let mut bbctx = BBContext::new(self);
@@ -224,12 +220,12 @@ impl BBContext {
     fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &MergeContext, pc: BytecodePtr) {
         let len = self.sp.0 as usize;
 
-        for i in 0..len {
-            let slot = SlotId(i as u16);
-            if target.mode(slot) == LinkMode::Stack {
-                self.write_back_slot(ir, slot);
-            };
-        }
+        //for i in 0..len {
+        //    let slot = SlotId(i as u16);
+        //    if target.mode(slot) == LinkMode::Stack {
+        //                self.write_back_slot(ir, slot);
+        //    };
+        //}
 
         for i in 0..len {
             let slot = SlotId(i as u16);
