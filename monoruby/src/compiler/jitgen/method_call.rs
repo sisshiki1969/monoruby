@@ -1,5 +1,17 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(super) struct JitBlockInfo {
+    func_id: FuncId,
+    pub(super) self_class: ClassId,
+}
+
+impl JitBlockInfo {
+    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
+        store[self.func_id].is_iseq()
+    }
+}
+
 impl JitContext {
     ///
     /// Compile TraceIr::MethodCall with inline method cache info.
@@ -294,7 +306,10 @@ impl JitContext {
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 if let Some(block_fid) = block_fid {
-                    let block_info = Some((block_fid, self.self_class()));
+                    let block_info = Some(JitBlockInfo {
+                        func_id: block_fid,
+                        self_class: self.self_class(),
+                    });
                     let inlined_entry = self.inlined_method(store, iseq_id, recv_class, block_info);
                     self.send_inlined(bbctx, ir, store, callsite, fid, inlined_entry, evict);
                 } else {
@@ -313,7 +328,7 @@ impl JitContext {
         store: &Store,
         inlined_iseq_id: ISeqId,
         inlined_self_class: ClassId,
-        block_info: Option<(FuncId, ClassId)>,
+        block_info: Option<JitBlockInfo>,
     ) -> JitLabel {
         let mut ctx = JitContext::new(
             store,

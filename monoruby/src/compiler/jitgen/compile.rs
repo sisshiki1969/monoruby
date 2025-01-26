@@ -31,6 +31,7 @@ impl JitContext {
                 _ => unreachable!(),
             }
         }
+        //dbg!(&bbctx);
         ir.push(AsmInst::Preparation);
 
         assert!(self.ir.is_empty());
@@ -158,8 +159,7 @@ impl JitContext {
             }
         }
 
-        self.loop_info
-            .insert(loop_start, (liveness, backedge));
+        self.loop_info.insert(loop_start, (liveness, backedge));
     }
 
     fn analyse_basic_block(
@@ -633,10 +633,17 @@ impl JitContext {
                 }
             }
             TraceIr::Yield { callid } => {
-                if let Some((block_fid, block_self)) = self.block_info()
-                    && let Some(block_iseq) = store[*block_fid].is_iseq()
+                if let Some(block_info) = self.block_info()
+                    && let Some(block_iseq) = block_info.is_iseq(store)
                 {
-                    self.compile_yield_inlined(bbctx, ir, store, callid, block_iseq, *block_self);
+                    self.compile_yield_inlined(
+                        bbctx,
+                        ir,
+                        store,
+                        callid,
+                        block_iseq,
+                        block_info.self_class,
+                    );
                 } else {
                     bbctx.compile_yield(ir, store, callid);
                 }

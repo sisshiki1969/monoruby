@@ -1,20 +1,53 @@
-benchmark:
-  integer_times: |
-    1000000.times do end
-  integer_ruby_times: |
-    class Integer
-      def times
-        if block_given?
-          i = 0
-          while i < self
-            yield i
-            i += 1
-          end
-          self
-        else
-          self.to_enum(:times)
+prelude: |
+  class Integer
+    def ruby_times
+      if block_given?
+        i = 0
+        while i < self
+          yield i
+          i += 1
         end
+        self
+      else
+        self.to_enum(:times)
       end
     end
-    1000000.times do end
-loop_count: 5
+  end
+
+  class Array
+    def ruby_map!
+      if block_given?
+        i = 0
+        while i < self.size
+          self[i] = yield(self[i])
+          i += 1
+        end
+        self
+      else
+        self.to_enum(:ruby_map!)
+      end
+    end
+
+    def ruby_map
+      if block_given?
+        ary = Array.new(self)
+        ary.ruby_map! do |elem|
+          yield elem
+        end
+      else
+        self.to_enum(:ruby_map)
+      end
+    end
+  end
+
+  a = [*(0..999)]
+benchmark:
+  integer_times: |
+    1000.times do end
+  integer_ruby_times: |
+    1000.ruby_times do end
+  array_map: |
+    a.map do |elem| elem end
+  array_ruby_map: |
+    a.ruby_map do |elem| elem end
+loop_count: 5000

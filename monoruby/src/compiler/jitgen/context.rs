@@ -25,7 +25,7 @@ pub struct JitContext {
     ///
     /// The block given to the method and its `self` class.
     ///
-    block_info: Option<(FuncId, ClassId)>,
+    block_info: Option<method_call::JitBlockInfo>,
     ///
     /// The start bytecode position of the loop to be compiled.
     ///
@@ -134,7 +134,7 @@ impl JitContext {
         class_version: u32,
         self_class: ClassId,
         inlining_level: usize,
-        block_info: Option<(FuncId, ClassId)>,
+        block_info: Option<method_call::JitBlockInfo>,
     ) -> Self {
         let func = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -182,7 +182,7 @@ impl JitContext {
         let local_num = self.local_num;
         Self {
             iseq_id: self.iseq_id,
-            block_info: self.block_info,
+            block_info: self.block_info.clone(),
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
@@ -218,7 +218,7 @@ impl JitContext {
         &self.jit_type
     }
 
-    pub(super) fn block_info(&self) -> &Option<(FuncId, ClassId)> {
+    pub(super) fn block_info(&self) -> &Option<method_call::JitBlockInfo> {
         &self.block_info
     }
 
