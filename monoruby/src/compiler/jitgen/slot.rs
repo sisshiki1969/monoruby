@@ -4,7 +4,10 @@ mod read_slot;
 
 #[derive(Clone)]
 pub(crate) struct SlotContext {
+    /// Slot states.
     slots: Vec<SlotState>,
+    /// Liveness information.
+    liveness: Vec<IsUsed>,
     /// Information for xmm registers (xmm2 - xmm15).
     xmm: [Vec<SlotId>; 14],
     r15: Option<SlotId>,
@@ -32,6 +35,7 @@ impl SlotContext {
     fn new(total_reg_num: usize, local_num: usize) -> Self {
         SlotContext {
             slots: vec![SlotState::default(); total_reg_num],
+            liveness: vec![IsUsed::default(); total_reg_num],
             xmm: {
                 let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
                 v.try_into().unwrap()
@@ -62,11 +66,11 @@ impl SlotContext {
     }
 
     fn is_used(&self, slot: SlotId) -> &IsUsed {
-        &self.slots[slot.0 as usize].is_used
+        &self.liveness[slot.0 as usize]
     }
 
     fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
-        &mut self.slots[slot.0 as usize].is_used
+        &mut self.liveness[slot.0 as usize]
     }
 
     fn set_guarded(&mut self, slot: SlotId, guarded: Guarded) {
@@ -707,7 +711,6 @@ impl Liveness {
 pub(crate) struct SlotState {
     link: LinkMode,
     guarded: Guarded,
-    is_used: IsUsed,
 }
 
 impl std::fmt::Debug for SlotState {

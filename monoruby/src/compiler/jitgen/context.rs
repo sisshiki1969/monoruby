@@ -37,7 +37,7 @@ pub struct JitContext {
     ///
     total_reg_num: usize,
     ///
-    /// Number of local variables.
+    /// Number of non-temp registers. (includes arguments and local variables, not `self`)
     ///
     local_num: usize,
     ///
@@ -226,10 +226,16 @@ impl JitContext {
         self.block_info.is_some()
     }
 
+    ///
+    /// Get a number of non-temp registers. (includes arguments and local variables, not self)
+    ///
     pub(super) fn local_num(&self) -> usize {
         self.local_num
     }
 
+    ///
+    /// Get a number of slots. (including `self`, arguments, local variables, and temp registers)
+    ///
     pub(super) fn total_reg_num(&self) -> usize {
         self.total_reg_num
     }

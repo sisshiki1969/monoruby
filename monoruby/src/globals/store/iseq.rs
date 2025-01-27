@@ -247,7 +247,7 @@ impl ISeqInfo {
     }
 
     ///
-    /// Get a number of non-temp registers.
+    /// Get a number of non-temp registers. (not includes `self`)
     ///
     pub(crate) fn local_num(&self) -> usize {
         self.non_temp_num as usize
