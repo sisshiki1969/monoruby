@@ -129,9 +129,9 @@ impl JitContext {
         eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);
 
         let pc = func.get_bb_pc(bbid);
-        self.gen_bridges_for_branches(&MergeContext::new(&bbctx), entries, bbid, pc + 1, &unused);
+        self.gen_bridges_for_branches(&bbctx, entries, bbid, pc + 1, &unused);
 
-        self.new_backedge(func, &mut bbctx, bbid);
+        self.new_backedge(func, bbctx.clone(), bbid);
 
         Some(bbctx)
     }
@@ -155,7 +155,7 @@ impl JitContext {
         let pc = func.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);
 
-        Some(target_ctx.get())
+        Some(target_ctx)
     }
 
     ///
@@ -163,7 +163,7 @@ impl JitContext {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target_bb: &MergeContext,
+        target_bb: &BBContext,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
@@ -217,15 +217,8 @@ impl BBContext {
     ///
     /// Generate bridge AsmIr to merge current state(*bbctx*) with target state(*target*)
     ///
-    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &MergeContext, pc: BytecodePtr) {
+    fn gen_bridge_for_target(mut self, ir: &mut AsmIr, target: &BBContext, pc: BytecodePtr) {
         let len = self.sp.0 as usize;
-
-        //for i in 0..len {
-        //    let slot = SlotId(i as u16);
-        //    if target.mode(slot) == LinkMode::Stack {
-        //                self.write_back_slot(ir, slot);
-        //    };
-        //}
 
         for i in 0..len {
             let slot = SlotId(i as u16);

@@ -143,21 +143,21 @@ impl JitContext {
             ctx.analyse_basic_block(store, func, &mut liveness, bbid);
         }
 
-        let mut backedge: Option<MergeContext> = None;
+        let mut backedge: Option<BBContext> = None;
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_idx, bbctx, .. } in branches {
+                liveness.merge(&bbctx);
                 let src_bb = func.bb_info.get_bb_id(src_idx);
                 if src_bb > loop_start {
                     // backegde
                     if let Some(ctx) = &mut backedge {
                         ctx.merge(&bbctx);
                     } else {
-                        backedge = Some(MergeContext::new(&bbctx));
+                        backedge = Some(bbctx);
                     }
                 } else {
                     panic!()
                 }
-                liveness.merge(bbctx);
             }
         }
 
@@ -187,7 +187,7 @@ impl JitContext {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
                 CompileResult::Leave | CompileResult::Recompile | CompileResult::ExitLoop => {
-                    liveness.merge(bbctx);
+                    liveness.merge(&bbctx);
                     return;
                 }
             }

@@ -667,7 +667,7 @@ impl Liveness {
         Self(vec![IsUsed::default(); total_reg_num])
     }
 
-    pub(in crate::compiler::jitgen) fn merge(&mut self, bbctx: BBContext) {
+    pub(in crate::compiler::jitgen) fn merge(&mut self, bbctx: &BBContext) {
         for (i, is_used) in &mut self.0.iter_mut().enumerate() {
             is_used.merge(bbctx.is_used(SlotId(i as u16)));
         }
@@ -1029,7 +1029,7 @@ impl BBContext {
     pub(super) fn gen_bridge(
         &mut self,
         ir: &mut AsmIr,
-        target: &MergeContext,
+        target: &BBContext,
         slot: SlotId,
         pc: BytecodePtr,
     ) {
@@ -1173,9 +1173,7 @@ impl BBContext {
         ir.push(AsmInst::WriteBack(wb));
         self.release_locals();
     }
-}
 
-impl MergeContext {
     ///
     /// ~~~text
     ///

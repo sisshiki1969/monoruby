@@ -70,7 +70,7 @@ pub struct JitContext {
     /// ### value
     /// liveness and backedge info in the loop head.
     ///
-    pub(super) loop_info: HashMap<BasicBlockId, (Liveness, Option<MergeContext>)>,
+    pub(super) loop_info: HashMap<BasicBlockId, (Liveness, Option<BBContext>)>,
     ///
     /// Nested loop count.
     ///
@@ -86,7 +86,7 @@ pub struct JitContext {
     ///
     /// Map for backward branches.
     ///
-    pub(super) backedge_map: HashMap<BasicBlockId, MergeContext>,
+    pub(super) backedge_map: HashMap<BasicBlockId, BBContext>,
     ///
     /// Information for bridges.
     ///
@@ -296,7 +296,7 @@ impl JitContext {
     pub(super) fn loop_info(
         &self,
         entry_bb: BasicBlockId,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>, Option<MergeContext>) {
+    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>, Option<BBContext>) {
         match self.loop_info.get(&entry_bb) {
             Some((liveness, merger)) => (
                 liveness.get_loop_used_as_float(),
@@ -357,13 +357,13 @@ impl JitContext {
     pub(super) fn new_backedge(
         &mut self,
         func: &ISeqInfo,
-        bb: &mut BBContext,
+        mut target: BBContext,
         bb_pos: BasicBlockId,
     ) {
-        bb.sp = func.get_sp(func.bb_info[bb_pos].begin);
+        target.sp = func.get_sp(func.bb_info[bb_pos].begin);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_backedge:[{:?}] {:?}", bb.sp, bb_pos);
-        self.backedge_map.insert(bb_pos, MergeContext::new(bb));
+        eprintln!("   new_backedge:[{:?}] {:?}", target.sp, bb_pos);
+        self.backedge_map.insert(bb_pos, target);
     }
 
     ///

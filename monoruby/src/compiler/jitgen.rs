@@ -33,12 +33,12 @@ mod variables;
 
 struct ContinuationInfo {
     from: BBContext,
-    to: MergeContext,
+    to: BBContext,
     pc: BytecodePtr,
 }
 
 impl ContinuationInfo {
-    fn new(from: BBContext, to: MergeContext, pc: BytecodePtr) -> Self {
+    fn new(from: BBContext, to: BBContext, pc: BytecodePtr) -> Self {
         Self { from, to, pc }
     }
 }
@@ -122,8 +122,8 @@ impl BBContext {
         }
     }
 
-    fn set_guard_from(&mut self, merger: &MergeContext) {
-        self.slot_state.set_guard_from(&merger.0)
+    fn set_guard_from(&mut self, merger: &BBContext) {
+        self.slot_state.set_guard_from(merger)
     }
 
     fn pc(&self) -> BytecodePtr {
@@ -142,8 +142,8 @@ impl BBContext {
         self.class_version_guarded = false;
     }
 
-    fn union(entries: &[BranchEntry]) -> MergeContext {
-        let mut merge_ctx = MergeContext::new(&entries.last().unwrap().bbctx);
+    fn union(entries: &[BranchEntry]) -> Self {
+        let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
@@ -581,36 +581,6 @@ enum LinkMode {
     /// On accumulator (r15).
     ///
     Accumulator,
-}
-
-#[derive(Debug, Clone)]
-struct MergeContext(BBContext);
-
-impl std::ops::Deref for MergeContext {
-    type Target = BBContext;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for MergeContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl MergeContext {
-    fn new(bb: &BBContext) -> Self {
-        MergeContext(bb.clone())
-    }
-
-    fn get(self) -> BBContext {
-        self.0
-    }
-
-    fn remove_unused(&mut self, unused: &[SlotId]) {
-        unused.iter().for_each(|reg| self.discard(*reg));
-    }
 }
 
 impl Codegen {
