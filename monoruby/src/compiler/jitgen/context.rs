@@ -92,6 +92,10 @@ pub struct JitContext {
     ///
     pub(super) bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
+    /// Information for bridges.
+    ///
+    pub(super) bridges2: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+    ///
     /// Information for continuation bridge.
     ///
     pub(super) continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
@@ -102,7 +106,7 @@ pub struct JitContext {
     ///
     /// Generated AsmIr.
     ///
-    pub(super) ir: Vec<AsmIr>,
+    pub(super) ir: Vec<(Option<BasicBlockId>, AsmIr)>,
     ///
     /// Flag whether ivar on the heap is accessed in this context.
     ///
@@ -163,6 +167,7 @@ impl JitContext {
             self_class,
             self_ty,
             bridges: vec![],
+            bridges2: vec![],
             continuation_bridge: None,
             labels,
             class_version,
@@ -195,6 +200,7 @@ impl JitContext {
             self_class: NIL_CLASS,
             self_ty: None,
             bridges: vec![],
+            bridges2: vec![],
             continuation_bridge: None,
             labels: vec![],
             class_version: 0,
@@ -310,6 +316,29 @@ impl JitContext {
     ///
     /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
     ///
+    pub(super) fn new_side_branch(
+        &mut self,
+        func: &ISeqInfo,
+        src_idx: BcIndex,
+        dest: BasicBlockId,
+        mut bbctx: BBContext,
+        branch_dest: JitLabel,
+    ) {
+        bbctx.sp = func.get_sp(src_idx);
+        let src_bb = func.bb_info.get_bb_id(src_idx);
+        #[cfg(feature = "jit-debug")]
+        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
+        self.branch_map.entry(dest).or_default().push(BranchEntry {
+            src_bb,
+            bbctx,
+            branch_dest,
+            cont: BranchMode::Side,
+        });
+    }
+
+    ///
+    /// Add new branch from *src_idx* to *dest* with the context *bbctx*.
+    ///
     pub(super) fn new_branch(
         &mut self,
         func: &ISeqInfo,
@@ -326,7 +355,7 @@ impl JitContext {
             src_bb,
             bbctx,
             branch_dest,
-            cont: false,
+            cont: BranchMode::Branch,
         });
     }
 
@@ -349,7 +378,7 @@ impl JitContext {
             src_bb,
             bbctx,
             branch_dest,
-            cont: true,
+            cont: BranchMode::Continue,
         })
     }
 

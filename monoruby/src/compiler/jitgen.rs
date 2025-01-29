@@ -64,6 +64,23 @@ enum CompileResult {
 #[derive(Debug, Clone, Copy)]
 struct JitLabel(usize);
 
+#[derive(Debug, PartialEq)]
+enum BranchMode {
+    ///
+    /// continuation branch.
+    /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
+    ///
+    Continue,
+    ///
+    /// side branch. (conditional branch)
+    ///
+    Side,
+    ///
+    /// branch. (unconditional branch)
+    ///
+    Branch,
+}
+
 ///
 /// The information for branches.
 ///
@@ -77,7 +94,7 @@ struct BranchEntry {
     branch_dest: JitLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
-    cont: bool,
+    cont: BranchMode,
 }
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
@@ -691,7 +708,13 @@ impl Codegen {
 
         // generate machine code for a main context
         for ir in std::mem::take(&mut ctx.ir).into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None);
+            self.gen_asm(ir.1, store, &mut ctx, None);
+        }
+
+        // generate machine code for bridges
+        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges2) {
+            let entry = ctx.resolve_label(&mut self.jit, entry);
+            self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }
 
         // generate machine code for bridges

@@ -12,9 +12,10 @@ impl JitContext {
             let pc = func.get_bb_pc(bbid);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
-                src_bb: _src_bb,
+                src_bb,
                 mut bbctx,
                 branch_dest,
+                cont,
                 ..
             } in entries
             {
@@ -22,12 +23,17 @@ impl JitContext {
                 bbctx.remove_unused(&unused);
                 #[cfg(feature = "jit-debug")]
                 {
-                    eprintln!("  backedge_write_back {_src_bb:?}->{bbid:?}");
+                    eprintln!("  backedge_write_back {src_bb:?}->{bbid:?}");
                     eprintln!("    src:    {:?}", bbctx.slot_state);
                     eprintln!("    target: {:?}", target_ctx);
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-                self.bridges.push((ir, branch_dest, bbid));
+                match cont {
+                    BranchMode::Side => self.bridges.push((ir, branch_dest, bbid)),
+                    BranchMode::Branch => self.bridges2.push((ir, branch_dest, bbid)),
+                    BranchMode::Continue => unreachable!(),
+                }
+                //self.bridges.push((ir, branch_dest, bbid));
             }
         }
     }
@@ -170,15 +176,15 @@ impl JitContext {
         let mut target_ctx = target_bb.clone();
         target_ctx.remove_unused(unused);
         for BranchEntry {
-            src_bb: _src_bb,
+            src_bb,
             mut bbctx,
             branch_dest,
             cont,
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  bridge {_src_bb:?}->{bbid:?}");
-            if cont {
+            eprintln!("  bridge {src_bb:?}->{bbid:?}");
+            if cont == BranchMode::Continue {
                 //  the destination is adjacent to the source basic block on the bytecode.
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((
@@ -194,7 +200,11 @@ impl JitContext {
                     eprintln!("    target: {:?}", target_ctx);
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-                self.bridges.push((ir, branch_dest, bbid));
+                if cont == BranchMode::Side {
+                    self.bridges.push((ir, branch_dest, bbid));
+                } else {
+                    self.bridges2.push((ir, branch_dest, bbid));
+                }
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge end");

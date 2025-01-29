@@ -84,6 +84,10 @@ impl AsmIr {
         self.inst.push(inst);
     }
 
+    pub(super) fn append(&mut self, ir: &mut AsmIr) {
+        self.inst.append(&mut ir.inst);
+    }
+
     pub(super) fn save(&mut self) -> (usize, usize) {
         (self.inst.len(), self.side_exit.len())
     }
@@ -1396,10 +1400,8 @@ impl Codegen {
             }
         }
 
-        if entry_exit.is_some() {
-            self.jit.select_page(1);
-        }
         if let Some((entry, _)) = entry_exit {
+            self.jit.select_page(1);
             self.jit.bind_label(entry);
         }
 
