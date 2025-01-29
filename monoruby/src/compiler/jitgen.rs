@@ -69,8 +69,8 @@ struct JitLabel(usize);
 ///
 #[derive(Debug)]
 struct BranchEntry {
-    /// source instruction index of the branch.
-    src_idx: BcIndex,
+    /// source BasicBlockId of the branch.
+    src_bb: BasicBlockId,
     /// context of the source basic block.
     bbctx: BBContext,
     /// `DestLabel` for the destination basic block.
@@ -145,13 +145,13 @@ impl BBContext {
     fn union(entries: &[BranchEntry]) -> Self {
         let mut merge_ctx = entries.last().unwrap().bbctx.clone();
         for BranchEntry {
-            src_idx: _src_idx,
+            src_bb: _src_bb,
             bbctx,
             ..
         } in entries.iter()
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  <-{:?}:[{:?}] {:?}", _src_idx, bbctx.sp, bbctx.slot_state);
+            eprintln!("  <-{:?}:[{:?}] {:?}", _src_bb, bbctx.sp, bbctx.slot_state);
             merge_ctx.merge(bbctx);
         }
         #[cfg(feature = "jit-debug")]

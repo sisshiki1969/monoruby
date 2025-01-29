@@ -319,10 +319,11 @@ impl JitContext {
         branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
+        let src_bb = func.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_idx,
+            src_bb,
             bbctx,
             branch_dest,
             cont: false,
@@ -341,10 +342,11 @@ impl JitContext {
         branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
+        let src_bb = func.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest);
         self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_idx,
+            src_bb,
             bbctx,
             branch_dest,
             cont: true,

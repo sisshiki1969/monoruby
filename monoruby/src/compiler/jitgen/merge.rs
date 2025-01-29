@@ -12,7 +12,7 @@ impl JitContext {
             let pc = func.get_bb_pc(bbid);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
-                src_idx: _src_idx,
+                src_bb: _src_bb,
                 mut bbctx,
                 branch_dest,
                 ..
@@ -22,7 +22,7 @@ impl JitContext {
                 bbctx.remove_unused(&unused);
                 #[cfg(feature = "jit-debug")]
                 {
-                    eprintln!("  backedge_write_back {_src_idx}->{:?}", bbid);
+                    eprintln!("  backedge_write_back {_src_bb:?}->{bbid:?}");
                     eprintln!("    src:    {:?}", bbctx.slot_state);
                     eprintln!("    target: {:?}", target_ctx);
                 }
@@ -37,6 +37,7 @@ impl JitContext {
     ///
     pub(super) fn incoming_context(
         &mut self,
+        ir: &mut AsmIr,
         func: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
@@ -53,10 +54,6 @@ impl JitContext {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        res
-    }
-
-    pub(super) fn gen_continuation(&mut self, ir: &mut AsmIr) {
         if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
             ir.push(AsmInst::Label(entry));
             if let Some(ContinuationInfo { from, to, pc }) = data {
@@ -69,6 +66,7 @@ impl JitContext {
                 from.gen_bridge_for_target(ir, &to, pc);
             }
         }
+        res
     }
 
     ///
@@ -172,14 +170,14 @@ impl JitContext {
         let mut target_ctx = target_bb.clone();
         target_ctx.remove_unused(unused);
         for BranchEntry {
-            src_idx: _src_idx,
+            src_bb: _src_bb,
             mut bbctx,
             branch_dest,
             cont,
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  bridge {_src_idx}->{:?}", bbid);
+            eprintln!("  bridge {_src_bb:?}->{bbid:?}");
             if cont {
                 //  the destination is adjacent to the source basic block on the bytecode.
                 assert!(self.continuation_bridge.is_none());

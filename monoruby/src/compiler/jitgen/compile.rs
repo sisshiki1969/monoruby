@@ -47,7 +47,7 @@ impl JitContext {
         self.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
-                src_idx: BcIndex(0),
+                src_bb: BasicBlockId(0),
                 bbctx,
                 branch_dest,
                 cont: true,
@@ -132,7 +132,7 @@ impl JitContext {
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
-                src_idx: BcIndex(0),
+                src_bb: BasicBlockId(0),
                 bbctx,
                 branch_dest,
                 cont: true,
@@ -145,18 +145,14 @@ impl JitContext {
 
         let mut backedge: Option<BBContext> = None;
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
-            for BranchEntry { src_idx, bbctx, .. } in branches {
+            for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.merge(&bbctx);
-                let src_bb = func.bb_info.get_bb_id(src_idx);
-                if src_bb > loop_start {
-                    // backegde
-                    if let Some(ctx) = &mut backedge {
-                        ctx.merge(&bbctx);
-                    } else {
-                        backedge = Some(bbctx);
-                    }
+                assert!(src_bb > loop_start);
+                // backegde
+                if let Some(ctx) = &mut backedge {
+                    ctx.merge(&bbctx);
                 } else {
-                    panic!()
+                    backedge = Some(bbctx);
                 }
             }
         }
@@ -207,8 +203,7 @@ impl JitContext {
     ) -> Option<BBContext> {
         if let Some(bb) = self.target_ctx.remove(&bbid) {
             Some(bb)
-        } else if let Some(bb) = self.incoming_context(func, bbid) {
-            self.gen_continuation(ir);
+        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
             Some(bb)
         } else {
             None
@@ -220,8 +215,7 @@ impl JitContext {
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
             let label = self.label();
             self.new_continue(func, end, next_bbid, bbctx, label);
-            if let Some(target_ctx) = self.incoming_context(func, next_bbid) {
-                self.gen_continuation(ir);
+            if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }
         } else {
