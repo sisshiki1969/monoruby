@@ -92,13 +92,9 @@ pub struct JitContext {
     ///
     pub(super) bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
-    /// Information for bridges.
+    /// Information for continue bridges.
     ///
-    pub(super) bridges2: Vec<(AsmIr, JitLabel, BasicBlockId)>,
-    ///
-    /// Information for continuation bridge.
-    ///
-    pub(super) continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
+    pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -167,8 +163,7 @@ impl JitContext {
             self_class,
             self_ty,
             bridges: vec![],
-            bridges2: vec![],
-            continuation_bridge: None,
+            continue_bridges: HashMap::default(),
             labels,
             class_version,
             ir: vec![],
@@ -200,8 +195,7 @@ impl JitContext {
             self_class: NIL_CLASS,
             self_ty: None,
             bridges: vec![],
-            bridges2: vec![],
-            continuation_bridge: None,
+            continue_bridges: HashMap::default(),
             labels: vec![],
             class_version: 0,
             ir: vec![],
@@ -320,20 +314,22 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         src_idx: BcIndex,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: JitLabel,
+        dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         let src_bb = func.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
-        self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_bb,
-            bbctx,
-            branch_dest,
-            cont: BranchMode::Side,
-        });
+        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
+        self.branch_map
+            .entry(dest_bb)
+            .or_default()
+            .push(BranchEntry {
+                src_bb,
+                bbctx,
+                mode: BranchMode::Side { dest },
+            });
     }
 
     ///
@@ -343,20 +339,22 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         src_idx: BcIndex,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: JitLabel,
+        dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         let src_bb = func.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest);
-        self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_bb,
-            bbctx,
-            branch_dest,
-            cont: BranchMode::Branch,
-        });
+        eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
+        self.branch_map
+            .entry(dest_bb)
+            .or_default()
+            .push(BranchEntry {
+                src_bb,
+                bbctx,
+                mode: BranchMode::Branch { dest },
+            });
     }
 
     ///
@@ -366,20 +364,21 @@ impl JitContext {
         &mut self,
         func: &ISeqInfo,
         src_idx: BcIndex,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         mut bbctx: BBContext,
-        branch_dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         let src_bb = func.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
-        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest);
-        self.branch_map.entry(dest).or_default().push(BranchEntry {
-            src_bb,
-            bbctx,
-            branch_dest,
-            cont: BranchMode::Continue,
-        })
+        eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest_bb);
+        self.branch_map
+            .entry(dest_bb)
+            .or_default()
+            .push(BranchEntry {
+                src_bb,
+                bbctx,
+                mode: BranchMode::Continue,
+            })
     }
 
     ///

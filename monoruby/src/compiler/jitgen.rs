@@ -31,18 +31,6 @@ mod slot;
 pub mod trace_ir;
 mod variables;
 
-struct ContinuationInfo {
-    from: BBContext,
-    to: BBContext,
-    pc: BytecodePtr,
-}
-
-impl ContinuationInfo {
-    fn new(from: BBContext, to: BBContext, pc: BytecodePtr) -> Self {
-        Self { from, to, pc }
-    }
-}
-
 ///
 /// Compile result of the current instruction.
 ///
@@ -61,24 +49,29 @@ enum CompileResult {
     Recompile,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct JitLabel(usize);
 
 #[derive(Debug, PartialEq)]
 enum BranchMode {
     ///
-    /// continuation branch.
+    /// Continuation branch.
+    ///
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     ///
     Continue,
     ///
-    /// side branch. (conditional branch)
+    /// Side branch. (conditional branch)
     ///
-    Side,
+    /// The machine code for the branch is outlined.
     ///
-    /// branch. (unconditional branch)
+    Side { dest: JitLabel },
     ///
-    Branch,
+    /// Branch. (unconditional branch)
+    ///
+    /// The machine code for the branch is inlined.
+    ///
+    Branch { dest: JitLabel },
 }
 
 ///
@@ -90,11 +83,9 @@ struct BranchEntry {
     src_bb: BasicBlockId,
     /// context of the source basic block.
     bbctx: BBContext,
-    /// `DestLabel` for the destination basic block.
-    branch_dest: JitLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
-    cont: BranchMode,
+    mode: BranchMode,
 }
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
@@ -707,14 +698,21 @@ impl Codegen {
         let pair = self.get_address_pair();
 
         // generate machine code for a main context
-        for ir in std::mem::take(&mut ctx.ir).into_iter() {
-            self.gen_asm(ir.1, store, &mut ctx, None);
-        }
-
-        // generate machine code for bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges2) {
-            let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
+        for (bbid, ir) in std::mem::take(&mut ctx.ir).into_iter() {
+            self.gen_asm(ir, store, &mut ctx, None);
+            // generate machine code for bridges
+            if let Some(bbid) = bbid
+                && let Some((ir, exit)) = ctx.continue_bridges.remove(&bbid)
+            {
+                self.gen_asm(ir, store, &mut ctx, None);
+                if let Some(exit) = exit {
+                    let exit = ctx.get_bb_label(exit);
+                    let exit = ctx.resolve_label(&mut self.jit, exit);
+                    monoasm! { &mut self.jit,
+                        jmp exit;
+                    }
+                }
+            }
         }
 
         // generate machine code for bridges
@@ -722,7 +720,6 @@ impl Codegen {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }
-        assert!(ctx.continuation_bridge.is_none());
 
         self.jit.finalize();
 
