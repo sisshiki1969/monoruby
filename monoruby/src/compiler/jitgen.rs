@@ -720,7 +720,6 @@ impl Codegen {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }
-        assert!(ctx.continue_label.is_none());
 
         self.jit.finalize();
 

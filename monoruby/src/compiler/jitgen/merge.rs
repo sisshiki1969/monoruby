@@ -56,14 +56,11 @@ impl JitContext {
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {:?}", bbid);
-            self.incoming_context_method(func, bbid)
+            self.incoming_context_method(ir, func, bbid)
         };
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        if let Some(entry) = std::mem::take(&mut self.continue_label) {
-            ir.push(AsmInst::Label(entry));
-        }
         res
     }
 
@@ -134,6 +131,7 @@ impl JitContext {
 
     fn incoming_context_method(
         &mut self,
+        ir: &mut AsmIr,
         func: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
@@ -141,10 +139,9 @@ impl JitContext {
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
-            assert!(self.continue_label.is_none());
             match entry.mode {
                 BranchMode::Side { dest } | BranchMode::Branch { dest } => {
-                    self.continue_label = Some(dest);
+                    ir.push(AsmInst::Label(dest));
                 }
                 BranchMode::Continue => {}
             }

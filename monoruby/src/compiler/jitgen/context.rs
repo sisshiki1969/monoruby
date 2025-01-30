@@ -96,10 +96,6 @@ pub struct JitContext {
     ///
     pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///
-    /// Information for continuation bridge.
-    ///
-    pub(super) continue_label: Option<JitLabel>,
-    ///
     /// Information for `JitLabel`s`.
     ///
     labels: Vec<Option<DestLabel>>,
@@ -168,7 +164,6 @@ impl JitContext {
             self_ty,
             bridges: vec![],
             continue_bridges: HashMap::default(),
-            continue_label: None,
             labels,
             class_version,
             ir: vec![],
@@ -201,7 +196,6 @@ impl JitContext {
             self_ty: None,
             bridges: vec![],
             continue_bridges: HashMap::default(),
-            continue_label: None,
             labels: vec![],
             class_version: 0,
             ir: vec![],
