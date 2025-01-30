@@ -1376,7 +1376,8 @@ impl Codegen {
         ir: AsmIr,
         store: &Store,
         ctx: &mut JitContext,
-        entry_exit: Option<(DestLabel, BasicBlockId)>,
+        entry: Option<DestLabel>,
+        exit: Option<BasicBlockId>,
     ) {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
@@ -1396,8 +1397,11 @@ impl Codegen {
             }
         }
 
-        if let Some((entry, _)) = entry_exit {
+        if entry.is_some() && exit.is_some() {
             self.jit.select_page(1);
+        }
+
+        if let Some(entry) = entry {
             self.jit.bind_label(entry);
         }
 
@@ -1410,12 +1414,14 @@ impl Codegen {
             self.compile_asmir(store, ctx, &side_exits, inst);
         }
 
-        if let Some((_, exit)) = entry_exit {
+        if let Some(exit) = exit {
             let exit = ctx.get_bb_label(exit);
             let exit = ctx.resolve_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;
             }
+        }
+        if entry.is_some() && exit.is_some() {
             self.jit.select_page(0);
         }
     }

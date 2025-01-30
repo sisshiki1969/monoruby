@@ -699,26 +699,19 @@ impl Codegen {
 
         // generate machine code for a main context
         for (bbid, ir) in std::mem::take(&mut ctx.ir).into_iter() {
-            self.gen_asm(ir, store, &mut ctx, None);
+            self.gen_asm(ir, store, &mut ctx, None, None);
             // generate machine code for bridges
             if let Some(bbid) = bbid
                 && let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid)
             {
-                self.gen_asm(ir, store, &mut ctx, None);
-                if let Some(exit) = exit {
-                    let exit = ctx.get_bb_label(exit);
-                    let exit = ctx.resolve_label(&mut self.jit, exit);
-                    monoasm! { &mut self.jit,
-                        jmp exit;
-                    }
-                }
+                self.gen_asm(ir, store, &mut ctx, None, exit);
             }
         }
 
         // generate machine code for bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.outline_bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
+            self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
         }
 
         self.jit.finalize();
