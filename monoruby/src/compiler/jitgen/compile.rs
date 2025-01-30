@@ -756,20 +756,20 @@ impl JitContext {
                 ir.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {
-                self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                self.new_branch(func, bc_pos, dest_idx, bbctx.clone());
                 return CompileResult::Branch;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                        self.new_branch(func, bc_pos, dest_idx, bbctx.clone());
                         return CompileResult::Branch;
                     } else {
                         return CompileResult::Continue;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                        self.new_branch(func, bc_pos, dest_idx, bbctx.clone());
                         return CompileResult::Branch;
                     } else {
                         return CompileResult::Continue;
@@ -781,7 +781,7 @@ impl JitContext {
             }
             TraceIr::NilBr(cond_, dest_idx) => {
                 if bbctx.is_nil(cond_) {
-                    self.compile_branch(ir, bbctx, func, bc_pos, dest_idx);
+                    self.new_branch(func, bc_pos, dest_idx, bbctx.clone());
                     return CompileResult::Branch;
                 } else if bbctx.is_not_nil(cond_) {
                 } else {
@@ -844,19 +844,6 @@ impl JitContext {
             CmpKind::TEq => IdentId::_TEQ,
             CmpKind::Cmp => IdentId::_CMP,
         }
-    }
-
-    fn compile_branch(
-        &mut self,
-        ir: &mut AsmIr,
-        bbctx: &mut BBContext,
-        func: &ISeqInfo,
-        bc_pos: BcIndex,
-        dest: BasicBlockId,
-    ) {
-        let branch_dest = self.label();
-        ir.push(AsmInst::Br(branch_dest));
-        self.new_branch(func, bc_pos, dest, bbctx.clone(), branch_dest);
     }
 }
 

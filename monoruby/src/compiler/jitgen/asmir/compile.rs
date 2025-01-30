@@ -286,12 +286,6 @@ impl Codegen {
                     jne  raise;
                 };
             }
-            AsmInst::Br(dest) => {
-                let dest = ctx.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    jmp dest;
-                );
-            }
             AsmInst::CondBr(brkind, dest) => {
                 let branch_dest = ctx.resolve_label(&mut self.jit, dest);
                 self.cond_br(branch_dest, brkind);

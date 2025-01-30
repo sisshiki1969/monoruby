@@ -28,9 +28,9 @@ impl JitContext {
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
-                    BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
+                    BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
                     BranchMode::Branch { .. } => {
-                        self.continue_bridges.insert(src_bb, (ir, Some(bbid)));
+                        self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                     }
                     BranchMode::Continue => unreachable!(),
                 }
@@ -140,10 +140,10 @@ impl JitContext {
         if entries.len() == 1 {
             let entry = entries.remove(0);
             match entry.mode {
-                BranchMode::Side { dest } | BranchMode::Branch { dest } => {
+                BranchMode::Side { dest } => {
                     ir.push(AsmInst::Label(dest));
                 }
-                BranchMode::Continue => {}
+                BranchMode::Continue | BranchMode::Branch => {}
             }
             return Some(entry.bbctx);
         }
@@ -187,12 +187,12 @@ impl JitContext {
             }
             bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
             match mode {
-                BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
+                BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
                 BranchMode::Branch { .. } => {
-                    self.continue_bridges.insert(src_bb, (ir, Some(bbid)));
+                    self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                 }
                 BranchMode::Continue => {
-                    self.continue_bridges.insert(src_bb, (ir, None));
+                    self.inline_bridges.insert(src_bb, (ir, None));
                 }
             }
             //}
