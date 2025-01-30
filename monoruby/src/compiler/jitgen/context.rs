@@ -312,14 +312,14 @@ impl JitContext {
     ///
     pub(super) fn new_side_branch(
         &mut self,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
         dest: JitLabel,
     ) {
-        bbctx.sp = func.get_sp(src_idx);
-        let src_bb = func.bb_info.get_bb_id(src_idx);
+        bbctx.sp = iseq.get_sp(src_idx);
+        let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
         self.branch_map
@@ -337,14 +337,13 @@ impl JitContext {
     ///
     pub(super) fn new_branch(
         &mut self,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
-        dest: JitLabel,
     ) {
-        bbctx.sp = func.get_sp(src_idx);
-        let src_bb = func.bb_info.get_bb_id(src_idx);
+        bbctx.sp = iseq.get_sp(src_idx);
+        let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_branch: [{:?}]{src_idx}->{:?}", bbctx.sp, dest_bb);
         self.branch_map
@@ -353,7 +352,7 @@ impl JitContext {
             .push(BranchEntry {
                 src_bb,
                 bbctx,
-                mode: BranchMode::Branch { dest },
+                mode: BranchMode::Branch,
             });
     }
 
@@ -362,13 +361,13 @@ impl JitContext {
     ///
     pub(super) fn new_continue(
         &mut self,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
     ) {
-        bbctx.sp = func.get_sp(src_idx);
-        let src_bb = func.bb_info.get_bb_id(src_idx);
+        bbctx.sp = iseq.get_sp(src_idx);
+        let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_continue:[{:?}] {src_idx}->{:?}", bbctx.sp, dest_bb);
         self.branch_map
@@ -386,11 +385,11 @@ impl JitContext {
     ///
     pub(super) fn new_backedge(
         &mut self,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         mut target: BBContext,
         bb_pos: BasicBlockId,
     ) {
-        target.sp = func.get_sp(func.bb_info[bb_pos].begin);
+        target.sp = iseq.get_sp(iseq.bb_info[bb_pos].begin);
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:[{:?}] {:?}", target.sp, bb_pos);
         self.backedge_map.insert(bb_pos, target);

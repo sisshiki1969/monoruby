@@ -4,12 +4,12 @@ impl JitContext {
     ///
     /// Generate bridge AsmIr for backedge branches.
     ///
-    pub(super) fn backedge_branches(&mut self, func: &ISeqInfo) {
+    pub(super) fn backedge_branches(&mut self, iseq: &ISeqInfo) {
         let branch_map = std::mem::take(&mut self.branch_map);
         for (bbid, entries) in branch_map.into_iter() {
             let mut target_ctx = self.backedge_map.remove(&bbid).unwrap();
             let unused = self.loop_info(bbid).1;
-            let pc = func.get_bb_pc(bbid);
+            let pc = iseq.get_bb_pc(bbid);
             target_ctx.remove_unused(&unused);
             for BranchEntry {
                 src_bb,
@@ -29,7 +29,7 @@ impl JitContext {
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
                     BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
-                    BranchMode::Branch { .. } => {
+                    BranchMode::Branch => {
                         self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                     }
                     BranchMode::Continue => unreachable!(),
@@ -44,19 +44,18 @@ impl JitContext {
     ///
     pub(super) fn incoming_context(
         &mut self,
-        ir: &mut AsmIr,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
-        let is_loop = func.get_bb_pc(bbid).is_loop_start();
+        let is_loop = iseq.get_bb_pc(bbid).is_loop_start();
         let res = if is_loop {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb(loop): {:?}", bbid);
-            self.incoming_context_loop(func, bbid)
+            self.incoming_context_loop(iseq, bbid)
         } else {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge bb: {:?}", bbid);
-            self.incoming_context_method(ir, func, bbid)
+            self.incoming_context_method(iseq, bbid)
         };
 
         #[cfg(feature = "jit-debug")]
@@ -83,7 +82,7 @@ impl JitContext {
     ///  +------------+
     /// ```
     ///
-    fn incoming_context_loop(&mut self, func: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
+    fn incoming_context_loop(&mut self, iseq: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
         let entries = self.branch_map.remove(&bbid)?;
 
         let (use_set, unused, backedge) = self.loop_info(bbid);
@@ -121,36 +120,24 @@ impl JitContext {
         #[cfg(feature = "jit-debug")]
         eprintln!("  target_ctx:[{:?}]   {:?}", bbctx.sp, bbctx.slot_state);
 
-        let pc = func.get_bb_pc(bbid);
+        let pc = iseq.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&bbctx, entries, bbid, pc + 1, &unused);
 
-        self.new_backedge(func, bbctx.clone(), bbid);
+        self.new_backedge(iseq, bbctx.clone(), bbid);
 
         Some(bbctx)
     }
 
     fn incoming_context_method(
         &mut self,
-        ir: &mut AsmIr,
-        func: &ISeqInfo,
+        iseq: &ISeqInfo,
         bbid: BasicBlockId,
     ) -> Option<BBContext> {
-        let mut entries = self.branch_map.remove(&bbid)?;
-
-        if entries.len() == 1 {
-            let entry = entries.remove(0);
-            match entry.mode {
-                BranchMode::Side { dest } | BranchMode::Branch { dest } => {
-                    ir.push(AsmInst::Label(dest));
-                }
-                BranchMode::Continue => {}
-            }
-            return Some(entry.bbctx);
-        }
+        let entries = self.branch_map.remove(&bbid)?;
 
         let target_ctx = BBContext::union(&entries);
 
-        let pc = func.get_bb_pc(bbid);
+        let pc = iseq.get_bb_pc(bbid);
         self.gen_bridges_for_branches(&target_ctx, entries, bbid, pc, &[]);
 
         Some(target_ctx)
@@ -188,14 +175,13 @@ impl JitContext {
             bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
             match mode {
                 BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
-                BranchMode::Branch { .. } => {
+                BranchMode::Branch => {
                     self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                 }
                 BranchMode::Continue => {
                     self.inline_bridges.insert(src_bb, (ir, None));
                 }
             }
-            //}
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge end");
         }

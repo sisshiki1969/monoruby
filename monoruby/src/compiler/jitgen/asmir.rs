@@ -702,7 +702,6 @@ pub(super) enum AsmInst {
     Raise,
     MethodRet(BytecodePtr),
     EnsureEnd,
-    Br(JitLabel),
     ///
     /// Conditional branch
     ///

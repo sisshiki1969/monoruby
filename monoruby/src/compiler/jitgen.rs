@@ -71,7 +71,7 @@ enum BranchMode {
     ///
     /// The machine code for the branch is inlined.
     ///
-    Branch { dest: JitLabel },
+    Branch,
 }
 
 ///
