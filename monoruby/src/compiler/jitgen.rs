@@ -31,18 +31,6 @@ mod slot;
 pub mod trace_ir;
 mod variables;
 
-struct ContinuationInfo {
-    from: BBContext,
-    to: BBContext,
-    pc: BytecodePtr,
-}
-
-impl ContinuationInfo {
-    fn new(from: BBContext, to: BBContext, pc: BytecodePtr) -> Self {
-        Self { from, to, pc }
-    }
-}
-
 ///
 /// Compile result of the current instruction.
 ///
@@ -725,7 +713,7 @@ impl Codegen {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }
-        assert!(ctx.continuation_bridge.is_none());
+        assert!(ctx.continue_label.is_none());
 
         self.jit.finalize();
 

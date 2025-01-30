@@ -98,7 +98,7 @@ pub struct JitContext {
     ///
     /// Information for continuation bridge.
     ///
-    pub(super) continuation_bridge: Option<(Option<ContinuationInfo>, JitLabel)>,
+    pub(super) continue_label: Option<JitLabel>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -168,7 +168,7 @@ impl JitContext {
             self_ty,
             bridges: vec![],
             continue_bridges: HashMap::default(),
-            continuation_bridge: None,
+            continue_label: None,
             labels,
             class_version,
             ir: vec![],
@@ -201,7 +201,7 @@ impl JitContext {
             self_ty: None,
             bridges: vec![],
             continue_bridges: HashMap::default(),
-            continuation_bridge: None,
+            continue_label: None,
             labels: vec![],
             class_version: 0,
             ir: vec![],

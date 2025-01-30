@@ -61,17 +61,8 @@ impl JitContext {
 
         #[cfg(feature = "jit-debug")]
         eprintln!("===merge_end");
-        if let Some((data, entry)) = std::mem::take(&mut self.continuation_bridge) {
+        if let Some(entry) = std::mem::take(&mut self.continue_label) {
             ir.push(AsmInst::Label(entry));
-            if let Some(ContinuationInfo { from, to, pc }) = data {
-                #[cfg(feature = "jit-debug")]
-                {
-                    eprintln!("  continuation");
-                    eprintln!("    src:    {:?}", from.slot_state);
-                    eprintln!("    target: {:?}", to);
-                }
-                from.gen_bridge_for_target(ir, &to, pc);
-            }
         }
         res
     }
@@ -150,12 +141,12 @@ impl JitContext {
 
         if entries.len() == 1 {
             let entry = entries.remove(0);
-            assert!(self.continuation_bridge.is_none());
+            assert!(self.continue_label.is_none());
             match entry.mode {
                 BranchMode::Continue { dest }
                 | BranchMode::Side { dest }
                 | BranchMode::Branch { dest } => {
-                    self.continuation_bridge = Some((None, dest));
+                    self.continue_label = Some(dest);
                     return Some(entry.bbctx);
                 }
             }
@@ -191,28 +182,28 @@ impl JitContext {
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge {src_bb:?}->{bbid:?}");
-            if let BranchMode::Continue { dest } = mode {
+            /*if let BranchMode::Continue { dest } = mode {
                 //  the destination is adjacent to the source basic block on the bytecode.
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((
                     Some(ContinuationInfo::new(bbctx, target_ctx.clone(), pc)),
                     dest,
                 ));
-            } else {
-                let mut ir = AsmIr::new();
-                bbctx.remove_unused(unused);
-                #[cfg(feature = "jit-debug")]
-                {
-                    eprintln!("    src:    {:?}", bbctx.slot_state);
-                    eprintln!("    target: {:?}", target_ctx);
-                }
-                bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-                if let BranchMode::Side { dest } = mode {
-                    self.bridges.push((ir, dest, bbid));
-                } else {
-                    self.continue_bridges.insert(src_bb, (ir, bbid));
-                }
+            } else {*/
+            let mut ir = AsmIr::new();
+            bbctx.remove_unused(unused);
+            #[cfg(feature = "jit-debug")]
+            {
+                eprintln!("    src:    {:?}", bbctx.slot_state);
+                eprintln!("    target: {:?}", target_ctx);
             }
+            bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
+            if let BranchMode::Side { dest } = mode {
+                self.bridges.push((ir, dest, bbid));
+            } else {
+                self.continue_bridges.insert(src_bb, (ir, bbid));
+            }
+            //}
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge end");
         }
