@@ -332,7 +332,7 @@ impl JitContext {
             src_bb,
             bbctx,
             branch_dest,
-            cont: BranchMode::Side,
+            cont: BranchMode::Side { dest: branch_dest },
         });
     }
 
@@ -378,7 +378,7 @@ impl JitContext {
             src_bb,
             bbctx,
             branch_dest,
-            cont: BranchMode::Continue,
+            cont: BranchMode::Continue { dest: branch_dest },
         })
     }
 

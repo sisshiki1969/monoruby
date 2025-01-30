@@ -50,7 +50,7 @@ impl JitContext {
                 src_bb: BasicBlockId(0),
                 bbctx,
                 branch_dest,
-                cont: BranchMode::Continue,
+                cont: BranchMode::Continue { dest: branch_dest },
             }],
         );
 
@@ -135,7 +135,7 @@ impl JitContext {
                 src_bb: BasicBlockId(0),
                 bbctx,
                 branch_dest,
-                cont: BranchMode::Continue,
+                cont: BranchMode::Continue { dest: branch_dest },
             }],
         );
 

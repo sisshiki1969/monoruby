@@ -61,7 +61,7 @@ enum CompileResult {
     Recompile,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct JitLabel(usize);
 
 #[derive(Debug, PartialEq)]
@@ -70,11 +70,11 @@ enum BranchMode {
     /// continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     ///
-    Continue,
+    Continue { dest: JitLabel },
     ///
     /// side branch. (conditional branch)
     ///
-    Side,
+    Side { dest: JitLabel },
     ///
     /// branch. (unconditional branch)
     ///

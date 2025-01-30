@@ -14,7 +14,6 @@ impl JitContext {
             for BranchEntry {
                 src_bb,
                 mut bbctx,
-                branch_dest,
                 cont,
                 ..
             } in entries
@@ -29,11 +28,11 @@ impl JitContext {
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
-                    BranchMode::Side => self.bridges.push((ir, branch_dest, bbid)),
+                    BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
                     BranchMode::Branch => {
                         self.continue_bridges.insert(src_bb, (ir, bbid));
                     }
-                    BranchMode::Continue => unreachable!(),
+                    BranchMode::Continue { .. } => unreachable!(),
                 }
                 //self.bridges.push((ir, branch_dest, bbid));
             }
@@ -180,18 +179,18 @@ impl JitContext {
         for BranchEntry {
             src_bb,
             mut bbctx,
-            branch_dest,
             cont,
+            ..
         } in entries
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge {src_bb:?}->{bbid:?}");
-            if cont == BranchMode::Continue {
+            if let BranchMode::Continue { dest } = cont {
                 //  the destination is adjacent to the source basic block on the bytecode.
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((
                     Some(ContinuationInfo::new(bbctx, target_ctx.clone(), pc)),
-                    branch_dest,
+                    dest,
                 ));
             } else {
                 let mut ir = AsmIr::new();
@@ -202,8 +201,8 @@ impl JitContext {
                     eprintln!("    target: {:?}", target_ctx);
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-                if cont == BranchMode::Side {
-                    self.bridges.push((ir, branch_dest, bbid));
+                if let BranchMode::Side { dest } = cont {
+                    self.bridges.push((ir, dest, bbid));
                 } else {
                     self.continue_bridges.insert(src_bb, (ir, bbid));
                 }
