@@ -702,7 +702,7 @@ impl Codegen {
             self.gen_asm(ir, store, &mut ctx, None);
             // generate machine code for bridges
             if let Some(bbid) = bbid
-                && let Some((ir, exit)) = ctx.continue_bridges.remove(&bbid)
+                && let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid)
             {
                 self.gen_asm(ir, store, &mut ctx, None);
                 if let Some(exit) = exit {
@@ -716,7 +716,7 @@ impl Codegen {
         }
 
         // generate machine code for bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges) {
+        for (ir, entry, exit) in std::mem::take(&mut ctx.outline_bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
         }

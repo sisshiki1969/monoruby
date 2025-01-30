@@ -90,11 +90,11 @@ pub struct JitContext {
     ///
     /// Information for bridges.
     ///
-    pub(super) bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+    pub(super) outline_bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
     /// Information for continue bridges.
     ///
-    pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
+    pub(super) inline_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///
     /// Information for `JitLabel`s`.
     ///
@@ -162,8 +162,8 @@ impl JitContext {
             local_num,
             self_class,
             self_ty,
-            bridges: vec![],
-            continue_bridges: HashMap::default(),
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
             labels,
             class_version,
             ir: vec![],
@@ -194,8 +194,8 @@ impl JitContext {
             local_num,
             self_class: NIL_CLASS,
             self_ty: None,
-            bridges: vec![],
-            continue_bridges: HashMap::default(),
+            outline_bridges: vec![],
+            inline_bridges: HashMap::default(),
             labels: vec![],
             class_version: 0,
             ir: vec![],
