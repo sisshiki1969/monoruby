@@ -94,7 +94,7 @@ pub struct JitContext {
     ///
     /// Information for continue bridges.
     ///
-    pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, BasicBlockId)>,
+    pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, Option<BasicBlockId>)>,
     ///
     /// Information for continuation bridge.
     ///
@@ -372,7 +372,6 @@ impl JitContext {
         src_idx: BcIndex,
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
-        dest: JitLabel,
     ) {
         bbctx.sp = func.get_sp(src_idx);
         let src_bb = func.bb_info.get_bb_id(src_idx);
@@ -384,7 +383,7 @@ impl JitContext {
             .push(BranchEntry {
                 src_bb,
                 bbctx,
-                mode: BranchMode::Continue { dest },
+                mode: BranchMode::Continue,
             })
     }
 

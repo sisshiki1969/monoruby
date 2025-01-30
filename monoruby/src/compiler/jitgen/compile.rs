@@ -43,13 +43,12 @@ impl JitContext {
         eprintln!("   new_branch_init: {}->{}", BcIndex(0), start_pos);
 
         let bb_begin = func.bb_info.get_bb_id(start_pos);
-        let branch_dest = self.label();
         self.branch_map.insert(
             bb_begin,
             vec![BranchEntry {
                 src_bb: BasicBlockId(0),
                 bbctx,
-                mode: BranchMode::Continue { dest: branch_dest },
+                mode: BranchMode::Continue,
             }],
         );
 
@@ -127,13 +126,12 @@ impl JitContext {
         let mut liveness = Liveness::new(self.total_reg_num());
 
         let bbctx = BBContext::new(&ctx);
-        let branch_dest = ctx.label();
         ctx.branch_map.insert(
             loop_start,
             vec![BranchEntry {
                 src_bb: BasicBlockId(0),
                 bbctx,
-                mode: BranchMode::Continue { dest: branch_dest },
+                mode: BranchMode::Continue,
             }],
         );
 
@@ -201,18 +199,15 @@ impl JitContext {
     ) -> Option<BBContext> {
         if let Some(bb) = self.target_ctx.remove(&bbid) {
             Some(bb)
-        } else if let Some(bb) = self.incoming_context(ir, func, bbid) {
-            Some(bb)
         } else {
-            None
+            self.incoming_context(ir, func, bbid)
         }
     }
 
     fn prepare_next(&mut self, ir: &mut AsmIr, bbctx: BBContext, func: &ISeqInfo, end: BcIndex) {
         let next_idx = end + 1;
         if let Some(next_bbid) = func.bb_info.is_bb_head(next_idx) {
-            let label = self.label();
-            self.new_continue(func, end, next_bbid, bbctx, label);
+            self.new_continue(func, end, next_bbid, bbctx);
             if let Some(target_ctx) = self.incoming_context(ir, func, next_bbid) {
                 assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
             }

@@ -55,16 +55,21 @@ struct JitLabel(usize);
 #[derive(Debug, PartialEq)]
 enum BranchMode {
     ///
-    /// continuation branch.
+    /// Continuation branch.
+    ///
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
     ///
-    Continue { dest: JitLabel },
+    Continue,
     ///
-    /// side branch. (conditional branch)
+    /// Side branch. (conditional branch)
+    ///
+    /// The machine code for the branch is outlined.
     ///
     Side { dest: JitLabel },
     ///
-    /// branch. (unconditional branch)
+    /// Branch. (unconditional branch)
+    ///
+    /// The machine code for the branch is inlined.
     ///
     Branch { dest: JitLabel },
 }
@@ -700,10 +705,12 @@ impl Codegen {
                 && let Some((ir, exit)) = ctx.continue_bridges.remove(&bbid)
             {
                 self.gen_asm(ir, store, &mut ctx, None);
-                let exit = ctx.get_bb_label(exit);
-                let exit = ctx.resolve_label(&mut self.jit, exit);
-                monoasm! { &mut self.jit,
-                    jmp exit;
+                if let Some(exit) = exit {
+                    let exit = ctx.get_bb_label(exit);
+                    let exit = ctx.resolve_label(&mut self.jit, exit);
+                    monoasm! { &mut self.jit,
+                        jmp exit;
+                    }
                 }
             }
         }

@@ -30,9 +30,9 @@ impl JitContext {
                 match cont {
                     BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
                     BranchMode::Branch { .. } => {
-                        self.continue_bridges.insert(src_bb, (ir, bbid));
+                        self.continue_bridges.insert(src_bb, (ir, Some(bbid)));
                     }
-                    BranchMode::Continue { .. } => unreachable!(),
+                    BranchMode::Continue => unreachable!(),
                 }
                 //self.bridges.push((ir, branch_dest, bbid));
             }
@@ -143,13 +143,12 @@ impl JitContext {
             let entry = entries.remove(0);
             assert!(self.continue_label.is_none());
             match entry.mode {
-                BranchMode::Continue { dest }
-                | BranchMode::Side { dest }
-                | BranchMode::Branch { dest } => {
+                BranchMode::Side { dest } | BranchMode::Branch { dest } => {
                     self.continue_label = Some(dest);
-                    return Some(entry.bbctx);
                 }
+                BranchMode::Continue => {}
             }
+            return Some(entry.bbctx);
         }
 
         let target_ctx = BBContext::union(&entries);
@@ -181,15 +180,7 @@ impl JitContext {
         } in entries
         {
             #[cfg(feature = "jit-debug")]
-            eprintln!("  bridge {src_bb:?}->{bbid:?}");
-            /*if let BranchMode::Continue { dest } = mode {
-                //  the destination is adjacent to the source basic block on the bytecode.
-                assert!(self.continuation_bridge.is_none());
-                self.continuation_bridge = Some((
-                    Some(ContinuationInfo::new(bbctx, target_ctx.clone(), pc)),
-                    dest,
-                ));
-            } else {*/
+            eprintln!("  bridge {mode:?} {src_bb:?}->{bbid:?}");
             let mut ir = AsmIr::new();
             bbctx.remove_unused(unused);
             #[cfg(feature = "jit-debug")]
@@ -198,10 +189,14 @@ impl JitContext {
                 eprintln!("    target: {:?}", target_ctx);
             }
             bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-            if let BranchMode::Side { dest } = mode {
-                self.bridges.push((ir, dest, bbid));
-            } else {
-                self.continue_bridges.insert(src_bb, (ir, bbid));
+            match mode {
+                BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
+                BranchMode::Branch { .. } => {
+                    self.continue_bridges.insert(src_bb, (ir, Some(bbid)));
+                }
+                BranchMode::Continue => {
+                    self.continue_bridges.insert(src_bb, (ir, None));
+                }
             }
             //}
             #[cfg(feature = "jit-debug")]
