@@ -30,7 +30,9 @@ impl JitContext {
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
                     BranchMode::Side => self.bridges.push((ir, branch_dest, bbid)),
-                    BranchMode::Branch => self.bridges2.push((ir, branch_dest, bbid)),
+                    BranchMode::Branch => {
+                        self.continue_bridges.insert(src_bb, (ir, bbid));
+                    }
                     BranchMode::Continue => unreachable!(),
                 }
                 //self.bridges.push((ir, branch_dest, bbid));
@@ -203,7 +205,7 @@ impl JitContext {
                 if cont == BranchMode::Side {
                     self.bridges.push((ir, branch_dest, bbid));
                 } else {
-                    self.bridges2.push((ir, branch_dest, bbid));
+                    self.continue_bridges.insert(src_bb, (ir, bbid));
                 }
             }
             #[cfg(feature = "jit-debug")]

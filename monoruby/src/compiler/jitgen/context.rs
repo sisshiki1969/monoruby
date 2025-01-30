@@ -92,9 +92,9 @@ pub struct JitContext {
     ///
     pub(super) bridges: Vec<(AsmIr, JitLabel, BasicBlockId)>,
     ///
-    /// Information for bridges.
+    /// Information for continue bridges.
     ///
-    pub(super) bridges2: Vec<(AsmIr, JitLabel, BasicBlockId)>,
+    pub(super) continue_bridges: HashMap<BasicBlockId, (AsmIr, BasicBlockId)>,
     ///
     /// Information for continuation bridge.
     ///
@@ -167,7 +167,7 @@ impl JitContext {
             self_class,
             self_ty,
             bridges: vec![],
-            bridges2: vec![],
+            continue_bridges: HashMap::default(),
             continuation_bridge: None,
             labels,
             class_version,
@@ -200,7 +200,7 @@ impl JitContext {
             self_class: NIL_CLASS,
             self_ty: None,
             bridges: vec![],
-            bridges2: vec![],
+            continue_bridges: HashMap::default(),
             continuation_bridge: None,
             labels: vec![],
             class_version: 0,

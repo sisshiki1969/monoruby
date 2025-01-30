@@ -707,14 +707,19 @@ impl Codegen {
         let pair = self.get_address_pair();
 
         // generate machine code for a main context
-        for ir in std::mem::take(&mut ctx.ir).into_iter() {
-            self.gen_asm(ir.1, store, &mut ctx, None);
-        }
-
-        // generate machine code for bridges
-        for (ir, entry, exit) in std::mem::take(&mut ctx.bridges2) {
-            let entry = ctx.resolve_label(&mut self.jit, entry);
-            self.gen_asm(ir, store, &mut ctx, Some((entry, exit)));
+        for (bbid, ir) in std::mem::take(&mut ctx.ir).into_iter() {
+            self.gen_asm(ir, store, &mut ctx, None);
+            // generate machine code for bridges
+            if let Some(bbid) = bbid
+                && let Some((ir, exit)) = ctx.continue_bridges.remove(&bbid)
+            {
+                self.gen_asm(ir, store, &mut ctx, None);
+                let exit = ctx.get_bb_label(exit);
+                let exit = ctx.resolve_label(&mut self.jit, exit);
+                monoasm! { &mut self.jit,
+                    jmp exit;
+                }
+            }
         }
 
         // generate machine code for bridges
