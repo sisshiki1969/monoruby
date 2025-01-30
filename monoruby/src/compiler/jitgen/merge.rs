@@ -14,7 +14,7 @@ impl JitContext {
             for BranchEntry {
                 src_bb,
                 mut bbctx,
-                cont,
+                mode: cont,
                 ..
             } in entries
             {
@@ -29,7 +29,7 @@ impl JitContext {
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
                     BranchMode::Side { dest } => self.bridges.push((ir, dest, bbid)),
-                    BranchMode::Branch => {
+                    BranchMode::Branch { .. } => {
                         self.continue_bridges.insert(src_bb, (ir, bbid));
                     }
                     BranchMode::Continue { .. } => unreachable!(),
@@ -151,8 +151,14 @@ impl JitContext {
         if entries.len() == 1 {
             let entry = entries.remove(0);
             assert!(self.continuation_bridge.is_none());
-            self.continuation_bridge = Some((None, entry.branch_dest));
-            return Some(entry.bbctx);
+            match entry.mode {
+                BranchMode::Continue { dest }
+                | BranchMode::Side { dest }
+                | BranchMode::Branch { dest } => {
+                    self.continuation_bridge = Some((None, dest));
+                    return Some(entry.bbctx);
+                }
+            }
         }
 
         let target_ctx = BBContext::union(&entries);
@@ -179,13 +185,13 @@ impl JitContext {
         for BranchEntry {
             src_bb,
             mut bbctx,
-            cont,
+            mode,
             ..
         } in entries
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("  bridge {src_bb:?}->{bbid:?}");
-            if let BranchMode::Continue { dest } = cont {
+            if let BranchMode::Continue { dest } = mode {
                 //  the destination is adjacent to the source basic block on the bytecode.
                 assert!(self.continuation_bridge.is_none());
                 self.continuation_bridge = Some((
@@ -201,7 +207,7 @@ impl JitContext {
                     eprintln!("    target: {:?}", target_ctx);
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
-                if let BranchMode::Side { dest } = cont {
+                if let BranchMode::Side { dest } = mode {
                     self.bridges.push((ir, dest, bbid));
                 } else {
                     self.continue_bridges.insert(src_bb, (ir, bbid));

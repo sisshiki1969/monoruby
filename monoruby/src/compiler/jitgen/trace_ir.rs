@@ -176,7 +176,7 @@ pub(crate) enum TraceIr {
     GCmpBr {
         kind: ruruby_parse::CmpKind,
         info: BinOpInfo,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         brkind: BrKind,
     },
     GCmpBrNotrace {
@@ -192,13 +192,13 @@ pub(crate) enum TraceIr {
         #[allow(dead_code)]
         dst: Option<SlotId>,
         mode: OpMode,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         brkind: BrKind,
     },
     FCmpBr {
         kind: ruruby_parse::CmpKind,
         info: BinOpInfo,
-        dest: BasicBlockId,
+        dest_bb: BasicBlockId,
         brkind: BrKind,
     },
     Index {

@@ -810,7 +810,7 @@ impl ISeqInfo {
                                 lhs_class: lhs_class.unwrap(),
                                 rhs_class: rhs_class.unwrap(),
                             },
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else if pc.is_integer_binop() {
@@ -818,7 +818,7 @@ impl ISeqInfo {
                             kind,
                             dst,
                             mode,
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else if let Some(lhs_class) = lhs_class
@@ -832,7 +832,7 @@ impl ISeqInfo {
                                 lhs_class,
                                 rhs_class,
                             },
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else {
@@ -865,7 +865,7 @@ impl ISeqInfo {
                                 lhs_class: lhs_class.unwrap(),
                                 rhs_class: rhs_class.unwrap(),
                             },
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else if pc.is_integer1() {
@@ -873,7 +873,7 @@ impl ISeqInfo {
                             kind,
                             dst,
                             mode,
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else if let Some(lhs_class) = lhs_class
@@ -887,7 +887,7 @@ impl ISeqInfo {
                                 lhs_class,
                                 rhs_class,
                             },
-                            dest,
+                            dest_bb: dest,
                             brkind,
                         }
                     } else {

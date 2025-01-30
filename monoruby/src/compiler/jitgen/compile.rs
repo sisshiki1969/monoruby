@@ -49,8 +49,7 @@ impl JitContext {
             vec![BranchEntry {
                 src_bb: BasicBlockId(0),
                 bbctx,
-                branch_dest,
-                cont: BranchMode::Continue { dest: branch_dest },
+                mode: BranchMode::Continue { dest: branch_dest },
             }],
         );
 
@@ -134,8 +133,7 @@ impl JitContext {
             vec![BranchEntry {
                 src_bb: BasicBlockId(0),
                 bbctx,
-                branch_dest,
-                cont: BranchMode::Continue { dest: branch_dest },
+                mode: BranchMode::Continue { dest: branch_dest },
             }],
         );
 
@@ -503,33 +501,33 @@ impl JitContext {
             TraceIr::FCmpBr {
                 kind,
                 info,
-                dest,
+                dest_bb,
                 brkind,
             } => {
-                let index = bc_pos + 1;
-                let branch_dest = self.label();
+                let src_idx = bc_pos + 1;
+                let dest = self.label();
                 let mode = bbctx.fmode(ir, info);
                 bbctx.discard(info.dst);
                 bbctx.clear_above_next_sp();
-                ir.float_cmp_br(mode, kind, brkind, branch_dest);
-                self.new_side_branch(func, index, dest, bbctx.clone(), branch_dest);
+                ir.float_cmp_br(mode, kind, brkind, dest);
+                self.new_side_branch(func, src_idx, dest_bb, bbctx.clone(), dest);
             }
             TraceIr::ICmpBr {
                 kind,
                 dst: _,
                 mode,
-                dest,
+                dest_bb,
                 brkind,
             } => {
-                let index = bc_pos + 1;
-                let branch_dest = self.label();
-                bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, branch_dest);
-                self.new_side_branch(func, index, dest, bbctx.clone(), branch_dest);
+                let src_idx = bc_pos + 1;
+                let dest = self.label();
+                bbctx.gen_cmpbr_integer(ir, kind, mode, brkind, dest);
+                self.new_side_branch(func, src_idx, dest_bb, bbctx.clone(), dest);
             }
             TraceIr::GCmpBr {
                 kind,
                 info,
-                dest,
+                dest_bb,
                 brkind,
             } => {
                 let recv_class = info.lhs_class;
@@ -537,9 +535,9 @@ impl JitContext {
                 if let Some(fid) = self.jit_check_method(store, recv_class, name) {
                     match self.compile_binop_call(bbctx, ir, store, fid, info) {
                         CompileResult::Continue => {
-                            let index = bc_pos + 1;
+                            let src_idx = bc_pos + 1;
                             bbctx.unset_class_version_guard();
-                            self.gen_cond_br(bbctx, ir, func, index, dest, brkind);
+                            self.gen_cond_br(bbctx, ir, func, src_idx, dest_bb, brkind);
                             //let branch_dest = self.label();
                             //ir.push(AsmInst::CondBr(brkind, branch_dest));
                             //self.new_branch(func, index, dest, bbctx.clone(), branch_dest);

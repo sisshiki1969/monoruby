@@ -78,7 +78,7 @@ enum BranchMode {
     ///
     /// branch. (unconditional branch)
     ///
-    Branch,
+    Branch { dest: JitLabel },
 }
 
 ///
@@ -90,11 +90,9 @@ struct BranchEntry {
     src_bb: BasicBlockId,
     /// context of the source basic block.
     bbctx: BBContext,
-    /// `DestLabel` for the destination basic block.
-    branch_dest: JitLabel,
     /// true if the branch is a continuation branch.
     /// 'continuation' means the destination is adjacent to the source basic block on the bytecode.
-    cont: BranchMode,
+    mode: BranchMode,
 }
 
 pub(crate) fn conv(reg: SlotId) -> i32 {
