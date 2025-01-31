@@ -68,7 +68,7 @@ impl JitContext {
         self.backedge_branches(iseq);
 
         #[cfg(feature = "emit-cfg")]
-        dump_cfg(func, store, bb_begin, bb_end);
+        dump_cfg(iseq, store, bb_begin, bb_end);
     }
 
     fn compile_basic_block(
@@ -110,6 +110,7 @@ impl JitContext {
             bbctx.sp = bbctx.next_sp;
         }
 
+        bbctx.clear_above_next_sp();
         self.prepare_next(bbctx, iseq, end);
 
         ir
@@ -173,9 +174,7 @@ impl JitContext {
         for bc_pos in begin..=end {
             bbctx.next_sp = iseq.get_sp(bc_pos);
 
-            let result = self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos);
-
-            match result {
+            match self.compile_instruction(&mut ir, &mut bbctx, store, iseq, bc_pos) {
                 CompileResult::Continue => {}
                 CompileResult::Branch => return,
                 CompileResult::Leave | CompileResult::Recompile | CompileResult::ExitLoop => {
@@ -184,7 +183,6 @@ impl JitContext {
                 }
             }
 
-            //ir.clear(&mut bbctx);
             bbctx.sp = bbctx.next_sp;
         }
 
@@ -751,20 +749,20 @@ impl JitContext {
                 ir.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(dest_idx) => {
-                self.compile_branch(bbctx, iseq, bc_pos, dest_idx);
+                self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
                 return CompileResult::Branch;
             }
             TraceIr::CondBr(cond_, dest_idx, false, brkind) => {
                 if bbctx.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
-                        self.compile_branch(bbctx, iseq, bc_pos, dest_idx);
+                        self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
                         return CompileResult::Branch;
                     } else {
                         return CompileResult::Continue;
                     }
                 } else if bbctx.is_falsy(cond_) {
                     if brkind == BrKind::BrIfNot {
-                        self.compile_branch(bbctx, iseq, bc_pos, dest_idx);
+                        self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
                         return CompileResult::Branch;
                     } else {
                         return CompileResult::Continue;
@@ -776,7 +774,7 @@ impl JitContext {
             }
             TraceIr::NilBr(cond_, dest_idx) => {
                 if bbctx.is_nil(cond_) {
-                    self.compile_branch(bbctx, iseq, bc_pos, dest_idx);
+                    self.gen_branch(bbctx, iseq, bc_pos, dest_idx);
                     return CompileResult::Branch;
                 } else if bbctx.is_not_nil(cond_) {
                 } else {
@@ -828,6 +826,16 @@ impl JitContext {
         self.new_side_branch(iseq, src_idx, dest, bbctx.clone(), branch_dest);
     }
 
+    fn gen_branch(
+        &mut self,
+        bbctx: &mut BBContext,
+        iseq: &ISeqInfo,
+        bc_pos: BcIndex,
+        dest: BasicBlockId,
+    ) {
+        self.new_branch(iseq, bc_pos, dest, bbctx.clone());
+    }
+
     fn cmpkind_to_id(kind: CmpKind) -> IdentId {
         match kind {
             CmpKind::Eq => IdentId::_EQ,
@@ -839,16 +847,6 @@ impl JitContext {
             CmpKind::TEq => IdentId::_TEQ,
             CmpKind::Cmp => IdentId::_CMP,
         }
-    }
-
-    fn compile_branch(
-        &mut self,
-        bbctx: &mut BBContext,
-        iseq: &ISeqInfo,
-        bc_pos: BcIndex,
-        dest: BasicBlockId,
-    ) {
-        self.new_branch(iseq, bc_pos, dest, bbctx.clone());
     }
 }
 

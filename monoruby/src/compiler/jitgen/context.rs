@@ -318,6 +318,7 @@ impl JitContext {
         mut bbctx: BBContext,
         dest: JitLabel,
     ) {
+        bbctx.clear_above_next_sp();
         bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -342,6 +343,7 @@ impl JitContext {
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
     ) {
+        bbctx.clear_above_next_sp();
         bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
@@ -366,6 +368,7 @@ impl JitContext {
         dest_bb: BasicBlockId,
         mut bbctx: BBContext,
     ) {
+        bbctx.clear_above_next_sp();
         bbctx.sp = iseq.get_sp(src_idx);
         let src_bb = iseq.bb_info.get_bb_id(src_idx);
         #[cfg(feature = "jit-debug")]
