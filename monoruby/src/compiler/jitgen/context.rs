@@ -80,10 +80,6 @@ pub struct JitContext {
     ///
     pub(super) branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
     ///
-    /// Target `BBContext` for an each instruction.
-    ///
-    pub(super) target_ctx: HashMap<BasicBlockId, BBContext>,
-    ///
     /// Map for backward branches.
     ///
     pub(super) backedge_map: HashMap<BasicBlockId, BBContext>,
@@ -156,7 +152,6 @@ impl JitContext {
             loop_info: HashMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
-            target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,
@@ -188,7 +183,6 @@ impl JitContext {
             loop_info: HashMap::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
-            target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
             total_reg_num,
             local_num,

@@ -61,7 +61,7 @@ impl JitContext {
         };
 
         for bbid in bb_begin..=bb_end {
-            let ir = self.compile_basic_block(store, iseq, self.position(), bbid);
+            let ir = self.compile_basic_block(store, iseq, self.position(), bbid, bbid == bb_end);
             self.ir.push((Some(bbid), ir));
         }
 
@@ -77,11 +77,12 @@ impl JitContext {
         iseq: &ISeqInfo,
         position: Option<BytecodePtr>,
         bbid: BasicBlockId,
+        last: bool,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
         ir.push(AsmInst::Label(self.get_bb_label(bbid)));
 
-        let mut bbctx = match self.generate_entry_bb(iseq, bbid) {
+        let mut bbctx = match self.incoming_context(iseq, bbid) {
             Some(bb) => bb,
             None => {
                 #[cfg(feature = "jit-debug")]
@@ -111,7 +112,9 @@ impl JitContext {
         }
 
         bbctx.clear_above_next_sp();
-        self.prepare_next(bbctx, iseq, end);
+        if !last {
+            self.prepare_next(bbctx, iseq, end)
+        }
 
         ir
     }
@@ -137,7 +140,7 @@ impl JitContext {
         );
 
         for bbid in loop_start..=loop_end {
-            ctx.analyse_basic_block(store, iseq, &mut liveness, bbid);
+            ctx.analyse_basic_block(store, iseq, &mut liveness, bbid, bbid == loop_end);
         }
 
         let mut backedge: Option<BBContext> = None;
@@ -163,9 +166,10 @@ impl JitContext {
         iseq: &ISeqInfo,
         liveness: &mut Liveness,
         bbid: BasicBlockId,
+        last: bool,
     ) {
         let mut ir = AsmIr::new();
-        let mut bbctx = match self.generate_entry_bb(iseq, bbid) {
+        let mut bbctx = match self.incoming_context(iseq, bbid) {
             Some(bb) => bb,
             None => return,
         };
@@ -185,28 +189,15 @@ impl JitContext {
 
             bbctx.sp = bbctx.next_sp;
         }
-
-        self.prepare_next(bbctx, iseq, end);
-    }
-
-    fn generate_entry_bb(&mut self, iseq: &ISeqInfo, bbid: BasicBlockId) -> Option<BBContext> {
-        if let Some(bb) = self.target_ctx.remove(&bbid) {
-            Some(bb)
-        } else {
-            self.incoming_context(iseq, bbid)
+        if !last {
+            self.prepare_next(bbctx, iseq, end);
         }
     }
 
     fn prepare_next(&mut self, bbctx: BBContext, iseq: &ISeqInfo, end: BcIndex) {
         let next_idx = end + 1;
-        if let Some(next_bbid) = iseq.bb_info.is_bb_head(next_idx) {
-            self.new_continue(iseq, end, next_bbid, bbctx);
-            if let Some(target_ctx) = self.incoming_context(iseq, next_bbid) {
-                assert!(self.target_ctx.insert(next_bbid, target_ctx).is_none());
-            }
-        } else {
-            unreachable!();
-        }
+        let next_bbid = iseq.bb_info.is_bb_head(next_idx).unwrap();
+        self.new_continue(iseq, end, next_bbid, bbctx);
     }
 
     fn compile_instruction(

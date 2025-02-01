@@ -28,13 +28,14 @@ impl JitContext {
                 }
                 bbctx.gen_bridge_for_target(&mut ir, &target_ctx, pc);
                 match cont {
-                    BranchMode::Side { dest } => self.outline_bridges.push((ir, dest, bbid)),
+                    BranchMode::Side { dest } => {
+                        self.outline_bridges.push((ir, dest, bbid));
+                    }
                     BranchMode::Branch => {
                         self.inline_bridges.insert(src_bb, (ir, Some(bbid)));
                     }
                     BranchMode::Continue => unreachable!(),
                 }
-                //self.bridges.push((ir, branch_dest, bbid));
             }
         }
     }
