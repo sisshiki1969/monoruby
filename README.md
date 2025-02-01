@@ -26,6 +26,8 @@ Currently, only x86-64/linux is supported.
 
 ## Build and run
 
+Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install) for details. 
+
 (1) Install nightly Rust.
 
 First of all, install Rust nightly.
@@ -44,21 +46,7 @@ _Caution!!_ **only nightly Rust works** for monoruby.
 (3) Build and run monoruby with Ruby script file.
 
 ```sh
-> cargo run test.rb
-```
-
-or
-
-```sh
 > cargo run --release -- test.rb
-```
-
-for release build.
-
-one liner.
-
-```sh
-> cargo run -- -e "puts 100"
 ```
 
 (4) Launch REPL.
@@ -97,9 +85,8 @@ and its REPL.
 
 ### 1. Optcarrot banechmark
 
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/optcarrot_benchmark) for details. 
-
 Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
+Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot_benchmark) for details. 
 
 #### Versions of used Rubies
 
@@ -118,9 +105,8 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 ### 2. Other benchmarks
 
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/benchmark) for details.
-
 Several Ruby implementations described below were measured bymeasured by [yjit-bench](https://github.com/Shopify/yjit-bench).
+Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/General-benchmarks) for details.
 
 #### Versions of used Rubies
 
