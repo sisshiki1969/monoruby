@@ -118,7 +118,7 @@ Several Ruby implementations described below were measured by [optcarrot](https:
 
 ### 2. Other benchmarks
 
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/micro_benchmark) for details.
+Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/benchmark) for details.
 
 Several Ruby implementations described below were measured bymeasured by [yjit-bench](https://github.com/Shopify/yjit-bench).
 
