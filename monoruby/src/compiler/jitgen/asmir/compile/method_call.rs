@@ -255,7 +255,7 @@ impl Codegen {
         return_addr
     }
 
-    pub(super) fn gen_yield_inlined(
+    pub(super) fn gen_yield_specialized(
         &mut self,
         store: &Store,
         callid: CallSiteId,

@@ -100,37 +100,31 @@ module Enumerable
     if n == 0 || n < 0
       raise ArgumentError, "invalid slice size"
     end
-    if block_given?
-      slice = []
-      self.each do |x|
-        slice << x
-        if slice.size == n
-          yield slice
-          slice = []
-        end
+    return self.to_enum(:each_slice, n) if !block_given?
+    slice = []
+    self.each do |x|
+      slice << x
+      if slice.size == n
+        yield slice
+        slice = []
       end
-      yield slice if !slice.empty?
-      self
-    else
-      self.to_enum(:each_slice, n)
     end
+    yield slice if !slice.empty?
+    self
   end
   
   def each_with_index
-    if block_given?
-      i = 0
-      self.each do |x|
-        yield x, i
-        i += 1
-      end
-      self
-    else
-      self.to_enum(:each_with_index)
+    return self.to_enum(:each_with_index) if !block_given?
+    i = 0
+    self.each do |x|
+      yield x, i
+      i += 1
     end
+    self
   end
 
   def map
-    return self if !block_given?
+    return self.to_enum(:map) if !block_given?
     res = []
     self.each do |x|
       res << yield(x)
@@ -146,6 +140,49 @@ end
 
 class Array
   include Enumerable
+
+  def each
+    return self.to_enum(:each) if !block_given?
+    i = 0
+    while i < self.size
+      yield self[i]
+      i += 1
+    end
+    self
+  end
+
+  def each_with_index
+    return self.to_enum(:each_with_index) if !block_given?
+    i = 0
+    while i < self.size
+      yield self[i], i
+      i += 1
+    end
+    self
+  end
+
+  def map!
+    return self.to_enum(:map!) if !block_given?
+    i = 0
+    while i < self.size
+      self[i] = yield(self[i])
+      i += 1
+    end
+    self
+  end
+  alias collect! map!
+
+  def map
+    return self.to_enum(:map) if !block_given?
+    res = Array.new(self)
+    i = 0
+    while i < self.size
+      res[i] = yield(self[i])
+      i += 1
+    end
+    res
+  end
+  alias collect map
 end
 
 class Hash
@@ -172,18 +209,18 @@ class Integer
     self + 1
   end
 
-  #def times
-  #  if block_given?
-  #    i = 0
-  #    while i < self
-  #      yield i
-  #      i += 1
-  #    end
-  #    self
-  #  else
-  #    self.to_enum(:times)
-  #  end
-  #end
+  def times
+    if block_given?
+      i = 0
+      while i < self
+        yield i
+        i += 1
+      end
+      self
+    else
+      self.to_enum(:times)
+    end
+  end
 end
 
 class Symbol

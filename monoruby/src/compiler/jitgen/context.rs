@@ -6,12 +6,12 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
-    /// JIT for method.
+    /// JIT for method / block.
     Method,
     /// JIT for loop.
     Loop(BytecodePtr),
-    /// inlined JIT method,
-    Inlined,
+    /// specialized JIT method.
+    Specialied,
 }
 
 ///
@@ -19,7 +19,7 @@ pub(super) enum JitType {
 ///
 pub struct JitContext {
     ///
-    /// IseqId of the method.
+    /// IseqId of the method / block.
     ///
     iseq_id: ISeqId,
     ///
@@ -104,9 +104,9 @@ pub struct JitContext {
     ///
     pub ivar_heap_accessed: bool,
     ///
-    /// Information for inlined methods.
+    /// Information for specialized method / block.
     ///
-    pub(super) inlined_methods: Vec<(JitLabel, JitContext)>,
+    pub(super) specialized_methods: Vec<(JitLabel, JitContext)>,
     ///
     /// Source map for bytecode index and machine code position.
     ///
@@ -164,7 +164,7 @@ impl JitContext {
             ir: vec![],
             ivar_heap_accessed: false,
             inlining_level,
-            inlined_methods: vec![],
+            specialized_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -195,7 +195,7 @@ impl JitContext {
             ir: vec![],
             ivar_heap_accessed: false,
             inlining_level: 0,
-            inlined_methods: vec![],
+            specialized_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
             #[cfg(feature = "emit-asm")]
@@ -430,9 +430,10 @@ impl JitContext {
     ///
     fn jit_check_super(&mut self, store: &Store, recv_class: ClassId) -> Option<FuncId> {
         // for super
-        let fid = store[self.iseq_id()].func_id();
-        let class_context = store[fid].owner_class().unwrap();
-        let func_name = store[fid].name().unwrap();
+        let iseq_id = self.iseq_id;
+        let mother = store[iseq_id].mother().0;
+        let class_context = store[mother].owner_class().unwrap();
+        let func_name = store[mother].name().unwrap();
         store.check_super(recv_class, class_context, func_name)
     }
 }

@@ -67,10 +67,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by", sort_by, 0);
     globals.define_builtin_func(ARRAY_CLASS, "group_by", group_by, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
-    globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
-    globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
+    //globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
+    //globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
+    //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
+    //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);

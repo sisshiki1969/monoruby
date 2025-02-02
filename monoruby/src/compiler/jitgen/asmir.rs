@@ -778,7 +778,7 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     ///
-    /// Send inlined method
+    /// Send specialized method
     ///
     /// ### in
     /// - rdi: receiver: Value
@@ -787,10 +787,10 @@ pub(super) enum AsmInst {
     /// - caller save registers
     /// - r15
     ///
-    SendInlined {
+    SendSpecialized {
         callid: CallSiteId,
         callee_fid: FuncId,
-        inlined_entry: JitLabel,
+        entry: JitLabel,
         error: AsmError,
         evict: AsmEvict,
     },
@@ -806,7 +806,7 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
-    YieldInlined {
+    YieldSpecialized {
         callid: CallSiteId,
         block_iseq: ISeqId,
         block_entry: JitLabel,
@@ -1392,7 +1392,7 @@ impl Codegen {
                 SideExit::Error(pc, wb) => {
                     self.gen_handle_error(pc, wb, label);
                 }
-                _ => {}
+                _ => unreachable!(),
             }
         }
 

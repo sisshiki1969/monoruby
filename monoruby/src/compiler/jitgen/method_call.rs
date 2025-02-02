@@ -198,9 +198,9 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
-        let block_entry = self.inlined_method(store, block_iseq, block_self, None);
+        let block_entry = self.compile_specialized_method(store, block_iseq, block_self, None);
         let evict = ir.new_evict();
-        ir.push(AsmInst::YieldInlined {
+        ir.push(AsmInst::YieldSpecialized {
             callid,
             block_iseq,
             block_entry,
@@ -310,8 +310,9 @@ impl JitContext {
                         func_id: block_fid,
                         self_class: self.self_class(),
                     });
-                    let inlined_entry = self.inlined_method(store, iseq_id, recv_class, block_info);
-                    self.send_inlined(bbctx, ir, store, callsite, fid, inlined_entry, evict);
+                    let entry =
+                        self.compile_specialized_method(store, iseq_id, recv_class, block_info);
+                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, evict);
                 } else {
                     self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 }
@@ -323,26 +324,26 @@ impl JitContext {
         CompileResult::Continue
     }
 
-    fn inlined_method(
+    fn compile_specialized_method(
         &mut self,
         store: &Store,
-        inlined_iseq_id: ISeqId,
-        inlined_self_class: ClassId,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         block_info: Option<JitBlockInfo>,
     ) -> JitLabel {
         let mut ctx = JitContext::new(
             store,
-            inlined_iseq_id,
-            JitType::Inlined,
+            iseq_id,
+            JitType::Specialied,
             self.class_version(),
-            inlined_self_class,
+            self_class,
             self.inlining_level() + 1,
             block_info,
         );
         ctx.compile(store);
-        let inlined_entry = self.label();
-        self.inlined_methods.push((inlined_entry, ctx));
-        inlined_entry
+        let entry = self.label();
+        self.specialized_methods.push((entry, ctx));
+        entry
     }
 
     ///
@@ -383,7 +384,7 @@ impl JitContext {
     /// ### in
     /// rdi: receiver: Value
     ///
-    fn send_inlined(
+    fn send_specialized(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -402,10 +403,10 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
-        ir.push(AsmInst::SendInlined {
+        ir.push(AsmInst::SendSpecialized {
             callid: callsite.id,
             callee_fid,
-            inlined_entry,
+            entry: inlined_entry,
             error,
             evict,
         });
@@ -450,6 +451,7 @@ impl BBContext {
             evict,
         });
         self.rax2acc(ir, dst);
+        self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
     }
 

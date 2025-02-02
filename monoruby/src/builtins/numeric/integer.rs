@@ -10,7 +10,7 @@ use std::ops::{BitAnd, BitOr, BitXor};
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
+    //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);

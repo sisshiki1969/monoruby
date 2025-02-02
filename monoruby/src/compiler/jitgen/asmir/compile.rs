@@ -357,15 +357,15 @@ impl Codegen {
                 let return_addr = self.gen_send(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
-            AsmInst::SendInlined {
+            AsmInst::SendSpecialized {
                 callid,
                 callee_fid,
-                inlined_entry,
+                entry,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let entry_label = ctx.resolve_label(&mut self.jit, inlined_entry);
+                let entry_label = ctx.resolve_label(&mut self.jit, entry);
                 let return_addr =
                     self.gen_send_inlined(store, callid, callee_fid, entry_label, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
@@ -391,7 +391,7 @@ impl Codegen {
                 let return_addr = self.gen_yield(store, callid, using_xmm, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
-            AsmInst::YieldInlined {
+            AsmInst::YieldSpecialized {
                 callid,
                 block_iseq,
                 block_entry,
@@ -401,7 +401,7 @@ impl Codegen {
                 let error = labels[error];
                 let block_entry = ctx.resolve_label(&mut self.jit, block_entry);
                 let return_addr =
-                    self.gen_yield_inlined(store, callid, block_iseq, block_entry, error);
+                    self.gen_yield_specialized(store, callid, block_iseq, block_entry, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
 

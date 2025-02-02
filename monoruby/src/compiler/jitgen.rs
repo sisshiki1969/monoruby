@@ -668,7 +668,7 @@ impl Codegen {
     }
 
     fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {
-        for (inlined_entry, inlined_ctx) in std::mem::take(&mut ctx.inlined_methods) {
+        for (inlined_entry, inlined_ctx) in std::mem::take(&mut ctx.specialized_methods) {
             let entry = ctx.resolve_label(&mut self.jit, inlined_entry);
             self.gen_machine_code(inlined_ctx, store, entry);
         }
