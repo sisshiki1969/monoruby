@@ -9,15 +9,16 @@ use std::cmp::Ordering;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
-    globals.define_builtin_class_inline_func_with(
-        ARRAY_CLASS,
-        "new",
-        new,
-        Box::new(super::class::gen_class_new(allocate_array)),
-        0,
-        0,
-        true,
-    );
+    globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
+    //globals.define_builtin_class_inline_func_with(
+    //    ARRAY_CLASS,
+    //    "new",
+    //    new,
+    //    Box::new(super::class::gen_class_new(allocate_array)),
+    //    0,
+    //    0,
+    //    true,
+    //);
     globals.define_builtin_func(ARRAY_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
@@ -26,6 +27,14 @@ pub(super) fn init(globals: &mut Globals) {
         &["length"],
         size,
         Box::new(array_size),
+        0,
+    );
+    globals.define_builtin_inline_funcs(
+        ARRAY_CLASS,
+        "clone",
+        &["dup"],
+        clone,
+        Box::new(array_clone),
         0,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
@@ -114,7 +123,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::array_with_class(vec![], class);
+    let obj = Value::array_empty_with_class(class);
     vm.invoke_method_if_exists(
         globals,
         IdentId::INITIALIZE,
@@ -133,13 +142,13 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::array_with_class(vec![], class);
+    let obj = Value::array_empty_with_class(class);
     Ok(obj)
 }
 
 extern "C" fn allocate_array(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
-    Value::array_with_class(vec![], class_id)
+    Value::array_empty_with_class(class_id)
 }
 
 ///
@@ -226,6 +235,52 @@ fn array_size(
 
     bb.reg2acc_fixnum(ir, GP::Rax, dst);
     true
+}
+
+///
+/// ### Array#clone
+///
+/// - clone -> Array
+/// - dup -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/clone.html]
+#[monoruby_builtin]
+fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().class();
+    Ok(Value::array_with_class(
+        lfp.self_val().as_array_inner().clone(),
+        class_id,
+    ))
+}
+
+fn array_clone(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    class_id: ClassId,
+) -> bool {
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
+    ir.inline(move |gen, _, _| {
+        monoasm! { &mut gen.jit,
+            movq rax, (array_dup);
+            call rax;
+        }
+    });
+    ir.xmm_restore(using_xmm);
+    bb.reg2acc_class(ir, GP::Rax, dst, class_id);
+    true
+}
+
+extern "C" fn array_dup(val: Value) -> Value {
+    let class_id = val.class();
+    Value::array_with_class(val.as_array_inner().clone(), class_id)
 }
 
 ///
@@ -1230,7 +1285,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     }
 }
 
-///
+/*///
 /// ### Array#each
 ///
 /// - each -> Enumerator
@@ -1246,9 +1301,9 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         vm.generate_enumerator(IdentId::EACH, lfp.self_val(), vec![])
     }
-}
+}*/
 
-///
+/*///
 /// ### Enumerable#each_with_index
 ///
 /// - each_with_index([NOT SUPPORTED]*args) -> Enumerator
@@ -1264,9 +1319,9 @@ fn each_with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
     } else {
         vm.generate_enumerator(IdentId::get_id("each_with_index"), lfp.self_val(), vec![])
     }
-}
+}*/
 
-/// ### Array#map
+/*/// ### Array#map
 ///
 /// - map {|item| ... } -> [object]
 /// - map -> Enumerator
@@ -1283,9 +1338,9 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let id = IdentId::get_id("map");
         vm.generate_enumerator(id, lfp.self_val(), vec![])
     }
-}
+}*/
 
-/// ### Array#map!
+/*/// ### Array#map!
 ///
 /// - collect! {|item| ..} -> self
 /// - map! {|item| ..} -> self
@@ -1306,7 +1361,7 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let id = IdentId::get_id("map!");
         vm.generate_enumerator(id, lfp.self_val(), vec![])
     }
-}
+}*/
 
 /// ### Enumerable#collect_concat
 ///

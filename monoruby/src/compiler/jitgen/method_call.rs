@@ -232,6 +232,7 @@ impl JitContext {
         recv_class: ClassId,
     ) -> CompileResult {
         let CallSiteInfo {
+            name,
             args,
             pos_num,
             dst,
@@ -313,6 +314,9 @@ impl JitContext {
                     let entry =
                         self.compile_specialized_method(store, iseq_id, recv_class, block_info);
                     self.send_specialized(bbctx, ir, store, callsite, fid, entry, evict);
+                } else if name == Some(IdentId::NEW) {
+                    let entry = self.compile_specialized_method(store, iseq_id, recv_class, None);
+                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, evict);
                 } else {
                     self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 }
@@ -331,13 +335,14 @@ impl JitContext {
         self_class: ClassId,
         block_info: Option<JitBlockInfo>,
     ) -> JitLabel {
+        let specialize_level = self.specialize_level() + 1;
         let mut ctx = JitContext::new(
             store,
             iseq_id,
-            JitType::Specialied,
+            JitType::Specialized,
             self.class_version(),
             self_class,
-            self.inlining_level() + 1,
+            specialize_level,
             block_info,
         );
         ctx.compile(store);

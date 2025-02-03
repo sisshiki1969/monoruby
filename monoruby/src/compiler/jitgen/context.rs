@@ -11,7 +11,7 @@ pub(super) enum JitType {
     /// JIT for loop.
     Loop(BytecodePtr),
     /// specialized JIT method.
-    Specialied,
+    Specialized,
 }
 
 ///
@@ -55,7 +55,7 @@ pub struct JitContext {
     ///
     /// Level of inlining.
     ///
-    inlining_level: usize,
+    specialize_level: usize,
 
     ///
     /// Destination labels for each BasicBlock.
@@ -129,7 +129,7 @@ impl JitContext {
         jit_type: JitType,
         class_version: u32,
         self_class: ClassId,
-        inlining_level: usize,
+        specialize_level: usize,
         block_info: Option<method_call::JitBlockInfo>,
     ) -> Self {
         let func = &store[iseq_id];
@@ -163,7 +163,7 @@ impl JitContext {
             class_version,
             ir: vec![],
             ivar_heap_accessed: false,
-            inlining_level,
+            specialize_level,
             specialized_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -194,7 +194,7 @@ impl JitContext {
             class_version: 0,
             ir: vec![],
             ivar_heap_accessed: false,
-            inlining_level: 0,
+            specialize_level: 0,
             specialized_methods: vec![],
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
@@ -246,8 +246,8 @@ impl JitContext {
         self.class_version
     }
 
-    pub(super) fn inlining_level(&self) -> usize {
-        self.inlining_level
+    pub(super) fn specialize_level(&self) -> usize {
+        self.specialize_level
     }
 
     pub(super) fn position(&self) -> Option<BytecodePtr> {

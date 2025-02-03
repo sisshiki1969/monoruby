@@ -1,21 +1,23 @@
 RUBY_PLATFORM = "x86_64-linux"
 
 require 'rbconfig' 
-class Process
-  CLOCK_REALTIME = 0
-  CLOCK_MONOTONIC = 1
-  CLOCK_PROCESS_CPUTIME_ID = 2
-  CLOCK_THREAD_CPUTIME_ID	= 3
-  CLOCK_MONOTONIC_RAW	= 4
-  CLOCK_REALTIME_COARSE	= 5
-  CLOCK_MONOTONIC_COARSE = 6
-  CLOCK_BOOTTIME = 7
-  CLOCK_REALTIME_ALARM = 8
-  CLOCK_BOOTTIME_ALARM = 9
-  class Tms
-    attr_accessor :utime, :stime, :cutime, :cstime
+
+class Object
+  def freeze
+    self
+  end
+
+  def initialize(*arg)
   end
 end
+
+#class Class
+#  def new(...)
+#    o = allocate
+#    o.initialize(...)
+#    o
+#  end
+#end
 
 module Comparable
   def ==(other)
@@ -174,7 +176,7 @@ class Array
 
   def map
     return self.to_enum(:map) if !block_given?
-    res = Array.new(self)
+    res = self.dup
     i = 0
     while i < self.size
       res[i] = yield(self[i])
@@ -210,22 +212,25 @@ class Integer
   end
 
   def times
-    if block_given?
-      i = 0
-      while i < self
-        yield i
-        i += 1
-      end
-      self
-    else
-      self.to_enum(:times)
+    return self.to_enum(:times) if !block_given?
+    i = 0
+    while i < self
+      yield i
+      i += 1
     end
+    self
   end
 end
 
 class Symbol
   def match(other)
     self.to_s.match(other)
+  end
+
+  def to_proc
+    Proc.new do |slf, *args|
+      slf.send(self, *args)
+    end
   end
 end
 
@@ -238,9 +243,23 @@ class String
   end
 end
 
-class Object
-  def freeze
-    self
+class Range
+  include Enumerable
+  
+  alias first begin
+  
+  def reject
+    return self.to_enum(:reject) if !block_given?
+    elem = self.begin
+    end_ = self.end
+    res = []
+    while elem != end_
+      if !yield(elem)
+        res << elem
+      end
+      elem = elem.succ
+    end
+    res
   end
 end
 
@@ -258,11 +277,19 @@ module Warning
   end
 end
 
-class Symbol
-  def to_proc
-    Proc.new do |slf, *args|
-      slf.send(self, *args)
-    end
+class Process
+  CLOCK_REALTIME = 0
+  CLOCK_MONOTONIC = 1
+  CLOCK_PROCESS_CPUTIME_ID = 2
+  CLOCK_THREAD_CPUTIME_ID	= 3
+  CLOCK_MONOTONIC_RAW	= 4
+  CLOCK_REALTIME_COARSE	= 5
+  CLOCK_MONOTONIC_COARSE = 6
+  CLOCK_BOOTTIME = 7
+  CLOCK_REALTIME_ALARM = 8
+  CLOCK_BOOTTIME_ALARM = 9
+  class Tms
+    attr_accessor :utime, :stime, :cutime, :cstime
   end
 end
 
@@ -293,29 +320,6 @@ end
 class Marshal
   MAJOR_VERSION = 3
   MINOR_VERSION = 0
-end
-
-class Range
-  include Enumerable
-  
-  alias first begin
-  
-  def reject
-    if block_given?
-      elem = self.begin
-      end_ = self.end
-      res = []
-      while elem != end_
-        if !yield(elem)
-          res << elem
-        end
-        elem = elem.succ
-      end
-      res
-    else
-      self.to_enum(:reject)
-    end
-  end
 end
 
 class Errno

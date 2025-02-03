@@ -80,7 +80,6 @@ impl JitContext {
         last: bool,
     ) -> AsmIr {
         let mut ir = AsmIr::new();
-        ir.push(AsmInst::Label(self.get_bb_label(bbid)));
 
         let mut bbctx = match self.incoming_context(iseq, bbid) {
             Some(bb) => bb,
@@ -90,6 +89,7 @@ impl JitContext {
                 return ir;
             }
         };
+        ir.push(AsmInst::Label(self.get_bb_label(bbid)));
 
         let BasciBlockInfoEntry { begin, end, .. } = iseq.bb_info[bbid];
         for bc_pos in begin..=end {

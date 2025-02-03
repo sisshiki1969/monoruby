@@ -1108,7 +1108,15 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+    pub(super) fn new_array_with_class(ary: ArrayInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::ARRAY),
+            kind: ObjKind::array(ary),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_array_from_vec_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::ARRAY),
             kind: ObjKind::array(ArrayInner::from_vec(v)),

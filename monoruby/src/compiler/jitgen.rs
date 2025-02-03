@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use monoasm_macro::monoasm;
 use paste::paste;
 use ruruby_parse::CmpKind;
@@ -681,7 +683,7 @@ impl Codegen {
                 eprintln!(
                     ">>>{:?}[{}] {:?} <{}> self_class: {}",
                     ctx.jit_type(),
-                    ctx.inlining_level(),
+                    ctx.specialize_level(),
                     iseq.func_id(),
                     name,
                     store.debug_class_name(ctx.self_class()),
@@ -697,13 +699,31 @@ impl Codegen {
         #[cfg(feature = "perf")]
         let pair = self.get_address_pair();
 
+        let ir_vec = std::mem::take(&mut ctx.ir);
+
+        let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
+        ir_vec.iter().for_each(|(bb, ir)| {
+            if let Some(bb) = bb {
+                if !ir.inst.is_empty() || ctx.inline_bridges.contains_key(&bb) {
+                    live_bb.insert(*bb);
+                }
+            }
+        });
+
         // generate machine code for a main context
-        for (bbid, ir) in std::mem::take(&mut ctx.ir).into_iter() {
+        for (bbid, ir) in ir_vec.into_iter() {
             self.gen_asm(ir, store, &mut ctx, None, None);
             // generate machine code for bridges
             if let Some(bbid) = bbid
                 && let Some((ir, exit)) = ctx.inline_bridges.remove(&bbid)
             {
+                let exit = if let Some(exit) = exit
+                    && (bbid >= exit || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
+                {
+                    Some(exit)
+                } else {
+                    None
+                };
                 self.gen_asm(ir, store, &mut ctx, None, exit);
             }
         }

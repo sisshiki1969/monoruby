@@ -716,7 +716,7 @@ impl Executor {
         Ok(())
     }
 
-    pub(crate) fn invoke_block_iter_with_index1(
+    /*pub(crate) fn invoke_block_iter_with_index1(
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
@@ -731,7 +731,7 @@ impl Executor {
             )?;
         }
         Ok(())
-    }
+    }*/
 
     pub(crate) fn invoke_block_map1(
         &mut self,

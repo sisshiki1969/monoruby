@@ -53,7 +53,7 @@ prelude: |
 
     def ruby_map
       return self.to_enum(:ruby_map) if !block_given?
-      res = Array.new(self)
+      res = self.dup
       i = 0
       while i < self.size
         res[i] = yield(self[i])

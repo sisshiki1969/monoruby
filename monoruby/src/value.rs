@@ -338,6 +338,10 @@ impl Value {
         RValue::new_array(ary).pack()
     }
 
+    pub fn array_with_class(ary: ArrayInner, class_id: ClassId) -> Self {
+        RValue::new_array_with_class(ary, class_id).pack()
+    }
+
     pub fn array1(elem: Value) -> Self {
         Value::array(ArrayInner::from(smallvec::smallvec![elem]))
     }
@@ -348,6 +352,10 @@ impl Value {
 
     pub fn array_empty() -> Self {
         Value::array(ArrayInner::new())
+    }
+
+    pub fn array_empty_with_class(class_id: ClassId) -> Self {
+        RValue::new_array_with_class(ArrayInner::new(), class_id).pack()
     }
 
     pub fn array_with_capacity(len: usize) -> Self {
@@ -362,8 +370,8 @@ impl Value {
         Value::array(ArrayInner::from_iter(iter))
     }
 
-    pub fn array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
-        RValue::new_array_with_class(v, class_id).pack()
+    pub fn array_from_vec_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+        RValue::new_array_from_vec_with_class(v, class_id).pack()
     }
 
     pub fn hash(map: IndexMap<HashKey, Value>) -> Self {
@@ -721,7 +729,7 @@ impl Value {
     ///
     /// Get a reference of underlying array from `self`.
     ///
-    fn as_array_inner(&self) -> &ArrayInner {
+    pub(crate) fn as_array_inner(&self) -> &ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
         self.rvalue().as_array()
     }

@@ -36,10 +36,6 @@ impl Array {
     pub fn new2(v1: Value, v2: Value) -> Self {
         Self(Value::array2(v1, v2))
     }
-
-    /*pub fn dup(inner: &ArrayInner) -> Self {
-        Self(Value::array(inner.clone()))
-    }*/
 }
 
 #[repr(transparent)]

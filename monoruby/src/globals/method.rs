@@ -534,7 +534,7 @@ impl Globals {
         )
     }
 
-    pub(crate) fn define_builtin_class_inline_func_with(
+    /*pub(crate) fn define_builtin_class_inline_func_with(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -546,7 +546,7 @@ impl Globals {
     ) -> FuncId {
         let class_id = self.store.get_metaclass(class_id).id();
         self.define_builtin_inline_func_with(class_id, name, address, inline_gen, min, max, rest)
-    }
+    }*/
 
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
