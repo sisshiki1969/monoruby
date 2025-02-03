@@ -24,7 +24,7 @@ Presentation movie and slides for [RubyKaigi2024](https://rubykaigi.org/2024/pre
 
 Currently, only x86-64/linux is supported.
 
-## Build and run
+## How to run
 
 Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install) for details. 
 
@@ -49,7 +49,7 @@ _Caution!!_ **only nightly Rust works** for monoruby.
 > cargo run --release -- test.rb
 ```
 
-(4) Launch REPL.
+(4) or, Launch REPL.
 
 ```sh
 > cargo run --bin irm
@@ -59,26 +59,6 @@ or
 
 ```sh
 > bin/irm
-```
-
-## Install
-
-To install monoruby,
-
-```sh
-> cargo install --path monoruby
-```
-
-Now, you can play with monoruby,
-
-```sh
-> monoruby test.rb
-```
-
-and its REPL.
-
-```sh
-> irm
 ```
 
 ## Benchmark
@@ -105,7 +85,7 @@ Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot_benchm
 
 ### 2. Other benchmarks
 
-Several Ruby implementations described below were measured bymeasured by [yjit-bench](https://github.com/Shopify/yjit-bench).
+Several Ruby implementations described below were measured by [yjit-bench](https://github.com/Shopify/yjit-bench).
 Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/General-benchmarks) for details.
 
 #### Versions of used Rubies
