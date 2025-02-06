@@ -106,6 +106,7 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     class_version_guarded: bool,
     pc: Option<BytecodePtr>,
+    specialize_level: usize,
 }
 
 impl std::ops::Deref for BBContext {
@@ -129,6 +130,7 @@ impl BBContext {
             next_sp: SlotId(cc.local_num() as u16),
             class_version_guarded: false,
             pc: None,
+            specialize_level: cc.specialize_level(),
         }
     }
 
@@ -257,7 +259,11 @@ impl BBContext {
 
     pub(super) fn recompile_and_deopt(&mut self, ir: &mut AsmIr, position: Option<BytecodePtr>) {
         let deopt = self.new_deopt(ir);
-        ir.push(AsmInst::RecompileDeopt { position, deopt });
+        if self.specialize_level == 0 {
+            ir.push(AsmInst::RecompileDeopt { position, deopt });
+        } else {
+            ir.push(AsmInst::Deopt(deopt));
+        }
     }
 
     ///
@@ -670,9 +676,9 @@ impl Codegen {
     }
 
     fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {
-        for (inlined_entry, inlined_ctx) in std::mem::take(&mut ctx.specialized_methods) {
-            let entry = ctx.resolve_label(&mut self.jit, inlined_entry);
-            self.gen_machine_code(inlined_ctx, store, entry);
+        for (specialized_entry, specialized_ctx) in std::mem::take(&mut ctx.specialized_methods) {
+            let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
+            self.gen_machine_code(specialized_ctx, store, entry);
         }
         self.jit.bind_label(entry_label);
         #[cfg(any(feature = "emit-asm", feature = "jit-log"))]

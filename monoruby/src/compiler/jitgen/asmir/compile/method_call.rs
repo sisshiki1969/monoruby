@@ -166,7 +166,7 @@ impl Codegen {
     /// ### in
     /// rdi: numer of args.
     ///
-    pub(super) fn gen_send_inlined(
+    pub(super) fn gen_send_specialized(
         &mut self,
         store: &Store,
         callid: CallSiteId,
@@ -179,7 +179,7 @@ impl Codegen {
         let meta = callee.meta();
         self.setup_method_frame(meta, caller);
         self.setup_keyword_args(callid, caller, callee, error);
-        self.do_inlined_call(entry_label)
+        self.do_specialized_call(entry_label)
     }
 
     ///
@@ -269,7 +269,7 @@ impl Codegen {
         let meta = callee.meta();
         self.setup_yield_frame(meta);
         self.setup_keyword_args(callid, caller, callee, error);
-        self.do_inlined_call(block_entry)
+        self.do_specialized_call(block_entry)
     }
 
     ///
@@ -404,7 +404,7 @@ impl Codegen {
         return_addr
     }
 
-    fn do_inlined_call(&mut self, entry: DestLabel) -> CodePtr {
+    fn do_specialized_call(&mut self, entry: DestLabel) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 

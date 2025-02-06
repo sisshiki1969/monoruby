@@ -367,7 +367,7 @@ impl Codegen {
                 let error = labels[error];
                 let entry_label = ctx.resolve_label(&mut self.jit, entry);
                 let return_addr =
-                    self.gen_send_inlined(store, callid, callee_fid, entry_label, error);
+                    self.gen_send_specialized(store, callid, callee_fid, entry_label, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             /*AsmInst::SendNotCached {
