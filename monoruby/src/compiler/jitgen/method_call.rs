@@ -198,7 +198,8 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
-        let block_entry = self.compile_specialized_method(store, block_iseq, block_self, None);
+        let block_entry =
+            self.compile_specialized_method(store, block_iseq, block_self, None, None);
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -306,17 +307,32 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if let Some(block_fid) = block_fid {
-                    let block_info = Some(JitBlockInfo {
-                        func_id: block_fid,
+                if block_fid.is_some() || name == Some(IdentId::NEW) {
+                    let block_info = block_fid.map(|fid| JitBlockInfo {
+                        func_id: fid,
                         self_class: self.self_class(),
                     });
-                    let entry =
-                        self.compile_specialized_method(store, iseq_id, recv_class, block_info);
-                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, evict);
-                } else if name == Some(IdentId::NEW) {
-                    let entry = self.compile_specialized_method(store, iseq_id, recv_class, None);
-                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, evict);
+                    let patch_point = match self.jit_type() {
+                        JitType::Specialized(_) => None,
+                        _ => Some(self.label()),
+                    };
+                    let entry = self.compile_specialized_method(
+                        store,
+                        iseq_id,
+                        recv_class,
+                        patch_point,
+                        block_info,
+                    );
+                    self.send_specialized(
+                        bbctx,
+                        ir,
+                        store,
+                        callsite,
+                        fid,
+                        entry,
+                        patch_point,
+                        evict,
+                    );
                 } else {
                     self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 }
@@ -333,13 +349,19 @@ impl JitContext {
         store: &Store,
         iseq_id: ISeqId,
         self_class: ClassId,
+        patch_point: Option<JitLabel>,
         block_info: Option<JitBlockInfo>,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
+        let jit_type = if !self.is_specialized() {
+            JitType::Specialized(self.specialized_methods.len())
+        } else {
+            self.jit_type().clone()
+        };
         let mut ctx = JitContext::new(
             store,
             iseq_id,
-            JitType::Specialized,
+            jit_type,
             self.class_version(),
             self_class,
             specialize_level,
@@ -347,7 +369,11 @@ impl JitContext {
         );
         ctx.compile(store);
         let entry = self.label();
-        self.specialized_methods.push((entry, ctx));
+        self.specialized_methods.push(context::SpecializeInfo {
+            entry,
+            ctx,
+            patch_point,
+        });
         entry
     }
 
@@ -397,6 +423,7 @@ impl JitContext {
         callsite: &CallSiteInfo,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
+        patch_point: Option<JitLabel>,
         evict: AsmEvict,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
@@ -412,6 +439,7 @@ impl JitContext {
             callid: callsite.id,
             callee_fid,
             entry: inlined_entry,
+            patch_point,
             error,
             evict,
         });

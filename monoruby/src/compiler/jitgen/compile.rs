@@ -101,7 +101,7 @@ impl JitContext {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile => {
-                    bbctx.recompile_and_deopt(&mut ir, position);
+                    bbctx.recompile_and_deopt(&mut ir, self, position);
                     return ir;
                 }
                 CompileResult::ExitLoop => break,

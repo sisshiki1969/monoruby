@@ -11,7 +11,13 @@ pub(super) enum JitType {
     /// JIT for loop.
     Loop(BytecodePtr),
     /// specialized JIT method.
-    Specialized,
+    Specialized(usize),
+}
+
+pub(super) struct SpecializeInfo {
+    pub(super) entry: JitLabel,
+    pub(super) ctx: JitContext,
+    pub(super) patch_point: Option<JitLabel>,
 }
 
 ///
@@ -106,7 +112,7 @@ pub struct JitContext {
     ///
     /// Information for specialized method / block.
     ///
-    pub(super) specialized_methods: Vec<(JitLabel, JitContext)>,
+    pub(super) specialized_methods: Vec<SpecializeInfo>,
     ///
     /// Source map for bytecode index and machine code position.
     ///
@@ -207,9 +213,12 @@ impl JitContext {
         self.iseq_id
     }
 
-    #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn jit_type(&self) -> &JitType {
         &self.jit_type
+    }
+
+    pub(super) fn is_specialized(&self) -> bool {
+        matches!(self.jit_type, JitType::Specialized(_))
     }
 
     pub(super) fn block_info(&self) -> &Option<method_call::JitBlockInfo> {

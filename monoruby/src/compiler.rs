@@ -60,6 +60,7 @@ const COUNT_START_COMPILE: i32 = 20;
 const COUNT_LOOP_START_COMPILE: i32 = 40;
 const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 5;
+const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 30;
 
 ///
 /// General purpose registers.
@@ -409,6 +410,8 @@ pub struct Codegen {
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    pub(crate) specialized_patch_point: Vec<(ISeqId, ClassId, DestLabel)>,
+    pub(crate) specialized_base: usize,
     #[allow(dead_code)]
     pub(crate) entry_panic: DestLabel,
     pub(crate) vm_entry: DestLabel,
@@ -497,6 +500,7 @@ impl std::ops::DerefMut for Codegen {
 impl Codegen {
     pub fn new(no_jit: bool) -> Self {
         let mut jit = JitModule::new();
+        let pair = jit.get_address_pair();
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
         let class_version_addr = jit.get_label_address(jit.class_version).as_ptr() as *mut u32;
@@ -525,6 +529,8 @@ impl Codegen {
             alloc_flag,
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
+            specialized_patch_point: Vec::new(),
+            specialized_base: 0,
             entry_panic,
             vm_entry: entry_panic,
             vm_code_position: (None, 0, None, 0),
@@ -551,6 +557,12 @@ impl Codegen {
         };
         codegen.construct_vm(no_jit);
         codegen.jit.finalize();
+
+        #[cfg(feature = "perf")]
+        codegen.perf_info(pair, "monoruby-vm");
+
+        let info = codegen.get_wrapper_info(pair);
+        codegen.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
 
         let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {

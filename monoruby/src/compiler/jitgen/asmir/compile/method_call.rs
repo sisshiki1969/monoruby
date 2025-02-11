@@ -172,6 +172,7 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         entry_label: DestLabel,
+        patch_point: Option<DestLabel>,
         error: DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
@@ -179,7 +180,7 @@ impl Codegen {
         let meta = callee.meta();
         self.setup_method_frame(meta, caller);
         self.setup_keyword_args(callid, caller, callee, error);
-        self.do_specialized_call(entry_label)
+        self.do_specialized_call(entry_label, patch_point)
     }
 
     ///
@@ -269,7 +270,7 @@ impl Codegen {
         let meta = callee.meta();
         self.setup_yield_frame(meta);
         self.setup_keyword_args(callid, caller, callee, error);
-        self.do_specialized_call(block_entry)
+        self.do_specialized_call(block_entry, None)
     }
 
     ///
@@ -404,10 +405,13 @@ impl Codegen {
         return_addr
     }
 
-    fn do_specialized_call(&mut self, entry: DestLabel) -> CodePtr {
+    fn do_specialized_call(&mut self, entry: DestLabel, patch_point: Option<DestLabel>) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 
+        if let Some(patch) = patch_point {
+            self.jit.bind_label(patch);
+        }
         monoasm! { &mut self.jit,
             call entry;    // CALL_SITE
         }

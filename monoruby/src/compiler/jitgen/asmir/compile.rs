@@ -224,6 +224,10 @@ impl Codegen {
                 let deopt = labels[deopt];
                 self.recompile_and_deopt(position, deopt)
             }
+            AsmInst::RecompileDeoptSpecialized { idx, deopt } => {
+                let deopt = labels[deopt];
+                self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx)
+            }
             AsmInst::CheckBOP { deopt } => {
                 let deopt = labels[deopt];
                 let bop_flag = self.bop_redefined_flags;
@@ -361,13 +365,21 @@ impl Codegen {
                 callid,
                 callee_fid,
                 entry,
+                patch_point,
                 error,
                 evict,
             } => {
                 let error = labels[error];
+                let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
                 let entry_label = ctx.resolve_label(&mut self.jit, entry);
-                let return_addr =
-                    self.gen_send_specialized(store, callid, callee_fid, entry_label, error);
+                let return_addr = self.gen_send_specialized(
+                    store,
+                    callid,
+                    callee_fid,
+                    entry_label,
+                    patch_point,
+                    error,
+                );
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             /*AsmInst::SendNotCached {

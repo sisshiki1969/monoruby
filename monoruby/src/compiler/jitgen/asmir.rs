@@ -733,6 +733,10 @@ pub(super) enum AsmInst {
         position: Option<BytecodePtr>,
         deopt: AsmDeopt,
     },
+    RecompileDeoptSpecialized {
+        idx: usize,
+        deopt: AsmDeopt,
+    },
     WriteBack(WriteBack),
     HandleError(AsmError),
     ///
@@ -791,6 +795,7 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         callee_fid: FuncId,
         entry: JitLabel,
+        patch_point: Option<JitLabel>,
         error: AsmError,
         evict: AsmEvict,
     },

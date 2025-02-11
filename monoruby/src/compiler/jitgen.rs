@@ -106,7 +106,6 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     class_version_guarded: bool,
     pc: Option<BytecodePtr>,
-    specialize_level: usize,
 }
 
 impl std::ops::Deref for BBContext {
@@ -130,7 +129,6 @@ impl BBContext {
             next_sp: SlotId(cc.local_num() as u16),
             class_version_guarded: false,
             pc: None,
-            specialize_level: cc.specialize_level(),
         }
     }
 
@@ -257,12 +255,18 @@ impl BBContext {
         ir.push(AsmInst::CheckBOP { deopt });
     }
 
-    pub(super) fn recompile_and_deopt(&mut self, ir: &mut AsmIr, position: Option<BytecodePtr>) {
+    pub(super) fn recompile_and_deopt(
+        &mut self,
+        ir: &mut AsmIr,
+        ctx: &JitContext,
+        position: Option<BytecodePtr>,
+    ) {
         let deopt = self.new_deopt(ir);
-        if self.specialize_level == 0 {
-            ir.push(AsmInst::RecompileDeopt { position, deopt });
-        } else {
-            ir.push(AsmInst::Deopt(deopt));
+        match ctx.jit_type() {
+            JitType::Specialized(idx) => {
+                ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
+            }
+            _ => ir.push(AsmInst::RecompileDeopt { position, deopt }),
         }
     }
 
@@ -600,7 +604,7 @@ enum LinkMode {
 }
 
 impl Codegen {
-    pub(super) fn jit_compile(
+    pub(crate) fn jit_compile(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
@@ -676,7 +680,20 @@ impl Codegen {
     }
 
     fn gen_machine_code(&mut self, mut ctx: JitContext, store: &Store, entry_label: DestLabel) {
-        for (specialized_entry, specialized_ctx) in std::mem::take(&mut ctx.specialized_methods) {
+        for context::SpecializeInfo {
+            entry: specialized_entry,
+            ctx: specialized_ctx,
+            patch_point,
+        } in std::mem::take(&mut ctx.specialized_methods)
+        {
+            if !ctx.is_specialized() {
+                let patch_point = ctx.resolve_label(&mut self.jit, patch_point.unwrap());
+                self.specialized_patch_point.push((
+                    specialized_ctx.iseq_id(),
+                    specialized_ctx.self_class(),
+                    patch_point,
+                ));
+            }
             let entry = ctx.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(specialized_ctx, store, entry);
         }
@@ -716,7 +733,7 @@ impl Codegen {
             }
         });
 
-        // generate machine code for a main context
+        // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
             self.gen_asm(ir, store, &mut ctx, None, None);
             // generate machine code for bridges
@@ -734,12 +751,15 @@ impl Codegen {
             }
         }
 
-        // generate machine code for bridges
+        // generate machine code for outlined bridges
         for (ir, entry, exit) in std::mem::take(&mut ctx.outline_bridges) {
             let entry = ctx.resolve_label(&mut self.jit, entry);
             self.gen_asm(ir, store, &mut ctx, Some(entry), Some(exit));
         }
 
+        if !ctx.is_specialized() {
+            self.specialized_base = self.specialized_patch_point.len();
+        }
         self.jit.finalize();
 
         #[cfg(feature = "emit-asm")]
@@ -904,6 +924,41 @@ impl Codegen {
         self.jit.select_page(0);
         #[cfg(feature = "jit-debug")]
         eprintln!(" => deopt");
+    }
+
+    fn recompile_and_deopt_specialized(&mut self, deopt: DestLabel, idx: usize) {
+        let recompile = self.jit.label();
+        let dec = self.jit.label();
+        let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE_SPECIALIZED);
+
+        monoasm!( &mut self.jit,
+            xorq rdi, rdi;
+            cmpl [rip + counter], 0;
+            jlt deopt;
+            jeq recompile;
+        dec:
+            subl [rip + counter], 1;
+            jmp deopt;
+        );
+
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        recompile:
+            movq rdi, r12;
+            movq rsi, (idx);
+        );
+        monoasm!( &mut self.jit,
+            movq rax, (exec_jit_specialized_compile_patch);
+            call rax;
+        );
+        monoasm!( &mut self.jit,
+            xorq rdi, rdi;
+            jmp dec;
+        );
+        self.jit.select_page(0);
+        #[cfg(feature = "jit-debug")]
+        eprintln!(" => deopt_specialized");
     }
 }
 

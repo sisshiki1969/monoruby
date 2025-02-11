@@ -1259,6 +1259,16 @@ pub enum Visibility {
     }
 }*/
 
+pub(crate) extern "C" fn exec_jit_specialized_compile_patch(globals: &mut Globals, idx: usize) {
+    let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx];
+    let entry = globals.codegen.jit.label();
+    globals
+        .codegen
+        .jit_compile(&globals.store, iseq_id, self_class, None, entry);
+
+    globals.codegen.jit.apply_jmp_patch(patch_point, entry);
+}
+
 pub(crate) extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     lfp: Lfp,

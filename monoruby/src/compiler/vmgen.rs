@@ -90,7 +90,6 @@ impl Codegen {
     /// Generate interpreter.
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
-        let pair = self.get_address_pair();
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         self.vm_fetch = entry_fetch;
@@ -389,12 +388,6 @@ impl Codegen {
         self.dispatch[206] = xor_rr;
         self.dispatch[207] = rem_rr;
         self.dispatch[208] = pow_rr;
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "monoruby-vm");
-
-        let info = self.get_wrapper_info(pair);
-        self.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
     }
 
     ///
