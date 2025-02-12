@@ -1261,6 +1261,12 @@ pub enum Visibility {
 
 pub(crate) extern "C" fn exec_jit_specialized_compile_patch(globals: &mut Globals, idx: usize) {
     let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx];
+
+    #[cfg(feature = "profile")]
+    {
+        globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
+    }
+
     let entry = globals.codegen.jit.label();
     globals
         .codegen
