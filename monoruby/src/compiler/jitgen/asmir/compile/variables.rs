@@ -14,12 +14,14 @@ impl Codegen {
     /// - rdi
     ///
     pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
+        let l = self.jit.label();
         monoasm! {&mut self.jit,
             movq r15, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
             // We must check whether the ivar slot is None.
-            movq rdi, (NIL_VALUE);
             testq r15, r15;
-            cmoveqq r15, rdi;
+            jne  l;
+            movq r15, (NIL_VALUE);
+        l:
         }
     }
 
@@ -43,31 +45,30 @@ impl Codegen {
             ivar
         };
         if self_ {
+            let l = self.jit.label();
             monoasm! { &mut self.jit,
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
                 movq r15, [rdi + (idx * 8)];
-                movq rdi, (NIL_VALUE);
                 testq r15, r15;
-                cmoveqq r15, rdi;
+                jne  l;
+                movq r15, (NIL_VALUE);
+            l:
             }
         } else {
             let exit = self.jit.label();
             monoasm! { &mut self.jit,
-                movq r15, (NIL_VALUE);
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
             }
             self.check_len(idx, exit);
             monoasm! { &mut self.jit,
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-                movq rdx, [rdi + (idx * 8)];
-                testq rdx, rdx;
-                cmovneq r15, rdx;
+                movq r15, [rdi + (idx * 8)];
+                testq r15, r15;
+                jne  exit;
+                movq r15, (NIL_VALUE);
             exit:
             }
-        }
-        monoasm! { &mut self.jit,
-
         }
     }
 }
