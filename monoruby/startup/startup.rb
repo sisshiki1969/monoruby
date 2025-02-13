@@ -2,22 +2,19 @@ RUBY_PLATFORM = "x86_64-linux"
 
 require 'rbconfig' 
 
+class Class
+  def new(*a,**b,&c)
+    o = allocate
+    o.initialize(*a,**b,&c) if o.respond_to?(:initialize)
+    o
+  end
+end
+
 class Object
   def freeze
     self
   end
-
-  def initialize(*arg)
-  end
 end
-
-#class Class
-#  def new(...)
-#    o = allocate
-#    o.initialize(...)
-#    o
-#  end
-#end
 
 module Comparable
   def ==(other)

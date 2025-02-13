@@ -9,17 +9,12 @@ use std::cmp::Ordering;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
-    globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
-    //globals.define_builtin_class_inline_func_with(
-    //    ARRAY_CLASS,
-    //    "new",
-    //    new,
-    //    Box::new(super::class::gen_class_new(allocate_array)),
-    //    0,
-    //    0,
-    //    true,
-    //);
-    globals.define_builtin_func(ARRAY_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_class_inline_func_rest(
+        ARRAY_CLASS,
+        "allocate",
+        allocate,
+        Box::new(array_allocate),
+    );
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
@@ -76,10 +71,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by", sort_by, 0);
     globals.define_builtin_func(ARRAY_CLASS, "group_by", group_by, 0);
-    //globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
-    //globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
-    //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
-    //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
@@ -144,6 +135,31 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_empty_with_class(class);
     Ok(obj)
+}
+
+fn array_allocate(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    _: ClassId,
+) -> bool {
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { dst, .. } = *callsite;
+    let using_xmm = bb.get_using_xmm();
+    ir.xmm_save(using_xmm);
+    ir.inline(move |gen, _, _| {
+        monoasm!( &mut gen.jit,
+            movq rax, (allocate_array);
+            call rax;
+        );
+    });
+    ir.xmm_restore(using_xmm);
+    bb.rax2acc(ir, dst);
+    true
 }
 
 extern "C" fn allocate_array(class_val: Value) -> Value {

@@ -207,7 +207,7 @@ impl BytecodeGen {
         let old = self.temp;
         // TODO: We must check this in parser
         if arglist.delegate {
-            return Err(self.syntax_error("Delegate argument should not be given", loc));
+            return Err(self.syntax_error("Argument forwarding is not allowed for yield", loc));
         }
         // yield does not accept block.
         if arglist.block.is_some() {
@@ -215,7 +215,7 @@ impl BytecodeGen {
         }
 
         let callid =
-            self.handle_no_delegate(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
+            self.handle_no_forwarding(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
         self.emit_yield(callid, loc);
 
         self.temp = old;

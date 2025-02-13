@@ -1079,6 +1079,7 @@ pub(crate) struct ParamsInfo {
     pub kw_names: Vec<IdentId>,
     pub kw_rest: Option<SlotId>,
     block_param: Option<IdentId>,
+    forwarding: bool,
 }
 
 impl ParamsInfo {
@@ -1090,6 +1091,7 @@ impl ParamsInfo {
         keyword_names: Vec<IdentId>,
         kw_rest: Option<SlotId>,
         block_param: Option<IdentId>,
+        forwarding: bool,
     ) -> Self {
         ParamsInfo {
             required_num,
@@ -1099,6 +1101,7 @@ impl ParamsInfo {
             kw_names: keyword_names,
             kw_rest,
             block_param,
+            forwarding,
         }
     }
 
@@ -1115,6 +1118,7 @@ impl ParamsInfo {
             kw_names: vec![],
             kw_rest: None,
             block_param: None,
+            forwarding: false,
         }
     }
 
@@ -1127,6 +1131,7 @@ impl ParamsInfo {
             kw_names,
             kw_rest: None,
             block_param: None,
+            forwarding: false,
         }
     }
 

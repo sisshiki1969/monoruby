@@ -470,6 +470,7 @@ impl Funcs {
         let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
+        let mut forwarding = false;
         for (dst_outer, dst_reg, _name) in for_params {
             for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
             args_names.push(None);
@@ -508,6 +509,7 @@ impl Funcs {
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
+                    forwarding = true;
                 }
                 ParamKind::Keyword(name, init) => {
                     let name = IdentId::get_id_from_string(name);
@@ -557,6 +559,7 @@ impl Funcs {
             keyword_names,
             kw_rest_param,
             block_param,
+            forwarding,
         );
         Ok((params_info, compile_info))
     }

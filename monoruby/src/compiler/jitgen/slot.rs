@@ -277,6 +277,14 @@ impl SlotContext {
 }
 
 impl SlotContext {
+    pub fn is_symbol_literal(&self, slot: SlotId) -> Option<IdentId> {
+        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+            v.try_symbol()
+        } else {
+            None
+        }
+    }
+
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
         if let LinkMode::ConcreteValue(v) = self.mode(slot) {
             v.try_fixnum()

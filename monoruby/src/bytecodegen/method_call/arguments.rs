@@ -10,9 +10,9 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<CallSite> {
         if arglist.delegate {
-            self.handle_delegate(arglist, method, recv, dst, loc)
+            self.handle_forwarding(arglist, method, recv, dst, loc)
         } else {
-            self.handle_no_delegate(arglist, method, recv, dst, loc)
+            self.handle_no_forwarding(arglist, method, recv, dst, loc)
         }
     }
 
@@ -29,7 +29,7 @@ impl BytecodeGen {
         }
     }
 
-    pub(super) fn handle_no_delegate(
+    pub(super) fn handle_no_forwarding(
         &mut self,
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
@@ -59,7 +59,7 @@ impl BytecodeGen {
         Ok(callsite)
     }
 
-    fn handle_delegate(
+    fn handle_forwarding(
         &mut self,
         arglist: ArgList,
         name: impl Into<Option<IdentId>>,
@@ -200,15 +200,16 @@ impl BytecodeGen {
     ///
     fn positional_args(&mut self, arglist: &mut ArgList) -> Result<(BcReg, usize, Vec<usize>)> {
         if arglist.args.len() == 1
-            //&& arglist.block.is_none()
             && arglist.kw_args.is_empty()
             && arglist.hash_splat.is_empty()
             && !arglist.delegate
         {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
-                let local = self.refer_local(ident).unwrap();
-                return Ok((local, 1, vec![]));
+                if let Some(local) = self.refer_local(ident) {
+                    return Ok((local, 1, vec![]));
+                }
+                // fallthrough in the case of "f(&a)"
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {

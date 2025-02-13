@@ -19,15 +19,6 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(class_allocate),
         0,
     );
-    globals.define_builtin_inline_func_with(
-        CLASS_CLASS,
-        "new",
-        new,
-        gen_class_new_object(),
-        0,
-        0,
-        true,
-    );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
 }
 

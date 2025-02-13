@@ -139,9 +139,15 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
     let bh = if let Some(block_fid) = block_fid {
         let bh = BlockHandler::from_caller(block_fid);
         Some(bh)
+    } else if let Some(block_arg) = block_arg {
+        let block = caller_lfp.register(block_arg.0 as usize).unwrap();
+        if block.is_nil() {
+            None
+        } else {
+            Some(BlockHandler::new(block))
+        }
     } else {
-        block_arg
-            .map(|block_arg| BlockHandler::new(caller_lfp.register(block_arg.0 as usize).unwrap()))
+        None
     };
     callee_lfp.set_block(bh);
 }
