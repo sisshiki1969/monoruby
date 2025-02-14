@@ -206,7 +206,7 @@ impl BytecodeGen {
         };
         let old = self.temp;
         // TODO: We must check this in parser
-        if arglist.delegate {
+        if arglist.forwarding {
             return Err(self.syntax_error("Argument forwarding is not allowed for yield", loc));
         }
         // yield does not accept block.

@@ -573,16 +573,15 @@ impl BytecodeGen {
         !self.outer_locals.is_empty()
     }
 
-    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
+    fn new_method(name: Option<IdentId>, info: BlockInfo) -> Functions {
         Functions::Method { name, info }
     }
 
-    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> Functions {
+    fn new_classdef(name: Option<IdentId>, info: BlockInfo) -> Functions {
         Functions::ClassDef { name, info }
     }
 
-    fn add_block(
-        &mut self,
+    fn new_block(
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
@@ -597,8 +596,7 @@ impl BytecodeGen {
         }
     }
 
-    fn add_lambda(
-        &mut self,
+    fn new_lambda(
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         info: BlockInfo,
@@ -782,7 +780,7 @@ impl BytecodeGen {
     ) -> Functions {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        self.add_block(
+        Self::new_block(
             (mother, outer + 1),
             (self.id, outer_locals),
             optional_params,
@@ -793,7 +791,7 @@ impl BytecodeGen {
     fn handle_lambda(&mut self, block: BlockInfo) -> Functions {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        self.add_lambda((mother, outer + 1), (self.id, outer_locals), block)
+        Self::new_lambda((mother, outer + 1), (self.id, outer_locals), block)
     }
 }
 
