@@ -3,36 +3,11 @@ prelude: |
     def initialize(x,y)
     end
   end
+  class Ary < Array
+  end
 benchmark:
   class_new: |
     a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
-    a = A.new(1,2)
+  array_new: |
+    a = Ary.new(10) do |i| i*2 end
 loop_count: 3000
