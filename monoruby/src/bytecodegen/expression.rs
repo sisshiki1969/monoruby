@@ -966,14 +966,8 @@ impl BytecodeGen {
     }
 
     fn gen_lambda(&mut self, dst: BcReg, info: BlockInfo, loc: Loc) -> Result<()> {
-        let info = self.handle_lambda(info);
-        self.emit(
-            BytecodeInst::Lambda {
-                dst,
-                func: Box::new(info),
-            },
-            loc,
-        );
+        let func = self.handle_lambda(info);
+        self.emit(BytecodeInst::Lambda { dst, func }, loc);
         Ok(())
     }
 
@@ -1005,14 +999,8 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = Self::new_method(Some(name), block);
-        self.emit(
-            BytecodeInst::MethodDef {
-                name,
-                func: Box::new(func),
-            },
-            loc,
-        );
+        let func = self.new_method(Some(name), block);
+        self.emit(BytecodeInst::MethodDef { name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -1024,16 +1012,9 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = Self::new_method(Some(name), block);
+        let func = self.new_method(Some(name), block);
         let obj = self.pop().into();
-        self.emit(
-            BytecodeInst::SingletonMethodDef {
-                obj,
-                name,
-                func: Box::new(func),
-            },
-            loc,
-        );
+        self.emit(BytecodeInst::SingletonMethodDef { obj, name, func }, loc);
         self.gen_symbol(name, use_mode)?;
         Ok(())
     }
@@ -1066,7 +1047,7 @@ impl BytecodeGen {
         } else {
             None
         };
-        let func = Self::new_classdef(Some(name), info);
+        let func = self.new_classdef(Some(name), info);
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
@@ -1084,7 +1065,7 @@ impl BytecodeGen {
                     ret,
                     base,
                     name,
-                    func: Box::new(func),
+                    func,
                 }
             } else {
                 BytecodeInst::ClassDef {
@@ -1092,7 +1073,7 @@ impl BytecodeGen {
                     base,
                     superclass,
                     name,
-                    func: Box::new(func),
+                    func,
                 }
             },
             loc,
@@ -1110,7 +1091,7 @@ impl BytecodeGen {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let func = Self::new_classdef(None, info);
+        let func = self.new_classdef(None, info);
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;
@@ -1119,14 +1100,7 @@ impl BytecodeGen {
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),
             UseMode2::Store(r) => Some(r),
         };
-        self.emit(
-            BytecodeInst::SingletonClassDef {
-                ret,
-                base,
-                func: Box::new(func),
-            },
-            loc,
-        );
+        self.emit(BytecodeInst::SingletonClassDef { ret, base, func }, loc);
         if use_mode == UseMode2::Ret {
             self.emit_ret(None)?;
         }

@@ -282,7 +282,7 @@ struct CallSite {
     /// Positions of splat arguments.
     splat_pos: Vec<usize>,
     /// *FuncId* of passed block.
-    block_fid: Option<Functions>,
+    block_fid: Option<FunctionId>,
     block_arg: Option<BcReg>,
     /// *BcReg* of the first arguments.
     args: BcReg,
@@ -298,7 +298,7 @@ impl CallSite {
         pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
-        block_fid: Option<Functions>,
+        block_fid: Option<FunctionId>,
         block_arg: Option<BcReg>,
         args: BcReg,
         recv: BcReg,
@@ -352,6 +352,9 @@ struct KeywordArgs {
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct FunctionId(usize);
 
 #[derive(Debug, Clone)]
 enum Functions {
@@ -519,6 +522,8 @@ struct BytecodeGen {
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
+    /// Functions.
+    functions: Vec<Functions>,
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
@@ -553,6 +558,7 @@ impl BytecodeGen {
             sourceinfo: info.sourceinfo.clone(),
             exception_table: vec![],
             merge_info: HashMap::default(),
+            functions: vec![],
         };
         if let Some(lvc) = binding {
             assert!(info.args.args_names.is_empty());
@@ -573,41 +579,55 @@ impl BytecodeGen {
         !self.outer_locals.is_empty()
     }
 
-    fn new_method(name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::Method { name, info }
+    fn new_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
+        let id = FunctionId(self.functions.len());
+        let f = Functions::Method { name, info };
+        self.functions.push(f);
+        id
     }
 
-    fn new_classdef(name: Option<IdentId>, info: BlockInfo) -> Functions {
-        Functions::ClassDef { name, info }
+    fn new_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> FunctionId {
+        let id = FunctionId(self.functions.len());
+        let f = Functions::ClassDef { name, info };
+        self.functions.push(f);
+        id
     }
 
     fn new_block(
+        &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
-    ) -> Functions {
-        Functions::Block {
+    ) -> FunctionId {
+        let id = FunctionId(self.functions.len());
+        let f = Functions::Block {
             mother,
             outer,
             optional_params,
             info,
             is_block_style: true,
-        }
+        };
+        self.functions.push(f);
+        id
     }
 
     fn new_lambda(
+        &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
         info: BlockInfo,
-    ) -> Functions {
-        Functions::Block {
+    ) -> FunctionId {
+        let id = FunctionId(self.functions.len());
+        let f = Functions::Block {
             mother,
             outer,
             optional_params: vec![],
             info,
             is_block_style: false,
-        }
+        };
+        self.functions.push(f);
+        id
     }
 
     fn loop_push(
@@ -777,10 +797,10 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Functions {
+    ) -> FunctionId {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        Self::new_block(
+        self.new_block(
             (mother, outer + 1),
             (self.id, outer_locals),
             optional_params,
@@ -788,10 +808,10 @@ impl BytecodeGen {
         )
     }
 
-    fn handle_lambda(&mut self, block: BlockInfo) -> Functions {
+    fn handle_lambda(&mut self, block: BlockInfo) -> FunctionId {
         let outer_locals = self.get_locals();
         let (mother, _, outer) = self.mother;
-        Self::new_lambda((mother, outer + 1), (self.id, outer_locals), block)
+        self.new_lambda((mother, outer + 1), (self.id, outer_locals), block)
     }
 }
 
