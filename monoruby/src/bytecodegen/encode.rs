@@ -359,7 +359,7 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bytecode::from_with_func_name_id(enc_www(71, op1.0, op2.0, 0), Some(name), func_id)
             }
-            BytecodeInst::BlockArgProxy(dst, outer) => {
+            BytecodeInst::BlockArgProxy { dst, outer } => {
                 // 21
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(21, op1.0, outer as u32))
@@ -374,7 +374,7 @@ impl BytecodeGen {
                 let func_id = self.new_function(store, func, loc)?;
                 Bytecode::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
-            BytecodeInst::BlockArg(dst, outer) => {
+            BytecodeInst::BlockArg { dst, outer } => {
                 // 23
                 let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_wl(23, op1.0, outer as u32))

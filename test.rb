@@ -1,17 +1,18 @@
-a = 0
-30.times do |x|
-  30.times do |y|
-    30.times do |z|
-      s = if x == 28 && y == 28 && z == 28
-        "def *(other); 42; end;"
-      else
-        ""
-      end
-      Integer.class_eval(s)
-      a += 100 * 100
-    end
-    a += 100 * 100
+class C
+  def g(*rest, **kw)
+    $res << "#{rest} #{kw}"
   end
-  a += 100 * 100
+  
+  def f(a,b,...)
+    a = 50
+    g(1,2,a:100)
+    g(...)
+    g(b,a,...)
+  end
 end
-puts "OK" if a == 269680572
+
+40.times {
+  $res = []
+  C.new.f(1,*[2,3],e:70,**{f:80, g:90})
+  puts "#{$res}"
+}

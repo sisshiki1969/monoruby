@@ -346,7 +346,34 @@ fn hash_splat4() {
 }
 
 #[test]
-fn delegate1() {
+fn forwarding0() {
+    run_test_with_prelude(
+        r#"
+        [
+          transform(1),
+          transform(1,2,3),
+          transform(1,2,3,a:1,b:2),
+          transform(1,2,3,a:1,b:2) {|args,kwargs| [args,kwargs]}
+        ]
+        "#,
+        r##"
+        def transform(a, ...)
+          process(a, ...)
+        end
+
+        def process(a, *args, **kwargs, &block)
+          if block
+            block.call(args, kwargs)
+          else
+            [a, args, kwargs]
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding1() {
     run_test_with_prelude(
         r#"
         $res = []
@@ -371,7 +398,7 @@ fn delegate1() {
 }
 
 #[test]
-fn delegate2() {
+fn forwarding2() {
     run_test_with_prelude(
         r##"
         $res = []

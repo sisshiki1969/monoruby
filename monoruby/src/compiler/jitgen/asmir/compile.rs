@@ -885,13 +885,13 @@ impl Codegen {
     /// - rax: block handler
     ///
     fn block_arg_proxy(&mut self) {
+        let exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq rax, [rax - (LFP_BLOCK)];
-            xorq rdi, rdi;
-            movq rsi, 0b10;
             testq rax, 0b1;
-            cmovneq rdi, rsi;
-            addq rax, rdi;
+            jz   exit;
+            addq rax, 0b10;
+        exit:
         };
     }
 

@@ -7,7 +7,8 @@ use ruruby_parse::CmpKind;
 
 use super::*;
 use crate::{
-    bytecodegen::BcIndex, compiler::jitgen::BasicBlockId, compiler::jitgen::BasicBlockInfo,
+    bytecodegen::BcIndex,
+    compiler::jitgen::{BasicBlockId, BasicBlockInfo},
 };
 
 #[derive(Clone, Debug)]
@@ -1163,6 +1164,17 @@ impl ParamsInfo {
         self.pos_num
     }
 
+    ///
+    /// The number of required + optional + rest arguments.
+    ///
+    pub fn rest_pos(&self) -> u16 {
+        (self.pos_num - 1) as u16
+    }
+
+    pub fn forwarding(&self) -> bool {
+        self.forwarding
+    }
+
     pub fn max_positional_args(&self) -> usize {
         self.reqopt_num
     }
@@ -1176,6 +1188,10 @@ impl ParamsInfo {
 
     pub fn is_rest(&self) -> bool {
         self.pos_num != self.reqopt_num
+    }
+
+    pub fn is_block_param(&self) -> bool {
+        self.block_param.is_some()
     }
 
     ///

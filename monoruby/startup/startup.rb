@@ -3,9 +3,9 @@ RUBY_PLATFORM = "x86_64-linux"
 require 'rbconfig' 
 
 class Class
-  def new(*a,**b,&c)
+  def new(...)
     o = allocate
-    o.initialize(*a,**b,&c) if o.respond_to?(:initialize)
+    o.initialize(...) if o.respond_to?(:initialize)
     o
   end
 end

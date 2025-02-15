@@ -509,6 +509,9 @@ impl Funcs {
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
+                    assert!(block_param.is_none());
+                    let name = IdentId::get_id("");
+                    block_param = Some(name);
                     forwarding = true;
                 }
                 ParamKind::Keyword(name, init) => {
@@ -524,7 +527,8 @@ impl Funcs {
                     args_names.push(Some(name));
                 }
                 ParamKind::Block(name) => {
-                    let name = IdentId::get_id_from_string(name.clone());
+                    assert!(block_param.is_none());
+                    let name = IdentId::get_id_from_string(name);
                     block_param = Some(name);
                 }
                 _ => {

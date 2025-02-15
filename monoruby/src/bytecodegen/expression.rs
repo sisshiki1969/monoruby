@@ -181,7 +181,7 @@ impl BytecodeGen {
                 if let Some(local2) = self.refer_local(&ident) {
                     self.emit_mov(dst, local2);
                 } else {
-                    self.emit(BytecodeInst::BlockArg(dst, 0), loc);
+                    self.emit(BytecodeInst::BlockArg { dst, outer: 0 }, loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
@@ -191,7 +191,7 @@ impl BytecodeGen {
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(name), self.block_param);
-                    self.emit(BytecodeInst::BlockArg(dst, outer), loc);
+                    self.emit(BytecodeInst::BlockArg { dst, outer }, loc);
                 }
             }
             NodeKind::Const {
@@ -423,26 +423,19 @@ impl BytecodeGen {
                     self.handle_mode(use_mode, local)?;
                     return Ok(());
                 } else {
-                    let ret = self.push().into();
-                    self.emit(BytecodeInst::BlockArg(ret, 0), loc);
+                    let dst = self.push().into();
+                    self.emit(BytecodeInst::BlockArg { dst, outer: 0 }, loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
-                let ret = self.push().into();
+                let dst = self.push().into();
                 let lvar = IdentId::get_id_from_string(ident);
                 if let Some(src) = self.refer_dynamic_local(outer, lvar) {
                     let src = src.into();
-                    self.emit(
-                        BytecodeInst::LoadDynVar {
-                            dst: ret,
-                            src,
-                            outer,
-                        },
-                        loc,
-                    );
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(lvar), self.outer_block_param_name(outer));
-                    self.emit(BytecodeInst::BlockArg(ret, outer), loc);
+                    self.emit(BytecodeInst::BlockArg { dst, outer }, loc);
                 }
             }
 

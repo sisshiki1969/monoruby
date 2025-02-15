@@ -124,10 +124,26 @@ pub(super) enum BytecodeInst {
         ret: BcReg,
         id: u32,
     },
-    BlockArgProxy(BcReg, usize),
-    BlockArg(BcReg, usize),
+    ///
+    /// Proxy the block argument from *outer* frame to *dst* of current frame.
+    ///
+    BlockArgProxy {
+        /// destination register of the current frame.
+        dst: BcReg,
+        /// outer frame count.
+        outer: usize,
+    },
+    ///
+    /// Load the block argument from *outer* frame to *dst* of current frame.
+    ///
+    BlockArg {
+        /// destination register of the current frame.
+        dst: BcReg,
+        /// outer frame count.
+        outer: usize,
+    },
     LoadDynVar {
-        /// return register of the current frame.
+        /// destination register of the current frame.
         dst: BcReg,
         /// source register of the outer frame.
         src: BcReg,
