@@ -1070,7 +1070,7 @@ dependencies = [
  "escape_string",
  "fancy-regex",
  "fxhash",
- "getrandom 0.2.15",
+ "getrandom 0.3.1",
  "globset",
  "hex",
  "html-escape",

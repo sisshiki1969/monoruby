@@ -19,14 +19,10 @@ impl Prng {
         let mut new_seed = <sfmt::SFMT as SeedableRng>::Seed::default();
         match seed {
             None => {
-                if let Err(err) = getrandom::getrandom(&mut new_seed) {
-                    panic!("from_entropy failed: {}", err);
-                }
+                getrandom::fill(&mut new_seed).unwrap();
             }
             Some(seed) => {
-                for (i, byte) in (seed as i32).to_ne_bytes().iter().enumerate() {
-                    new_seed[i] = *byte;
-                }
+                new_seed = (seed as i32).to_ne_bytes();
             }
         };
         self.seed = new_seed;

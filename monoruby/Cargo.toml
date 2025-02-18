@@ -33,7 +33,7 @@ perf = []
 emit-cfg = ["dump-bc"]
 
 [dependencies]
-clap = { version = "4.5.27", features = ["derive"] }
+clap = { version = "4.5.29", features = ["derive"] }
 rustyline = "15.0.0"
 paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
@@ -55,7 +55,7 @@ indexmap = "2.7.1"
 regex = "1.11.1"
 fancy-regex = "0.14.0"
 libc = "0.2.169"
-getrandom = "0.2.15"
+getrandom = "0.3.1"
 sfmt = "0.7.0"
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
