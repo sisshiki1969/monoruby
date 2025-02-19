@@ -25,7 +25,7 @@ impl BytecodeGen {
         if let Some(arglist) = arglist {
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)
         } else {
-            Ok(self.handle_super_delegate(dst, loc))
+            Ok(self.handle_super_forwarding(dst, loc))
         }
     }
 
@@ -54,7 +54,7 @@ impl BytecodeGen {
         };
 
         let callsite = CallSite::new(
-            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst,
+            method, pos_num, kw, splat_pos, block_fid, block_arg, args, recv, dst, false,
         );
         Ok(callsite)
     }
@@ -137,10 +137,11 @@ impl BytecodeGen {
             args,
             recv,
             dst,
+            true,
         ))
     }
 
-    fn handle_super_delegate(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
+    fn handle_super_forwarding(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
         let (_, mother_args, outer) = self.mother.clone();
         let pos_len = mother_args.pos_num();
         let splat_pos = if mother_args.is_rest() {
@@ -205,6 +206,7 @@ impl BytecodeGen {
             pos_start,
             BcReg::Self_,
             dst,
+            true,
         )
     }
 

@@ -653,6 +653,7 @@ impl Codegen {
             self_class,
             0,
             None,
+            None,
         );
         ctx.compile(store);
 

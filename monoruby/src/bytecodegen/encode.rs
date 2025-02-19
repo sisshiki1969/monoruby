@@ -645,6 +645,7 @@ impl BytecodeGen {
             args,
             recv,
             dst,
+            forwarding,
         } = callsite;
 
         let block_fid = if let Some(block_fid) = block_fid {
@@ -684,6 +685,7 @@ impl BytecodeGen {
             args,
             recv,
             dst,
+            forwarding,
         ))
     }
 

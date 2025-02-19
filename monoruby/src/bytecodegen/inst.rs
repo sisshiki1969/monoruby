@@ -315,7 +315,7 @@ impl std::fmt::Debug for FnInitInfo {
 impl FnInitInfo {
     pub(super) fn new(total_reg_num: usize, info: &ISeqInfo) -> Self {
         let reg_num = total_reg_num - 1;
-        let arg_num = info.args.args_names.len();
+        let arg_num = info.params.args_names.len();
         let stack_offset = (reg_num * 8 + (RSP_LOCAL_FRAME + LFP_ARG0) as usize + 31) / 16;
         FnInitInfo {
             reg_num,

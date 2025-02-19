@@ -84,6 +84,7 @@ impl JitContext {
             hash_splat_pos: vec![],
             kw_pos: idx,
             kw_args: Default::default(),
+            forwarding: false,
         };
 
         let recv = callsite.recv;
@@ -180,7 +181,7 @@ impl JitContext {
     /// ### in
     /// rdi: receiver: Value
     ///
-    pub(super) fn compile_yield_inlined(
+    pub(super) fn compile_yield_specialized(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -199,7 +200,7 @@ impl JitContext {
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
         let block_entry =
-            self.compile_specialized_method(store, block_iseq, block_self, None, None);
+            self.compile_specialized_method(store, block_iseq, block_self, None, None, None);
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -233,11 +234,11 @@ impl JitContext {
         recv_class: ClassId,
     ) -> CompileResult {
         let CallSiteInfo {
-            name,
             args,
             pos_num,
             dst,
             block_fid,
+            forwarding,
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
@@ -307,7 +308,9 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if block_fid.is_some() || name == Some(IdentId::NEW) {
+                if block_fid.is_some() || store[iseq_id].params.forwarding()
+                /*|| forwarding*/
+                {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
                         self_class: self.self_class(),
@@ -316,12 +319,34 @@ impl JitContext {
                         JitType::Specialized(_) => None,
                         _ => Some(self.label()),
                     };
+                    let forwaring_info = if let Some((id, i)) = self.forwarding_info {
+                        if forwarding {
+                            Some((id, i + 1))
+                        } else {
+                            None
+                        }
+                    } else {
+                        if store[iseq_id].params.forwarding() {
+                            Some((callsite.id, 1))
+                        } else {
+                            None
+                        }
+                    };
+                    /*if let Some((id, i)) = forwaring_info {
+                        eprintln!(
+                            "{}->{} ({i}) {:?}",
+                            store.func_description(store[self.iseq_id()].func_id()),
+                            store.func_description(fid),
+                            &store[id]
+                        );
+                    }*/
                     let entry = self.compile_specialized_method(
                         store,
                         iseq_id,
                         recv_class,
                         patch_point,
                         block_info,
+                        forwaring_info,
                     );
                     self.send_specialized(
                         bbctx,
@@ -351,6 +376,7 @@ impl JitContext {
         self_class: ClassId,
         patch_point: Option<JitLabel>,
         block_info: Option<JitBlockInfo>,
+        forwarding_info: Option<(CallSiteId, usize)>,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
         let jit_type = if !self.is_specialized() {
@@ -366,6 +392,7 @@ impl JitContext {
             self_class,
             specialize_level,
             block_info,
+            forwarding_info,
         );
         ctx.compile(store);
         let entry = self.label();

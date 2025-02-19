@@ -29,9 +29,13 @@ pub struct JitContext {
     ///
     iseq_id: ISeqId,
     ///
-    /// The block given to the method and its `self` class.
+    /// The block given to the method and its `self` class (for specialized call).
     ///
     block_info: Option<method_call::JitBlockInfo>,
+    ///
+    /// If the method has argumrnts forwarding, hold callee's *CallsiteId* (for specialized call).
+    ///
+    pub(super) forwarding_info: Option<(CallSiteId, usize)>,
     ///
     /// The start bytecode position of the loop to be compiled.
     ///
@@ -137,6 +141,7 @@ impl JitContext {
         self_class: ClassId,
         specialize_level: usize,
         block_info: Option<method_call::JitBlockInfo>,
+        forwarding_info: Option<(CallSiteId, usize)>,
     ) -> Self {
         let func = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -153,6 +158,7 @@ impl JitContext {
         Self {
             iseq_id,
             block_info,
+            forwarding_info,
             jit_type,
             basic_block_labels,
             loop_info: HashMap::default(),
@@ -184,6 +190,7 @@ impl JitContext {
         Self {
             iseq_id: self.iseq_id,
             block_info: self.block_info.clone(),
+            forwarding_info: None,
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),

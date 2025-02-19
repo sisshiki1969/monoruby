@@ -98,7 +98,7 @@ pub struct ISeqInfo {
     ///
     /// Information of parameters.
     ///
-    pub(crate) args: ParamsInfo,
+    pub(crate) params: ParamsInfo,
     ///
     /// Name of local variables
     ///
@@ -142,7 +142,7 @@ impl std::fmt::Debug for ISeqInfo {
             self.func_id().get(),
             self.name(),
             self.mother,
-            self.args.args_names.len(),
+            self.params.args_names.len(),
             self.non_temp_num,
             self.temp_num
         )
@@ -176,7 +176,7 @@ impl ISeqInfo {
             sourcemap: vec![],
             sp: vec![],
             exception_map: vec![],
-            args: args.clone(),
+            params: args.clone(),
             locals: IndexMap::default(),
             outer_locals,
             literals: vec![],
@@ -258,14 +258,14 @@ impl ISeqInfo {
     /// Get a number of required + optional + rest arguments.
     ///
     pub(crate) fn pos_num(&self) -> usize {
-        self.args.pos_num
+        self.params.pos_num
     }
 
     ///
     /// Get a block argument name.
     ///
     pub(crate) fn block_param(&self) -> Option<IdentId> {
-        self.args.block_param
+        self.params.block_param
     }
 
     ///

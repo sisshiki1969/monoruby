@@ -67,7 +67,7 @@ fn bytecode_compile_func(
     } = store.functions.get_compile_info();
     let info = store.iseq(func_id);
     let (fid, outer) = info.mother();
-    let params = store.iseq(fid).args.clone();
+    let params = store.iseq(fid).params.clone();
     let mut gen = BytecodeGen::new(info, (fid, params, outer), binding);
     // arguments preparation
     for ForParamInfo {
@@ -290,6 +290,7 @@ struct CallSite {
     recv: BcReg,
     /// *BcReg* of the return value. If None, the return value is discarded.
     dst: Option<BcReg>,
+    forwarding: bool,
 }
 
 impl CallSite {
@@ -303,6 +304,7 @@ impl CallSite {
         args: BcReg,
         recv: BcReg,
         dst: Option<BcReg>,
+        forwarding: bool,
     ) -> Self {
         let name = name.into();
         CallSite {
@@ -315,6 +317,7 @@ impl CallSite {
             args,
             recv,
             dst,
+            forwarding,
         }
     }
 
@@ -325,7 +328,7 @@ impl CallSite {
         recv: BcReg,
         dst: Option<BcReg>,
     ) -> CallSite {
-        CallSite::new(name, len, None, vec![], None, None, args, recv, dst)
+        CallSite::new(name, len, None, vec![], None, None, args, recv, dst, false)
     }
 
     fn has_splat(&self) -> bool {
@@ -561,12 +564,12 @@ impl BytecodeGen {
             functions: vec![],
         };
         if let Some(lvc) = binding {
-            assert!(info.args.args_names.is_empty());
+            assert!(info.params.args_names.is_empty());
             lvc.table.0.iter().for_each(|name| {
                 ir.add_local(IdentId::get_id(name));
             });
         } else {
-            info.args.args_names.iter().for_each(|name| {
+            info.params.args_names.iter().for_each(|name| {
                 ir.add_local(*name);
             });
         }
@@ -947,6 +950,7 @@ impl BytecodeGen {
             src,
             BcReg::Self_,
             Some(dst),
+            false,
         );
         self.emit(BytecodeInst::Array(dst, Box::new(calsite)), loc);
     }
