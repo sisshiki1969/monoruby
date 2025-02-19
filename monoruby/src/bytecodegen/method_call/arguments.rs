@@ -9,7 +9,7 @@ impl BytecodeGen {
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSite> {
-        if arglist.delegate {
+        if arglist.forwarding {
             self.handle_delegate(arglist, method, recv, dst, loc)
         } else {
             self.handle_no_delegate(arglist, method, recv, dst, loc)
@@ -203,7 +203,7 @@ impl BytecodeGen {
             //&& arglist.block.is_none()
             && arglist.kw_args.is_empty()
             && arglist.hash_splat.is_empty()
-            && !arglist.delegate
+            && !arglist.forwarding
         {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
