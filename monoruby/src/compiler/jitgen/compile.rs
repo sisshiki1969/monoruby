@@ -126,7 +126,7 @@ impl JitContext {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) {
-        let mut ctx = JitContext::from_ctx(self);
+        let mut ctx = JitContext::new_analyse(self);
         let mut liveness = Liveness::new(self.total_reg_num());
 
         let bbctx = BBContext::new(&ctx);

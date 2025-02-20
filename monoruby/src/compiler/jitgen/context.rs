@@ -25,6 +25,10 @@ pub(super) struct SpecializeInfo {
 ///
 pub struct JitContext {
     ///
+    /// True for analyse mode.
+    ///
+    analyse_mode: bool,
+    ///
     /// IseqId of the method / block.
     ///
     iseq_id: ISeqId,
@@ -156,6 +160,7 @@ impl JitContext {
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
+            analyse_mode: false,
             iseq_id,
             block_info,
             forwarding_info,
@@ -184,10 +189,11 @@ impl JitContext {
         }
     }
 
-    pub(super) fn from_ctx(&self) -> Self {
+    pub(super) fn new_analyse(&self) -> Self {
         let total_reg_num = self.total_reg_num;
         let local_num = self.local_num;
         Self {
+            analyse_mode: true,
             iseq_id: self.iseq_id,
             block_info: self.block_info.clone(),
             forwarding_info: None,
@@ -214,6 +220,10 @@ impl JitContext {
             #[cfg(feature = "emit-asm")]
             start_codepos: 0,
         }
+    }
+
+    pub(super) fn analyse_mode(&self) -> bool {
+        self.analyse_mode
     }
 
     pub(super) fn iseq_id(&self) -> ISeqId {

@@ -33,7 +33,9 @@ impl JitContext {
         if (version != self.class_version()) || (recv.is_self() && self.self_class() != recv_class)
         {
             // the inline method cache is invalid because the receiver class is not matched.
-            recv_class = self.self_class();
+            if recv.is_self() {
+                recv_class = self.self_class();
+            }
             if let Some(fid) = self.jit_check_call(store, recv_class, callsite.name) {
                 func_id = fid;
             } else {
@@ -308,9 +310,7 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if block_fid.is_some() || store[iseq_id].params.forwarding()
-                /*|| forwarding*/
-                {
+                if block_fid.is_some() || store[iseq_id].params.forwarding() {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
                         self_class: self.self_class(),
@@ -332,14 +332,17 @@ impl JitContext {
                             None
                         }
                     };
-                    /*if let Some((id, i)) = forwaring_info {
+                    #[cfg(feature = "jit-log")]
+                    if let Some((id, i)) = forwaring_info {
                         eprintln!(
-                            "{}->{} ({i}) {:?}",
+                            "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
+                            self.specialize_level(),
                             store.func_description(store[self.iseq_id()].func_id()),
+                            recv_class.get_name_id(store),
                             store.func_description(fid),
                             &store[id]
                         );
-                    }*/
+                    }
                     let entry = self.compile_specialized_method(
                         store,
                         iseq_id,
@@ -378,6 +381,10 @@ impl JitContext {
         block_info: Option<JitBlockInfo>,
         forwarding_info: Option<(CallSiteId, usize)>,
     ) -> JitLabel {
+        let entry = self.label();
+        if self.analyse_mode() {
+            return entry;
+        }
         let specialize_level = self.specialize_level() + 1;
         let jit_type = if !self.is_specialized() {
             JitType::Specialized(self.specialized_methods.len())
@@ -395,7 +402,6 @@ impl JitContext {
             forwarding_info,
         );
         ctx.compile(store);
-        let entry = self.label();
         self.specialized_methods.push(context::SpecializeInfo {
             entry,
             ctx,
