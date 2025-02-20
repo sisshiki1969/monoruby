@@ -382,6 +382,19 @@ impl BBContext {
         ir.handle_error(error);
     }
 
+    fn is_simple(callee: &FuncInfo, callsite: &CallSiteInfo) -> bool {
+        let pos_num = callsite.pos_num;
+        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
+        let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
+        !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !ex_positional
+            && !single_arg_expand
+            && !callee.is_rest()
+            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
+            && callee.req_num() <= pos_num
+    }
+
     ///
     /// Set positional arguments for callee.
     ///
@@ -397,16 +410,7 @@ impl BBContext {
         let pos_num = callsite.pos_num;
         let kw_pos = callsite.kw_pos;
         let kw_num = callsite.kw_len();
-        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
-        let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
-        if !callsite.has_splat()
-            && !callsite.has_hash_splat()
-            && !ex_positional
-            && !single_arg_expand
-            && !callee.is_rest()
-            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
-            && callee.req_num() <= pos_num
-        {
+        if Self::is_simple(callee, callsite) {
             // write back keyword arguments.
             for arg in kw_pos..kw_pos + kw_num {
                 self.write_back_slot(ir, arg);
