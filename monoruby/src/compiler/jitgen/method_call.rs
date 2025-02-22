@@ -244,7 +244,7 @@ impl JitContext {
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        match store[fid].kind {
+        let evict = match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);
                 assert!(!callsite.kw_may_exists());
@@ -274,6 +274,7 @@ impl JitContext {
                     }
                 }
                 bbctx.reg2acc(ir, GP::R15, dst);
+                return CompileResult::Continue;
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, pos_num);
@@ -300,13 +301,27 @@ impl JitContext {
                     });
                 }
                 bbctx.rax2acc(ir, dst);
+                return CompileResult::Continue;
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
-                bbctx.rax2acc(ir, dst);
-                bbctx.immediate_evict(ir, evict);
-                bbctx.unset_class_version_guard();
+                if let Some((id, i)) = self.forwarding_info
+                    && forwarding
+                {
+                    #[cfg(feature = "jit-log")]
+                    eprintln!(
+                        "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
+                        self.specialize_level(),
+                        store.func_description(store[self.iseq_id()].func_id()),
+                        recv_class.get_name_id(store),
+                        store.func_description(fid),
+                        &store[id]
+                    );
+                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
+                } else {
+                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
+                }
+                evict
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
@@ -332,17 +347,7 @@ impl JitContext {
                             None
                         }
                     };
-                    #[cfg(feature = "jit-log")]
-                    if let Some((id, i)) = forwaring_info {
-                        eprintln!(
-                            "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
-                            self.specialize_level(),
-                            store.func_description(store[self.iseq_id()].func_id()),
-                            recv_class.get_name_id(store),
-                            store.func_description(fid),
-                            &store[id]
-                        );
-                    }
+
                     let entry = self.compile_specialized_method(
                         store,
                         iseq_id,
@@ -361,14 +366,29 @@ impl JitContext {
                         patch_point,
                         evict,
                     );
+                } else if let Some((id, i)) = self.forwarding_info
+                    && forwarding
+                {
+                    #[cfg(feature = "jit-log")]
+                    eprintln!(
+                        "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
+                        self.specialize_level(),
+                        store.func_description(store[self.iseq_id()].func_id()),
+                        recv_class.get_name_id(store),
+                        store.func_description(fid),
+                        &store[id]
+                    );
+
+                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 } else {
                     self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
                 }
-                bbctx.rax2acc(ir, dst);
-                bbctx.immediate_evict(ir, evict);
-                bbctx.unset_class_version_guard();
+                evict
             }
         };
+        bbctx.rax2acc(ir, dst);
+        bbctx.immediate_evict(ir, evict);
+        bbctx.unset_class_version_guard();
         CompileResult::Continue
     }
 

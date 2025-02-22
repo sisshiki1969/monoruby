@@ -709,7 +709,7 @@ impl Codegen {
                 let iseq = &store[ctx.iseq_id()];
                 let name = store.func_description(iseq.func_id());
                 eprintln!(
-                    "  >>>{:?}[{}] {:?} <{}> self_class: {}",
+                    "  >>> {:?}[{}] {:?} <{}> self_class: {}",
                     ctx.jit_type(),
                     ctx.specialize_level(),
                     iseq.func_id(),

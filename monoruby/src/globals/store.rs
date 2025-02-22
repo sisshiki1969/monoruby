@@ -687,7 +687,7 @@ impl ConstSiteInfo {
 pub struct ConstSiteId(pub u32);
 
 /// Infomation for a call site.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CallSiteInfo {
     /// Call site id.
     pub id: CallSiteId,
@@ -714,6 +714,54 @@ pub struct CallSiteInfo {
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
     pub(crate) forwarding: bool,
+}
+
+impl std::fmt::Debug for CallSiteInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let CallSiteInfo {
+            id,
+            name,
+            recv,
+            args,
+            pos_num,
+            splat_pos,
+            block_fid,
+            block_arg,
+            kw_pos,
+            kw_args,
+            hash_splat_pos,
+            dst,
+            forwarding,
+        } = self;
+        write!(
+            f,
+            "CallSiteInfo {{ id: {}, name: {:?}, recv: {:?}, args: {:?}, pos_num: {:?}, ",
+            id.get(),
+            name,
+            recv,
+            args,
+            pos_num
+        )?;
+        if !splat_pos.is_empty() {
+            write!(f, "splat_pos: {:?}, ", splat_pos)?;
+        }
+        if let Some(block_fid) = block_fid {
+            write!(f, "block_fid: {:?}, ", block_fid,)?;
+        }
+        if let Some(block_arg) = block_arg {
+            write!(f, "block_arg: {:?}, ", block_arg,)?;
+        }
+        if !kw_args.is_empty() || !hash_splat_pos.is_empty() {
+            write!(f, "kw_pos: {:?}, ", kw_pos,)?;
+        }
+        if !kw_args.is_empty() {
+            write!(f, "kw_args: {:?}, ", kw_args)?;
+        }
+        if !hash_splat_pos.is_empty() {
+            write!(f, "hash_splat_pos: {:?}, ", hash_splat_pos)?;
+        }
+        write!(f, "dst: {:?}, forwarding: {:?} }}", dst, forwarding)
+    }
 }
 
 impl CallSiteInfo {
