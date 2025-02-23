@@ -789,6 +789,9 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
+    LfpForward {
+        i: usize,
+    },
     ///
     /// Send specialized method
     ///

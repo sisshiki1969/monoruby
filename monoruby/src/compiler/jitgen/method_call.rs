@@ -196,7 +196,7 @@ impl JitContext {
         bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, &store[callid], store[block_iseq].func_id());
+        bbctx.set_arguments(ir, store, &store[callid], store[block_iseq].func_id());
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
@@ -305,7 +305,8 @@ impl JitContext {
             }
             FuncKind::Builtin { .. } => {}
             FuncKind::ISeq(iseq_id) => {
-                if block_fid.is_some() || store[iseq_id].params.forwarding() {
+                let params = &store[iseq_id].params;
+                if block_fid.is_some() || params.forwarding() {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
                         self_class: self.self_class(),
@@ -321,7 +322,7 @@ impl JitContext {
                             None
                         }
                     } else {
-                        if store[iseq_id].params.forwarding() {
+                        if params.forwarding() {
                             Some((callsite.id, 1))
                         } else {
                             None
@@ -356,7 +357,16 @@ impl JitContext {
                 &store[id],
                 store[fid].params(),
             );
-            self.send_forwarding(bbctx, ir, store, callsite, 1, callsite.dst, fid, recv_class);
+            self.send_forwarding(
+                bbctx,
+                ir,
+                store,
+                &store[id],
+                i,
+                callsite.dst,
+                fid,
+                recv_class,
+            );
         } else {
             self.send(bbctx, ir, store, callsite, fid, recv_class);
         }
@@ -415,7 +425,7 @@ impl JitContext {
         bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        bbctx.set_arguments(ir, store, callsite, callee_fid);
         bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
@@ -482,7 +492,8 @@ impl JitContext {
         bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        ir.push(AsmInst::LfpForward { i });
+        bbctx.set_arguments_forwarding(store, ir, callsite, callee_fid);
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
@@ -571,5 +582,159 @@ impl BBContext {
         ir.push(AsmInst::ImmediateEvict { evict });
         let pc = self.pc();
         ir[evict] = SideExit::Evict(Some((pc + 2, self.get_write_back())));
+    }
+
+    ///
+    /// Verify if the invokation is **simple**.
+    ///
+    /// **Simple** invokation means:
+    /// - no rest argument.
+    /// - no splat arguments.
+    /// - no hash splat arguments.
+    /// - no extra positional argument.
+    /// - no single argument expansion.
+    /// - in the case of method call, the number of positional arguments is not greater than the maximal positional parameters.
+    /// - the number of required parameters is not greater than the number of positional arguments.
+    ///
+    fn is_simple(callee: &FuncInfo, callsite: &CallSiteInfo) -> bool {
+        let pos_num = callsite.pos_num;
+        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
+        let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
+        !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !ex_positional
+            && !single_arg_expand
+            && !callee.is_rest()
+            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
+            && callee.req_num() <= pos_num
+    }
+
+    ///
+    /// Set positional arguments for callee.
+    ///
+    fn set_arguments(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+    ) {
+        let callee = &store[callee_fid];
+        let args = callsite.args;
+        let pos_num = callsite.pos_num;
+        let kw_pos = callsite.kw_pos;
+        let kw_num = callsite.kw_len();
+        if Self::is_simple(callee, callsite) {
+            // write back keyword arguments.
+            for arg in kw_pos..kw_pos + kw_num {
+                self.write_back_slot(ir, arg);
+            }
+            // write back block argument.
+            if let Some(block_arg) = callsite.block_arg {
+                self.write_back_slot(ir, block_arg);
+            }
+            let ofs =
+                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
+                    (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
+                } else {
+                    0
+                };
+
+            ir.reg_sub(GP::Rsp, ofs);
+            for i in 0..pos_num {
+                let reg = args + i;
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, offset);
+            }
+
+            Self::fill_opt(ir, pos_num, callee.max_positional_args(), ofs);
+
+            ir.reg_add(GP::Rsp, ofs);
+        } else {
+            self.write_back_args(ir, callsite);
+
+            let error = self.new_error(ir);
+            ir.push(AsmInst::SetArguments {
+                callid: callsite.id,
+                callee_fid,
+            });
+            ir.handle_error(error);
+        }
+    }
+
+    ///
+    /// Set positional arguments for callee.
+    ///
+    fn set_arguments_forwarding(
+        &self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+    ) {
+        let callee = &store[callee_fid];
+        let args = callsite.args;
+        let pos_num = callsite.pos_num;
+        if Self::is_simple(callee, callsite) {
+            for i in 0..pos_num {
+                let reg = args + i;
+                let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                ir.stack2reg(reg, GP::Rax);
+                ir.reg2rsp_offset(GP::Rax, offset);
+            }
+
+            Self::fill_opt(ir, pos_num, callee.max_positional_args(), 0);
+        } else {
+            let error = self.new_error(ir);
+            ir.push(AsmInst::SetArguments {
+                callid: callsite.id,
+                callee_fid,
+            });
+            ir.handle_error(error);
+        }
+    }
+
+    fn set_binop_arguments(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callee_fid: FuncId,
+        mode: OpMode,
+    ) {
+        let callee = &store[callee_fid];
+        // callee.req_num() <= 1 at this point.
+        // callee.is_rest() || callee.max_positional_args() >= 1 at this point.
+        let xmm_flag = match mode {
+            OpMode::RR(_, rhs) | OpMode::IR(_, rhs) => {
+                matches!(self.mode(rhs), LinkMode::Xmm(_))
+            }
+            OpMode::RI(_, _) => false,
+        };
+        let ofs = if xmm_flag || callee.is_rest() {
+            (RSP_LOCAL_FRAME + LFP_ARG0 + 16 as i32) & !0xf
+        } else {
+            0
+        };
+
+        ir.reg_sub(GP::Rsp, ofs);
+        let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0);
+        self.fetch_rhs_for_callee(ir, mode, offset);
+
+        Self::fill_opt(ir, 1, callee.max_positional_args(), ofs);
+
+        if callee.is_rest() {
+            ir.push(AsmInst::RSPOffsetToArray(offset));
+        }
+        ir.reg_add(GP::Rsp, ofs);
+    }
+
+    fn fill_opt(ir: &mut AsmIr, start: usize, end: usize, ofs: i32) {
+        if start < end {
+            ir.push(AsmInst::I32ToReg(0, GP::Rax));
+            for i in start..end {
+                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+                ir.reg2rsp_offset(GP::Rax, offset);
+            }
+        }
     }
 }

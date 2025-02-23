@@ -24,18 +24,12 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn jit_set_arguments(
-        &mut self,
-        callid: CallSiteId,
-        args: SlotId,
-        offset: usize,
-        meta: Meta,
-    ) {
+    pub(super) fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());
-            lea  rcx, [r14 - (conv(args))];
+            movq rcx, r14;
             lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
             movq r9, (meta.get());
             subq rsp, (offset);
@@ -162,6 +156,10 @@ impl Codegen {
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
+    ///
+    /// ### in
+    /// - r13: receiver: Value.
+    ///
     pub(super) fn gen_send_forwarding(
         &mut self,
         store: &Store,
@@ -299,24 +297,7 @@ impl Codegen {
             movq rax, (meta.get());
             pushq rax;
         }
-        // set block
-        if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from_caller(func_id, 1);
-            monoasm!( &mut self.jit,
-                movq rax, (bh.id());
-                pushq rax;
-            );
-        } else if let Some(block) = callsite.block_arg {
-            monoasm!( &mut self.jit,
-                movq rax, [r14 - (conv(block))];
-                pushq rax;
-            );
-        } else {
-            monoasm!( &mut self.jit,
-                xorq rax, rax;
-                pushq rax;
-            );
-        }
+        self.push_block(callsite, 1);
         // set self
         monoasm! { &mut self.jit,
             pushq r13;
@@ -334,24 +315,7 @@ impl Codegen {
             movq rax, (meta.get());
             pushq rax;
         }
-        // set block
-        if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from_caller(func_id, i);
-            monoasm!( &mut self.jit,
-                movq rax, (bh.id());
-                pushq rax;
-            );
-        } else if let Some(block) = callsite.block_arg {
-            monoasm!( &mut self.jit,
-                movq rax, [r14 - (conv(block))];
-                pushq rax;
-            );
-        } else {
-            monoasm!( &mut self.jit,
-                xorq rax, rax;
-                pushq rax;
-            );
-        }
+        self.push_block(callsite, i + 1);
         // set self
         monoasm! { &mut self.jit,
             pushq r13;
@@ -469,14 +433,14 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn push_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
-        if let Some(func_id) = block_fid {
-            let bh = BlockHandler::from_caller(func_id, 1);
+    fn push_block(&mut self, callsite: &CallSiteInfo, i: usize) {
+        if let Some(func_id) = callsite.block_fid {
+            let bh = BlockHandler::from_caller(func_id, i);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
             );
-        } else if let Some(block) = block_arg {
+        } else if let Some(block) = callsite.block_arg {
             monoasm!( &mut self.jit,
                 pushq [r14 - (conv(block))];
             );
@@ -705,8 +669,6 @@ impl Codegen {
             recv,
             args,
             pos_num,
-            block_fid,
-            block_arg,
             ..
         } = store[callid];
         let cache = self.jit.data(std::mem::size_of::<Cache>());
@@ -754,7 +716,7 @@ impl Codegen {
             pushq [r15 + (FUNCDATA_META)];
         };
         // set block
-        self.push_block(block_fid, block_arg);
+        self.push_block(&store[callid], 1);
         // set self
         monoasm!( &mut self.jit,
             pushq [r14 - (conv(recv))];

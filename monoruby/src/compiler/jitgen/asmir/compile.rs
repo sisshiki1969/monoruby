@@ -253,8 +253,7 @@ impl Codegen {
             AsmInst::SetArguments { callid, callee_fid } => {
                 let meta = store[callee_fid].meta();
                 let offset = store[callee_fid].get_offset();
-                let args = store[callid].args;
-                self.jit_set_arguments(callid, args, offset, meta);
+                self.jit_set_arguments(callid, offset, meta);
             }
 
             AsmInst::Ret => {
@@ -341,6 +340,19 @@ impl Codegen {
                 self.return_addr_table
                     .entry(*return_addr)
                     .and_modify(|e| e.0 = Some(patch_point));
+            }
+            AsmInst::LfpForward { i } => {
+                monoasm! { &mut self.jit,
+                    movq rax, [rbx + (EXECUTOR_CFP)];
+                }
+                for _ in 0..i {
+                    monoasm! { &mut self.jit,
+                        movq rax, [rax];
+                    }
+                }
+                monoasm! { &mut self.jit,
+                    movq r14, [rax - (CFP_LFP)];
+                }
             }
             AsmInst::BinopCached {
                 callee_fid,

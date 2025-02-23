@@ -154,11 +154,10 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     vm: &mut Executor,
     globals: &Globals,
     caller: CallSiteId,
-    src: *const Value,
+    caller_lfp: Lfp,
     callee_lfp: Lfp,
     meta: Meta,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
     let caller = &globals.store[caller];
     let callee_fid = meta.func_id();
     let callee = &globals.store[callee_fid];
