@@ -781,6 +781,14 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
+    SendForwarding {
+        callid: CallSiteId,
+        i: usize,
+        recv_class: ClassId,
+        callee_fid: FuncId,
+        error: AsmError,
+        evict: AsmEvict,
+    },
     ///
     /// Send specialized method
     ///
@@ -807,7 +815,6 @@ pub(super) enum AsmInst {
     Inline(InlineProcedure),
     Yield {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
         error: AsmError,
         evict: AsmEvict,
     },

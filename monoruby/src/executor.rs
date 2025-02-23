@@ -1109,8 +1109,8 @@ impl BlockHandler {
         }
     }
 
-    pub fn from_caller(func_id: FuncId) -> Self {
-        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+    pub fn from_caller(func_id: FuncId, i: usize) -> Self {
+        let block_handler = ((u32::from(func_id) as i64) << 16) + i as i64;
         let bh = Value::integer(block_handler);
         Self::new(bh)
     }

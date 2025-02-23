@@ -771,6 +771,10 @@ impl FuncInfo {
         self.ext.name
     }
 
+    pub(crate) fn params(&self) -> &ParamsInfo {
+        &self.ext.params
+    }
+
     pub(crate) fn owner_class(&self) -> Option<ClassId> {
         self.ext.class_id
     }

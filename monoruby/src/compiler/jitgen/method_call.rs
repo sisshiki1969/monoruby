@@ -244,7 +244,7 @@ impl JitContext {
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let evict = match store[fid].kind {
+        match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);
                 assert!(!callsite.kw_may_exists());
@@ -303,28 +303,8 @@ impl JitContext {
                 bbctx.rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
-            FuncKind::Builtin { .. } => {
-                let evict = ir.new_evict();
-                if let Some((id, i)) = self.forwarding_info
-                    && forwarding
-                {
-                    #[cfg(feature = "jit-log")]
-                    eprintln!(
-                        "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
-                        self.specialize_level(),
-                        store.func_description(store[self.iseq_id()].func_id()),
-                        recv_class.get_name_id(store),
-                        store.func_description(fid),
-                        &store[id]
-                    );
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
-                } else {
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
-                }
-                evict
-            }
+            FuncKind::Builtin { .. } => {}
             FuncKind::ISeq(iseq_id) => {
-                let evict = ir.new_evict();
                 if block_fid.is_some() || store[iseq_id].params.forwarding() {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
@@ -334,7 +314,7 @@ impl JitContext {
                         JitType::Specialized(_) => None,
                         _ => Some(self.label()),
                     };
-                    let forwaring_info = if let Some((id, i)) = self.forwarding_info {
+                    let forwarding_info = if let Some((id, i)) = self.forwarding_info {
                         if forwarding {
                             Some((id, i + 1))
                         } else {
@@ -354,41 +334,33 @@ impl JitContext {
                         recv_class,
                         patch_point,
                         block_info,
-                        forwaring_info,
+                        forwarding_info,
                     );
-                    self.send_specialized(
-                        bbctx,
-                        ir,
-                        store,
-                        callsite,
-                        fid,
-                        entry,
-                        patch_point,
-                        evict,
-                    );
-                } else if let Some((id, i)) = self.forwarding_info
-                    && forwarding
-                {
-                    #[cfg(feature = "jit-log")]
-                    eprintln!(
-                        "FORWARD [{}] {}->{:?}:{} ({i}) {:?}",
-                        self.specialize_level(),
-                        store.func_description(store[self.iseq_id()].func_id()),
-                        recv_class.get_name_id(store),
-                        store.func_description(fid),
-                        &store[id]
-                    );
+                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, patch_point);
 
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
-                } else {
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
+                    return CompileResult::Continue;
                 }
-                evict
             }
         };
-        bbctx.rax2acc(ir, dst);
-        bbctx.immediate_evict(ir, evict);
-        bbctx.unset_class_version_guard();
+
+        if let Some((id, i)) = self.forwarding_info
+            && forwarding
+        {
+            #[cfg(feature = "jit-log")]
+            eprintln!(
+                "FORWARD [{}] {}->{:?}:{} ({i})\n{:?}\n{:?}",
+                self.specialize_level(),
+                store.func_description(store[self.iseq_id()].func_id()),
+                recv_class.get_name_id(store),
+                store.func_description(fid),
+                &store[id],
+                store[fid].params(),
+            );
+            self.send_forwarding(bbctx, ir, store, callsite, 1, callsite.dst, fid, recv_class);
+        } else {
+            self.send(bbctx, ir, store, callsite, fid, recv_class);
+        }
+
         CompileResult::Continue
     }
 
@@ -430,6 +402,42 @@ impl JitContext {
         entry
     }
 
+    fn send_prep(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        callsite: &CallSiteInfo,
+        callee_fid: FuncId,
+    ) -> (UsingXmm, AsmError, AsmEvict) {
+        let evict = ir.new_evict();
+        ir.reg_move(GP::Rdi, GP::R13);
+        bbctx.exec_gc(ir);
+        let using_xmm = bbctx.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        bbctx.discard(callsite.dst);
+        bbctx.clear_above_next_sp();
+        let error = bbctx.new_error(ir);
+        bbctx.writeback_acc(ir);
+        (using_xmm, error, evict)
+    }
+
+    fn send_finish(
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        using_xmm: UsingXmm,
+        error: AsmError,
+        evict: AsmEvict,
+    ) {
+        ir.xmm_restore(using_xmm);
+        ir.handle_error(error);
+        bbctx.rax2acc(ir, dst);
+        bbctx.immediate_evict(ir, evict);
+        bbctx.unset_class_version_guard();
+    }
+
     ///
     /// ### in
     /// rdi: receiver: Value
@@ -442,17 +450,8 @@ impl JitContext {
         callsite: &CallSiteInfo,
         callee_fid: FuncId,
         recv_class: ClassId,
-        evict: AsmEvict,
     ) {
-        ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir);
-        let using_xmm = bbctx.get_using_xmm();
-        ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
-        bbctx.discard(callsite.dst);
-        bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
-        bbctx.writeback_acc(ir);
+        let (using_xmm, error, evict) = self.send_prep(bbctx, ir, store, callsite, callee_fid);
         ir.push(AsmInst::Send {
             callid: callsite.id,
             callee_fid,
@@ -460,8 +459,47 @@ impl JitContext {
             error,
             evict,
         });
+        Self::send_finish(bbctx, ir, callsite.dst, using_xmm, error, evict);
+    }
+
+    ///
+    /// ### in
+    /// rdi: receiver: Value
+    ///
+    fn send_forwarding(
+        &mut self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        store: &Store,
+        callsite: &CallSiteInfo,
+        i: usize,
+        dst: Option<SlotId>,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+    ) {
+        let evict = ir.new_evict();
+        ir.reg_move(GP::Rdi, GP::R13);
+        bbctx.exec_gc(ir);
+        let using_xmm = bbctx.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        bbctx.set_arguments(store, ir, callsite, callee_fid);
+        bbctx.discard(dst);
+        bbctx.clear_above_next_sp();
+        let error = bbctx.new_error(ir);
+        bbctx.writeback_acc(ir);
+        ir.push(AsmInst::SendForwarding {
+            callid: callsite.id,
+            i,
+            callee_fid,
+            recv_class,
+            error,
+            evict,
+        });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
+        bbctx.rax2acc(ir, dst);
+        bbctx.immediate_evict(ir, evict);
+        bbctx.unset_class_version_guard();
     }
 
     ///
@@ -477,17 +515,8 @@ impl JitContext {
         callee_fid: FuncId,
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
-        evict: AsmEvict,
     ) {
-        ir.reg_move(GP::Rdi, GP::R13);
-        bbctx.exec_gc(ir);
-        let using_xmm = bbctx.get_using_xmm();
-        ir.xmm_save(using_xmm);
-        bbctx.set_arguments(store, ir, callsite, callee_fid);
-        bbctx.discard(callsite.dst);
-        bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
-        bbctx.writeback_acc(ir);
+        let (using_xmm, error, evict) = self.send_prep(bbctx, ir, store, callsite, callee_fid);
         ir.push(AsmInst::SendSpecialized {
             callid: callsite.id,
             callee_fid,
@@ -496,8 +525,7 @@ impl JitContext {
             error,
             evict,
         });
-        ir.xmm_restore(using_xmm);
-        ir.handle_error(error);
+        Self::send_finish(bbctx, ir, callsite.dst, using_xmm, error, evict);
     }
 
     fn inline_asm(
@@ -530,15 +558,13 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         let error = self.new_error(ir);
         let evict = ir.new_evict();
+        ir.xmm_save(using_xmm);
         ir.push(AsmInst::Yield {
             callid,
-            using_xmm,
             error,
             evict,
         });
-        self.rax2acc(ir, dst);
-        self.immediate_evict(ir, evict);
-        self.unset_class_version_guard();
+        JitContext::send_finish(self, ir, dst, using_xmm, error, evict);
     }
 
     fn immediate_evict(&self, ir: &mut AsmIr, evict: AsmEvict) {

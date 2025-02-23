@@ -361,6 +361,19 @@ impl Codegen {
                 let return_addr = self.gen_send(store, callid, callee_fid, recv_class, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
+            AsmInst::SendForwarding {
+                callid,
+                i,
+                callee_fid,
+                recv_class,
+                error,
+                evict,
+            } => {
+                let error = labels[error];
+                let return_addr =
+                    self.gen_send_forwarding(store, callid, i, callee_fid, recv_class, error);
+                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+            }
             AsmInst::SendSpecialized {
                 callid,
                 callee_fid,
@@ -395,12 +408,11 @@ impl Codegen {
             }*/
             AsmInst::Yield {
                 callid,
-                using_xmm,
                 error,
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.gen_yield(store, callid, using_xmm, error);
+                let return_addr = self.gen_yield(store, callid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::YieldSpecialized {

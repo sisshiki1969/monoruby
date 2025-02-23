@@ -162,6 +162,23 @@ impl Codegen {
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
+    pub(super) fn gen_send_forwarding(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        i: usize,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+        error: DestLabel,
+    ) -> CodePtr {
+        let caller = &store[callid];
+        let callee = &store[callee_fid];
+        let (meta, codeptr, pc) = callee.get_data();
+        self.setup_method_frame_forwarding(meta, caller, i);
+        self.setup_keyword_args(callid, caller, callee, error);
+        self.do_call(store, callee, codeptr, recv_class, pc)
+    }
+
     ///
     /// ### in
     /// rdi: numer of args.
@@ -217,10 +234,8 @@ impl Codegen {
         &mut self,
         store: &Store,
         callid: CallSiteId,
-        using_xmm: UsingXmm,
         error: DestLabel,
     ) -> CodePtr {
-        self.xmm_save(using_xmm);
         self.get_proc_data();
         self.handle_error(error);
         // rax <- outer, rdx <- FuncId
@@ -250,10 +265,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        let return_addr = self.generic_call(callid, store[callid].args, error);
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        return_addr
+        self.generic_call(callid, store[callid].args, error)
     }
 
     pub(super) fn gen_yield_specialized(
@@ -294,7 +306,42 @@ impl Codegen {
         }
         // set block
         if let Some(func_id) = callsite.block_fid {
-            let bh = BlockHandler::from_caller(func_id);
+            let bh = BlockHandler::from_caller(func_id, 1);
+            monoasm!( &mut self.jit,
+                movq rax, (bh.id());
+                pushq rax;
+            );
+        } else if let Some(block) = callsite.block_arg {
+            monoasm!( &mut self.jit,
+                movq rax, [r14 - (conv(block))];
+                pushq rax;
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                xorq rax, rax;
+                pushq rax;
+            );
+        }
+        // set self
+        monoasm! { &mut self.jit,
+            pushq r13;
+            addq rsp, 64;
+        }
+    }
+
+    fn setup_method_frame_forwarding(&mut self, meta: Meta, callsite: &CallSiteInfo, i: usize) {
+        monoasm! { &mut self.jit,
+            subq rsp, 32;
+            // set outer
+            xorq rax, rax;
+            pushq rax;
+            // set meta.
+            movq rax, (meta.get());
+            pushq rax;
+        }
+        // set block
+        if let Some(func_id) = callsite.block_fid {
+            let bh = BlockHandler::from_caller(func_id, i);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
@@ -429,7 +476,7 @@ impl Codegen {
     ///
     fn push_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
         if let Some(func_id) = block_fid {
-            let bh = BlockHandler::from_caller(func_id);
+            let bh = BlockHandler::from_caller(func_id, 1);
             monoasm!( &mut self.jit,
                 movq rax, (bh.id());
                 pushq rax;
