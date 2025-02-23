@@ -304,14 +304,7 @@ pub(super) extern "C" fn vm_handle_arguments(
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments(
-        globals,
-        callee_lfp,
-        caller_lfp,
-        callid,
-        src,
-        globals.store[callid].pos_num,
-    ) {
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::nil())
@@ -331,14 +324,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callid: CallSiteId,
 ) -> Option<Value> {
     let caller_lfp = vm.cfp().lfp();
-    match set_frame_arguments(
-        globals,
-        callee_lfp,
-        caller_lfp,
-        callid,
-        src,
-        globals.store[callid].pos_num,
-    ) {
+    match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
