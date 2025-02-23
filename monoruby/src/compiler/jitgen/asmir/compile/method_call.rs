@@ -230,12 +230,7 @@ impl Codegen {
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
 
-    pub(super) fn gen_yield(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
-        error: DestLabel,
-    ) -> CodePtr {
+    pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: DestLabel) -> CodePtr {
         self.get_proc_data();
         self.handle_error(error);
         // rax <- outer, rdx <- FuncId
@@ -265,7 +260,7 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        self.generic_call(callid, store[callid].args, error)
+        self.generic_call(callid, error)
     }
 
     pub(super) fn gen_yield_specialized(
@@ -587,10 +582,9 @@ impl Codegen {
     /// ### out
     /// - rax: return value
     ///
-    fn generic_call(&mut self, callid: CallSiteId, args: SlotId, error: DestLabel) -> CodePtr {
+    fn generic_call(&mut self, callid: CallSiteId, error: DestLabel) -> CodePtr {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (conv(args))];
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
         self.handle_error(error);
@@ -772,7 +766,6 @@ impl Codegen {
         } else {
             monoasm! { &mut self.jit,
                 movl r8, (callid.get()); // CallSiteId
-                lea  rdx, [r14 - (conv(args))];
             }
             self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send_splat);
             self.handle_error(error);
@@ -882,7 +875,6 @@ impl Codegen {
             call rax;
             jmp  error;
         not_simple:
-            lea  rdx, [r14 - (conv(args))];
             movl r8, (callid.get()); // CallSiteId
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send);

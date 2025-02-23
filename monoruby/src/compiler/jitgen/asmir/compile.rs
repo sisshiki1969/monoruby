@@ -412,7 +412,7 @@ impl Codegen {
                 evict,
             } => {
                 let error = labels[error];
-                let return_addr = self.gen_yield(store, callid, error);
+                let return_addr = self.gen_yield(callid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
             }
             AsmInst::YieldSpecialized {
