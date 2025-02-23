@@ -896,7 +896,6 @@ impl Codegen {
     ///
     /// ### in
     /// - r15: &FuncData
-    /// - rdx: src: *const Value
     /// - r8: CallsiteId
     ///
     /// ### out
@@ -907,13 +906,7 @@ impl Codegen {
     ///
     fn generic_handle_arguments(
         &mut self,
-        f: extern "C" fn(
-            &mut Executor,
-            &mut Globals,
-            *const Value,
-            Lfp,
-            CallSiteId,
-        ) -> Option<Value>,
+        f: extern "C" fn(&mut Executor, &mut Globals, Lfp, Lfp, CallSiteId) -> Option<Value>,
     ) {
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
@@ -928,10 +921,11 @@ impl Codegen {
             movq rsi, r12;
             // rdi: &mut Executor
             // rsi: &mut Globals
-            // rdx: src: *const Value
+            // rdx: caller LFP
             // rcx: callee LFP
             // r8: CallsiteId
             movq rax, (f);
+            movq rdx, r14;
             call rax;
             popq rdi;
             addq rsp, rdi;

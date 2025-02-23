@@ -299,11 +299,10 @@ pub(crate) extern "C" fn create_array(src: *mut Value, len: usize) -> Value {
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
-    src: *const Value,
+    caller_lfp: Lfp,
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => {
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
@@ -319,11 +318,10 @@ pub(super) extern "C" fn vm_handle_arguments(
 pub(super) extern "C" fn jit_handle_arguments_no_block(
     vm: &mut Executor,
     globals: &mut Globals,
-    src: *const Value,
+    caller_lfp: Lfp,
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
@@ -336,11 +334,11 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     vm: &mut Executor,
     globals: &mut Globals,
-    src: *const Value,
+    caller_lfp: Lfp,
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
+    let src = caller_lfp.register_ptr(globals.store[callid].args.0 as usize) as *const Value;
     match set_frame_arguments_simple(
         globals,
         callee_lfp,
@@ -360,11 +358,12 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
 pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     vm: &mut Executor,
     globals: &mut Globals,
-    src: *const Value,
+    caller_lfp: Lfp,
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
     assert_eq!(globals.store[callid].pos_num, 1);
+    let src = caller_lfp.register_ptr(globals.store[callid].args.0 as usize) as _;
     match set_frame_arguments_send_splat(globals, callee_lfp, src) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
