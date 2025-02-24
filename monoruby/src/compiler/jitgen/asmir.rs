@@ -147,6 +147,10 @@ impl AsmIr {
         }
     }
 
+    pub(super) fn int2reg(&mut self, i: i32, r: GP) {
+        self.push(AsmInst::I32ToReg(i, r));
+    }
+
     pub(super) fn reg_add(&mut self, r: GP, i: i32) {
         self.push(AsmInst::RegAdd(r, i));
     }
@@ -797,6 +801,7 @@ pub(super) enum AsmInst {
     ///
     SendSpecialized {
         callid: CallSiteId,
+        forwarded: bool,
         callee_fid: FuncId,
         entry: JitLabel,
         patch_point: Option<JitLabel>,

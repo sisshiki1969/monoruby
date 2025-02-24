@@ -3,11 +3,11 @@ def d(...)
 end
 
 def f(...)
-  g(1,2,...)
+  g(2,...)
 end
 
-def g(*a,**b,&c)
-  puts "#{a} #{b} #{c}"
+def g(*x,a:nil)
+  puts "#{x} #{a}"
 end
 
-30.times { d(10,a:5) }
+25.times { d(10,11,a:5) }

@@ -376,6 +376,7 @@ impl Codegen {
             }
             AsmInst::SendSpecialized {
                 callid,
+                forwarded,
                 callee_fid,
                 entry,
                 patch_point,
@@ -388,6 +389,7 @@ impl Codegen {
                 let return_addr = self.gen_send_specialized(
                     store,
                     callid,
+                    forwarded,
                     callee_fid,
                     entry_label,
                     patch_point,

@@ -196,7 +196,13 @@ impl JitContext {
         bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(ir, store, &store[callid], store[block_iseq].func_id());
+        bbctx.set_arguments(
+            ir,
+            store,
+            &store[callid],
+            store[block_iseq].func_id(),
+            false,
+        );
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
@@ -306,9 +312,25 @@ impl JitContext {
             FuncKind::Builtin { .. } => {}
             FuncKind::ISeq(iseq_id) => {
                 let params = &store[iseq_id].params;
-                if (params.forwarding() && params.pos_num() != 1)
-                    && (block_fid.is_some() || params.forwarding())
-                {
+                let callee_forwarding = params.forwarding() && params.pos_num() == 1;
+
+                if let Some((id, i)) = self.forwarding_info {
+                    if forwarding && !callee_forwarding {
+                        self.send_forwarding(
+                            bbctx,
+                            ir,
+                            store,
+                            &store[id],
+                            i,
+                            callsite.dst,
+                            fid,
+                            recv_class,
+                        );
+                        return CompileResult::Continue;
+                    }
+                }
+
+                if block_fid.is_some() || callee_forwarding {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
                         self_class: self.self_class(),
@@ -319,18 +341,29 @@ impl JitContext {
                     };
                     let forwarding_info = if let Some((id, i)) = self.forwarding_info {
                         if forwarding {
+                            assert!(callee_forwarding);
                             Some((id, i + 1))
                         } else {
                             None
                         }
                     } else {
-                        if params.forwarding() {
+                        if callee_forwarding {
                             Some((callsite.id, 1))
                         } else {
                             None
                         }
                     };
-
+                    let forwarded = forwarding_info.is_some();
+                    #[cfg(feature = "jit-log")]
+                    eprintln!(
+                        "SPECIALIZED[{}] {}->{:?}:{}\n  {:?}\n  {:?}",
+                        self.specialize_level(),
+                        store.func_description(store[self.iseq_id()].func_id()),
+                        recv_class.get_name_id(store),
+                        store.func_description(fid),
+                        callsite,
+                        store[fid].params(),
+                    );
                     let entry = self.compile_specialized_method(
                         store,
                         iseq_id,
@@ -339,40 +372,22 @@ impl JitContext {
                         block_info,
                         forwarding_info,
                     );
-                    self.send_specialized(bbctx, ir, store, callsite, fid, entry, patch_point);
-
+                    self.send_specialized(
+                        bbctx,
+                        ir,
+                        store,
+                        callsite,
+                        forwarded,
+                        fid,
+                        entry,
+                        patch_point,
+                    );
                     return CompileResult::Continue;
                 }
             }
         };
 
-        if let Some((id, i)) = self.forwarding_info
-            && forwarding
-        {
-            #[cfg(feature = "jit-log")]
-            eprintln!(
-                "FORWARD [{}] {}->{:?}:{} ({i})\n{:?}\n{:?}",
-                self.specialize_level(),
-                store.func_description(store[self.iseq_id()].func_id()),
-                recv_class.get_name_id(store),
-                store.func_description(fid),
-                &store[id],
-                store[fid].params(),
-            );
-            self.send_forwarding(
-                bbctx,
-                ir,
-                store,
-                &store[id],
-                i,
-                callsite.dst,
-                fid,
-                recv_class,
-            );
-        } else {
-            self.send(bbctx, ir, store, callsite, fid, recv_class);
-        }
-
+        self.send(bbctx, ir, store, callsite, fid, recv_class);
         CompileResult::Continue
     }
 
@@ -427,7 +442,7 @@ impl JitContext {
         bbctx.exec_gc(ir);
         let using_xmm = bbctx.get_using_xmm();
         ir.xmm_save(using_xmm);
-        bbctx.set_arguments(ir, store, callsite, callee_fid);
+        bbctx.set_arguments(ir, store, callsite, callee_fid, false);
         bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
@@ -490,6 +505,20 @@ impl JitContext {
         callee_fid: FuncId,
         recv_class: ClassId,
     ) {
+        #[cfg(feature = "jit-log")]
+        {
+            let params = store[callee_fid].params();
+            eprintln!(
+                "FORWARD[{}] {}->{:?}:{} \n  idx:{i} {:?}\n  {:?}",
+                self.specialize_level(),
+                store.func_description(store[self.iseq_id()].func_id()),
+                recv_class.get_name_id(store),
+                store.func_description(callee_fid),
+                callsite,
+                params,
+            );
+        }
+
         let evict = ir.new_evict();
         ir.reg_move(GP::Rdi, GP::R13);
         bbctx.exec_gc(ir);
@@ -526,13 +555,24 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callsite: &CallSiteInfo,
+        forwarded: bool,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
     ) {
-        let (using_xmm, error, evict) = self.send_prep(bbctx, ir, store, callsite, callee_fid);
+        let evict = ir.new_evict();
+        ir.reg_move(GP::Rdi, GP::R13);
+        bbctx.exec_gc(ir);
+        let using_xmm = bbctx.get_using_xmm();
+        ir.xmm_save(using_xmm);
+        bbctx.set_arguments(ir, store, callsite, callee_fid, forwarded);
+        bbctx.discard(callsite.dst);
+        bbctx.clear_above_next_sp();
+        let error = bbctx.new_error(ir);
+        bbctx.writeback_acc(ir);
         ir.push(AsmInst::SendSpecialized {
             callid: callsite.id,
+            forwarded,
             callee_fid,
             entry: inlined_entry,
             patch_point,
@@ -621,6 +661,7 @@ impl BBContext {
         store: &Store,
         callsite: &CallSiteInfo,
         callee_fid: FuncId,
+        forwarded: bool,
     ) {
         let callee = &store[callee_fid];
         let args = callsite.args;
@@ -656,7 +697,18 @@ impl BBContext {
             ir.reg_add(GP::Rsp, ofs);
         } else {
             self.write_back_args(ir, callsite);
-
+            if forwarded {
+                assert_eq!(0, callee.params().reqopt_num());
+                assert_eq!(1, callee.params().pos_num());
+                assert!(callee.params().kw_names.is_empty());
+                assert_eq!(Some(SlotId(2)), callee.params().kw_rest);
+                assert!(callee.params().forwarding());
+                //    ir.int2reg(NIL_VALUE as i32, GP::Rax);
+                //    let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 0) as i32);
+                //    ir.reg2rsp_offset(GP::Rax, offset);
+                //    let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 1) as i32);
+                //    ir.reg2rsp_offset(GP::Rax, offset);
+            }
             let error = self.new_error(ir);
             ir.push(AsmInst::SetArguments {
                 callid: callsite.id,
@@ -734,7 +786,7 @@ impl BBContext {
 
     fn fill_opt(ir: &mut AsmIr, start: usize, end: usize, ofs: i32) {
         if start < end {
-            ir.push(AsmInst::I32ToReg(0, GP::Rax));
+            ir.int2reg(0, GP::Rax);
             for i in start..end {
                 let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
                 ir.reg2rsp_offset(GP::Rax, offset);

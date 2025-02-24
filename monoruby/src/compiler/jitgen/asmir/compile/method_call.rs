@@ -165,6 +165,7 @@ impl Codegen {
         &mut self,
         store: &Store,
         callid: CallSiteId,
+        forwarded: bool,
         callee_fid: FuncId,
         entry_label: DestLabel,
         patch_point: Option<DestLabel>,
@@ -491,6 +492,7 @@ impl Codegen {
             movl rdx, (callid.get());
             movq rcx, (meta.get());
             lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
+            movq r9, r14;
             subq rsp, (offset);
             movq rax, (jit_handle_hash_splat_kw_rest);
             call rax;
@@ -540,8 +542,8 @@ extern "C" fn jit_handle_hash_splat_kw_rest(
     callid: CallSiteId,
     meta: Meta,
     callee_lfp: Lfp,
+    caller_lfp: Lfp,
 ) -> Option<Value> {
-    let caller_lfp = vm.cfp().lfp();
     match runtime::jit_hash_splat_kw_rest(globals, callid, callee_lfp, caller_lfp, meta) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {

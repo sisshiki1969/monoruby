@@ -37,7 +37,7 @@ pub struct JitContext {
     ///
     block_info: Option<method_call::JitBlockInfo>,
     ///
-    /// If the method has argumrnts forwarding, hold callee's *CallsiteId* (for specialized call).
+    /// If the method has argumrnts forwarding, hold callee's *CallsiteId* and nest index (for specialized call).
     ///
     pub(super) forwarding_info: Option<(CallSiteId, usize)>,
     ///
