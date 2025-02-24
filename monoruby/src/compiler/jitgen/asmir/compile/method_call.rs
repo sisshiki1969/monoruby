@@ -144,26 +144,6 @@ impl Codegen {
         &mut self,
         store: &Store,
         callid: CallSiteId,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        error: DestLabel,
-    ) -> CodePtr {
-        let caller = &store[callid];
-        let callee = &store[callee_fid];
-        let (meta, codeptr, pc) = callee.get_data();
-        self.setup_method_frame(meta, caller);
-        self.setup_keyword_args(callid, caller, callee, error);
-        self.do_call(store, callee, codeptr, recv_class, pc)
-    }
-
-    ///
-    /// ### in
-    /// - r13: receiver: Value.
-    ///
-    pub(super) fn gen_send_forwarding(
-        &mut self,
-        store: &Store,
-        callid: CallSiteId,
         i: usize,
         callee_fid: FuncId,
         recv_class: ClassId,
@@ -172,7 +152,7 @@ impl Codegen {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
-        self.setup_method_frame_forwarding(meta, caller, i);
+        self.setup_method_frame(meta, caller, i);
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
@@ -193,7 +173,7 @@ impl Codegen {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let meta = callee.meta();
-        self.setup_method_frame(meta, caller);
+        self.setup_method_frame(meta, caller, 0);
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_specialized_call(entry_label, patch_point)
     }
@@ -287,25 +267,7 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn setup_method_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
-        monoasm! { &mut self.jit,
-            subq rsp, 32;
-            // set outer
-            xorq rax, rax;
-            pushq rax;
-            // set meta.
-            movq rax, (meta.get());
-            pushq rax;
-        }
-        self.push_block(callsite, 1);
-        // set self
-        monoasm! { &mut self.jit,
-            pushq r13;
-            addq rsp, 64;
-        }
-    }
-
-    fn setup_method_frame_forwarding(&mut self, meta: Meta, callsite: &CallSiteInfo, i: usize) {
+    fn setup_method_frame(&mut self, meta: Meta, callsite: &CallSiteInfo, i: usize) {
         monoasm! { &mut self.jit,
             subq rsp, 32;
             // set outer
@@ -368,9 +330,9 @@ impl Codegen {
         callee: &FuncInfo,
         error: DestLabel,
     ) {
-        let meta = callee.meta();
         self.copy_keyword_args(caller, callee);
-        if callee.kw_rest().is_some() || !caller.hash_splat_pos.is_empty() {
+        if callee.kw_rest().is_some() || caller.has_hash_splat() {
+            let meta = callee.meta();
             let offset = callee.get_offset();
             self.handle_hash_splat_kw_rest(callid, meta, offset, error);
         }

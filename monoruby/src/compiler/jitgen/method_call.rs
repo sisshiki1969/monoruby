@@ -306,7 +306,9 @@ impl JitContext {
             FuncKind::Builtin { .. } => {}
             FuncKind::ISeq(iseq_id) => {
                 let params = &store[iseq_id].params;
-                if block_fid.is_some() || params.forwarding() {
+                if (params.forwarding() && params.pos_num() != 1)
+                    && (block_fid.is_some() || params.forwarding())
+                {
                     let block_info = block_fid.map(|fid| JitBlockInfo {
                         func_id: fid,
                         self_class: self.self_class(),
@@ -465,6 +467,7 @@ impl JitContext {
         ir.push(AsmInst::Send {
             callid: callsite.id,
             callee_fid,
+            i: 0,
             recv_class,
             error,
             evict,
@@ -498,7 +501,7 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = bbctx.new_error(ir);
         bbctx.writeback_acc(ir);
-        ir.push(AsmInst::SendForwarding {
+        ir.push(AsmInst::Send {
             callid: callsite.id,
             i,
             callee_fid,
@@ -601,7 +604,7 @@ impl BBContext {
         let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
         let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
         !callsite.has_splat()
-            && !callsite.has_hash_splat()
+            //&& !callsite.has_hash_splat()
             && !ex_positional
             && !single_arg_expand
             && !callee.is_rest()
@@ -639,14 +642,15 @@ impl BBContext {
                 } else {
                     0
                 };
-
             ir.reg_sub(GP::Rsp, ofs);
+
+            // fill positional arguments
             for i in 0..pos_num {
                 let reg = args + i;
                 let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, offset);
             }
-
+            // fill optional parameters with None.
             Self::fill_opt(ir, pos_num, callee.max_positional_args(), ofs);
 
             ir.reg_add(GP::Rsp, ofs);

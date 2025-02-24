@@ -776,13 +776,6 @@ pub(super) enum AsmInst {
     ///
     Send {
         callid: CallSiteId,
-        recv_class: ClassId,
-        callee_fid: FuncId,
-        error: AsmError,
-        evict: AsmEvict,
-    },
-    SendForwarding {
-        callid: CallSiteId,
         i: usize,
         recv_class: ClassId,
         callee_fid: FuncId,
