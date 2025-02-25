@@ -309,7 +309,23 @@ impl JitContext {
                 bbctx.rax2acc(ir, dst);
                 return CompileResult::Continue;
             }
-            FuncKind::Builtin { .. } => {}
+            FuncKind::Builtin { .. } => {
+                if let Some((id, i)) = self.forwarding_info
+                    && forwarding
+                {
+                    self.send_forwarding(
+                        bbctx,
+                        ir,
+                        store,
+                        &store[id],
+                        i,
+                        callsite.dst,
+                        fid,
+                        recv_class,
+                    );
+                    return CompileResult::Continue;
+                }
+            }
             FuncKind::ISeq(iseq_id) => {
                 let params = &store[iseq_id].params;
                 let callee_forwarding = params.forwarding() && params.pos_num() == 1;
@@ -494,6 +510,10 @@ impl JitContext {
     /// ### in
     /// rdi: receiver: Value
     ///
+    /// - self.forwarding_info.is_some()
+    /// - forwarding
+    /// - !callee_forwarding
+    ///  
     fn send_forwarding(
         &mut self,
         bbctx: &mut BBContext,
@@ -555,6 +575,7 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callsite: &CallSiteInfo,
+        // whether the callee is *forwarded*
         forwarded: bool,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
@@ -668,7 +689,19 @@ impl BBContext {
         let pos_num = callsite.pos_num;
         let kw_pos = callsite.kw_pos;
         let kw_num = callsite.kw_len();
-        if Self::is_simple(callee, callsite) {
+        if forwarded {
+            self.write_back_args(ir, callsite);
+            assert_eq!(0, callee.params().reqopt_num());
+            assert_eq!(1, callee.params().pos_num());
+            assert!(callee.params().kw_names.is_empty());
+            assert_eq!(Some(SlotId(2)), callee.params().kw_rest);
+            assert!(callee.params().forwarding());
+            ir.int2reg(NIL_VALUE as i32, GP::Rax);
+            let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 0) as i32);
+            ir.reg2rsp_offset(GP::Rax, offset);
+            let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 1) as i32);
+            ir.reg2rsp_offset(GP::Rax, offset);
+        } else if Self::is_simple(callee, callsite) {
             // write back keyword arguments.
             for arg in kw_pos..kw_pos + kw_num {
                 self.write_back_slot(ir, arg);
@@ -697,18 +730,6 @@ impl BBContext {
             ir.reg_add(GP::Rsp, ofs);
         } else {
             self.write_back_args(ir, callsite);
-            if forwarded {
-                assert_eq!(0, callee.params().reqopt_num());
-                assert_eq!(1, callee.params().pos_num());
-                assert!(callee.params().kw_names.is_empty());
-                assert_eq!(Some(SlotId(2)), callee.params().kw_rest);
-                assert!(callee.params().forwarding());
-                //    ir.int2reg(NIL_VALUE as i32, GP::Rax);
-                //    let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 0) as i32);
-                //    ir.reg2rsp_offset(GP::Rax, offset);
-                //    let offset = -(RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * 1) as i32);
-                //    ir.reg2rsp_offset(GP::Rax, offset);
-            }
             let error = self.new_error(ir);
             ir.push(AsmInst::SetArguments {
                 callid: callsite.id,
@@ -720,6 +741,11 @@ impl BBContext {
 
     ///
     /// Set positional arguments for callee.
+    ///
+    /// ex. f(...) -> def f(x)
+    /// - self.forwarding_info.is_some()
+    /// - forwarding
+    /// - !callee_forwarding
     ///
     fn set_arguments_forwarding(
         &self,
