@@ -778,13 +778,15 @@ pub(super) extern "C" fn handle_error(
     let func_info = &globals.store[meta.func_id()];
     match &func_info.kind {
         FuncKind::ISeq(info) => {
+            let bc_base = globals.store[*info].get_top_pc();
+            let pc = pc - bc_base;
             // check exception table.
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
             let info = &globals.store[*info];
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
-                    ErrorReturn::goto(ensure)
+                    ErrorReturn::goto(bc_base + ensure)
                 } else if lfp == *target_lfp {
                     let val = *val;
                     vm.take_error();
@@ -793,9 +795,8 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
-            let bc_base = func_info.pc();
             let sourceinfo = info.sourceinfo.clone();
-            let loc = info.sourcemap[pc - bc_base];
+            let loc = info.sourcemap[pc.0 as usize];
             vm.push_error_location(loc, sourceinfo);
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err_val = vm.take_ex_obj(globals);
@@ -803,7 +804,7 @@ pub(super) extern "C" fn handle_error(
                 if let Some(err_reg) = err_reg {
                     unsafe { lfp.set_register(err_reg.0 as _, Some(err_val)) };
                 }
-                return ErrorReturn::goto(rescue);
+                return ErrorReturn::goto(bc_base + rescue);
             }
         }
         FuncKind::Builtin { .. } => {}

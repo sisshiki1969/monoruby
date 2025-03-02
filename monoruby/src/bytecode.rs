@@ -203,7 +203,7 @@ impl BytecodePtrBase {
         Self(std::ptr::NonNull::from(bc))
     }
 
-    fn as_ptr(&self) -> *mut Bytecode {
+    pub fn as_ptr(&self) -> *mut Bytecode {
         self.0.as_ptr()
     }
 }
@@ -216,20 +216,11 @@ impl BytecodePtrBase {
 pub(crate) struct BytecodePtr(std::ptr::NonNull<Bytecode>);
 
 impl std::ops::Sub<BytecodePtrBase> for BytecodePtr {
-    type Output = usize;
-    fn sub(self, rhs: BytecodePtrBase) -> usize {
+    type Output = BcIndex;
+    fn sub(self, rhs: BytecodePtrBase) -> BcIndex {
         let offset = unsafe { self.as_ptr().offset_from(rhs.as_ptr()) };
         assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
-        offset as usize
-    }
-}
-
-impl std::ops::Sub<BytecodePtr> for BytecodePtr {
-    type Output = usize;
-    fn sub(self, rhs: BytecodePtr) -> usize {
-        let offset = unsafe { self.as_ptr().offset_from(rhs.as_ptr()) };
-        assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
-        offset as usize
+        BcIndex(offset as u32)
     }
 }
 

@@ -44,7 +44,7 @@ pub(crate) struct FuncData {
     /// metadata of this function.
     meta: Meta,
     /// the address of program counter
-    pc: Option<BytecodePtr>,
+    pc: Option<BytecodePtrBase>,
     ofs: u16,
     min: u16,
     max: u16,
@@ -52,11 +52,11 @@ pub(crate) struct FuncData {
 }
 
 impl FuncData {
-    pub fn pc(&self) -> Option<BytecodePtr> {
+    pub fn pc(&self) -> Option<BytecodePtrBase> {
         self.pc
     }
 
-    pub(super) fn set_pc(&mut self, pc: BytecodePtr) {
+    pub(super) fn set_pc(&mut self, pc: BytecodePtrBase) {
         self.pc = Some(pc);
     }
 
@@ -788,13 +788,6 @@ impl FuncInfo {
     }
 
     ///
-    /// Get program counter (BcPc) of this function.
-    ///
-    pub(crate) fn pc(&self) -> BytecodePtr {
-        self.data.pc().unwrap()
-    }
-
-    ///
     /// Get code pointer (Option<CodePtr>) of this function.
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
@@ -862,7 +855,7 @@ impl FuncInfo {
     ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
-    pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtr, reg_num: u16) {
+    pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtrBase, reg_num: u16) {
         self.data.set_pc(pc);
         self.data.set_reg_num(reg_num);
     }
@@ -891,7 +884,7 @@ impl FuncInfo {
         &self.data
     }
 
-    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BytecodePtr>) {
+    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BytecodePtrBase>) {
         let meta = self.data.meta();
         let codeptr = self.data.codeptr().unwrap();
         let pc = self.data.pc();

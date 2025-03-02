@@ -375,7 +375,7 @@ impl Codegen {
         callee: &FuncInfo,
         codeptr: CodePtr,
         recv_class: ClassId,
-        pc: Option<BytecodePtr>,
+        pc: Option<BytecodePtrBase>,
     ) -> CodePtr {
         self.set_lfp();
         self.push_frame();

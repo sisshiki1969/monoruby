@@ -74,10 +74,10 @@ impl BytecodeGen {
             if rescue.is_none() && ensure.is_none() {
                 continue;
             }
-            let start = self.get_pc(info, range.start);
-            let end = self.get_pc(info, range.end);
-            let rescue = rescue.map(|l| self.get_pc(info, l));
-            let ensure = ensure.map(|l| self.get_pc(info, l));
+            let start = self[range.start];
+            let end = self[range.end];
+            let rescue = rescue.map(|l| self[l]);
+            let ensure = ensure.map(|l| self[l]);
             let err_reg = err_reg.map(|reg| self.slot_id(&reg));
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
@@ -91,10 +91,6 @@ impl BytecodeGen {
         info.bb_info = bbinfo;
         store.set_func_data(func_id);
         Ok(())
-    }
-
-    fn get_pc(&self, info: &ISeqInfo, label: Label) -> BytecodePtr {
-        info.get_pc(self[label])
     }
 
     fn ir_to_bc(&mut self, store: &mut Store) -> Result<(Vec<Bytecode>, Vec<Loc>, BasicBlockInfo)> {

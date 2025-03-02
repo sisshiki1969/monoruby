@@ -426,7 +426,7 @@ impl Store {
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
         let info = self.iseq(func_id);
         let regs = info.total_reg_num();
-        let pc = info.get_top_pc() + 0;
+        let pc = info.get_top_pc();
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
     }
 

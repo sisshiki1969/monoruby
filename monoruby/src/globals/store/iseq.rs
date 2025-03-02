@@ -12,17 +12,17 @@ use crate::{
 
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {
-    range: std::ops::Range<BytecodePtr>, // range of capturing exception
-    rescue_pc: Option<BytecodePtr>,      // rescue destination pc
-    ensure_pc: Option<BytecodePtr>,      // ensure destination pc
-    error_slot: Option<SlotId>,          // a slot where an error object is assigned
+    range: std::ops::Range<BcIndex>, // range of capturing exception
+    rescue_pc: Option<BcIndex>,      // rescue destination pc
+    ensure_pc: Option<BcIndex>,      // ensure destination pc
+    error_slot: Option<SlotId>,      // a slot where an error object is assigned
 }
 
 impl ExceptionMapEntry {
     fn new(
-        range: std::ops::Range<BytecodePtr>,
-        rescue_pc: Option<BytecodePtr>,
-        ensure_pc: Option<BytecodePtr>,
+        range: std::ops::Range<BcIndex>,
+        rescue_pc: Option<BcIndex>,
+        ensure_pc: Option<BcIndex>,
         error_slot: Option<SlotId>,
     ) -> Self {
         ExceptionMapEntry {
@@ -337,12 +337,11 @@ impl ISeqInfo {
     /// Get an instruction index(*usize*) corresponding to pc(*BytecodePtr*).
     ///
     pub(crate) fn get_pc_index(&self, pc: Option<BytecodePtr>) -> BcIndex {
-        let i = if let Some(pos) = pc {
+        if let Some(pos) = pc {
             pos - self.get_top_pc()
         } else {
-            0
-        };
-        BcIndex::from(i)
+            BcIndex::from(0)
+        }
     }
 
     pub(crate) fn get_sp(&self, i: BcIndex) -> SlotId {
@@ -367,8 +366,8 @@ impl ISeqInfo {
     ///
     pub(crate) fn get_exception_dest(
         &self,
-        pc: BytecodePtr,
-    ) -> Option<(Option<BytecodePtr>, Option<BytecodePtr>, Option<SlotId>)> {
+        pc: BcIndex,
+    ) -> Option<(Option<BcIndex>, Option<BcIndex>, Option<SlotId>)> {
         self.exception_map
             .iter()
             .filter_map(|entry| {
@@ -383,9 +382,9 @@ impl ISeqInfo {
 
     pub(crate) fn exception_push(
         &mut self,
-        range: std::ops::Range<BytecodePtr>,
-        rescue: Option<BytecodePtr>,
-        ensure: Option<BytecodePtr>,
+        range: std::ops::Range<BcIndex>,
+        rescue: Option<BcIndex>,
+        ensure: Option<BcIndex>,
         err_reg: Option<SlotId>,
     ) {
         self.exception_map
@@ -407,10 +406,10 @@ impl ISeqInfo {
         self.exception_map
             .iter()
             .map(|entry| {
-                let start = self.get_pc_index(Some(entry.range.start));
-                let end = self.get_pc_index(Some(entry.range.end));
-                let rescue = entry.rescue_pc.map(|pc| self.get_pc_index(Some(pc)));
-                let ensure = entry.ensure_pc.map(|pc| self.get_pc_index(Some(pc)));
+                let start = entry.range.start;
+                let end = entry.range.end;
+                let rescue = entry.rescue_pc;
+                let ensure = entry.ensure_pc;
                 (start..end, rescue, ensure, entry.error_slot)
             })
             .collect::<Vec<_>>()
