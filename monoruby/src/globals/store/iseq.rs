@@ -175,7 +175,7 @@ impl ISeqInfo {
             sourcemap: vec![],
             sp: vec![],
             exception_map: vec![],
-            args: args.clone(),
+            args,
             locals: IndexMap::default(),
             outer_locals,
             literals: vec![],
