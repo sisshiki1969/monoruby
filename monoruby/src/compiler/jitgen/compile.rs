@@ -208,7 +208,7 @@ impl JitContext {
         iseq: &ISeqInfo,
         bc_pos: BcIndex,
     ) -> CompileResult {
-        bbctx.set_pc(iseq.get_pc(bc_pos));
+        bbctx.set_pc(self.bytecode(bc_pos));
         bbctx.clear_above_sp();
         let trace_ir = iseq.trace_ir(store, bc_pos);
         match trace_ir {

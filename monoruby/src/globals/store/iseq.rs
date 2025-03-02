@@ -300,8 +300,16 @@ impl ISeqInfo {
     ///
     /// Get a reference of bytecode.
     ///
-    pub(crate) fn bytecode(&self) -> &[Bytecode] {
+    fn bytecode(&self) -> &[Bytecode] {
         self.bytecode.as_ref().unwrap()
+    }
+
+    ///
+    /// Get length of bytecode.
+    ///
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn bytecode_len(&self) -> usize {
+        self.bytecode.as_ref().unwrap().len()
     }
 
     ///
@@ -321,8 +329,8 @@ impl ISeqInfo {
     ///
     /// Get pc(*BytecodePtr*) for instruction index(*idx*).
     ///
-    pub(crate) fn get_top_pc(&self) -> BytecodePtr {
-        BytecodePtr::from_bc(&self.bytecode()[0])
+    pub(crate) fn get_top_pc(&self) -> BytecodePtrBase {
+        BytecodePtrBase::from_bc(&self.bytecode()[0])
     }
 
     ///

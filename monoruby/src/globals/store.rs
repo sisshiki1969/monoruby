@@ -426,7 +426,7 @@ impl Store {
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
         let info = self.iseq(func_id);
         let regs = info.total_reg_num();
-        let pc = info.get_top_pc();
+        let pc = info.get_top_pc() + 0;
         self[func_id].set_pc_regnum(pc, u16::try_from(regs).unwrap());
     }
 
@@ -505,7 +505,7 @@ impl Store {
         );
         eprintln!("{:?}", iseq.args);
         eprintln!("{:?}", iseq.get_exception_map());
-        for i in 0..iseq.bytecode().len() {
+        for i in 0..iseq.bytecode_len() {
             let bc_pos = BcIndex::from(i);
             if let Some(bbid) = iseq.bb_info.is_bb_head(bc_pos) {
                 eprintln!("  {:?}", bbid);
