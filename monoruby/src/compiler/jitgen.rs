@@ -106,6 +106,10 @@ pub(crate) struct BBContext {
     next_sp: SlotId,
     class_version_guarded: bool,
     pc: Option<BytecodePtr>,
+    ///
+    /// If the method has argumrnts forwarding, hold callee's *CallsiteId* and nest index (for specialized call).
+    ///
+    forwarding_info: Option<(CallSiteId, usize)>,
 }
 
 impl std::ops::Deref for BBContext {
@@ -129,6 +133,7 @@ impl BBContext {
             next_sp: SlotId(cc.local_num() as u16),
             class_version_guarded: false,
             pc: None,
+            forwarding_info: cc.forwarding_info.clone(),
         }
     }
 
@@ -174,7 +179,13 @@ impl BBContext {
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
-        self.slot_state.get_write_back(self.sp)
+        let (xmm, literal, r15) = self.slot_state.get_write_back(self.sp);
+        WriteBack::new(xmm, literal, r15, self.forwarding_info.clone())
+    }
+
+    pub(crate) fn get_locals_write_back(&self) -> WriteBack {
+        let (xmm, literal, r15) = self.slot_state.get_locals_write_back();
+        WriteBack::new(xmm, literal, r15, self.forwarding_info.clone())
     }
 
     pub(crate) fn rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
@@ -400,6 +411,7 @@ pub(crate) struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     r15: Option<SlotId>,
+    forwarding_info: Option<(CallSiteId, usize)>,
 }
 
 impl std::fmt::Debug for WriteBack {
@@ -426,8 +438,14 @@ impl WriteBack {
         xmm: Vec<(Xmm, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
+        forwarding_info: Option<(CallSiteId, usize)>,
     ) -> Self {
-        Self { xmm, literal, r15 }
+        Self {
+            xmm,
+            literal,
+            r15,
+            forwarding_info,
+        }
     }
 }
 
@@ -889,6 +907,9 @@ impl Codegen {
         }
         if let Some(slot) = wb.r15 {
             self.store_r15(slot);
+        }
+        if let Some((callsite, idx)) = wb.forwarding_info {
+            todo!()
         }
     }
 

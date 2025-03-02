@@ -550,10 +550,17 @@ impl SlotContext {
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
         let literal = self.wb_literal(|_| true);
-        WriteBack::new(vec![], literal, self.r15)
+        WriteBack::new(vec![], literal, self.r15, None)
     }
 
-    pub(super) fn get_write_back(&self, sp: SlotId) -> WriteBack {
+    pub(super) fn get_write_back(
+        &self,
+        sp: SlotId,
+    ) -> (
+        Vec<(Xmm, Vec<SlotId>)>,
+        Vec<(Value, SlotId)>,
+        Option<SlotId>,
+    ) {
         let f = |reg: SlotId| reg < sp;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
@@ -561,7 +568,7 @@ impl SlotContext {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15)
+        (xmm, literal, r15)
     }
 
     fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
@@ -638,7 +645,13 @@ impl SlotContext {
             .collect()
     }
 
-    fn get_locals_write_back(&self) -> WriteBack {
+    pub(super) fn get_locals_write_back(
+        &self,
+    ) -> (
+        Vec<(Xmm, Vec<SlotId>)>,
+        Vec<(Value, SlotId)>,
+        Option<SlotId>,
+    ) {
         let local_num = self.local_num;
         let f = |reg: SlotId| reg.0 as usize <= local_num;
         let xmm = self.wb_xmm(f);
@@ -647,7 +660,7 @@ impl SlotContext {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15)
+        (xmm, literal, r15)
     }
 }
 
