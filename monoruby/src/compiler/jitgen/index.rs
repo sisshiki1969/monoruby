@@ -9,7 +9,7 @@ impl BBContext {
         base: SlotId,
         idx: SlotId,
     ) {
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
         if let Some(idx) = self.is_u16_literal(idx) {
             ir.array_u16_index(idx);
@@ -28,7 +28,7 @@ impl BBContext {
         base: SlotId,
         idx: SlotId,
     ) {
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         self.fetch_array_ty(ir, store, base, GP::Rdi, deopt);
         if let Some(idx) = self.is_u16_literal(idx) {
             self.fetch(ir, src, GP::Rdx);

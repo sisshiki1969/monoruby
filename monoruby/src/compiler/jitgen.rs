@@ -233,35 +233,13 @@ impl BBContext {
         self.slot_state.write_back_acc(ir, sp);
     }
 
-    pub(crate) fn new_deopt(&self, ir: &mut AsmIr) -> AsmDeopt {
-        ir.new_deopt(self.pc(), self.get_write_back())
-    }
-
-    pub(crate) fn new_deopt_with_pc(&self, ir: &mut AsmIr, pc: BytecodePtr) -> AsmDeopt {
-        ir.new_deopt(pc, self.get_write_back())
-    }
-
-    pub(crate) fn new_error(&self, ir: &mut AsmIr) -> AsmError {
-        ir.new_error(self.pc(), self.get_write_back())
-    }
-
-    pub(super) fn deopt(&self, ir: &mut AsmIr) {
-        let exit = self.new_deopt(ir);
-        ir.push(AsmInst::Deopt(exit));
-    }
-
-    pub(super) fn check_bop(&mut self, ir: &mut AsmIr) {
-        let deopt = self.new_deopt(ir);
-        ir.push(AsmInst::CheckBOP { deopt });
-    }
-
     pub(super) fn recompile_and_deopt(
         &mut self,
         ir: &mut AsmIr,
         ctx: &JitContext,
         position: Option<BytecodePtr>,
     ) {
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         match ctx.jit_type() {
             JitType::Specialized(idx) => {
                 ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
@@ -300,7 +278,7 @@ impl BBContext {
     ///
     pub fn guard_const_base_class(&mut self, ir: &mut AsmIr, slot: SlotId, base_class: Value) {
         self.fetch(ir, slot, GP::Rax);
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         ir.inst
             .push(AsmInst::GuardConstBaseClass { base_class, deopt });
     }
@@ -312,7 +290,7 @@ impl BBContext {
 
     pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         ir.push(AsmInst::GuardConstVersion {
             const_version: *version,
             deopt,
@@ -325,61 +303,6 @@ impl BBContext {
         } else {
             self.reg2acc(ir, GP::Rax, dst);
         }
-    }
-
-    pub(super) fn block_arg(&self, ir: &mut AsmIr, ret: SlotId, outer: usize) {
-        let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
-        ir.push(AsmInst::BlockArg {
-            ret,
-            outer,
-            using_xmm,
-            error,
-        });
-    }
-
-    pub(super) fn load_svar(&mut self, ir: &mut AsmIr, id: u32) {
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::LoadSVar { id, using_xmm });
-    }
-
-    pub(super) fn concat_str(&mut self, ir: &mut AsmIr, arg: SlotId, len: u16) {
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::ConcatStr {
-            arg,
-            len,
-            using_xmm,
-        });
-    }
-
-    pub(super) fn concat_regexp(&mut self, ir: &mut AsmIr, arg: SlotId, len: u16) {
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::ConcatRegexp {
-            arg,
-            len,
-            using_xmm,
-        });
-    }
-
-    pub(super) fn expand_array(&mut self, ir: &mut AsmIr, dst: SlotId, len: u16) {
-        let using_xmm = self.get_using_xmm();
-        let len = len as _;
-        ir.push(AsmInst::ExpandArray {
-            dst,
-            len,
-            using_xmm,
-        });
-    }
-
-    pub(super) fn alias_method(&self, ir: &mut AsmIr, new: IdentId, old: IdentId) {
-        let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
-        ir.push(AsmInst::AliasMethod {
-            new,
-            old,
-            using_xmm,
-        });
-        ir.handle_error(error);
     }
 
     ///
@@ -439,7 +362,7 @@ impl BBContext {
         } else {
             self.write_back_args(ir, callsite);
 
-            let error = self.new_error(ir);
+            let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments {
                 callid: callsite.id,
                 callee_fid,
@@ -488,7 +411,7 @@ impl BBContext {
 
     pub(super) fn generic_unop(&mut self, ir: &mut AsmIr, func: UnaryOpFn) {
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         ir.push(AsmInst::GenericUnOp { func, using_xmm });
         ir.handle_error(error);
     }

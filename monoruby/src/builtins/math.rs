@@ -109,7 +109,7 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = bb.new_deopt(ir);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(dst) = dst {
         let fret = bb.xmm_write_enc(dst);
@@ -134,7 +134,7 @@ fn math_cos(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let deopt = bb.new_deopt(ir);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = dst {
         let fret = bb.xmm_write_enc(ret);
@@ -167,7 +167,7 @@ fn math_sin(
         return false;
     }
     let CallSiteInfo { args, dst: ret, .. } = *callsite;
-    let deopt = bb.new_deopt(ir);
+    let deopt = ir.new_deopt(bb);
     let fsrc = bb.fetch_float_for_xmm(ir, args, deopt).enc();
     if let Some(ret) = ret {
         let fret = bb.xmm_write_enc(ret);

@@ -1074,7 +1074,7 @@ impl BBContext {
             }
             (LinkMode::Stack, LinkMode::Stack) => {
                 if let Some(class) = guarded.class() {
-                    let deopt = self.new_deopt_with_pc(ir, pc + 1);
+                    let deopt = ir.new_deopt_with_pc(self, pc + 1);
                     self.guard_class_stack_slot(ir, slot, class, deopt);
                 }
             }

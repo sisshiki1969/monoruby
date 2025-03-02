@@ -19,7 +19,7 @@ impl BBContext {
         }
         self.discard(dst);
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         ir.push(AsmInst::ClassDef {
             base,
             superclass,
@@ -42,7 +42,7 @@ impl BBContext {
         self.write_back_slots(ir, &[base]);
         self.discard(dst);
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         ir.push(AsmInst::SingletonClassDef {
             base,
             dst,

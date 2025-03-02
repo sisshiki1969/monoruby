@@ -404,7 +404,7 @@ fn integer_shr(
         return false;
     }
     let CallSiteInfo { dst, args, .. } = *callsite;
-    let deopt = bb.new_deopt(ir);
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args) {
         ir.inline(move |gen, _, _| gen.gen_shr_imm(rhs));
     } else {
@@ -440,7 +440,7 @@ fn integer_shl(
     let CallSiteInfo {
         dst, args, recv, ..
     } = *callsite;
-    let deopt = bb.new_deopt(ir);
+    let deopt = ir.new_deopt(bb);
     if let Some(rhs) = bb.is_u8_literal(args)
         && rhs < 64
     {

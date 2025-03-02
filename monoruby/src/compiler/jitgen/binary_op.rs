@@ -25,26 +25,26 @@ impl BBContext {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_comm(ir, lhs, rhs, mode);
-                self.integer_binop(ir, kind, lhs, rhs, mode, deopt);
+                ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Sub => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_mode(ir, lhs, rhs, mode);
-                self.integer_binop(ir, kind, lhs, rhs, mode, deopt);
+                ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Exp => {
                 self.fetch_fixnum_binary(ir, GP::Rdi, GP::Rsi, mode);
-                self.integer_exp(ir);
+                ir.integer_exp(self);
                 self.reg2acc(ir, GP::Rax, dst);
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 let deopt = self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                self.integer_binop(ir, kind, lhs, rhs, mode, deopt);
+                ir.integer_binop(kind, lhs, rhs, mode, deopt);
                 self.reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem => match mode {
@@ -57,7 +57,7 @@ impl BBContext {
                     let lhs = GP::Rdi;
                     let rhs = GP::Rsi;
                     let deopt = self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                    self.integer_binop(ir, kind, lhs, rhs, mode, deopt);
+                    ir.integer_binop(kind, lhs, rhs, mode, deopt);
                     self.reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
@@ -145,7 +145,7 @@ impl BBContext {
     ) -> AsmDeopt {
         self.fetch(ir, l, lhs);
         self.fetch(ir, r, rhs);
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         self.guard_fixnum(ir, l, lhs, deopt);
         self.guard_fixnum(ir, r, rhs, deopt);
         deopt
@@ -157,7 +157,7 @@ impl BBContext {
         if self.is_fixnum_literal(l).is_some() && self.is_fixnum_literal(r).is_some() {
             return;
         }
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         self.guard_fixnum(ir, l, lhs, deopt);
         self.guard_fixnum(ir, r, rhs, deopt);
     }
@@ -165,10 +165,10 @@ impl BBContext {
     fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) -> AsmDeopt {
         if self.is_fixnum_literal(slot).is_some() {
             self.fetch(ir, slot, r);
-            self.new_deopt(ir)
+            ir.new_deopt(self)
         } else {
             self.fetch(ir, slot, r);
-            let deopt = self.new_deopt(ir);
+            let deopt = ir.new_deopt(self);
             self.guard_fixnum(ir, slot, r, deopt);
             deopt
         }
@@ -179,7 +179,7 @@ impl BBContext {
             self.fetch(ir, slot, r);
         } else {
             self.fetch(ir, slot, r);
-            let deopt = self.new_deopt(ir);
+            let deopt = ir.new_deopt(self);
             self.guard_fixnum(ir, slot, r, deopt);
         }
     }
@@ -189,71 +189,6 @@ impl BBContext {
         self.generic_cmp(ir, kind);
         self.rax2acc(ir, info.dst);
     }*/
-
-    ///
-    /// Integer binary operation.
-    ///
-    /// ### in
-    /// - rdi  lhs
-    /// - rsi  rhs
-    ///
-    /// ### out
-    /// - rdi  dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    fn integer_binop(
-        &self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        deopt: AsmDeopt,
-    ) {
-        ir.push(AsmInst::IntegerBinOp {
-            kind,
-            lhs,
-            rhs,
-            mode,
-            deopt,
-        });
-    }
-
-    fn integer_exp(&self, ir: &mut AsmIr) {
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::IntegerExp { using_xmm });
-    }
-
-    /*///
-    /// Generic integer binary operation.
-    ///
-    /// ### in
-    /// - rdi: lhs
-    /// - rsi: rhs
-    ///
-    /// ### out
-    /// - rax: dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    pub(super) fn generic_binop(&self, ir: &mut AsmIr, kind: BinOpK) {
-        let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
-        ir.push(AsmInst::GenericBinOp { kind, using_xmm });
-        ir.handle_error(error);
-    }*/
-
-    pub(super) fn generic_cmp(&self, ir: &mut AsmIr, kind: CmpKind) {
-        let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
-        ir.push(AsmInst::GenericCmp { kind, using_xmm });
-        ir.handle_error(error);
-    }
 }
 
 impl BBContext {
@@ -313,7 +248,7 @@ impl BBContext {
     }
 
     pub(super) fn fmode(&mut self, ir: &mut AsmIr, info: BinOpInfo) -> FMode {
-        let deopt = self.new_deopt(ir);
+        let deopt = ir.new_deopt(self);
         let BinOpInfo {
             mode,
             lhs_class,

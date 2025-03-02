@@ -118,7 +118,7 @@ impl JitContext {
 
         // class version guard
         let class_version = self.class_version();
-        let deopt = bbctx.new_deopt(ir);
+        let deopt = ir.new_deopt(bbctx);
         bbctx.guard_class_version(ir, class_version, deopt);
 
         // receiver class guard
@@ -139,7 +139,7 @@ impl JitContext {
 
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         let evict = ir.new_evict();
         ir.push(AsmInst::BinopCached {
@@ -164,7 +164,7 @@ impl JitContext {
         let version = self.class_version();
 
         // class version guard
-        let deopt = bbctx.new_deopt(ir);
+        let deopt = ir.new_deopt(bbctx);
         bbctx.guard_class_version(ir, version, deopt);
 
         // receiver class guard
@@ -196,7 +196,7 @@ impl JitContext {
         bbctx.set_arguments(store, ir, &store[callid], store[block_iseq].func_id());
         bbctx.discard(dst);
         bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         let block_entry =
             self.compile_specialized_method(store, block_iseq, block_self, None, None);
@@ -398,7 +398,7 @@ impl JitContext {
         bbctx.set_arguments(store, ir, callsite, callee_fid);
         bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::Send {
             callid: callsite.id,
@@ -433,7 +433,7 @@ impl JitContext {
         bbctx.set_arguments(store, ir, callsite, callee_fid);
         bbctx.discard(callsite.dst);
         bbctx.clear_above_next_sp();
-        let error = bbctx.new_error(ir);
+        let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
         ir.push(AsmInst::SendSpecialized {
             callid: callsite.id,
@@ -475,7 +475,7 @@ impl BBContext {
         self.write_back_callargs_and_dst(ir, &callinfo);
         self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         let evict = ir.new_evict();
         ir.push(AsmInst::Yield {
             callid,
