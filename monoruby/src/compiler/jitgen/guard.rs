@@ -1,77 +1,22 @@
 use super::*;
 
 impl Codegen {
-    /*///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers except rdi
-    /// - stack
-    ///
-    pub(super) fn guard_class_version_with_recovery(
-        &mut self,
-        cached_fid: FuncId,
-        cached_version: u32,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        deopt: DestLabel,
-        error: DestLabel,
-    ) {
-        assert_eq!(0, self.jit.get_page());
+    fn check_version(&mut self, cached_version: u32, fail: DestLabel) {
         let global_version = self.class_version;
-        let unmatch = self.jit.label();
-        let exit = self.jit.label();
-        let fail = self.jit.label();
         let cached_version = self.jit.data_i32(cached_version as i32);
         monoasm! { &mut self.jit,
             movl rax, [rip + cached_version];
             cmpl [rip + global_version], rax;
-            jne  unmatch;
-        exit:
-        }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(unmatch);
-        self.xmm_save(using_xmm);
-        monoasm! { &mut self.jit,
-            pushq rdi;
-            pushq r13;
-            movq rcx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, (callid.get());  // CallSiteId
-            movq rax, (runtime::find_method);
-            call rax;   // rax <- Option<FuncId>
-            popq r13;
-            popq rdi;
-            movl rax, rax;
-        }
-        self.xmm_restore(using_xmm);
-        self.handle_error(error);
-        monoasm! { &mut self.jit,
-            cmpl rax, (cached_fid.get());
             jne  fail;
-            movl rax, [rip + global_version];
-            movl [rip + cached_version], rax;
-            jmp  exit;
-        fail:
+        }
+    }
+
+    fn version_guard_fail(&mut self, deopt: DestLabel) {
+        monoasm! { &mut self.jit,
             movq rdi, (Value::symbol_from_str("__version_guard").id());
             jmp  deopt;
         }
-        self.jit.select_page(0);
-    }*/
-
+    }
     ///
     /// Class version guard for JIT.
     ///
@@ -81,24 +26,119 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    pub(super) fn guard_class_version(&mut self, cached_version: u32, deopt: DestLabel) {
+    pub(super) fn guard_class_version(
+        &mut self,
+        cached_version: u32,
+        position: Option<BytecodePtr>,
+        deopt: DestLabel,
+    ) {
         assert_eq!(0, self.jit.get_page());
-        let global_version = self.class_version;
         let fail = self.jit.label();
-        let cached_version = self.jit.data_i32(cached_version as i32);
-        monoasm! { &mut self.jit,
-            movl rax, [rip + cached_version];
-            cmpl [rip + global_version], rax;
-            jne  fail;
-        }
+        self.check_version(cached_version, fail);
 
         self.jit.select_page(1);
+        self.exec_recompile(position, fail);
+        self.version_guard_fail(deopt);
+        self.jit.select_page(0);
+    }
+
+    pub(super) fn guard_class_version_specialized(
+        &mut self,
+        cached_version: u32,
+        idx: usize,
+        deopt: DestLabel,
+    ) {
+        assert_eq!(0, self.jit.get_page());
+        let fail = self.jit.label();
+        self.check_version(cached_version, fail);
+
+        self.jit.select_page(1);
+        self.exec_specialized_recompile(idx, fail);
+        self.version_guard_fail(deopt);
+        self.jit.select_page(0);
+    }
+
+    fn dec_counter(&mut self, dec: DestLabel, recompile: DestLabel, deopt: DestLabel, count: i32) {
+        let counter = self.jit.data_i32(count);
+        monoasm!( &mut self.jit,
+            xorq rdi, rdi;
+            cmpl [rip + counter], 0;
+            jlt deopt;
+            jeq recompile;
+        dec:
+            subl [rip + counter], 1;
+            jmp deopt;
+        );
+    }
+
+    pub(super) fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: DestLabel) {
+        let recompile = self.jit.label();
+        let dec = self.jit.label();
+
+        self.dec_counter(dec, recompile, deopt, COUNT_DEOPT_RECOMPILE);
+
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.exec_recompile(position, recompile);
+        monoasm!( &mut self.jit,
+            xorq rdi, rdi;
+            jmp dec;
+        );
+        self.jit.select_page(0);
+        #[cfg(feature = "jit-debug")]
+        eprintln!(" => deopt");
+    }
+
+    pub(super) fn recompile_and_deopt_specialized(&mut self, deopt: DestLabel, idx: usize) {
+        let recompile = self.jit.label();
+        let dec = self.jit.label();
+
+        self.dec_counter(dec, recompile, deopt, COUNT_DEOPT_RECOMPILE_SPECIALIZED);
+
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.exec_specialized_recompile(idx, recompile);
         monoasm! { &mut self.jit,
-        fail:
-            movq rdi, (Value::symbol_from_str("__version_guard").id());
-            jmp  deopt;
+            xorq rdi, rdi;
+            jmp dec;
         }
         self.jit.select_page(0);
+        #[cfg(feature = "jit-debug")]
+        eprintln!(" => deopt_specialized");
+    }
+
+    fn exec_recompile(&mut self, position: Option<BytecodePtr>, label: DestLabel) {
+        self.jit.bind_label(label);
+        self.jit.save_registers();
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+        );
+        if let Some(pc) = position {
+            monoasm!( &mut self.jit,
+                movq rdx, (pc.as_ptr());
+                movq rax, (exec_jit_partial_compile);
+                call rax;
+            );
+        } else {
+            monoasm!( &mut self.jit,
+                movq rax, (exec_jit_recompile_method);
+                call rax;
+            );
+        }
+        self.jit.restore_registers();
+    }
+
+    fn exec_specialized_recompile(&mut self, idx: usize, label: DestLabel) {
+        self.jit.bind_label(label);
+        self.jit.save_registers();
+        monoasm!( &mut self.jit,
+            movq rdi, r12;
+            movq rsi, (idx);
+            movq rax, (exec_jit_specialized_compile_patch);
+            call rax;
+        );
+        self.jit.restore_registers();
     }
 
     ///

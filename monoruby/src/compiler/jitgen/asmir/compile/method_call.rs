@@ -668,7 +668,7 @@ impl Codegen {
         } = store[callid];
         let cache = self.jit.data(std::mem::size_of::<Cache>());
 
-        self.check_version(cache);
+        self.check_version_with_cache(cache);
 
         self.xmm_save(using_xmm);
         if no_splat {
@@ -732,7 +732,7 @@ impl Codegen {
         self.handle_error(error);
     }
 
-    fn check_version(&mut self, cache: DestLabel) {
+    fn check_version_with_cache(&mut self, cache: DestLabel) {
         let cached_version = self.jit.data_i32(-1);
         let global_version = self.class_version;
         let clear_cache = self.jit.label();

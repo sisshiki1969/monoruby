@@ -759,7 +759,16 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rax
     ///
-    GuardClassVersion(u32, AsmDeopt),
+    GuardClassVersion {
+        version: u32,
+        position: Option<BytecodePtr>,
+        deopt: AsmDeopt,
+    },
+    GuardClassVersionSpecialized {
+        version: u32,
+        idx: usize,
+        deopt: AsmDeopt,
+    },
     ///
     /// Type guard.
     ///

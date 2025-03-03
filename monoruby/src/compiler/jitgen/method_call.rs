@@ -119,7 +119,7 @@ impl JitContext {
         // class version guard
         let class_version = self.class_version();
         let deopt = ir.new_deopt(bbctx);
-        bbctx.guard_class_version(ir, class_version, deopt);
+        self.guard_class_version(bbctx, ir, class_version, deopt);
 
         // receiver class guard
         let BinOpInfo {
@@ -165,7 +165,7 @@ impl JitContext {
 
         // class version guard
         let deopt = ir.new_deopt(bbctx);
-        bbctx.guard_class_version(ir, version, deopt);
+        self.guard_class_version(bbctx, ir, version, deopt);
 
         // receiver class guard
         bbctx.fetch(ir, recv, GP::Rdi);
@@ -174,6 +174,44 @@ impl JitContext {
         if !recv.is_self() && !bbctx.is_class(recv, recv_class) {
             bbctx.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
         }
+    }
+
+    ///
+    /// Class version guard for JIT.
+    ///
+    /// Check the cached class version.
+    /// If different, jump to `deopt`.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn guard_class_version(
+        &self,
+        bbctx: &mut BBContext,
+        ir: &mut AsmIr,
+        version: u32,
+        deopt: AsmDeopt,
+    ) {
+        if bbctx.class_version_guarded {
+            return;
+        }
+        match self.jit_type() {
+            JitType::Specialized(idx) => {
+                ir.push(AsmInst::GuardClassVersionSpecialized {
+                    version,
+                    idx: *idx,
+                    deopt,
+                });
+            }
+            _ => {
+                ir.push(AsmInst::GuardClassVersion {
+                    version,
+                    position: self.position(),
+                    deopt,
+                });
+            }
+        }
+        bbctx.set_class_version_guard();
     }
 
     ///

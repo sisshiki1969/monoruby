@@ -197,10 +197,6 @@ impl Codegen {
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
-            AsmInst::GuardClassVersion(cached_version, deopt) => {
-                let deopt = labels[deopt];
-                self.guard_class_version(cached_version, deopt);
-            }
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt];
                 self.guard_class(r, class, deopt);
@@ -213,6 +209,22 @@ impl Codegen {
             AsmInst::HandleError(error) => {
                 let error = labels[error];
                 self.handle_error(error);
+            }
+            AsmInst::GuardClassVersion {
+                version,
+                position,
+                deopt,
+            } => {
+                let deopt = labels[deopt];
+                self.guard_class_version(version, position, deopt);
+            }
+            AsmInst::GuardClassVersionSpecialized {
+                version,
+                idx,
+                deopt,
+            } => {
+                let deopt = labels[deopt];
+                self.guard_class_version_specialized(version, self.specialized_base + idx, deopt);
             }
             AsmInst::Deopt(deopt) => {
                 let deopt = labels[deopt];

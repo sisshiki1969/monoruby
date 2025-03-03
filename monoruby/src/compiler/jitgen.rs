@@ -233,43 +233,6 @@ impl BBContext {
         self.slot_state.write_back_acc(ir, sp);
     }
 
-    pub(super) fn recompile_and_deopt(
-        &mut self,
-        ir: &mut AsmIr,
-        ctx: &JitContext,
-        position: Option<BytecodePtr>,
-    ) {
-        let deopt = ir.new_deopt(self);
-        match ctx.jit_type() {
-            JitType::Specialized(idx) => {
-                ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
-            }
-            _ => ir.push(AsmInst::RecompileDeopt { position, deopt }),
-        }
-    }
-
-    ///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version.
-    /// If different, jump to `deopt`.
-    ///
-    /// ### destroy
-    /// - rax
-    ///
-    pub(super) fn guard_class_version(
-        &mut self,
-        ir: &mut AsmIr,
-        cached_version: u32,
-        deopt: AsmDeopt,
-    ) {
-        if self.class_version_guarded {
-            return;
-        }
-        ir.push(AsmInst::GuardClassVersion(cached_version, deopt));
-        self.set_class_version_guard();
-    }
-
     ///
     /// Guard for the base class object of the constant in *slot*.
     ///
@@ -804,84 +767,6 @@ impl Codegen {
         monoasm!( &mut self.jit,
             addq rsp, (sp_offset);
         );
-    }
-
-    fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: DestLabel) {
-        let recompile = self.jit.label();
-        let dec = self.jit.label();
-        let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
-
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            cmpl [rip + counter], 0;
-            jlt deopt;
-            jeq recompile;
-        dec:
-            subl [rip + counter], 1;
-            jmp deopt;
-        );
-
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        recompile:
-            movq rdi, rbx;
-            movq rsi, r12;
-        );
-        if let Some(pc) = position {
-            monoasm!( &mut self.jit,
-                movq rdx, (pc.as_ptr());
-                movq rax, (exec_jit_partial_compile);
-                call rax;
-            );
-        } else {
-            monoasm!( &mut self.jit,
-                movq rax, (exec_jit_recompile_method);
-                call rax;
-            );
-        }
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            jmp dec;
-        );
-        self.jit.select_page(0);
-        #[cfg(feature = "jit-debug")]
-        eprintln!(" => deopt");
-    }
-
-    fn recompile_and_deopt_specialized(&mut self, deopt: DestLabel, idx: usize) {
-        let recompile = self.jit.label();
-        let dec = self.jit.label();
-        let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE_SPECIALIZED);
-
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            cmpl [rip + counter], 0;
-            jlt deopt;
-            jeq recompile;
-        dec:
-            subl [rip + counter], 1;
-            jmp deopt;
-        );
-
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        recompile:
-            movq rdi, r12;
-            movq rsi, (idx);
-        );
-        monoasm!( &mut self.jit,
-            movq rax, (exec_jit_specialized_compile_patch);
-            call rax;
-        );
-        monoasm!( &mut self.jit,
-            xorq rdi, rdi;
-            jmp dec;
-        );
-        self.jit.select_page(0);
-        #[cfg(feature = "jit-debug")]
-        eprintln!(" => deopt_specialized");
     }
 }
 

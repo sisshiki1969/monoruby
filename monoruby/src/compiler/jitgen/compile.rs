@@ -61,7 +61,7 @@ impl JitContext {
         };
 
         for bbid in bb_begin..=bb_end {
-            let ir = self.compile_basic_block(store, iseq, self.position(), bbid, bbid == bb_end);
+            let ir = self.compile_basic_block(store, iseq, bbid, bbid == bb_end);
             self.ir.push((Some(bbid), ir));
         }
 
@@ -75,7 +75,6 @@ impl JitContext {
         &mut self,
         store: &Store,
         iseq: &ISeqInfo,
-        position: Option<BytecodePtr>,
         bbid: BasicBlockId,
         last: bool,
     ) -> AsmIr {
@@ -101,7 +100,7 @@ impl JitContext {
                 CompileResult::Continue => {}
                 CompileResult::Branch | CompileResult::Leave => return ir,
                 CompileResult::Recompile => {
-                    bbctx.recompile_and_deopt(&mut ir, self, position);
+                    self.recompile_and_deopt(&mut bbctx, &mut ir);
                     return ir;
                 }
                 CompileResult::ExitLoop => break,
@@ -837,6 +836,19 @@ impl JitContext {
             CmpKind::Ge => IdentId::_GE,
             CmpKind::TEq => IdentId::_TEQ,
             CmpKind::Cmp => IdentId::_CMP,
+        }
+    }
+
+    fn recompile_and_deopt(&self, bbctx: &mut BBContext, ir: &mut AsmIr) {
+        let deopt = ir.new_deopt(bbctx);
+        match self.jit_type() {
+            JitType::Specialized(idx) => {
+                ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
+            }
+            _ => ir.push(AsmInst::RecompileDeopt {
+                position: self.position(),
+                deopt,
+            }),
         }
     }
 }
