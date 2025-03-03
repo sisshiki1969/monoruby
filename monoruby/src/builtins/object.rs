@@ -22,7 +22,15 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(object_object_id),
         0,
     );
-    globals.define_builtin_func_with(OBJECT_CLASS, "respond_to?", respond_to, 1, 2, false);
+    globals.define_builtin_inline_func_with(
+        OBJECT_CLASS,
+        "respond_to?",
+        respond_to,
+        Box::new(object_respond_to),
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
@@ -271,6 +279,40 @@ fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     } else {
         globals.check_public_method(lfp.self_val(), name).is_some()
     }))
+}
+
+fn object_respond_to(
+    bb: &mut BBContext,
+    _: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callsite: &CallSiteInfo,
+    recv_class: ClassId,
+) -> bool {
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, pos_num, ..
+    } = *callsite;
+    let dst = if let Some(dst) = dst {
+        dst
+    } else {
+        return false;
+    };
+    if pos_num != 1 {
+        return false;
+    }
+    let method_name = if let Some(name) = bb.is_symbol_literal(args) {
+        name
+    } else {
+        return false;
+    };
+    let b = store
+        .check_method_for_class(recv_class, method_name, ctx.class_version())
+        .is_some();
+    bb.def_concrete_value(dst, Value::bool(b));
+    true
 }
 
 ///

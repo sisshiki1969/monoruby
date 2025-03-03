@@ -261,7 +261,7 @@ impl JitContext {
         self.self_ty
     }
 
-    pub(super) fn class_version(&self) -> u32 {
+    pub(crate) fn class_version(&self) -> u32 {
         self.class_version
     }
 
