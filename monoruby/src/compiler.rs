@@ -806,6 +806,7 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         let cont = self.jit.label();
+        let exit_patch_point_addr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
         exit_patch_point:
             jmp cont;
@@ -815,7 +816,7 @@ impl Codegen {
 
             movq rdi, r12;
             movq rsi, r14;
-            movl rdx, (exit_patch_point.to_usize());
+            movq rdx, (exit_patch_point_addr.as_ptr());
             subq rsp, 4088;
             movq rax, (exec_jit_compile_patch as usize);
             call rax;

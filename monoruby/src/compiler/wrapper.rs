@@ -43,6 +43,7 @@ impl Codegen {
         let vm_entry = self.vm_entry;
         let counter = self.jit.data_i32(COUNT_START_COMPILE);
         let next = self.jit.label();
+        let entry_addr = self.jit.get_current_address();
         monoasm!( &mut self.jit,
         entry:
             jmp  next;
@@ -51,7 +52,7 @@ impl Codegen {
             jne vm_entry;
             movq rdi, r12;
             movq rsi, r14;
-            movl rdx, (entry.to_usize());
+            movq rdx, (entry_addr.as_ptr());
             subq rsp, 4088;
             movq rax, (exec_jit_compile_patch);
             call rax;

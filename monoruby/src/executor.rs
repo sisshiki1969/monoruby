@@ -1272,13 +1272,17 @@ pub(crate) extern "C" fn exec_jit_specialized_compile_patch(globals: &mut Global
         .codegen
         .jit_compile(&globals.store, iseq_id, self_class, None, entry);
 
-    globals.codegen.jit.apply_jmp_patch(patch_point, entry);
+    let patch_point = globals.codegen.jit.get_label_address(patch_point);
+    globals
+        .codegen
+        .jit
+        .apply_jmp_patch_address(patch_point, entry);
 }
 
 pub(crate) extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     lfp: Lfp,
-    entry_patch_point: monoasm::DestLabel,
+    entry_patch_point: monoasm::CodePtr,
 ) {
     let patch_point = globals.codegen.jit.label();
     let jit_entry = globals.codegen.jit.label();
@@ -1298,7 +1302,7 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     globals
         .codegen
         .jit
-        .apply_jmp_patch(entry_patch_point, guard);
+        .apply_jmp_patch_address(entry_patch_point, guard);
 }
 
 pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &mut Globals) {
@@ -1317,7 +1321,11 @@ pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &
     // get_jit_code() must not be None.
     // After BOP redefinition occurs, recompilation in invalidated methods cause None.
     if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
-        globals.codegen.jit.apply_jmp_patch(patch_point, jit_entry);
+        let patch_point = globals.codegen.jit.get_label_address(patch_point);
+        globals
+            .codegen
+            .jit
+            .apply_jmp_patch_address(patch_point, jit_entry);
     }
 }
 
