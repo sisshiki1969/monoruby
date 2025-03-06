@@ -892,8 +892,8 @@ impl Globals {
         let vm_entry = self.codegen.vm_entry;
         for func in self.store.functions.functions() {
             if let FuncKind::ISeq(_) = func.kind {
-                let entry = func.entry_label();
-                self.codegen.jit.apply_jmp_patch(entry, vm_entry);
+                let entry = self.codegen.jit.get_label_address(func.entry_label());
+                self.codegen.jit.apply_jmp_patch_address(entry, vm_entry);
             }
         }
     }
