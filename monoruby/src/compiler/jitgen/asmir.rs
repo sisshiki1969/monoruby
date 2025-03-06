@@ -96,6 +96,17 @@ impl AsmIr {
         }
     }
 
+    pub(super) fn is_empty(&self) -> bool {
+        if cfg!(feature = "emit-asm") {
+            self.inst.iter().all(|inst| match inst {
+                AsmInst::BcIndex(_) => true,
+                _ => false,
+            })
+        } else {
+            self.inst.is_empty()
+        }
+    }
+
     pub(super) fn push(&mut self, inst: AsmInst) {
         self.inst.push(inst);
     }

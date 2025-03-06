@@ -220,6 +220,16 @@ class Integer
     end
     self
   end
+
+  def step(limit, step = 1)
+    return self.to_enum(:step, limit, step) if !block_given?
+    i = self
+    while i <= limit
+      yield i
+      i += step
+    end
+    self
+  end
 end
 
 class Symbol

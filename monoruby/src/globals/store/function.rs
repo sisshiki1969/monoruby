@@ -48,7 +48,8 @@ pub(crate) struct FuncData {
     ofs: u16,
     min: u16,
     max: u16,
-    _padding: [u8; 4],
+    /// class id which this function belongs to.
+    owner: Option<ClassId>,
 }
 
 impl FuncData {
@@ -582,8 +583,6 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 struct FuncExt {
     /// name of this function.
     name: Option<IdentId>,
-    /// class id which this function belongs to.
-    class_id: Option<ClassId>,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
     /// parameter information of this function.
@@ -617,7 +616,7 @@ impl FuncInfo {
             ofs: 0,
             min,
             max,
-            _padding: [0; 4],
+            owner: None,
         };
         data.set_offset(max);
         Self {
@@ -625,7 +624,6 @@ impl FuncInfo {
             kind,
             ext: Box::new(FuncExt {
                 name,
-                class_id: None,
                 entry: None,
                 params,
                 #[cfg(feature = "perf")]
@@ -765,11 +763,11 @@ impl FuncInfo {
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {
-        self.ext.class_id
+        self.data.owner
     }
 
     pub(super) fn set_owner_class(&mut self, class: ClassId) {
-        self.ext.class_id = Some(class);
+        self.data.owner = Some(class);
     }
 
     pub(super) fn entry_label(&self) -> DestLabel {

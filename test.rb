@@ -1,5 +1,4 @@
-30.times {
-  [2,5,7,10,2.2,7,9].each do |x|
-    puts x*2
+100.times {
+  0.step(100, 2) do |x|
   end
 }
