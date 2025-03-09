@@ -1,8 +1,8 @@
 use super::*;
 
 impl Codegen {
-    fn check_version(&mut self, cached_version: u32, fail: DestLabel) {
-        let global_version = self.class_version;
+    fn check_version(&mut self, cached_version: u32, fail: &DestLabel) {
+        let global_version = self.class_version_label();
         let cached_version = self.jit.data_i32(cached_version as i32);
         monoasm! { &mut self.jit,
             movl rax, [rip + cached_version];
@@ -11,7 +11,7 @@ impl Codegen {
         }
     }
 
-    fn version_guard_fail(&mut self, deopt: DestLabel) {
+    fn version_guard_fail(&mut self, deopt: &DestLabel) {
         monoasm! { &mut self.jit,
             movq rdi, (Value::symbol_from_str("__version_guard").id());
             jmp  deopt;
@@ -30,11 +30,11 @@ impl Codegen {
         &mut self,
         cached_version: u32,
         position: Option<BytecodePtr>,
-        deopt: DestLabel,
+        deopt: &DestLabel,
     ) {
         assert_eq!(0, self.jit.get_page());
         let fail = self.jit.label();
-        self.check_version(cached_version, fail);
+        self.check_version(cached_version, &fail);
 
         self.jit.select_page(1);
         self.exec_recompile(position, fail);
@@ -46,11 +46,11 @@ impl Codegen {
         &mut self,
         cached_version: u32,
         idx: usize,
-        deopt: DestLabel,
+        deopt: &DestLabel,
     ) {
         assert_eq!(0, self.jit.get_page());
         let fail = self.jit.label();
-        self.check_version(cached_version, fail);
+        self.check_version(cached_version, &fail);
 
         self.jit.select_page(1);
         self.exec_specialized_recompile(idx, fail);
@@ -58,7 +58,13 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn dec_counter(&mut self, dec: DestLabel, recompile: DestLabel, deopt: DestLabel, count: i32) {
+    fn dec_counter(
+        &mut self,
+        dec: &DestLabel,
+        recompile: &DestLabel,
+        deopt: &DestLabel,
+        count: i32,
+    ) {
         let counter = self.jit.data_i32(count);
         monoasm!( &mut self.jit,
             xorq rdi, rdi;
@@ -71,11 +77,11 @@ impl Codegen {
         );
     }
 
-    pub(super) fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: DestLabel) {
+    pub(super) fn recompile_and_deopt(&mut self, position: Option<BytecodePtr>, deopt: &DestLabel) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
 
-        self.dec_counter(dec, recompile, deopt, COUNT_DEOPT_RECOMPILE);
+        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE);
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -89,11 +95,11 @@ impl Codegen {
         eprintln!(" => deopt");
     }
 
-    pub(super) fn recompile_and_deopt_specialized(&mut self, deopt: DestLabel, idx: usize) {
+    pub(super) fn recompile_and_deopt_specialized(&mut self, deopt: &DestLabel, idx: usize) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
 
-        self.dec_counter(dec, recompile, deopt, COUNT_DEOPT_RECOMPILE_SPECIALIZED);
+        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE_SPECIALIZED);
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -150,7 +156,7 @@ impl Codegen {
     /// ### in
     /// - rdi: Value
     ///
-    pub(crate) fn guard_class_rdi(&mut self, class_id: ClassId, deopt: DestLabel) {
+    pub(crate) fn guard_class_rdi(&mut self, class_id: ClassId, deopt: &DestLabel) {
         self.guard_class(GP::Rdi, class_id, deopt)
     }
 
@@ -163,7 +169,7 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: DestLabel) {
+    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
             if self.jit.get_page() == 0 {
@@ -187,7 +193,7 @@ impl Codegen {
             }
             label
         } else {
-            fail
+            fail.clone()
         };
         match class_id {
             INTEGER_CLASS => {
@@ -204,7 +210,7 @@ impl Codegen {
                     testq R(reg as _), 0b010;
                     jnz exit;
                 );
-                self.guard_rvalue(reg, FLOAT_CLASS, fail);
+                self.guard_rvalue(reg, FLOAT_CLASS, &fail);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
@@ -231,7 +237,7 @@ impl Codegen {
                     jnz fail;
                 );
             }
-            _ => self.guard_rvalue(reg, class_id, fail),
+            _ => self.guard_rvalue(reg, class_id, &fail),
         }
         //if reg != GP::Rdi {
         //    monoasm!( &mut self.jit,
@@ -240,7 +246,7 @@ impl Codegen {
         //}
     }
 
-    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: DestLabel) {
+    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: &DestLabel) {
         let label = self.set_rdi_for_deopt(r, deopt);
         monoasm! { &mut self.jit,
             testq R(r as _), 0b111;
@@ -250,7 +256,7 @@ impl Codegen {
         }
     }
 
-    fn set_rdi_for_deopt(&mut self, r: GP, deopt: DestLabel) -> DestLabel {
+    fn set_rdi_for_deopt(&mut self, r: GP, deopt: &DestLabel) -> DestLabel {
         if r != GP::Rdi {
             assert_eq!(0, self.jit.get_page());
             self.jit.select_page(1);
@@ -263,7 +269,7 @@ impl Codegen {
             self.jit.select_page(0);
             label
         } else {
-            deopt
+            deopt.clone()
         }
     }
 
@@ -286,7 +292,7 @@ impl Codegen {
     ///
     /// - rax, rdi
     ///
-    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
+    pub(super) fn float_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: &DestLabel) {
         let l1 = self.jit.label();
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b001;
@@ -320,7 +326,7 @@ impl Codegen {
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: DestLabel) {
+    pub(super) fn numeric_val_to_f64(&mut self, reg: GP, xmm: Xmm, deopt: &DestLabel) {
         let integer = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -353,7 +359,7 @@ impl Codegen {
     /// ### Safety
     /// - if *reg* is Fixnum, cause UB.
     ///
-    fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: DestLabel) {
+    fn float_val_to_f64(&mut self, reg: GP, xmm: Xmm, side_exit: &DestLabel) {
         let heap = self.jit.label();
         let exit = self.jit.label();
         let r = reg as _;
@@ -395,7 +401,7 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: DestLabel) {
+    fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b111;
             jnz deopt;
@@ -412,7 +418,7 @@ mod tests {
     #[test]
     fn guard_class() {
         let mut gen = Codegen::new(false);
-        let side_exit = gen.entry_panic;
+        let side_exit = gen.entry_panic();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -428,7 +434,7 @@ mod tests {
             (FALSE_CLASS, Value::bool(false)),
         ] {
             let entry_point = gen.jit.get_current_address();
-            gen.guard_class_rdi(class, side_exit);
+            gen.guard_class_rdi(class, &side_exit);
             monoasm!( &mut gen.jit,
                 xorq rax, rax;
                 ret;
@@ -443,10 +449,10 @@ mod tests {
     #[test]
     fn unbox_float() {
         let mut gen = Codegen::new(false);
-        let side_exit = gen.entry_panic;
+        let side_exit = gen.entry_panic();
         let entry_point = gen.jit.get_current_address();
         let x = Xmm(0);
-        gen.float_to_f64(GP::Rdi, x, side_exit);
+        gen.float_to_f64(GP::Rdi, x, &side_exit);
         monoasm!( &mut gen.jit,
             movq xmm0, xmm(x.enc());
             ret;
@@ -477,10 +483,10 @@ mod tests {
     #[test]
     fn unbox_integer_float() {
         let mut gen = Codegen::new(false);
-        let side_exit = gen.entry_panic;
+        let side_exit = gen.entry_panic();
         let entry_point = gen.jit.get_current_address();
         let x = Xmm(0);
-        gen.numeric_val_to_f64(GP::Rdi, x, side_exit);
+        gen.numeric_val_to_f64(GP::Rdi, x, &side_exit);
         monoasm!( &mut gen.jit,
             movq xmm0, xmm(x.enc());
             ret;

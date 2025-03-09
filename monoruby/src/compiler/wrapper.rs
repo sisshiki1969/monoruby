@@ -3,11 +3,11 @@ use super::*;
 impl Codegen {
     pub(crate) fn gen_wrapper(&mut self, kind: &FuncKind, no_jit: bool) -> DestLabel {
         let entry = self.jit.label();
-        self.jit.bind_label(entry);
+        self.jit.bind_label(entry.clone());
         match kind {
             FuncKind::ISeq(_) => {
                 if !no_jit && !cfg!(feature = "no-jit") {
-                    self.gen_jit_stub(entry);
+                    self.gen_jit_stub(&entry);
                 } else {
                     self.gen_vm_stub()
                 }
@@ -39,13 +39,12 @@ impl Codegen {
     ///    +-------------------------------+
     ///
     /// ```
-    fn gen_jit_stub(&mut self, entry: DestLabel) {
-        let vm_entry = self.vm_entry;
+    fn gen_jit_stub(&mut self, entry: &DestLabel) {
+        let vm_entry = self.vm_entry();
         let counter = self.jit.data_i32(COUNT_START_COMPILE);
         let next = self.jit.label();
         let entry_addr = self.jit.get_current_address();
         monoasm!( &mut self.jit,
-        entry:
             jmp  next;
         next:
             subl [rip + counter], 1;
@@ -62,7 +61,7 @@ impl Codegen {
     }
 
     fn gen_vm_stub(&mut self) {
-        let vm_entry = self.vm_entry;
+        let vm_entry = self.vm_entry();
         monoasm!( &mut self.jit,
             jmp vm_entry;
         );

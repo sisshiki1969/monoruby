@@ -145,8 +145,8 @@ pub fn object_send(
     let error = ir.new_error(bb);
     let callid = callsite.id;
     ir.inline(move |gen, store, labels| {
-        let error = labels[error];
-        gen.object_send_inline(callid, store, using_xmm, error, no_splat);
+        let error = &labels[error];
+        gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });
     bb.reg2acc(ir, GP::Rax, callsite.dst);
     true

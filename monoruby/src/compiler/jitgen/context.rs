@@ -283,11 +283,11 @@ impl JitContext {
     /// Resolve *JitLabel* and return *DestLabel*.
     ///
     pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match self.labels[label.0] {
-            Some(l) => l,
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
             None => {
                 let l = jit.label();
-                self.labels[label.0] = Some(l);
+                self.labels[label.0] = Some(l.clone());
                 l
             }
         }

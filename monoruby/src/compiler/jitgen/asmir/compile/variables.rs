@@ -60,7 +60,7 @@ impl Codegen {
             monoasm! { &mut self.jit,
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
             }
-            self.check_len(idx, exit);
+            self.check_len(idx, &exit);
             monoasm! { &mut self.jit,
                 movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
                 movq r15, [rdi + (idx * 8)];
@@ -114,7 +114,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
         }
-        if let Some(generic) = generic {
+        if let Some(generic) = &generic {
             self.check_len(idx, generic);
         }
         monoasm! { &mut self.jit,
@@ -123,7 +123,7 @@ impl Codegen {
         exit:
         }
 
-        if let Some(generic) = generic {
+        if let Some(generic) = &generic {
             self.jit.select_page(1);
             monoasm!( &mut self.jit,
             generic:
@@ -149,7 +149,7 @@ impl Codegen {
     /// #### in
     /// - rdx: ivar_table
     ///
-    fn check_len(&mut self, idx: i32, fail: DestLabel) {
+    fn check_len(&mut self, idx: i32, fail: &DestLabel) {
         monoasm! { &mut self.jit,
             // check var_table is not None
             testq rdx, rdx;

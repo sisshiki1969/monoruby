@@ -591,7 +591,7 @@ impl Executor {
                     globals
                         .codegen
                         .jit
-                        .apply_jmp_patch_address(patch_point, deopt);
+                        .apply_jmp_patch_address(patch_point, &deopt);
                     unsafe { patch_point.as_ptr().write(0xe9) };
                 }
             }
@@ -1260,8 +1260,7 @@ pub enum Visibility {
 }*/
 
 pub(crate) extern "C" fn exec_jit_specialized_compile_patch(globals: &mut Globals, idx: usize) {
-    let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx];
-
+    let (iseq_id, self_class, patch_point) = globals.codegen.specialized_patch_point[idx].clone();
     #[cfg(feature = "profile")]
     {
         globals.countup_recompile(globals.store[iseq_id].func_id(), self_class);
@@ -1270,13 +1269,13 @@ pub(crate) extern "C" fn exec_jit_specialized_compile_patch(globals: &mut Global
     let entry = globals.codegen.jit.label();
     globals
         .codegen
-        .jit_compile(&globals.store, iseq_id, self_class, None, entry);
+        .jit_compile(&globals.store, iseq_id, self_class, None, entry.clone());
 
-    let patch_point = globals.codegen.jit.get_label_address(patch_point);
+    let patch_point = globals.codegen.jit.get_label_address(&patch_point);
     globals
         .codegen
         .jit
-        .apply_jmp_patch_address(patch_point, entry);
+        .apply_jmp_patch_address(patch_point, &entry);
 }
 
 pub(crate) extern "C" fn exec_jit_compile_patch(
@@ -1290,19 +1289,16 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     let func_id = lfp.meta().func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     let self_class = lfp.self_val().class();
-    //eprintln!("{:?}", lfp.outermost().block());
     globals
         .codegen
-        .class_guard_stub(self_class, patch_point, jit_entry, guard);
-
+        .class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
     let old_entry = globals.store[iseq_id].add_jit_code(self_class, patch_point);
     assert!(old_entry.is_none());
     globals.exec_jit_compile_method(iseq_id, self_class, jit_entry);
-
     globals
         .codegen
         .jit
-        .apply_jmp_patch_address(entry_patch_point, guard);
+        .apply_jmp_patch_address(entry_patch_point, &guard);
 }
 
 pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &mut Globals) {
@@ -1311,21 +1307,20 @@ pub(crate) extern "C" fn exec_jit_recompile_method(vm: &mut Executor, globals: &
     let func_id = lfp.meta().func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     let jit_entry = globals.codegen.jit.label();
-
     #[cfg(feature = "profile")]
     {
         globals.countup_recompile(func_id, self_class);
     }
 
-    globals.exec_jit_compile_method(iseq_id, self_class, jit_entry);
+    globals.exec_jit_compile_method(iseq_id, self_class, jit_entry.clone());
     // get_jit_code() must not be None.
     // After BOP redefinition occurs, recompilation in invalidated methods cause None.
     if let Some(patch_point) = globals.store[iseq_id].get_jit_code(self_class) {
-        let patch_point = globals.codegen.jit.get_label_address(patch_point);
+        let patch_point = globals.codegen.jit.get_label_address(&patch_point);
         globals
             .codegen
             .jit
-            .apply_jmp_patch_address(patch_point, jit_entry);
+            .apply_jmp_patch_address(patch_point, &jit_entry);
     }
 }
 
@@ -1341,8 +1336,8 @@ pub(crate) extern "C" fn exec_jit_partial_compile(
     let self_class = vm.cfp().lfp().self_val().class();
     let func_id = vm.cfp().lfp().meta().func_id();
     let iseq_id = globals.store[func_id].as_iseq();
-    globals.exec_jit_compile(iseq_id, self_class, Some(pc), entry_label);
-    let codeptr = globals.codegen.jit.get_label_address(entry_label);
+    globals.exec_jit_compile(iseq_id, self_class, Some(pc), entry_label.clone());
+    let codeptr = globals.codegen.jit.get_label_address(&entry_label);
     pc.write2(codeptr.as_ptr() as u64);
 }
 

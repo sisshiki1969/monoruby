@@ -172,7 +172,7 @@ impl Codegen {
             },
 
             AsmInst::NumToXmm(reg, x, side_exit) => {
-                self.numeric_val_to_f64(reg, x, labels[side_exit]);
+                self.numeric_val_to_f64(reg, x, &labels[side_exit]);
             }
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(f);
@@ -184,7 +184,7 @@ impl Codegen {
                 self.integer_val_to_f64(r, x);
             }
             AsmInst::FloatToXmm(reg, x, deopt) => {
-                self.float_to_f64(reg, x, labels[deopt]);
+                self.float_to_f64(reg, x, &labels[deopt]);
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
@@ -198,24 +198,24 @@ impl Codegen {
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
             AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.guard_class(r, class, deopt);
             }
             AsmInst::GuardArrayTy(r, deopt) => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
             }
 
             AsmInst::HandleError(error) => {
-                let error = labels[error];
-                self.handle_error(error);
+                let error = &labels[error];
+                self.handle_error(&error);
             }
             AsmInst::GuardClassVersion {
                 version,
                 position,
                 deopt,
             } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.guard_class_version(version, position, deopt);
             }
             AsmInst::GuardClassVersionSpecialized {
@@ -223,26 +223,26 @@ impl Codegen {
                 idx,
                 deopt,
             } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.guard_class_version_specialized(version, self.specialized_base + idx, deopt);
             }
             AsmInst::Deopt(deopt) => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 monoasm!( &mut self.jit,
                     jmp deopt;
                 );
             }
             AsmInst::RecompileDeopt { position, deopt } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.recompile_and_deopt(position, deopt)
             }
             AsmInst::RecompileDeoptSpecialized { idx, deopt } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx)
             }
             AsmInst::CheckBOP { deopt } => {
-                let deopt = labels[deopt];
-                let bop_flag = self.bop_redefined_flags;
+                let deopt = &labels[deopt];
+                let bop_flag = self.bop_redefined_flags.clone();
                 let l1 = self.jit.label();
                 assert_eq!(0, self.jit.get_page());
                 monoasm!(
@@ -283,7 +283,7 @@ impl Codegen {
                 self.epilogue();
             }
             AsmInst::Raise => {
-                let raise = self.entry_raise;
+                let raise = self.entry_raise();
                 monoasm! { &mut self.jit,
                     movq rdi, rbx;
                     movq rsi, rax;
@@ -293,7 +293,7 @@ impl Codegen {
                 };
             }
             AsmInst::EnsureEnd => {
-                let raise = self.entry_raise;
+                let raise = self.entry_raise();
                 monoasm! { &mut self.jit,
                     movq rdi, rbx;
                     movq rax, (runtime::check_err);
@@ -360,7 +360,7 @@ impl Codegen {
                 evict,
             } => {
                 let return_addr = self.gen_binop_cached(store, callee_fid, recv_class);
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::Send {
                 callid,
@@ -369,9 +369,9 @@ impl Codegen {
                 error,
                 evict,
             } => {
-                let error = labels[error];
+                let error = &labels[error];
                 let return_addr = self.gen_send(store, callid, callee_fid, recv_class, error);
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SendSpecialized {
                 callid,
@@ -381,7 +381,7 @@ impl Codegen {
                 error,
                 evict,
             } => {
-                let error = labels[error];
+                let error = &labels[error];
                 let patch_point = patch_point.map(|label| ctx.resolve_label(&mut self.jit, label));
                 let entry_label = ctx.resolve_label(&mut self.jit, entry);
                 let return_addr = self.gen_send_specialized(
@@ -392,7 +392,7 @@ impl Codegen {
                     patch_point,
                     error,
                 );
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             /*AsmInst::SendNotCached {
                 self_class,
@@ -411,9 +411,9 @@ impl Codegen {
                 error,
                 evict,
             } => {
-                let error = labels[error];
+                let error = &labels[error];
                 let return_addr = self.gen_yield(callid, using_xmm, error);
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::YieldSpecialized {
                 callid,
@@ -422,18 +422,18 @@ impl Codegen {
                 error,
                 evict,
             } => {
-                let error = labels[error];
+                let error = &labels[error];
                 let block_entry = ctx.resolve_label(&mut self.jit, block_entry);
                 let return_addr =
                     self.gen_yield_specialized(store, callid, block_iseq, block_entry, error);
-                self.set_deopt_with_return_addr(return_addr, evict, labels[evict]);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
             AsmInst::Not => {
                 self.not_rdi_to_rax();
             }
             AsmInst::FixnumNeg { reg, deopt } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 let r = reg as u64;
                 monoasm! { &mut self.jit,
                     sarq  R(r), 1;
@@ -468,7 +468,7 @@ impl Codegen {
                 mode,
                 deopt,
             } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.integer_binop(lhs, rhs, &mode, kind, deopt);
             }
             AsmInst::IntegerExp { using_xmm } => {
@@ -515,7 +515,7 @@ impl Codegen {
             }
 
             AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 let cached_base_class = self.jit.const_i64(base_class.id() as _);
                 monoasm! { &mut self.jit,
                     cmpq rax, [rip + cached_base_class];  // rax: base_class
@@ -526,7 +526,7 @@ impl Codegen {
                 const_version,
                 deopt,
             } => {
-                let deopt = labels[deopt];
+                let deopt = &labels[deopt];
                 self.guard_const_version(const_version, deopt);
             }
             AsmInst::StoreConstant { id, using_xmm } => {
@@ -561,10 +561,10 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.gen_array_u16_index_assign(using_xmm, labels[error], idx);
+                self.gen_array_u16_index_assign(using_xmm, &labels[error], idx);
             }
             AsmInst::ArrayIndexAssign { using_xmm, error } => {
-                self.gen_array_index_assign(using_xmm, labels[error]);
+                self.gen_array_index_assign(using_xmm, &labels[error]);
             }
 
             AsmInst::NewArray { callid, using_xmm } => {
@@ -600,7 +600,7 @@ impl Codegen {
             } => {
                 self.get_method_lfp(outer);
                 self.block_arg(using_xmm);
-                self.handle_error(labels[error]);
+                self.handle_error(&labels[error]);
                 self.store_rax(ret);
             }
 
@@ -662,7 +662,7 @@ impl Codegen {
                     func_id,
                     is_module,
                     using_xmm,
-                    labels[error],
+                    &labels[error],
                 );
             }
             AsmInst::SingletonClassDef {
@@ -672,7 +672,7 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                self.singleton_class_def(base, dst, func_id, using_xmm, labels[error]);
+                self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
             }
             AsmInst::MethodDef {
                 name,
@@ -768,11 +768,11 @@ impl Codegen {
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,
-        evict_label: DestLabel,
+        evict_label: &DestLabel,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
-            .insert(return_addr, (None, evict_label));
+            .insert(return_addr, (None, evict_label.clone()));
     }
 
     ///

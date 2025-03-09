@@ -771,7 +771,7 @@ impl FuncInfo {
     }
 
     pub(super) fn entry_label(&self) -> DestLabel {
-        self.ext.entry.unwrap()
+        self.ext.entry.clone().unwrap()
     }
 
     ///

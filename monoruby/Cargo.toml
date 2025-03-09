@@ -36,8 +36,8 @@ emit-cfg = ["dump-bc"]
 clap = { version = "4.5.27", features = ["derive"] }
 rustyline = "15.0.0"
 paste = "1.0.15"
-monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
-monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
+monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
+monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
 monoruby-attr = { path = "../monoruby_attr" }
 num = "0.4.3"

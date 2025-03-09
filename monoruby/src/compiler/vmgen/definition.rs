@@ -120,7 +120,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         //self.fetch2();
         monoasm! { &mut self.jit,
             movl rdx, [r13 - 8];  // name

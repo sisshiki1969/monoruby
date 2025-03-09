@@ -1470,7 +1470,7 @@ impl Codegen {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();
-            side_exits.push(label);
+            side_exits.push(label.clone());
             match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     self.gen_evict_with_label(pc, &wb, label);
@@ -1489,8 +1489,8 @@ impl Codegen {
             self.jit.select_page(1);
         }
 
-        if let Some(entry) = entry {
-            self.jit.bind_label(entry);
+        if let Some(entry) = &entry {
+            self.jit.bind_label(entry.clone());
         }
 
         for inst in ir.inst {
@@ -1519,7 +1519,7 @@ impl Codegen {
     ///
     /// Check *rax*, and if it is 0, go to 'error'.
     ///
-    pub(crate) fn handle_error(&mut self, error: DestLabel) {
+    pub(crate) fn handle_error(&mut self, error: &DestLabel) {
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq   error;

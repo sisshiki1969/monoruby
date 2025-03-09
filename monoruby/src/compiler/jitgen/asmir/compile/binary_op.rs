@@ -21,7 +21,7 @@ impl Codegen {
         rhs: GP,
         mode: &OpMode,
         kind: BinOpK,
-        deopt: DestLabel,
+        deopt: &DestLabel,
     ) {
         let lhs_r = lhs as u64;
         let rhs_r = rhs as u64;
@@ -820,7 +820,7 @@ impl Codegen {
     /// - rax
     /// - rcx
     ///
-    pub(crate) fn gen_shr(&mut self, deopt: DestLabel) {
+    pub(crate) fn gen_shr(&mut self, deopt: &DestLabel) {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -883,7 +883,7 @@ impl Codegen {
     /// - rax
     /// - rcx
     ///
-    pub(crate) fn gen_shl(&mut self, deopt: DestLabel) {
+    pub(crate) fn gen_shl(&mut self, deopt: &DestLabel) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -925,7 +925,7 @@ impl Codegen {
     /// - rax
     /// - rcx
     ///
-    pub(crate) fn gen_shl_lhs_imm(&mut self, lhs: i64, deopt: DestLabel) {
+    pub(crate) fn gen_shl_lhs_imm(&mut self, lhs: i64, deopt: &DestLabel) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -968,7 +968,7 @@ impl Codegen {
     /// - rax
     /// - rcx
     ///
-    pub(crate) fn gen_shl_rhs_imm(&mut self, rhs: u8, deopt: DestLabel) {
+    pub(crate) fn gen_shl_rhs_imm(&mut self, rhs: u8, deopt: &DestLabel) {
         monoasm!( &mut self.jit,
             lzcntq rax, rdi;
             cmpq rax, (rhs);

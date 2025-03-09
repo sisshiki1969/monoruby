@@ -18,14 +18,14 @@ macro_rules! vm_cmp_opt {
               self.fetch3();
               self.vm_get_slot_value(GP::Rdi);
               self.vm_get_slot_value(GP::Rsi);
-              self.guard_rdi_rsi_fixnum(generic);
+              self.guard_rdi_rsi_fixnum(&generic);
               self.vm_save_binary_integer();
 
               self.[<icmp_ $op>]();
               self.vm_store_r15(GP::Rax);
               self.fetch_and_dispatch();
 
-              self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
+              self.vm_generic_binop(&generic, [<cmp_ $op _values>] as _);
               self.fetch_and_dispatch();
 
               label
@@ -37,14 +37,14 @@ macro_rules! vm_cmp_opt {
               self.fetch3();
               self.vm_get_slot_value(GP::Rdi);
               self.vm_get_smi_rsi(); // rsi <- rhs addr
-              self.guard_rdi_fixnum(generic);
+              self.guard_rdi_fixnum(&generic);
               self.vm_save_binary_integer();
 
               self.[<icmp_ $op>]();
               self.vm_store_r15(GP::Rax);
               self.fetch_and_dispatch();
 
-              self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
+              self.vm_generic_binop(&generic, [<cmp_ $op _values>] as _);
               self.fetch_and_dispatch();
 
               label
@@ -57,7 +57,7 @@ macro_rules! vm_cmp_opt {
               self.vm_get_slot_value(GP::Rdi);
               self.vm_get_slot_value(GP::Rsi);
               self.vm_save_binary_integer();
-              self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
+              self.vm_generic_binop(&generic, [<cmp_ $op _values_no_opt>] as _);
               self.fetch_and_dispatch();
 
               label
@@ -70,7 +70,7 @@ macro_rules! vm_cmp_opt {
               self.vm_get_slot_value(GP::Rdi);
               self.vm_get_smi_rsi(); // rsi <- rhs addr
               self.vm_save_binary_integer();
-              self.vm_generic_binop(generic, [<cmp_ $op _values_no_opt>] as _);
+              self.vm_generic_binop(&generic, [<cmp_ $op _values_no_opt>] as _);
               self.fetch_and_dispatch();
 
               label
@@ -92,8 +92,6 @@ impl Codegen {
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
-        self.vm_fetch = entry_fetch;
-        self.vm_entry = vm_entry;
 
         //
         // VM entry
@@ -114,10 +112,10 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
-        self.jit_class_guard_fail = self.jit.label();
-        self.jit.bind_label(self.jit_class_guard_fail);
+        let jit_class_guard_fail = self.jit.label();
         #[cfg(feature = "profile")]
         monoasm! { &mut self.jit,
+        jit_class_guard_fail:
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
@@ -157,7 +155,6 @@ impl Codegen {
             leave;
             ret;
         }
-        self.entry_raise = vm_raise;
 
         let div_by_zero = self.jit.label();
         monoasm!( &mut self.jit,
@@ -167,6 +164,11 @@ impl Codegen {
             call rax;
             jmp vm_raise;
         );
+
+        self.vm_fetch = entry_fetch;
+        self.vm_entry = vm_entry;
+        self.entry_raise = vm_raise;
+        self.jit_class_guard_fail = jit_class_guard_fail;
         self.div_by_zero = div_by_zero;
 
         //BcOp::Ret
@@ -196,7 +198,7 @@ impl Codegen {
 
         //BcOp::Raise
         let raise_err = self.jit.get_current_address();
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         self.fetch_val_r15();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
@@ -208,7 +210,7 @@ impl Codegen {
 
         //BcOp::EnsureEnd
         let ensure_end = self.jit.get_current_address();
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rax, (runtime::check_err);
@@ -253,22 +255,22 @@ impl Codegen {
         self.dispatch[1] = self.vm_singleton_method_def();
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
-        self.dispatch[4] = self.vm_condbr(branch);
-        self.dispatch[5] = self.vm_condnotbr(branch);
+        self.dispatch[4] = self.vm_condbr(&branch);
+        self.dispatch[5] = self.vm_condnotbr(&branch);
         self.dispatch[6] = self.vm_integer();
         self.dispatch[7] = self.vm_literal();
         self.dispatch[8] = self.vm_nil();
         self.dispatch[9] = self.vm_symbol();
         self.dispatch[10] = self.vm_load_const();
         self.dispatch[11] = self.vm_store_const();
-        self.dispatch[12] = self.vm_condbr(branch);
-        self.dispatch[13] = self.vm_condnotbr(branch);
+        self.dispatch[12] = self.vm_condbr(&branch);
+        self.dispatch[13] = self.vm_condnotbr(&branch);
         self.dispatch[14] = self.vm_loop_start(no_jit);
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_check_const();
-        self.dispatch[20] = self.vm_check_local(branch);
+        self.dispatch[20] = self.vm_check_local(&branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
         self.dispatch[23] = self.vm_block_arg();
@@ -285,8 +287,8 @@ impl Codegen {
         self.dispatch[34] = self.vm_yield(true);
         self.dispatch[35] = self.vm_yield(false);
 
-        self.dispatch[36] = self.vm_optcase(branch);
-        self.dispatch[37] = self.vm_nilbr(branch);
+        self.dispatch[36] = self.vm_optcase(&branch);
+        self.dispatch[37] = self.vm_nilbr(&branch);
         self.dispatch[38] = self.vm_lambda();
         self.dispatch[39] = self.vm_array();
 
@@ -627,7 +629,7 @@ impl Codegen {
     /// - rax: ClassId
     ///
     fn vm_save_lhs_class(&mut self) {
-        let get_class = self.get_class;
+        let get_class = self.get_class.clone();
         monoasm! { &mut self.jit,
             call  get_class;
             movl  [r13 - 8], rax;
@@ -645,7 +647,7 @@ impl Codegen {
     /// - rax
     ///
     fn vm_save_binary_class(&mut self) {
-        let get_class = self.get_class;
+        let get_class = self.get_class.clone();
         monoasm! { &mut self.jit,
             call  get_class;
             movl  [r13 - 8], rax;
@@ -674,15 +676,15 @@ impl Codegen {
     }
 
     fn vm_handle_error(&mut self) {
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq  raise;
         };
     }
 
-    fn vm_generic_unop(&mut self, generic: DestLabel, func: UnaryOpFn) {
-        self.jit.bind_label(generic);
+    fn vm_generic_unop(&mut self, generic: &DestLabel, func: UnaryOpFn) {
+        self.jit.bind_label(generic.clone());
         self.vm_save_lhs_class();
         self.call_unop(func);
         self.vm_handle_error();
@@ -690,8 +692,8 @@ impl Codegen {
         self.fetch_and_dispatch();
     }
 
-    fn vm_generic_binop(&mut self, generic: DestLabel, func: BinaryOpFn) {
-        self.jit.bind_label(generic);
+    fn vm_generic_binop(&mut self, generic: &DestLabel, func: BinaryOpFn) {
+        self.jit.bind_label(generic.clone());
         self.vm_save_binary_class();
         self.call_binop(func);
         self.vm_handle_error();
@@ -828,6 +830,7 @@ impl Codegen {
                 lea  rdx, [r13 - 16];
                 movq rax, (exec_jit_partial_compile);
                 call rax;
+                movq rax, [r13 - 8];
                 jmp rax;
             );
         }
@@ -1055,7 +1058,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         self.fetch2();
         monoasm! { &mut self.jit,
             movq  rax, r14;
@@ -1171,7 +1174,7 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(generic, bitnot_value);
+        self.vm_generic_unop(&generic, bitnot_value);
         label
     }
 
@@ -1180,7 +1183,7 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(generic, bitnot_value_no_opt);
+        self.vm_generic_unop(&generic, bitnot_value_no_opt);
         label
     }
 
@@ -1189,7 +1192,7 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.guard_rdi_fixnum(generic);
+        self.guard_rdi_fixnum(&generic);
         monoasm! { &mut self.jit,
             sarq rdi, 1;
             negq rdi;
@@ -1198,7 +1201,7 @@ impl Codegen {
         self.vm_lhs_integer();
         self.vm_store_r15(GP::Rdi);
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, neg_value);
+        self.vm_generic_unop(&generic, neg_value);
         label
     }
 
@@ -1207,7 +1210,7 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(generic, neg_value_no_opt);
+        self.vm_generic_unop(&generic, neg_value_no_opt);
         label
     }
 
@@ -1222,7 +1225,7 @@ impl Codegen {
         }
         self.vm_store_r15(GP::Rdi);
         self.fetch_and_dispatch();
-        self.vm_generic_unop(generic, pos_value);
+        self.vm_generic_unop(&generic, pos_value);
         label
     }
 
@@ -1231,7 +1234,7 @@ impl Codegen {
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(generic, pos_value_no_opt);
+        self.vm_generic_unop(&generic, pos_value_no_opt);
         label
     }
 
@@ -1287,22 +1290,22 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
-        self.guard_rdi_rsi_fixnum(generic);
-        self.jit.bind_label(common);
+        self.guard_rdi_rsi_fixnum(&generic);
+        self.jit.bind_label(common.clone());
         self.vm_save_binary_integer();
-        opt_func(self, generic);
+        opt_func(self, generic.clone());
         self.vm_store_r15(GP::Rax);
-        self.jit.bind_label(exit);
+        self.jit.bind_label(exit.clone());
         self.fetch_and_dispatch();
 
-        self.vm_generic_binop(generic, generic_func);
+        self.vm_generic_binop(&generic, generic_func);
         monoasm! { &mut self.jit, jmp exit; };
 
         let ptr_ri = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_smi_rsi(); // rsi <- rhs addr
-        self.guard_rdi_fixnum(generic);
+        self.guard_rdi_fixnum(&generic);
         monoasm!( &mut self.jit,
             jmp common;
         );
@@ -1311,7 +1314,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_smi_rdi();
         self.vm_get_slot_value(GP::Rsi); // rsi <- rhs addr
-        self.guard_rsi_fixnum(generic);
+        self.guard_rsi_fixnum(&generic);
         monoasm!( &mut self.jit,
             jmp common;
         );
@@ -1325,7 +1328,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
-        self.vm_generic_binop(common, func);
+        self.vm_generic_binop(&common, func);
         self.fetch_and_dispatch();
 
         let ptr_ri = self.jit.get_current_address();
@@ -1343,7 +1346,7 @@ impl Codegen {
         (ptr_rr, ptr_ri, ptr_ir)
     }
 
-    fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {
+    fn vm_check_local(&mut self, branch: &DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
@@ -1355,7 +1358,7 @@ impl Codegen {
         label
     }
 
-    fn vm_condbr(&mut self, branch: DestLabel) -> CodePtr {
+    fn vm_condbr(&mut self, branch: &DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
@@ -1368,7 +1371,7 @@ impl Codegen {
         label
     }
 
-    fn vm_nilbr(&mut self, branch: DestLabel) -> CodePtr {
+    fn vm_nilbr(&mut self, branch: &DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
@@ -1380,7 +1383,7 @@ impl Codegen {
         label
     }
 
-    fn vm_condnotbr(&mut self, branch: DestLabel) -> CodePtr {
+    fn vm_condnotbr(&mut self, branch: &DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
@@ -1393,7 +1396,7 @@ impl Codegen {
         label
     }
 
-    fn vm_optcase(&mut self, branch: DestLabel) -> CodePtr {
+    fn vm_optcase(&mut self, branch: &DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_slot_addr(GP::R15);

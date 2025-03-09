@@ -65,7 +65,7 @@ impl Codegen {
     //
     pub(super) fn vm_load_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let const_version = self.const_version;
+        let const_version = self.const_version_label();
         self.fetch2();
         monoasm! { &mut self.jit,
             movq rdx, rdi;  // ConstSiteId
@@ -91,7 +91,7 @@ impl Codegen {
     //
     pub(super) fn vm_check_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let const_version = self.const_version;
+        let const_version = self.const_version_label();
         self.fetch2();
         monoasm! { &mut self.jit,
             movq rdx, rdi;  // ConstSiteId
@@ -116,7 +116,7 @@ impl Codegen {
     //
     pub(super) fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let const_version = self.const_version;
+        let const_version = self.const_version_label();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
         monoasm! { &mut self.jit,

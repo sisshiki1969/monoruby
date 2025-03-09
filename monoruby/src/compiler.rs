@@ -412,10 +412,8 @@ pub struct Codegen {
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
     pub(crate) specialized_patch_point: Vec<(ISeqId, ClassId, DestLabel)>,
     pub(crate) specialized_base: usize,
-    #[allow(dead_code)]
-    pub(crate) entry_panic: DestLabel,
-    pub(crate) vm_entry: DestLabel,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
+    vm_entry: DestLabel,
     vm_fetch: DestLabel,
     jit_class_guard_fail: DestLabel,
     ///
@@ -503,8 +501,8 @@ impl Codegen {
         let pair = jit.get_address_pair();
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
-        let class_version_addr = jit.get_label_address(jit.class_version).as_ptr() as *mut u32;
-        let const_version_addr = jit.get_label_address(jit.const_version).as_ptr() as *mut u64;
+        let class_version_addr = jit.get_label_address(&jit.class_version).as_ptr() as *mut u32;
+        let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
         let entry_panic = jit.entry_panic();
         let get_class = jit.get_class();
         let f64_to_val = jit.f64_to_val();
@@ -526,19 +524,18 @@ impl Codegen {
             jit,
             class_version_addr,
             const_version_addr,
-            alloc_flag,
+            alloc_flag: alloc_flag.clone(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             specialized_patch_point: Vec::new(),
             specialized_base: 0,
-            entry_panic,
-            vm_entry: entry_panic,
+            vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
-            vm_fetch: entry_panic,
-            jit_class_guard_fail: entry_panic,
-            entry_raise: entry_panic,
+            vm_fetch: entry_panic.clone(),
+            jit_class_guard_fail: entry_panic.clone(),
+            entry_raise: entry_panic.clone(),
             f64_to_val,
-            div_by_zero: entry_panic,
+            div_by_zero: entry_panic.clone(),
             get_class,
             exec_gc,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
@@ -551,7 +548,7 @@ impl Codegen {
             fiber_invoker_with_self,
             resume_fiber,
             yield_fiber,
-            startup_flag: false,
+            startup_flag: true,
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
         };
@@ -564,7 +561,7 @@ impl Codegen {
         let info = codegen.get_wrapper_info(pair);
         codegen.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
 
-        let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
+        let address = codegen.jit.get_label_address(&alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {
             alloc.borrow_mut().set_alloc_flag_address(address);
         });
@@ -572,7 +569,30 @@ impl Codegen {
     }
 
     pub(crate) fn class_version_label(&self) -> DestLabel {
-        self.class_version
+        self.class_version.clone()
+    }
+    pub(crate) fn const_version_label(&self) -> DestLabel {
+        self.const_version.clone()
+    }
+
+    pub(crate) fn alloc_flag(&self) -> DestLabel {
+        self.alloc_flag.clone()
+    }
+
+    pub(crate) fn exec_gc(&self) -> DestLabel {
+        self.exec_gc.clone()
+    }
+
+    pub(crate) fn entry_raise(&self) -> DestLabel {
+        self.entry_raise.clone()
+    }
+
+    pub(crate) fn vm_entry(&self) -> DestLabel {
+        self.vm_entry.clone()
+    }
+
+    pub(crate) fn vm_fetch(&self) -> DestLabel {
+        self.vm_fetch.clone()
     }
 
     pub(crate) fn class_version(&self) -> u32 {
@@ -590,7 +610,7 @@ impl Codegen {
     pub(crate) fn bop_redefine_flags(&self) -> u32 {
         let addr = self
             .jit
-            .get_label_address(self.bop_redefined_flags)
+            .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
         unsafe { *addr }
     }
@@ -598,7 +618,7 @@ impl Codegen {
     pub(crate) fn set_bop_redefine(&mut self) {
         let addr = self
             .jit
-            .get_label_address(self.bop_redefined_flags)
+            .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
         unsafe { *addr = !0 }
         self.remove_vm_bop_optimization();
@@ -655,10 +675,10 @@ impl Codegen {
     /// Execute garbage collection.
     ///
     fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
-        let alloc_flag = self.alloc_flag;
+        let alloc_flag = self.alloc_flag();
         let gc = self.jit.label();
         let exit = self.jit.label();
-        let exec_gc = self.exec_gc;
+        let exec_gc = self.exec_gc();
         assert_eq!(0, self.jit.get_page());
         monoasm! { &mut self.jit,
             cmpl [rip + alloc_flag], 0;
@@ -695,7 +715,7 @@ impl Codegen {
     ///
     /// check whether lhs and rhs are fixnum.
     ///
-    fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rdi_rsi_fixnum(&mut self, generic: &DestLabel) {
         self.guard_rdi_fixnum(generic);
         self.guard_rsi_fixnum(generic);
     }
@@ -703,7 +723,7 @@ impl Codegen {
     ///
     /// check whether lhs is fixnum.
     ///
-    fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rdi_fixnum(&mut self, generic: &DestLabel) {
         monoasm!( &mut self.jit,
             testq rdi, 0x1;
             jz generic;
@@ -713,7 +733,7 @@ impl Codegen {
     ///
     /// check whether rhs is fixnum.
     ///
-    fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rsi_fixnum(&mut self, generic: &DestLabel) {
         monoasm!( &mut self.jit,
             testq rsi, 0x1;
             jz generic;
@@ -762,7 +782,7 @@ impl Codegen {
     ///
     /// if the frame is on the heap, jump to *label*.
     ///
-    fn branch_if_heap_frame(&mut self, label: DestLabel) {
+    fn branch_if_heap_frame(&mut self, label: &DestLabel) {
         monoasm! { &mut self.jit,
             testb [r14 - (LFP_META - META_KIND)], (0b1000_0000_u8 as i8);
             jnz label;
@@ -785,11 +805,11 @@ impl Codegen {
     pub(super) fn class_guard_stub(
         &mut self,
         self_class: ClassId,
-        patch_point: DestLabel,
-        jit_entry: DestLabel,
-        guard: DestLabel,
+        patch_point: &DestLabel,
+        jit_entry: &DestLabel,
+        guard: &DestLabel,
     ) {
-        let exit = self.jit_class_guard_fail;
+        let exit = self.jit_class_guard_fail.clone();
         let exit_patch_point = self.jit.label();
         let counter = self.jit.data_i32(COUNT_RECOMPILE_ARECV_CLASS);
 
@@ -797,7 +817,7 @@ impl Codegen {
         guard:
             movq rdi, [r14 - (LFP_SELF)];
         }
-        self.guard_class_rdi(self_class, exit_patch_point);
+        self.guard_class_rdi(self_class, &exit_patch_point);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;
@@ -824,7 +844,6 @@ impl Codegen {
             jmp exit_patch_point;
         }
         self.jit.select_page(0);
-        self.jit.finalize();
     }
 
     ///
@@ -848,7 +867,7 @@ impl Codegen {
     /// - r13: pc + 1
     ///
     fn method_return(&mut self) {
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1081,7 +1100,7 @@ mod tests {
             (HASH_CLASS, Value::hash(IndexMap::default())),
             (STRING_CLASS, Value::string_from_str("Ruby")),
         ] {
-            let func = gen.jit.get_label_addr(gen.get_class);
+            let func = gen.jit.get_label_addr(&gen.get_class);
 
             assert_eq!(class, func(value))
         }
@@ -1102,7 +1121,7 @@ mod tests {
             f64::MAX,
             f64::MIN,
         ] {
-            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(gen.f64_to_val);
+            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(&gen.f64_to_val);
             if f.is_nan() {
                 assert!(func(f).try_float().unwrap().is_nan())
             } else {

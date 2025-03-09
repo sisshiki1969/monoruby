@@ -772,7 +772,7 @@ impl Codegen {
 
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
-        let raise = self.entry_raise;
+        let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
@@ -818,7 +818,7 @@ impl Codegen {
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", xmm, v);
-        let f64_to_val = self.f64_to_val;
+        let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
             movq xmm0, xmm(xmm.enc());
             call f64_to_val;
@@ -924,7 +924,7 @@ impl Codegen {
                 call rax;
             );
         }
-        let fetch = self.vm_fetch;
+        let fetch = self.vm_fetch();
         monoasm!( &mut self.jit,
             jmp fetch;
         );
@@ -936,7 +936,7 @@ impl Codegen {
 fn float_test() {
     let gen = Codegen::new(false);
 
-    let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
+    let from_f64_entry = gen.jit.get_label_address(&gen.f64_to_val);
     let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
 
     for lhs in [
@@ -979,7 +979,7 @@ fn float_test2() {
         ret;
     );
     gen.jit.finalize();
-    let int_to_f64_entry = gen.jit.get_label_address(assume_int_to_f64);
+    let int_to_f64_entry = gen.jit.get_label_address(&assume_int_to_f64);
 
     let int_to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
     assert_eq!(143.0, int_to_f64(Value::integer(143)));
