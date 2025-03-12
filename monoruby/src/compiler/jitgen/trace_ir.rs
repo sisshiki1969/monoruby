@@ -214,6 +214,7 @@ pub(crate) enum TraceIr {
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
     },
     MethodCall {
+        polymorphic: bool,
         callid: CallSiteId,
         cache: Option<MethodCacheEntry>,
     },
@@ -679,7 +680,11 @@ impl TraceIr {
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            TraceIr::MethodCall { callid, cache } => {
+            TraceIr::MethodCall {
+                polymorphic,
+                callid,
+                cache,
+            } => {
                 let callsite = &store[*callid];
                 let name = if let Some(name) = callsite.name {
                     name.to_string()
@@ -690,8 +695,9 @@ impl TraceIr {
                 let s = callsite.format_args();
                 let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv,);
                 format!(
-                    "{:36} [{}] {}",
+                    "{:36} {} [{}] {}",
                     op1,
+                    if *polymorphic { "POLY" } else { "" },
                     store.debug_class_name(if let Some(entry) = cache {
                         Some(entry.recv_class)
                     } else {

@@ -534,8 +534,14 @@ impl ISeqInfo {
                 },
                 30..=33 => {
                     let callid = op1_l.into();
+                    let polymorphic = match pc.opcode_sub() {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    };
                     if let Some(func_id) = pc.cached_fid() {
                         TraceIr::MethodCall {
+                            polymorphic,
                             callid,
                             cache: Some(MethodCacheEntry {
                                 recv_class: pc.cached_class1().unwrap(),
@@ -545,6 +551,7 @@ impl ISeqInfo {
                         }
                     } else {
                         TraceIr::MethodCall {
+                            polymorphic,
                             callid,
                             cache: None,
                         }

@@ -24,20 +24,13 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn jit_set_arguments(
-        &mut self,
-        callid: CallSiteId,
-        args: SlotId,
-        offset: usize,
-        meta: Meta,
-    ) {
+    pub(super) fn jit_set_arguments(&mut self, callid: CallSiteId, offset: usize, meta: Meta) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());
-            lea  rcx, [r14 - (conv(args))];
-            lea  r8, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
-            movq r9, (meta.get());
+            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
+            movq r8, (meta.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
             call rax;

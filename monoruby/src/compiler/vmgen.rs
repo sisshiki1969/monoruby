@@ -825,8 +825,8 @@ impl Codegen {
         if !no_jit && !cfg!(feature = "no-jit") {
             monoasm!( &mut self.jit,
             compile:
-                movq rdi, rbx;
-                movq rsi, r12;
+                movq rdi, r12;
+                movq rsi, r14;
                 lea  rdx, [r13 - 16];
                 movq rax, (exec_jit_partial_compile);
                 call rax;

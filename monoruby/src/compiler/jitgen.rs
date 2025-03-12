@@ -490,13 +490,14 @@ enum LinkMode {
 }
 
 impl Codegen {
-    pub(crate) fn jit_compile(
+    pub(super) fn jit_compile(
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
+        is_recompile: bool,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
@@ -504,12 +505,13 @@ impl Codegen {
             let start_pos = iseq.get_pc_index(position);
             let name = store.func_description(iseq.func_id());
             eprintln!(
-                "==> start {} compile: {:?} <{}> {}self_class: {} {}:{}",
+                "==> start {} {}compile: {:?} <{}> {}self_class: {} {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
                     "whole"
                 },
+                if is_recompile { "re" } else { "" },
                 iseq.func_id(),
                 name,
                 if position.is_some() {

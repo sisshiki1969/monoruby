@@ -148,7 +148,6 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     vm: &mut Executor,
     globals: &Globals,
     caller: CallSiteId,
-    src: *const Value,
     callee_lfp: Lfp,
     meta: Meta,
 ) -> Option<Value> {

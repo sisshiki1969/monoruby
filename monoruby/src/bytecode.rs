@@ -262,6 +262,10 @@ impl BytecodePtr {
         (self.op1 >> 48) as u8
     }
 
+    pub fn opcode_sub(&self) -> u8 {
+        (self.op1 >> 56) as u8
+    }
+
     pub fn as_ptr(&self) -> *mut Bytecode {
         self.0.as_ptr()
     }

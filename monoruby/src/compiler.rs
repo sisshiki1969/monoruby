@@ -1138,9 +1138,22 @@ impl Globals {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
+        is_recompile: bool,
     ) {
-        self.codegen
-            .jit_compile(&self.store, iseq_id, self_class, position, entry_label);
+        #[cfg(feature = "profile")]
+        {
+            if is_recompile {
+                self.countup_recompile(self.store[iseq_id].func_id(), self_class);
+            }
+        }
+        self.codegen.jit_compile(
+            &self.store,
+            iseq_id,
+            self_class,
+            position,
+            entry_label,
+            is_recompile,
+        );
     }
 
     ///
@@ -1151,7 +1164,8 @@ impl Globals {
         iseq_id: ISeqId,
         self_class: ClassId,
         jit_entry: DestLabel,
+        is_recompile: bool,
     ) {
-        self.exec_jit_compile(iseq_id, self_class, None, jit_entry)
+        self.exec_jit_compile(iseq_id, self_class, None, jit_entry, is_recompile)
     }
 }

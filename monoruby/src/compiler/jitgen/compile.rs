@@ -597,7 +597,11 @@ impl JitContext {
                 ir.alias_method(bbctx, new, old);
                 bbctx.unset_class_version_guard();
             }
-            TraceIr::MethodCall { callid, cache } => {
+            TraceIr::MethodCall {
+                polymorphic: _,
+                callid,
+                cache,
+            } => {
                 if let Some(cache) = cache {
                     return self.compile_method_call(bbctx, ir, store, cache, &store[callid]);
                 } else {

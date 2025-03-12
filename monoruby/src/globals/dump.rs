@@ -155,7 +155,7 @@ pub(crate) extern "C" fn log_deoptimize(
     vm: &mut Executor,
     globals: &mut Globals,
     pc: BytecodePtr,
-    #[cfg(feature = "deopt")] v: Option<Value>,
+    #[cfg(feature = "deopt")] reason: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().meta().func_id();
@@ -194,7 +194,7 @@ pub(crate) extern "C" fn log_deoptimize(
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", bc_pos);
                 },
-                _ => if let Some(v) = v {
+                _ => if let Some(v) = reason {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
                 } else {

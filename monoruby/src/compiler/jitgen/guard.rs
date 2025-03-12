@@ -122,12 +122,16 @@ impl Codegen {
         );
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
+                movq rdi, r12;
+                movq rsi, r14;
                 movq rdx, (pc.as_ptr());
-                movq rax, (exec_jit_partial_compile);
+                movq rax, (exec_jit_partial_recompile);
                 call rax;
             );
         } else {
             monoasm!( &mut self.jit,
+                movq rdi, r12;
+                movq rsi, r14;
                 movq rax, (exec_jit_recompile_method);
                 call rax;
             );
@@ -141,7 +145,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, r12;
             movq rsi, (idx);
-            movq rax, (exec_jit_specialized_compile_patch);
+            movq rax, (exec_jit_specialized_recompile);
             call rax;
         );
         self.jit.restore_registers();
