@@ -78,8 +78,24 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
     }
 }
 
+// private interface
+impl AsmIr {
+    fn new_label(&mut self, side_exit: SideExit) -> usize {
+        let label = self.side_exit.len();
+        self.side_exit.push(side_exit);
+        label
+    }
+}
+
 // public interface
 impl AsmIr {
+    pub(super) fn new() -> Self {
+        Self {
+            inst: vec![],
+            side_exit: vec![],
+        }
+    }
+
     pub(super) fn push(&mut self, inst: AsmInst) {
         self.inst.push(inst);
     }
@@ -93,36 +109,27 @@ impl AsmIr {
         self.side_exit.truncate(side_exit);
     }
 
-    pub(super) fn new_deopt(&mut self, pc: BytecodePtr, wb: WriteBack) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(pc, wb));
-        AsmDeopt(i)
-    }
-
-    pub(super) fn new_error(&mut self, pc: BytecodePtr, wb: WriteBack) -> AsmError {
-        let i = self.new_label(SideExit::Error(pc, wb));
-        AsmError(i)
-    }
-
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
         let i = self.new_label(SideExit::Evict(None));
         AsmEvict(i)
     }
+
+    pub(crate) fn new_deopt(&mut self, bb: &BBContext) -> AsmDeopt {
+        self.new_deopt_with_pc(bb, bb.pc())
+    }
+
+    pub(crate) fn new_deopt_with_pc(&mut self, bb: &BBContext, pc: BytecodePtr) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(pc, bb.get_write_back()));
+        AsmDeopt(i)
+    }
+
+    pub(crate) fn new_error(&mut self, bb: &BBContext) -> AsmError {
+        let i = self.new_label(SideExit::Error(bb.pc(), bb.get_write_back()));
+        AsmError(i)
+    }
 }
 
 impl AsmIr {
-    pub(super) fn new() -> Self {
-        Self {
-            inst: vec![],
-            side_exit: vec![],
-        }
-    }
-
-    fn new_label(&mut self, side_exit: SideExit) -> usize {
-        let label = self.side_exit.len();
-        self.side_exit.push(side_exit);
-        label
-    }
-
     ///
     /// Save floating point registers in use.
     ///
@@ -141,7 +148,7 @@ impl AsmIr {
         self.push(AsmInst::ExecGc(wb));
     }
 
-    pub fn reg_move(&mut self, src: GP, dst: GP) {
+    pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.push(AsmInst::RegMove(src, dst));
         }
@@ -183,28 +190,6 @@ impl AsmIr {
 
     pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
         self.push(AsmInst::XmmMove(src, dst));
-    }
-
-    ///
-    /// Float binary operation
-    ///
-    /// ### in
-    /// - depends on *mode*
-    ///
-    /// ### out
-    /// - xmm(*dst*): dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmBinOp {
-            kind,
-            mode,
-            dst,
-            using_xmm,
-        });
     }
 
     ///
@@ -294,46 +279,74 @@ impl AsmIr {
         self.push(AsmInst::DeepCopyLit(val, using_xmm));
     }
 
-    pub fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
+    pub(super) fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
         self.push(AsmInst::GuardArrayTy(r, deopt));
     }
 
-    /*///
-    /// Class version guard for JIT.
-    ///
-    /// Check the cached class version, and if the version is changed, call `find_method` and
-    /// compare obtained FuncId and cached FuncId.
-    /// If different, jump to `deopt`.
-    /// If identical, update the cached version and go on.
-    ///
-    /// ### in
-    /// - rdi: receiver: Value
-    ///
-    /// ### out
-    /// - rdi: receiver: Value
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    pub(super) fn guard_version(
-        &mut self,
-        cached_fid: FuncId,
-        cached_version: u32,
-        callid: CallSiteId,
-        using_xmm: UsingXmm,
-        deopt: AsmDeopt,
-        error: AsmError,
-    ) {
-        self.push(AsmInst::GuardClassVersionWithRecovery(
-            cached_fid,
-            cached_version,
-            callid,
+    pub(super) fn deopt(&mut self, bb: &BBContext) {
+        let exit = self.new_deopt(bb);
+        self.push(AsmInst::Deopt(exit));
+    }
+
+    pub(super) fn check_bop(&mut self, bb: &BBContext) {
+        let deopt = self.new_deopt(bb);
+        self.push(AsmInst::CheckBOP { deopt });
+    }
+
+    pub(super) fn block_arg(&mut self, bb: &BBContext, ret: SlotId, outer: usize) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb);
+        self.push(AsmInst::BlockArg {
+            ret,
+            outer,
             using_xmm,
-            deopt,
             error,
-        ));
-    }*/
+        });
+    }
+
+    pub(super) fn load_svar(&mut self, bb: &BBContext, id: u32) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::LoadSVar { id, using_xmm });
+    }
+
+    pub(super) fn concat_str(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::ConcatStr {
+            arg,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn concat_regexp(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::ConcatRegexp {
+            arg,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
+        let using_xmm = bb.get_using_xmm();
+        let len = len as _;
+        self.push(AsmInst::ExpandArray {
+            dst,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb);
+        self.push(AsmInst::AliasMethod {
+            new,
+            old,
+            using_xmm,
+        });
+        self.handle_error(error);
+    }
 
     pub(super) fn opt_case(
         &mut self,
@@ -355,7 +368,75 @@ impl AsmIr {
     }
 }
 
+//
+// binary operations
+//
 impl AsmIr {
+    ///
+    /// Integer binary operation.
+    ///
+    /// ### in
+    /// - rdi  lhs
+    /// - rsi  rhs
+    ///
+    /// ### out
+    /// - rdi  dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
+    pub(super) fn integer_binop(
+        &mut self,
+        kind: BinOpK,
+        lhs: GP,
+        rhs: GP,
+        mode: OpMode,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerBinOp {
+            kind,
+            lhs,
+            rhs,
+            mode,
+            deopt,
+        });
+    }
+
+    ///
+    /// Float binary operation
+    ///
+    /// ### in
+    /// - depends on *mode*
+    ///
+    /// ### out
+    /// - xmm(*dst*): dst
+    ///
+    /// ### destroy
+    /// - caller save registers
+    /// - stack
+    ///
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, mode: FMode, dst: Xmm, using_xmm: UsingXmm) {
+        self.push(AsmInst::XmmBinOp {
+            kind,
+            mode,
+            dst,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn integer_exp(&mut self, bb: &BBContext) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::IntegerExp { using_xmm });
+    }
+
+    pub(super) fn generic_cmp(&mut self, bb: &BBContext, kind: CmpKind) {
+        let using_xmm = bb.get_using_xmm();
+        let error = self.new_error(bb);
+        self.push(AsmInst::GenericCmp { kind, using_xmm });
+        self.handle_error(error);
+    }
+
     ///
     /// Integer comparison
     ///
@@ -405,20 +486,12 @@ impl AsmIr {
             branch_dest,
         });
     }
+}
 
-    /*pub(crate) fn generic_index(&mut self, bb: &BBContext, base: SlotId, idx: SlotId) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
-        let pc = bb.pc();
-        self.push(AsmInst::GenericIndex {
-            base,
-            idx,
-            pc,
-            using_xmm,
-        });
-        self.handle_error(error);
-    }*/
-
+///
+/// index operations
+///
+impl AsmIr {
     ///
     /// Array index operation with u16 index `idx``.
     ///
@@ -456,7 +529,7 @@ impl AsmIr {
         src: SlotId,
     ) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb.pc(), bb.get_write_back());
+        let error = self.new_error(bb);
         let pc = bb.pc();
         self.push(AsmInst::GenericIndexAssign {
             src,
@@ -480,7 +553,7 @@ impl AsmIr {
     ///
     pub(super) fn array_u16_index_assign(&mut self, bb: &BBContext, idx: u16) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb.pc(), bb.get_write_back());
+        let error = self.new_error(bb);
         self.push(AsmInst::ArrayU16IndexAssign {
             idx,
             using_xmm,
@@ -501,11 +574,13 @@ impl AsmIr {
     ///
     pub(super) fn array_index_assign(&mut self, bb: &BBContext) {
         let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb.pc(), bb.get_write_back());
+        let error = self.new_error(bb);
         self.inst
             .push(AsmInst::ArrayIndexAssign { using_xmm, error });
     }
+}
 
+impl AsmIr {
     pub(super) fn new_array(&mut self, using_xmm: UsingXmm, callid: CallSiteId) {
         self.push(AsmInst::NewArray { callid, using_xmm });
     }
@@ -684,7 +759,16 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rax
     ///
-    GuardClassVersion(u32, AsmDeopt),
+    GuardClassVersion {
+        version: u32,
+        position: Option<BytecodePtr>,
+        deopt: AsmDeopt,
+    },
+    GuardClassVersionSpecialized {
+        version: u32,
+        idx: usize,
+        deopt: AsmDeopt,
+    },
     ///
     /// Type guard.
     ///
@@ -1386,7 +1470,7 @@ impl Codegen {
         let mut side_exits = SideExitLabels::new();
         for side_exit in ir.side_exit {
             let label = self.jit.label();
-            side_exits.push(label);
+            side_exits.push(label.clone());
             match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     self.gen_evict_with_label(pc, &wb, label);
@@ -1405,8 +1489,8 @@ impl Codegen {
             self.jit.select_page(1);
         }
 
-        if let Some(entry) = entry {
-            self.jit.bind_label(entry);
+        if let Some(entry) = &entry {
+            self.jit.bind_label(entry.clone());
         }
 
         for inst in ir.inst {
@@ -1435,7 +1519,7 @@ impl Codegen {
     ///
     /// Check *rax*, and if it is 0, go to 'error'.
     ///
-    pub(crate) fn handle_error(&mut self, error: DestLabel) {
+    pub(crate) fn handle_error(&mut self, error: &DestLabel) {
         monoasm! { &mut self.jit,
             testq rax, rax;
             jeq   error;

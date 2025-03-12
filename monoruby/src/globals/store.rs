@@ -251,8 +251,8 @@ impl Store {
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let func_id = self.functions.add_classdef(info, sourceinfo.clone())?;
-        let iseq = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
-        let iseq = self.add_iseq(iseq);
+        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
+        let iseq = self.add_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         self.functions.info.push(info);
         Ok(func_id)
@@ -266,8 +266,8 @@ impl Store {
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let (func_id, params) = self.functions.add_method(info, sourceinfo.clone())?;
-        let iseq = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
-        let iseq = self.add_iseq(iseq);
+        let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(info);
         let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
         self.functions.info.push(info);
         Ok(func_id)
@@ -286,8 +286,8 @@ impl Store {
         let (func_id, params) =
             self.functions
                 .add_block(optional_params, info, sourceinfo.clone())?;
-        let iseq = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
-        let iseq = self.add_iseq(iseq);
+        let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
+        let iseq = self.add_iseq(info);
         let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);
         self.functions.info.push(info);
         Ok(func_id)
@@ -505,7 +505,7 @@ impl Store {
         );
         eprintln!("{:?}", iseq.args);
         eprintln!("{:?}", iseq.get_exception_map());
-        for i in 0..iseq.bytecode().len() {
+        for i in 0..iseq.bytecode_len() {
             let bc_pos = BcIndex::from(i);
             if let Some(bbid) = iseq.bb_info.is_bb_head(bc_pos) {
                 eprintln!("  {:?}", bbid);

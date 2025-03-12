@@ -12,7 +12,7 @@
         "args": [
           "run",
           "--features",
-          "jit-debug",
+          "jit-log",
           "--bin=monoruby",
           "--package=monoruby",
         ],

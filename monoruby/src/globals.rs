@@ -510,7 +510,7 @@ impl Globals {
         let pair = self.codegen.get_address_pair();
         let kind = self.store[func_id].kind.clone();
         let entry = self.codegen.gen_wrapper(&kind, self.no_jit);
-        let codeptr = self.codegen.jit.get_label_address(entry);
+        let codeptr = self.codegen.jit.get_label_address(&entry);
         self.store[func_id].set_entry(entry, codeptr);
         #[cfg(feature = "perf")]
         {

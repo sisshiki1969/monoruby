@@ -127,7 +127,7 @@ impl Codegen {
             movq rax, (runtime::find_method);
             call rax;
         }
-        self.handle_error(error);
+        self.handle_error(&error);
         monoasm! { &mut self.jit,
             // FuncId was returned to rax.
             movl [r13 + (BC_OFFSET_CACHED_FUNCID)], rax;
@@ -152,7 +152,7 @@ impl Codegen {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv_class: ClassId,
-        error: DestLabel,
+        error: &DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
@@ -173,7 +173,7 @@ impl Codegen {
         callee_fid: FuncId,
         entry_label: DestLabel,
         patch_point: Option<DestLabel>,
-        error: DestLabel,
+        error: &DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
@@ -217,11 +217,11 @@ impl Codegen {
         &mut self,
         callid: CallSiteId,
         using_xmm: UsingXmm,
-        error: DestLabel,
+        error: &DestLabel,
     ) -> CodePtr {
         self.xmm_save(using_xmm);
         self.get_proc_data();
-        self.handle_error(error);
+        self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
         monoasm! { &mut self.jit,
             movq rdi, rax;
@@ -249,9 +249,9 @@ impl Codegen {
             addq  rsp, 64;
         };
 
-        let return_addr = self.generic_call(callid, error);
+        let return_addr = self.generic_call(callid, &error);
         self.xmm_restore(using_xmm);
-        self.handle_error(error);
+        self.handle_error(&error);
         return_addr
     }
 
@@ -261,7 +261,7 @@ impl Codegen {
         callid: CallSiteId,
         block_iseq: ISeqId,
         block_entry: DestLabel,
-        error: DestLabel,
+        error: &DestLabel,
     ) -> CodePtr {
         let caller = &store[callid];
         let block_fid = store[block_iseq].func_id();
@@ -359,7 +359,7 @@ impl Codegen {
         callid: CallSiteId,
         caller: &CallSiteInfo,
         callee: &FuncInfo,
-        error: DestLabel,
+        error: &DestLabel,
     ) {
         let meta = callee.meta();
         self.copy_keyword_args(caller, callee);
@@ -375,7 +375,7 @@ impl Codegen {
         callee: &FuncInfo,
         codeptr: CodePtr,
         recv_class: ClassId,
-        pc: Option<BytecodePtr>,
+        pc: Option<BytecodePtrBase>,
     ) -> CodePtr {
         self.set_lfp();
         self.push_frame();
@@ -514,7 +514,7 @@ impl Codegen {
         callid: CallSiteId,
         meta: Meta,
         offset: usize,
-        error: DestLabel,
+        error: &DestLabel,
     ) {
         monoasm! { &mut self.jit,
             movq rdi, rbx; // &mut Executor
@@ -539,7 +539,7 @@ impl Codegen {
     /// ### out
     /// - rax: return value
     ///
-    fn generic_call(&mut self, callid: CallSiteId, error: DestLabel) -> CodePtr {
+    fn generic_call(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
         }
@@ -655,7 +655,7 @@ impl Codegen {
         callid: CallSiteId,
         store: &Store,
         using_xmm: UsingXmm,
-        error: DestLabel,
+        error: &DestLabel,
         no_splat: bool,
     ) {
         let CallSiteInfo {
@@ -668,7 +668,7 @@ impl Codegen {
         } = store[callid];
         let cache = self.jit.data(std::mem::size_of::<Cache>());
 
-        self.check_version(cache);
+        self.check_version_with_cache(&cache);
 
         self.xmm_save(using_xmm);
         if no_splat {
@@ -683,13 +683,13 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movq rcx, [r14 - (conv(args))];
                 }
-                self.object_send_inner(recv, cache, error);
+                self.object_send_inner(recv, cache, &error);
             }
         } else {
-            self.object_send_splat_arg0(args, error);
-            self.object_send_inner(recv, cache, error);
+            self.object_send_splat_arg0(args, &error);
+            self.object_send_inner(recv, cache, &error);
         }
-        self.handle_error(error);
+        self.handle_error(&error);
         monoasm! { &mut self.jit,
             // FuncId was returned to rax.
             movl rdx, rax;
@@ -719,22 +719,22 @@ impl Codegen {
         );
 
         if no_splat {
-            self.object_send_handle_arguments(args, pos_num, callid, error);
+            self.object_send_handle_arguments(args, pos_num, callid, &error);
         } else {
             monoasm! { &mut self.jit,
                 movl r8, (callid.get()); // CallSiteId
             }
             self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send_splat);
-            self.handle_error(error);
+            self.handle_error(&error);
         }
         self.call_funcdata();
         self.xmm_restore(using_xmm);
-        self.handle_error(error);
+        self.handle_error(&error);
     }
 
-    fn check_version(&mut self, cache: DestLabel) {
+    fn check_version_with_cache(&mut self, cache: &DestLabel) {
         let cached_version = self.jit.data_i32(-1);
-        let global_version = self.class_version;
+        let global_version = self.class_version_label();
         let clear_cache = self.jit.label();
         let exit = self.jit.label();
         monoasm! {&mut self.jit,
@@ -763,7 +763,7 @@ impl Codegen {
     /// ### out
     /// - rcx: arg0
     ///
-    fn object_send_splat_arg0(&mut self, args: SlotId, error: DestLabel) {
+    fn object_send_splat_arg0(&mut self, args: SlotId, error: &DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
@@ -794,7 +794,7 @@ impl Codegen {
         args: SlotId,
         pos_num: usize,
         callid: CallSiteId,
-        error: DestLabel,
+        error: &DestLabel,
     ) {
         let loop0 = self.jit.label();
         let not_simple = self.jit.label();
@@ -835,7 +835,7 @@ impl Codegen {
             movl r8, (callid.get()); // CallSiteId
         }
         self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send);
-        self.handle_error(error);
+        self.handle_error(&error);
         monoasm! { &mut self.jit,
             jmp exit;
         }
@@ -849,7 +849,7 @@ impl Codegen {
     /// ### out
     /// - rax: Some(FuncId)
     ///
-    fn object_send_inner(&mut self, recv: SlotId, cache: DestLabel, error: DestLabel) {
+    fn object_send_inner(&mut self, recv: SlotId, cache: DestLabel, error: &DestLabel) {
         let not_symbol = self.jit.label();
         let l1 = self.jit.label();
         let found = self.jit.label();
@@ -933,7 +933,7 @@ impl Codegen {
             call rax;
             movl rax, rax;
         }
-        self.handle_error(error);
+        self.handle_error(&error);
         monoasm! { &mut self.jit,
             movq rcx, rax;
             jmp  l1;

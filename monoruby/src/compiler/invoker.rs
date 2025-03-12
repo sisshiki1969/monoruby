@@ -21,9 +21,9 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
-        self.invoker_epilogue(error_exit);
+        self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "method-invoker");
@@ -51,9 +51,9 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_prep2();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
-        self.invoker_epilogue(error_exit);
+        self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "method-invoker2");
@@ -77,9 +77,9 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
-        self.invoker_epilogue(error_exit);
+        self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "block-invoker");
@@ -103,9 +103,9 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
-        self.invoker_epilogue(error_exit);
+        self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "block-invoker-with-self");
@@ -141,7 +141,7 @@ impl JitModule {
             movq rdi, [rsp - (RSP_CFP)];
             movq [rbx + (EXECUTOR_CFP)], rdi;
         };
-        self.invoker_epilogue(error_exit);
+        self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "binding-invoker");
@@ -176,7 +176,7 @@ impl JitModule {
         }
         self.invoker_frame_setup(true, false);
         self.invoker_prep();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -222,7 +222,7 @@ impl JitModule {
         }
         self.invoker_frame_setup(true, true);
         self.invoker_prep();
-        self.invoker_args(error_exit);
+        self.invoker_args(&error_exit);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -647,7 +647,7 @@ impl JitModule {
     /// ### destroy
     /// - caller save registers
     ///
-    fn invoker_args(&mut self, error_exit: DestLabel) {
+    fn invoker_args(&mut self, error_exit: &DestLabel) {
         // In invoker call, CallSiteInfo is not available.
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
         // So several conditions are met, we can optimize this.
@@ -703,7 +703,7 @@ impl JitModule {
         };
     }
 
-    fn invoker_epilogue(&mut self, error_exit: DestLabel) {
+    fn invoker_epilogue(&mut self, error_exit: &DestLabel) {
         monoasm! { &mut self.jit,
         error_exit:
             popq r15;

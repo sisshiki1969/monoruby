@@ -43,8 +43,8 @@ impl Codegen {
         let exec = self.jit.label();
         let slow_path1 = self.jit.label();
         let slow_path2 = self.jit.label();
-        let class_version = self.class_version;
-        let get_class = self.get_class;
+        let class_version = self.class_version_label();
+        let get_class = self.get_class.clone();
         self.execute_gc(None);
         monoasm! { &mut self.jit,
             pushq r13;
@@ -73,7 +73,7 @@ impl Codegen {
         self.call(is_simple);
         self.fetch_and_dispatch();
 
-        self.slow_path(exec, slow_path1, slow_path2);
+        self.slow_path(&exec, &slow_path1, &slow_path2);
 
         label
     }
@@ -226,7 +226,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    fn slow_path(&mut self, exec: DestLabel, slow_path1: DestLabel, slow_path2: DestLabel) {
+    fn slow_path(&mut self, exec: &DestLabel, slow_path1: &DestLabel, slow_path2: &DestLabel) {
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
             // receiver mismatch
@@ -240,13 +240,6 @@ impl Codegen {
             // version mismatch
         slow_path2:
             subq rsp, 1024;
-            //pushq rcx;
-            //subq rsp, 8;
-            //movq rdi, rcx;
-            //movq rax, (dump_rdi);
-            //call rax;
-            //addq rsp, 8;
-            //popq rcx;
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
@@ -271,7 +264,7 @@ impl Codegen {
     /// - r15: ClassId of receiver
     ///
     fn save_cache(&mut self) {
-        let class_version = self.class_version;
+        let class_version = self.class_version_label();
         monoasm!( &mut self.jit,
             movl [r13 + (CACHED_FUNCID)], rax;    // FuncId
             movl [r13 + (CACHED_CLASS)], r15;    // ClassId of receiver

@@ -29,6 +29,10 @@ pub struct JitContext {
     ///
     iseq_id: ISeqId,
     ///
+    ///
+    ///
+    bytecode_top: BytecodePtrBase,
+    ///
     /// The block given to the method and its `self` class.
     ///
     block_info: Option<method_call::JitBlockInfo>,
@@ -138,20 +142,21 @@ impl JitContext {
         specialize_level: usize,
         block_info: Option<method_call::JitBlockInfo>,
     ) -> Self {
-        let func = &store[iseq_id];
+        let iseq = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
-        for i in 0..func.bb_info.len() {
+        for i in 0..iseq.bb_info.len() {
             let idx = BasicBlockId(i);
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
         }
 
-        let total_reg_num = func.total_reg_num();
-        let local_num = func.local_num();
+        let total_reg_num = iseq.total_reg_num();
+        let local_num = iseq.local_num();
         Self {
             iseq_id,
+            bytecode_top: iseq.get_top_pc(),
             block_info,
             jit_type,
             basic_block_labels,
@@ -183,6 +188,7 @@ impl JitContext {
         let local_num = self.local_num;
         Self {
             iseq_id: self.iseq_id,
+            bytecode_top: self.bytecode_top,
             block_info: self.block_info.clone(),
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
@@ -211,6 +217,10 @@ impl JitContext {
 
     pub(super) fn iseq_id(&self) -> ISeqId {
         self.iseq_id
+    }
+
+    pub(super) fn bytecode(&self, i: BcIndex) -> BytecodePtr {
+        self.bytecode_top + i
     }
 
     pub(super) fn jit_type(&self) -> &JitType {
@@ -251,7 +261,7 @@ impl JitContext {
         self.self_ty
     }
 
-    pub(super) fn class_version(&self) -> u32 {
+    pub(crate) fn class_version(&self) -> u32 {
         self.class_version
     }
 
@@ -273,11 +283,11 @@ impl JitContext {
     /// Resolve *JitLabel* and return *DestLabel*.
     ///
     pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
-        match self.labels[label.0] {
-            Some(l) => l,
+        match &self.labels[label.0] {
+            Some(l) => l.clone(),
             None => {
                 let l = jit.label();
-                self.labels[label.0] = Some(l);
+                self.labels[label.0] = Some(l.clone());
                 l
             }
         }

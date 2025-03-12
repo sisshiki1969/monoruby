@@ -277,6 +277,14 @@ impl SlotContext {
 }
 
 impl SlotContext {
+    pub fn is_symbol_literal(&self, slot: SlotId) -> Option<IdentId> {
+        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+            v.try_symbol()
+        } else {
+            None
+        }
+    }
+
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
         if let LinkMode::ConcreteValue(v) = self.mode(slot) {
             v.try_fixnum()
@@ -1074,7 +1082,7 @@ impl BBContext {
             }
             (LinkMode::Stack, LinkMode::Stack) => {
                 if let Some(class) = guarded.class() {
-                    let deopt = self.new_deopt_with_pc(ir, pc + 1);
+                    let deopt = ir.new_deopt_with_pc(self, pc + 1);
                     self.guard_class_stack_slot(ir, slot, class, deopt);
                 }
             }

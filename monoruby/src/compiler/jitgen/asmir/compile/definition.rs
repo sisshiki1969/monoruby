@@ -23,7 +23,7 @@ impl Codegen {
         func_id: FuncId,
         is_module: bool,
         using_xmm: UsingXmm,
-        error: DestLabel,
+        error: &DestLabel,
     ) {
         self.xmm_save(using_xmm);
         // r9 <- base: Option<Value>
@@ -51,7 +51,7 @@ impl Codegen {
             movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
         };
-        self.handle_error(error);
+        self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
         self.xmm_restore(using_xmm);
     }
@@ -62,7 +62,7 @@ impl Codegen {
         dst: Option<SlotId>,
         func_id: FuncId,
         using_xmm: UsingXmm,
-        error: DestLabel,
+        error: &DestLabel,
     ) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
@@ -72,7 +72,7 @@ impl Codegen {
             movq rax, (runtime::define_singleton_class);
             call rax;  // rax <- self: Value
         };
-        self.handle_error(error);
+        self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
         self.xmm_restore(using_xmm);
     }
@@ -110,7 +110,7 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
-    fn jit_class_def_sub(&mut self, func_id: FuncId, dst: Option<SlotId>, error: DestLabel) {
+    fn jit_class_def_sub(&mut self, func_id: FuncId, dst: Option<SlotId>, error: &DestLabel) {
         monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
@@ -143,6 +143,6 @@ impl Codegen {
             call rax;
             movq rax, r13;
         }
-        self.handle_error(error);
+        self.handle_error(&error);
     }
 }

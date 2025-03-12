@@ -49,7 +49,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl rsi, (idx);
         }
-        self.array_index(out_range);
+        self.array_index(&out_range);
     }
 
     ///
@@ -72,7 +72,7 @@ impl Codegen {
             js  negative;
         checked:
         }
-        self.array_index(generic);
+        self.array_index(&generic);
 
         self.jit.select_page(1);
         self.jit.bind_label(negative);
@@ -131,14 +131,14 @@ impl Codegen {
     pub(super) fn gen_array_u16_index_assign(
         &mut self,
         using_xmm: UsingXmm,
-        error: DestLabel,
+        error: &DestLabel,
         idx: u16,
     ) {
         let generic = self.jit.label();
         monoasm! { &mut self.jit,
             movl rsi, (idx);
         }
-        self.array_index_assign(using_xmm, generic, error);
+        self.array_index_assign(using_xmm, &generic, error);
     }
 
     ///
@@ -152,7 +152,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: DestLabel) {
+    pub(super) fn gen_array_index_assign(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
         let generic = self.jit.label();
         let checked = self.jit.label();
         let negative = self.jit.label();
@@ -162,7 +162,7 @@ impl Codegen {
             js   negative;
         checked:
         };
-        self.array_index_assign(using_xmm, generic, error);
+        self.array_index_assign(using_xmm, &generic, error);
 
         self.jit.select_page(1);
         self.jit.bind_label(negative);
@@ -187,7 +187,7 @@ impl Codegen {
     /// ### out
     /// - rax: result Value
     ///
-    fn array_index(&mut self, out_range: DestLabel) {
+    fn array_index(&mut self, out_range: &DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
@@ -233,7 +233,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: DestLabel, error: DestLabel) {
+    fn array_index_assign(&mut self, using_xmm: UsingXmm, generic: &DestLabel, error: &DestLabel) {
         let exit = self.jit.label();
         let heap = self.jit.label();
 
@@ -261,7 +261,7 @@ impl Codegen {
             movq [rdi + rsi * 8], rdx;
             jmp  exit;
         };
-        self.jit.bind_label(generic);
+        self.jit.bind_label(generic.clone());
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq r8, rdx;
@@ -271,7 +271,7 @@ impl Codegen {
             call rax;
         };
         self.xmm_restore(using_xmm);
-        self.handle_error(error);
+        self.handle_error(&error);
         monoasm! { &mut self.jit,
             jmp  exit;
         };

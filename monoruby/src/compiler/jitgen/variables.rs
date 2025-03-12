@@ -78,7 +78,7 @@ impl BBContext {
     pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         ir.push(AsmInst::LoadCVar { name, using_xmm });
         ir.handle_error(error);
         self.rax2acc(ir, dst);
@@ -94,7 +94,7 @@ impl BBContext {
     pub(super) fn jit_store_cvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
         let using_xmm = self.get_using_xmm();
-        let error = self.new_error(ir);
+        let error = ir.new_error(self);
         ir.push(AsmInst::StoreCVar {
             name,
             src,

@@ -44,19 +44,20 @@ pub(crate) struct FuncData {
     /// metadata of this function.
     meta: Meta,
     /// the address of program counter
-    pc: Option<BytecodePtr>,
+    pc: Option<BytecodePtrBase>,
     ofs: u16,
     min: u16,
     max: u16,
-    _padding: [u8; 4],
+    /// class id which this function belongs to.
+    owner: Option<ClassId>,
 }
 
 impl FuncData {
-    pub fn pc(&self) -> Option<BytecodePtr> {
+    pub fn pc(&self) -> Option<BytecodePtrBase> {
         self.pc
     }
 
-    pub(super) fn set_pc(&mut self, pc: BytecodePtr) {
+    pub(super) fn set_pc(&mut self, pc: BytecodePtrBase) {
         self.pc = Some(pc);
     }
 
@@ -582,8 +583,6 @@ pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 struct FuncExt {
     /// name of this function.
     name: Option<IdentId>,
-    /// class id which this function belongs to.
-    class_id: Option<ClassId>,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
     /// parameter information of this function.
@@ -617,7 +616,7 @@ impl FuncInfo {
             ofs: 0,
             min,
             max,
-            _padding: [0; 4],
+            owner: None,
         };
         data.set_offset(max);
         Self {
@@ -625,7 +624,6 @@ impl FuncInfo {
             kind,
             ext: Box::new(FuncExt {
                 name,
-                class_id: None,
                 entry: None,
                 params,
                 #[cfg(feature = "perf")]
@@ -765,15 +763,15 @@ impl FuncInfo {
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {
-        self.ext.class_id
+        self.data.owner
     }
 
     pub(super) fn set_owner_class(&mut self, class: ClassId) {
-        self.ext.class_id = Some(class);
+        self.data.owner = Some(class);
     }
 
     pub(super) fn entry_label(&self) -> DestLabel {
-        self.ext.entry.unwrap()
+        self.ext.entry.clone().unwrap()
     }
 
     ///
@@ -785,13 +783,6 @@ impl FuncInfo {
 
     pub(crate) fn set_method_style(&mut self) {
         self.data.meta.set_method_style();
-    }
-
-    ///
-    /// Get program counter (BcPc) of this function.
-    ///
-    pub(crate) fn pc(&self) -> BytecodePtr {
-        self.data.pc().unwrap()
     }
 
     ///
@@ -862,7 +853,7 @@ impl FuncInfo {
     ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
-    pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtr, reg_num: u16) {
+    pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtrBase, reg_num: u16) {
         self.data.set_pc(pc);
         self.data.set_reg_num(reg_num);
     }
@@ -891,7 +882,7 @@ impl FuncInfo {
         &self.data
     }
 
-    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BytecodePtr>) {
+    pub(crate) fn get_data(&self) -> (Meta, monoasm::CodePtr, Option<BytecodePtrBase>) {
         let meta = self.data.meta();
         let codeptr = self.data.codeptr().unwrap();
         let pc = self.data.pc();
