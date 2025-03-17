@@ -96,4 +96,6 @@ benchmark:
     a.each_with_index do |elem| end
   array_ruby_each_with_index: |
     a.ruby_each_with_index do |elem| end
+  array_new: |
+    Array.new(5) do |x| x + 1 end
 loop_count: 5000

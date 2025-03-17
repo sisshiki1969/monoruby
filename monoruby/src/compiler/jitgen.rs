@@ -542,6 +542,7 @@ impl Codegen {
             0,
         );
         ctx.compile(store);
+        self.jit.finalize();
 
         self.gen_machine_code(ctx, store, entry_label);
 
