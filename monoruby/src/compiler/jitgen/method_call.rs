@@ -196,7 +196,7 @@ impl JitContext {
             return;
         }
         match self.jit_type() {
-            JitType::Specialized(idx) => {
+            JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::GuardClassVersionSpecialized {
                     version,
                     idx: *idx,
@@ -350,9 +350,10 @@ impl JitContext {
                         func_id: fid,
                         self_class: self.self_class(),
                     });
-                    let patch_point = match self.jit_type() {
-                        JitType::Specialized(_) => None,
-                        _ => Some(self.label()),
+                    let patch_point = if self.is_specialized() {
+                        None
+                    } else {
+                        Some(self.label())
                     };
                     let entry = self.compile_specialized_method(
                         store,
@@ -391,11 +392,11 @@ impl JitContext {
         block_info: Option<JitBlockInfo>,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
-        let jit_type = if !self.is_specialized() {
-            JitType::Specialized(self.specialized_methods.len())
-        } else {
-            self.jit_type().clone()
+        let idx = match self.jit_type() {
+            JitType::Specialized { idx, .. } => *idx,
+            _ => self.specialized_methods.len(),
         };
+        let jit_type = JitType::Specialized { idx, block_info };
         let mut ctx = JitContext::new(
             store,
             iseq_id,
@@ -403,7 +404,6 @@ impl JitContext {
             self.class_version(),
             self_class,
             specialize_level,
-            block_info,
         );
         ctx.compile(store);
         let entry = self.label();

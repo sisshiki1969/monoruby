@@ -846,7 +846,7 @@ impl JitContext {
     fn recompile_and_deopt(&self, bbctx: &mut BBContext, ir: &mut AsmIr) {
         let deopt = ir.new_deopt(bbctx);
         match self.jit_type() {
-            JitType::Specialized(idx) => {
+            JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::RecompileDeoptSpecialized { idx: *idx, deopt })
             }
             _ => ir.push(AsmInst::RecompileDeopt {

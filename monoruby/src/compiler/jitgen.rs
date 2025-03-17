@@ -540,7 +540,6 @@ impl Codegen {
             self.class_version(),
             self_class,
             0,
-            None,
         );
         ctx.compile(store);
 

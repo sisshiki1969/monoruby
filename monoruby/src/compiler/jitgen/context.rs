@@ -11,7 +11,10 @@ pub(super) enum JitType {
     /// JIT for loop.
     Loop(BytecodePtr),
     /// specialized JIT method.
-    Specialized(usize),
+    Specialized {
+        idx: usize,
+        block_info: Option<method_call::JitBlockInfo>,
+    },
 }
 
 pub(super) struct SpecializeInfo {
@@ -32,10 +35,6 @@ pub struct JitContext {
     ///
     ///
     bytecode_top: BytecodePtrBase,
-    ///
-    /// The block given to the method and its `self` class.
-    ///
-    block_info: Option<method_call::JitBlockInfo>,
     ///
     /// The start bytecode position of the loop to be compiled.
     ///
@@ -140,7 +139,6 @@ impl JitContext {
         class_version: u32,
         self_class: ClassId,
         specialize_level: usize,
-        block_info: Option<method_call::JitBlockInfo>,
     ) -> Self {
         let iseq = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -157,7 +155,6 @@ impl JitContext {
         Self {
             iseq_id,
             bytecode_top: iseq.get_top_pc(),
-            block_info,
             jit_type,
             basic_block_labels,
             loop_info: HashMap::default(),
@@ -189,7 +186,6 @@ impl JitContext {
         Self {
             iseq_id: self.iseq_id,
             bytecode_top: self.bytecode_top,
-            block_info: self.block_info.clone(),
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
@@ -228,15 +224,21 @@ impl JitContext {
     }
 
     pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized(_))
+        matches!(self.jit_type, JitType::Specialized { .. })
     }
 
-    pub(super) fn block_info(&self) -> &Option<method_call::JitBlockInfo> {
-        &self.block_info
+    pub(super) fn block_info(&self) -> Option<&method_call::JitBlockInfo> {
+        match self.jit_type() {
+            JitType::Specialized { block_info, .. } => block_info.as_ref(),
+            _ => None,
+        }
     }
 
     pub fn has_block_info(&self) -> bool {
-        self.block_info.is_some()
+        match self.jit_type() {
+            JitType::Specialized { block_info, .. } => block_info.is_some(),
+            _ => false,
+        }
     }
 
     ///
