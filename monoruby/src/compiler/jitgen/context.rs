@@ -13,7 +13,7 @@ pub(super) enum JitType {
     /// specialized JIT method.
     Specialized {
         idx: usize,
-        block_info: Option<method_call::JitBlockInfo>,
+        args_info: JitArgumentInfo,
     },
 }
 
@@ -21,6 +21,39 @@ pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
     pub(super) ctx: JitContext,
     pub(super) patch_point: Option<JitLabel>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct JitBlockInfo {
+    block_fid: FuncId,
+    block_self: ClassId,
+}
+
+impl JitBlockInfo {
+    pub(super) fn new(block_fid: FuncId, block_self: ClassId) -> Self {
+        Self {
+            block_fid,
+            block_self,
+        }
+    }
+
+    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
+        store[self.block_fid].is_iseq()
+    }
+
+    pub(super) fn block_self(&self) -> ClassId {
+        self.block_self
+    }
+}
+#[derive(Debug, Clone)]
+pub(super) struct JitArgumentInfo {
+    pub(super) block: Option<JitBlockInfo>,
+}
+
+impl JitArgumentInfo {
+    pub(super) fn new() -> Self {
+        Self { block: None }
+    }
 }
 
 ///
@@ -227,16 +260,16 @@ impl JitContext {
         matches!(self.jit_type, JitType::Specialized { .. })
     }
 
-    pub(super) fn block_info(&self) -> Option<&method_call::JitBlockInfo> {
+    pub(super) fn block_info(&self) -> Option<&JitBlockInfo> {
         match self.jit_type() {
-            JitType::Specialized { block_info, .. } => block_info.as_ref(),
+            JitType::Specialized { args_info, .. } => args_info.block.as_ref(),
             _ => None,
         }
     }
 
     pub fn has_block_info(&self) -> bool {
         match self.jit_type() {
-            JitType::Specialized { block_info, .. } => block_info.is_some(),
+            JitType::Specialized { args_info, .. } => args_info.block.is_some(),
             _ => false,
         }
     }

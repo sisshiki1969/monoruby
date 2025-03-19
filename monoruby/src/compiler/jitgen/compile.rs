@@ -618,7 +618,7 @@ impl JitContext {
                         store,
                         callid,
                         block_iseq,
-                        block_info.self_class,
+                        block_info.block_self(),
                     );
                 } else {
                     bbctx.compile_yield(ir, store, callid);

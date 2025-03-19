@@ -1,5 +1,5 @@
 40.times do
-  Array.new(5) do |x|
+ 100.times do |x|
     x.to_s
   end
 end

@@ -1,16 +1,7 @@
-use super::*;
-
-#[derive(Debug, Clone)]
-pub(super) struct JitBlockInfo {
-    func_id: FuncId,
-    pub(super) self_class: ClassId,
-}
-
-impl JitBlockInfo {
-    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
-        store[self.func_id].is_iseq()
-    }
-}
+use super::{
+    context::{JitArgumentInfo, JitBlockInfo},
+    *,
+};
 
 impl JitContext {
     ///
@@ -236,8 +227,13 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
-        let block_entry =
-            self.compile_specialized_method(store, block_iseq, block_self, None, None);
+        let block_entry = self.compile_specialized_method(
+            store,
+            block_iseq,
+            block_self,
+            None,
+            JitArgumentInfo::new(),
+        );
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -346,10 +342,9 @@ impl JitContext {
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 if block_fid.is_some() || name == Some(IdentId::NEW) {
-                    let block_info = block_fid.map(|fid| JitBlockInfo {
-                        func_id: fid,
-                        self_class: self.self_class(),
-                    });
+                    let args_info = JitArgumentInfo {
+                        block: block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class())),
+                    };
                     let patch_point = if self.is_specialized() {
                         None
                     } else {
@@ -360,7 +355,7 @@ impl JitContext {
                         iseq_id,
                         recv_class,
                         patch_point,
-                        block_info,
+                        args_info,
                     );
                     self.send_specialized(
                         bbctx,
@@ -389,14 +384,14 @@ impl JitContext {
         iseq_id: ISeqId,
         self_class: ClassId,
         patch_point: Option<JitLabel>,
-        block_info: Option<JitBlockInfo>,
+        args_info: JitArgumentInfo,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
             _ => self.specialized_methods.len(),
         };
-        let jit_type = JitType::Specialized { idx, block_info };
+        let jit_type = JitType::Specialized { idx, args_info };
         let mut ctx = JitContext::new(
             store,
             iseq_id,
