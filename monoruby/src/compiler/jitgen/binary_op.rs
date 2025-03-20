@@ -20,6 +20,88 @@ impl BBContext {
         dst: Option<SlotId>,
         mode: OpMode,
     ) {
+        if let Some((lhs, rhs)) = match mode {
+            OpMode::RR(lhs, rhs) => {
+                if let Some(lhs) = self.is_fixnum_literal(lhs)
+                    && let Some(rhs) = self.is_fixnum_literal(rhs)
+                {
+                    Some((lhs, rhs))
+                } else {
+                    None
+                }
+            }
+            OpMode::RI(lhs, rhs) => {
+                if let Some(lhs) = self.is_fixnum_literal(lhs) {
+                    Some((lhs, rhs as i64))
+                } else {
+                    None
+                }
+            }
+            OpMode::IR(lhs, rhs) => {
+                if let Some(rhs) = self.is_fixnum_literal(rhs) {
+                    Some((lhs as i64, rhs))
+                } else {
+                    None
+                }
+            }
+        } {
+            match kind {
+                BinOpK::Add => {
+                    if let Some(result) = lhs.checked_add(rhs) {
+                        if Value::is_i63(result) {
+                            self.def_fixnum_value(dst, result);
+                            return;
+                        }
+                    }
+                }
+                BinOpK::Sub => {
+                    if let Some(result) = lhs.checked_sub(rhs) {
+                        if Value::is_i63(result) {
+                            self.def_fixnum_value(dst, result);
+                            return;
+                        }
+                    }
+                }
+                BinOpK::Mul => {
+                    if let Some(result) = lhs.checked_mul(rhs) {
+                        if Value::is_i63(result) {
+                            self.def_fixnum_value(dst, result);
+                            return;
+                        }
+                    }
+                }
+                BinOpK::Div => {
+                    if let Some(result) = lhs.checked_div(rhs) {
+                        if Value::is_i63(result) {
+                            self.def_fixnum_value(dst, result);
+                            return;
+                        }
+                    }
+                }
+                BinOpK::Rem => {
+                    if let Some(result) = lhs.checked_rem(rhs) {
+                        if Value::is_i63(result) {
+                            self.def_fixnum_value(dst, result);
+                            return;
+                        }
+                    }
+                }
+                BinOpK::Exp => {}
+                BinOpK::BitOr => {
+                    self.def_fixnum_value(dst, lhs | rhs);
+                    return;
+                }
+                BinOpK::BitAnd => {
+                    self.def_fixnum_value(dst, lhs & rhs);
+                    return;
+                }
+                BinOpK::BitXor => {
+                    self.def_fixnum_value(dst, lhs ^ rhs);
+                    return;
+                }
+            }
+        };
+
         match kind {
             BinOpK::Add | BinOpK::Mul | BinOpK::BitOr | BinOpK::BitAnd | BinOpK::BitXor => {
                 let lhs = GP::Rdi;
@@ -61,6 +143,15 @@ impl BBContext {
                     self.reg2acc_fixnum(ir, GP::Rax, dst);
                 }
             },
+        }
+    }
+
+    pub(super) fn gen_binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, info: BinOpInfo) {
+        let fmode = self.fmode(ir, info);
+        if let Some(dst) = info.dst {
+            let dst = self.xmm_write(dst);
+            let using_xmm = self.get_using_xmm();
+            ir.xmm_binop(kind, fmode, dst, using_xmm);
         }
     }
 

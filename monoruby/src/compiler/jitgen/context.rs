@@ -48,11 +48,15 @@ impl JitBlockInfo {
 #[derive(Debug, Clone)]
 pub(super) struct JitArgumentInfo {
     pub(super) block: Option<JitBlockInfo>,
+    pub(super) args: Vec<slot::SlotState>,
 }
 
 impl JitArgumentInfo {
     pub(super) fn new() -> Self {
-        Self { block: None }
+        Self {
+            block: None,
+            args: vec![],
+        }
     }
 }
 

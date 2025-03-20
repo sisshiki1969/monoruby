@@ -851,6 +851,31 @@ impl FuncInfo {
     }
 
     ///
+    /// Check whether this function call is a *simple* call.
+    ///
+    /// *simple* call means that:
+    /// - no splat arguments
+    /// - no hash splat arguments
+    /// - no single argument expansion in block call
+    /// - no extra poritional argument
+    /// - no optional
+    /// - no rest param
+    /// - the number of required params is not greater than positional arguments.
+    ///
+    pub(crate) fn is_simple_call(&self, callsite: &CallSiteInfo) -> bool {
+        let pos_num = callsite.pos_num;
+        let single_arg_expand = pos_num == 1 && self.single_arg_expand();
+        let ex_positional = self.no_keyword() && callsite.kw_may_exists();
+        !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !ex_positional
+            && !single_arg_expand
+            && !self.is_rest()
+            && (self.is_block_style() || (pos_num <= self.max_positional_args()))
+            && self.req_num() <= pos_num
+    }
+
+    ///
     /// Set a program counter (BcPc) and the number of registers of this function.
     ///
     pub(super) fn set_pc_regnum(&mut self, pc: BytecodePtrBase, reg_num: u16) {

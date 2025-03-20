@@ -267,7 +267,6 @@ impl JitContext {
         recv_class: ClassId,
     ) -> CompileResult {
         let CallSiteInfo {
-            name,
             args,
             pos_num,
             dst,
@@ -341,9 +340,24 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if block_fid.is_some() || name == Some(IdentId::NEW) {
+                let specializable = callsite.splat_pos.is_empty()
+                    && !store[fid].is_rest()
+                    && !(pos_num == 1 && store[fid].single_arg_expand())
+                    && (bbctx.state(callsite.recv).is_concrete_value()
+                        || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
+                if block_fid.is_some() || (specializable && self.specialize_level() < 3)
+                /*name == Some(IdentId::NEW)*/
+                {
+                    let mut slots = vec![];
+                    if specializable {
+                        slots.push(bbctx.state(callsite.recv).clone());
+                        for i in args..args + pos_num {
+                            slots.push(bbctx.state(i).clone());
+                        }
+                    }
                     let args_info = JitArgumentInfo {
                         block: block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class())),
+                        args: slots,
                     };
                     let patch_point = if self.is_specialized() {
                         None

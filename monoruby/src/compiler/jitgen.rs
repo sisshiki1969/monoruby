@@ -13,7 +13,7 @@ use self::slot::Guarded;
 use super::*;
 //use analysis::{ExitType, SlotInfo};
 use asmir::*;
-use context::JitType;
+use context::{JitArgumentInfo, JitType};
 use slot::{Liveness, SlotContext};
 use trace_ir::*;
 
@@ -125,6 +125,16 @@ impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
             slot_state: SlotContext::from(cc),
+            sp: SlotId(cc.local_num() as u16),
+            next_sp: SlotId(cc.local_num() as u16),
+            class_version_guarded: false,
+            pc: None,
+        }
+    }
+
+    fn new_with_args(cc: &JitContext) -> Self {
+        Self {
+            slot_state: SlotContext::from_args(cc),
             sp: SlotId(cc.local_num() as u16),
             next_sp: SlotId(cc.local_num() as u16),
             class_version_guarded: false,
@@ -283,16 +293,14 @@ impl BBContext {
         let pos_num = callsite.pos_num;
         let kw_pos = callsite.kw_pos;
         let kw_num = callsite.kw_len();
-        let single_arg_expand = pos_num == 1 && callee.single_arg_expand();
-        let ex_positional = callee.no_keyword() && callsite.kw_may_exists();
-        if !callsite.has_splat()
-            && !callsite.has_hash_splat()
-            && !ex_positional
-            && !single_arg_expand
-            && !callee.is_rest()
-            && (callee.is_block_style() || (pos_num <= callee.max_positional_args()))
-            && callee.req_num() <= pos_num
-        {
+        if callee.is_simple_call(callsite) {
+            let stack_offset =
+                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
+                    callee.get_offset() as i32
+                } else {
+                    0
+                };
+            ir.reg_sub(GP::Rsp, stack_offset);
             // write back keyword arguments.
             for arg in kw_pos..kw_pos + kw_num {
                 self.write_back_slot(ir, arg);
@@ -301,27 +309,21 @@ impl BBContext {
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
             }
-            let ofs =
-                if (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::Xmm(_))) {
-                    (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * pos_num) as i32 + 8) & !0xf
-                } else {
-                    0
-                };
-
-            ir.reg_sub(GP::Rsp, ofs);
+            // fetch positional arguments.
             for i in 0..pos_num {
                 let reg = args + i;
-                let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, offset);
             }
             if pos_num != callee.max_positional_args() {
                 ir.push(AsmInst::I32ToReg(0, GP::Rax));
                 for i in pos_num..callee.max_positional_args() {
-                    let offset = ofs - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+                    let offset =
+                        stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
                     ir.reg2rsp_offset(GP::Rax, offset);
                 }
             }
-            ir.reg_add(GP::Rsp, ofs);
+            ir.reg_add(GP::Rsp, stack_offset);
         } else {
             self.write_back_args(ir, callsite);
 

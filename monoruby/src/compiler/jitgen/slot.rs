@@ -32,6 +32,25 @@ impl SlotContext {
         ctx
     }
 
+    pub(super) fn from_args(cc: &JitContext) -> Self {
+        let mut ctx = Self::from(cc);
+        if let JitType::Specialized {
+            args_info: JitArgumentInfo { args, .. },
+            ..
+        } = cc.jit_type()
+        {
+            for (i, arg) in args.iter().enumerate() {
+                match arg.link {
+                    LinkMode::ConcreteValue(_) => {
+                        ctx.slots[i] = arg.clone();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        ctx
+    }
+
     fn new(total_reg_num: usize, local_num: usize) -> Self {
         SlotContext {
             slots: vec![SlotState::default(); total_reg_num],
@@ -57,6 +76,10 @@ impl SlotContext {
 
     pub(super) fn guarded(&self, slot: SlotId) -> Guarded {
         self.slots[slot.0 as usize].guarded
+    }
+
+    pub(super) fn state(&self, slot: SlotId) -> &SlotState {
+        &self.slots[slot.0 as usize]
     }
 }
 
@@ -241,6 +264,24 @@ impl SlotContext {
 
     pub(super) fn def_new_both_float(&mut self, slot: SlotId) -> Xmm {
         self.def_new_both(slot, Guarded::Float)
+    }
+
+    ///
+    /// Link *slot* to a concrete fixnum value *i*.
+    ///
+    pub(crate) fn def_fixnum_value(&mut self, slot: impl Into<Option<SlotId>>, i: i64) {
+        if let Some(slot) = slot.into() {
+            self.def_concrete_value(slot, Value::fixnum(i));
+        }
+    }
+
+    ///
+    /// Link *slot* to a concrete flonum value *i*.
+    ///
+    pub(crate) fn def_flonum_value(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
+        if let Some(slot) = slot.into() {
+            self.def_concrete_value(slot, Value::float(f));
+        }
     }
 
     ///
@@ -734,6 +775,12 @@ impl std::fmt::Debug for SlotState {
                 Guarded::Class(class) => format!(" <{:?}>", class),
             },
         )
+    }
+}
+
+impl SlotState {
+    pub(super) fn is_concrete_value(&self) -> bool {
+        matches!(self.link, LinkMode::ConcreteValue(_))
     }
 }
 

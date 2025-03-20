@@ -1,5 +1,9 @@
+def f(x,y)
+  x + y
+end
+
 40.times do
- 100.times do |x|
-    x.to_s
+ 10.times do |x|
+    puts f(1, 2)
   end
 end

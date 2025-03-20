@@ -9,7 +9,7 @@ impl JitContext {
             self.analyse_loop(store, iseq, *loop_start, *loop_end);
         }
 
-        let mut bbctx = BBContext::new(&self);
+        let mut bbctx = BBContext::new_with_args(&self);
 
         let mut ir = AsmIr::new();
         if let Some(pc) = self.position() {
@@ -428,12 +428,7 @@ impl JitContext {
                 bbctx.gen_binop_integer(ir, kind, dst, mode);
             }
             TraceIr::FBinOp { kind, info } => {
-                let fmode = bbctx.fmode(ir, info);
-                if let Some(dst) = info.dst {
-                    let dst = bbctx.xmm_write(dst);
-                    let using_xmm = bbctx.get_using_xmm();
-                    ir.xmm_binop(kind, fmode, dst, using_xmm);
-                }
+                bbctx.gen_binop_float(ir, kind, info);
             }
             TraceIr::GBinOp { kind, info } => {
                 let recv_class = info.lhs_class;
