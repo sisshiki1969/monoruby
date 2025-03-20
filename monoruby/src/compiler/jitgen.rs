@@ -123,20 +123,22 @@ impl std::ops::DerefMut for BBContext {
 
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
+        let sp = SlotId(cc.local_num() as u16 + 1);
         Self {
             slot_state: SlotContext::from(cc),
-            sp: SlotId(cc.local_num() as u16),
-            next_sp: SlotId(cc.local_num() as u16),
+            sp,
+            next_sp: sp,
             class_version_guarded: false,
             pc: None,
         }
     }
 
     fn new_with_args(cc: &JitContext) -> Self {
+        let sp = SlotId(cc.local_num() as u16 + 1);
         Self {
             slot_state: SlotContext::from_args(cc),
-            sp: SlotId(cc.local_num() as u16),
-            next_sp: SlotId(cc.local_num() as u16),
+            sp,
+            next_sp: sp,
             class_version_guarded: false,
             pc: None,
         }

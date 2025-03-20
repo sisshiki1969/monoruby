@@ -147,6 +147,52 @@ impl BBContext {
     }
 
     pub(super) fn gen_binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, info: BinOpInfo) {
+        if let Some((lhs, rhs)) = match info.mode {
+            OpMode::RR(l, r) => {
+                if let Some(lhs) = self.is_float_literal(l)
+                    && let Some(rhs) = self.is_float_literal(r)
+                {
+                    Some((lhs, rhs))
+                } else {
+                    None
+                }
+            }
+            OpMode::RI(l, r) => {
+                if let Some(lhs) = self.is_float_literal(l) {
+                    Some((lhs, r as f64))
+                } else {
+                    None
+                }
+            }
+            OpMode::IR(l, r) => {
+                if let Some(rhs) = self.is_float_literal(r) {
+                    Some((l as f64, rhs))
+                } else {
+                    None
+                }
+            }
+        } {
+            match kind {
+                BinOpK::Add => {
+                    self.def_float_value(info.dst, lhs + rhs);
+                    return;
+                }
+                BinOpK::Sub => {
+                    self.def_float_value(info.dst, lhs - rhs);
+                    return;
+                }
+                BinOpK::Mul => {
+                    self.def_float_value(info.dst, lhs * rhs);
+                    return;
+                }
+                BinOpK::Div => {
+                    self.def_float_value(info.dst, lhs / rhs);
+                    return;
+                }
+                _ => {}
+            }
+        };
+
         let fmode = self.fmode(ir, info);
         if let Some(dst) = info.dst {
             let dst = self.xmm_write(dst);

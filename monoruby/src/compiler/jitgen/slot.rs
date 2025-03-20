@@ -278,7 +278,7 @@ impl SlotContext {
     ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
-    pub(crate) fn def_flonum_value(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
+    pub(crate) fn def_float_value(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
         if let Some(slot) = slot.into() {
             self.def_concrete_value(slot, Value::float(f));
         }
@@ -329,6 +329,14 @@ impl SlotContext {
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<i64> {
         if let LinkMode::ConcreteValue(v) = self.mode(slot) {
             v.try_fixnum()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_float_literal(&self, slot: SlotId) -> Option<f64> {
+        if let LinkMode::ConcreteValue(v) = self.mode(slot) {
+            v.try_float()
         } else {
             None
         }

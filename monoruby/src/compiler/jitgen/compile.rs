@@ -22,7 +22,7 @@ impl JitContext {
             for i in (1 + self.local_num())..self.total_reg_num() {
                 bbctx.def_concrete_value(SlotId(i as u16), Value::nil());
             }
-            bbctx.set_guard_class(SlotId::self_(), self.self_class());
+            //bbctx.set_guard_class(SlotId::self_(), self.self_class());
             // for method JIT, class of *self* is already checked in an entry stub.
             match iseq.trace_ir(store, BcIndex::from(0)) {
                 TraceIr::InitMethod(fn_info) => {
@@ -31,7 +31,6 @@ impl JitContext {
                 _ => unreachable!(),
             }
         }
-        //dbg!(&bbctx);
         ir.push(AsmInst::Preparation);
 
         assert!(self.ir.is_empty());
