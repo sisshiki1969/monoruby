@@ -279,19 +279,19 @@ impl SlotContext {
     /// Link *slot* to a concrete flonum value *i*.
     ///
     pub(crate) fn def_float_value(&mut self, slot: impl Into<Option<SlotId>>, f: f64) {
-        if let Some(slot) = slot.into() {
-            self.def_concrete_value(slot, Value::float(f));
-        }
+        self.def_concrete_value(slot, Value::float(f));
     }
 
     ///
     /// Link *slot* to a concrete value *v*.
     ///
-    pub(crate) fn def_concrete_value(&mut self, slot: SlotId, v: Value) {
-        let guarded = Guarded::from_concrete_value(v);
-        self.discard(slot);
-        self.set_mode(slot, LinkMode::ConcreteValue(v));
-        self.set_guarded(slot, guarded);
+    pub(crate) fn def_concrete_value(&mut self, slot: impl Into<Option<SlotId>>, v: Value) {
+        if let Some(slot) = slot.into() {
+            let guarded = Guarded::from_concrete_value(v);
+            self.discard(slot);
+            self.set_mode(slot, LinkMode::ConcreteValue(v));
+            self.set_guarded(slot, guarded);
+        }
     }
 
     // APIs for 'use'

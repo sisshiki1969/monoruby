@@ -3,24 +3,8 @@ use crate::bytecodegen::BinOpK;
 use super::*;
 
 impl BBContext {
-    ///
-    /// Integer binary operations
-    ///
-    /// ### in
-    /// - rdi: lhs
-    /// - rsi: rhs
-    ///
-    /// ### out
-    /// - r15: dst
-    ///
-    pub(super) fn gen_binop_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        mode: OpMode,
-    ) {
-        if let Some((lhs, rhs)) = match mode {
+    fn check_concrete_integer(&self, mode: OpMode) -> Option<(i64, i64)> {
+        match mode {
             OpMode::RR(lhs, rhs) => {
                 if let Some(lhs) = self.is_fixnum_literal(lhs)
                     && let Some(rhs) = self.is_fixnum_literal(rhs)
@@ -44,46 +28,66 @@ impl BBContext {
                     None
                 }
             }
-        } {
+        }
+    }
+
+    ///
+    /// Integer binary operations
+    ///
+    /// ### in
+    /// - rdi: lhs
+    /// - rsi: rhs
+    ///
+    /// ### out
+    /// - r15: dst
+    ///
+    pub(super) fn gen_binop_integer(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        mode: OpMode,
+    ) {
+        if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
             match kind {
                 BinOpK::Add => {
-                    if let Some(result) = lhs.checked_add(rhs) {
-                        if Value::is_i63(result) {
-                            self.def_fixnum_value(dst, result);
-                            return;
-                        }
+                    if let Some(result) = lhs.checked_add(rhs)
+                        && Value::is_i63(result)
+                    {
+                        self.def_fixnum_value(dst, result);
+                        return;
                     }
                 }
                 BinOpK::Sub => {
-                    if let Some(result) = lhs.checked_sub(rhs) {
-                        if Value::is_i63(result) {
-                            self.def_fixnum_value(dst, result);
-                            return;
-                        }
+                    if let Some(result) = lhs.checked_sub(rhs)
+                        && Value::is_i63(result)
+                    {
+                        self.def_fixnum_value(dst, result);
+                        return;
                     }
                 }
                 BinOpK::Mul => {
-                    if let Some(result) = lhs.checked_mul(rhs) {
-                        if Value::is_i63(result) {
-                            self.def_fixnum_value(dst, result);
-                            return;
-                        }
+                    if let Some(result) = lhs.checked_mul(rhs)
+                        && Value::is_i63(result)
+                    {
+                        self.def_fixnum_value(dst, result);
+                        return;
                     }
                 }
                 BinOpK::Div => {
-                    if let Some(result) = lhs.checked_div(rhs) {
-                        if Value::is_i63(result) {
-                            self.def_fixnum_value(dst, result);
-                            return;
-                        }
+                    if let Some(result) = lhs.checked_div(rhs)
+                        && Value::is_i63(result)
+                    {
+                        self.def_fixnum_value(dst, result);
+                        return;
                     }
                 }
                 BinOpK::Rem => {
-                    if let Some(result) = lhs.checked_rem(rhs) {
-                        if Value::is_i63(result) {
-                            self.def_fixnum_value(dst, result);
-                            return;
-                        }
+                    if let Some(result) = lhs.checked_rem(rhs)
+                        && Value::is_i63(result)
+                    {
+                        self.def_fixnum_value(dst, result);
+                        return;
                     }
                 }
                 BinOpK::Exp => {}
@@ -173,24 +177,13 @@ impl BBContext {
             }
         } {
             match kind {
-                BinOpK::Add => {
-                    self.def_float_value(info.dst, lhs + rhs);
-                    return;
-                }
-                BinOpK::Sub => {
-                    self.def_float_value(info.dst, lhs - rhs);
-                    return;
-                }
-                BinOpK::Mul => {
-                    self.def_float_value(info.dst, lhs * rhs);
-                    return;
-                }
-                BinOpK::Div => {
-                    self.def_float_value(info.dst, lhs / rhs);
-                    return;
-                }
+                BinOpK::Add => self.def_float_value(info.dst, lhs + rhs),
+                BinOpK::Sub => self.def_float_value(info.dst, lhs - rhs),
+                BinOpK::Mul => self.def_float_value(info.dst, lhs * rhs),
+                BinOpK::Div => self.def_float_value(info.dst, lhs / rhs),
                 _ => {}
             }
+            return;
         };
 
         let fmode = self.fmode(ir, info);
@@ -216,6 +209,41 @@ impl BBContext {
         dst: Option<SlotId>,
         mode: OpMode,
     ) {
+        if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
+            match kind {
+                CmpKind::Eq => {
+                    let b = lhs == rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                CmpKind::Ne => {
+                    let b = lhs != rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                CmpKind::Lt => {
+                    let b = lhs < rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                CmpKind::Le => {
+                    let b = lhs <= rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                CmpKind::Gt => {
+                    let b = lhs > rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                CmpKind::Ge => {
+                    let b = lhs >= rhs;
+                    self.def_concrete_value(dst, Value::bool(b));
+                    return;
+                }
+                _ => {}
+            }
+        };
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp(mode, kind, lhs, rhs);
         self.rax2acc(ir, dst);
