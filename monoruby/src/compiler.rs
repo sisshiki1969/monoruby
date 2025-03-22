@@ -548,7 +548,7 @@ impl Codegen {
             fiber_invoker_with_self,
             resume_fiber,
             yield_fiber,
-            startup_flag: true,
+            startup_flag: false,
             #[cfg(feature = "jit-log")]
             jit_compile_time: std::time::Duration::default(),
         };
