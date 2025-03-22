@@ -3,32 +3,174 @@ use crate::bytecodegen::BinOpK;
 use super::*;
 
 impl BBContext {
+    fn cmp_folded<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>) -> bool
+    where
+        T: PartialEq + PartialOrd,
+    {
+        let b = match kind {
+            CmpKind::Eq | CmpKind::TEq => lhs == rhs,
+            CmpKind::Ne => lhs != rhs,
+            CmpKind::Lt => lhs < rhs,
+            CmpKind::Le => lhs <= rhs,
+            CmpKind::Gt => lhs > rhs,
+            CmpKind::Ge => lhs >= rhs,
+            _ => return false,
+        };
+        self.def_concrete_value(dst, Value::bool(b));
+        true
+    }
+}
+
+impl BBContext {
     fn check_concrete_integer(&self, mode: OpMode) -> Option<(i64, i64)> {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                if let Some(lhs) = self.is_fixnum_literal(lhs)
-                    && let Some(rhs) = self.is_fixnum_literal(rhs)
-                {
-                    Some((lhs, rhs))
-                } else {
-                    None
-                }
+                let lhs = self.is_fixnum_literal(lhs)?;
+                let rhs = self.is_fixnum_literal(rhs)?;
+                Some((lhs, rhs))
             }
             OpMode::RI(lhs, rhs) => {
-                if let Some(lhs) = self.is_fixnum_literal(lhs) {
-                    Some((lhs, rhs as i64))
-                } else {
-                    None
-                }
+                let lhs = self.is_fixnum_literal(lhs)?;
+                Some((lhs, rhs as i64))
             }
             OpMode::IR(lhs, rhs) => {
-                if let Some(rhs) = self.is_fixnum_literal(rhs) {
-                    Some((lhs as i64, rhs))
-                } else {
-                    None
-                }
+                let rhs = self.is_fixnum_literal(rhs)?;
+                Some((lhs as i64, rhs))
             }
         }
+    }
+
+    fn check_concrete_float(&self, mode: OpMode) -> Option<(f64, f64)> {
+        match mode {
+            OpMode::RR(lhs, rhs) => {
+                let lhs = self.is_float_literal(lhs)?;
+                let rhs = self.is_float_literal(rhs)?;
+                Some((lhs, rhs))
+            }
+            OpMode::RI(lhs, rhs) => {
+                let lhs = self.is_float_literal(lhs)?;
+                Some((lhs, rhs as f64))
+            }
+            OpMode::IR(lhs, rhs) => {
+                let rhs = self.is_float_literal(rhs)?;
+                Some((lhs as f64, rhs))
+            }
+        }
+    }
+
+    pub(super) fn check_concrete_integer_cmpbr(
+        &mut self,
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+    ) -> Option<CompileResult> {
+        if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
+            let b = match kind {
+                CmpKind::Eq | CmpKind::TEq => lhs == rhs,
+                CmpKind::Ne => lhs != rhs,
+                CmpKind::Lt => lhs < rhs,
+                CmpKind::Le => lhs <= rhs,
+                CmpKind::Gt => lhs > rhs,
+                CmpKind::Ge => lhs >= rhs,
+                _ => return None,
+            } ^ (brkind == BrKind::BrIfNot);
+            return Some(if b {
+                CompileResult::Branch
+            } else {
+                CompileResult::Continue
+            });
+        }
+        None
+    }
+
+    pub(super) fn check_concrete_float_cmpbr(
+        &mut self,
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+    ) -> Option<CompileResult> {
+        if let Some((lhs, rhs)) = self.check_concrete_float(mode) {
+            let b = match kind {
+                CmpKind::Eq | CmpKind::TEq => lhs == rhs,
+                CmpKind::Ne => lhs != rhs,
+                CmpKind::Lt => lhs < rhs,
+                CmpKind::Le => lhs <= rhs,
+                CmpKind::Gt => lhs > rhs,
+                CmpKind::Ge => lhs >= rhs,
+                _ => return None,
+            } ^ (brkind == BrKind::BrIfNot);
+            return Some(if b {
+                CompileResult::Branch
+            } else {
+                CompileResult::Continue
+            });
+        }
+        None
+    }
+
+    fn binop_integer_folded(
+        &mut self,
+        kind: BinOpK,
+        lhs: i64,
+        rhs: i64,
+        dst: Option<SlotId>,
+    ) -> bool {
+        match kind {
+            BinOpK::Add => {
+                if let Some(result) = lhs.checked_add(rhs)
+                    && Value::is_i63(result)
+                {
+                    self.def_fixnum_value(dst, result);
+                    return true;
+                }
+            }
+            BinOpK::Sub => {
+                if let Some(result) = lhs.checked_sub(rhs)
+                    && Value::is_i63(result)
+                {
+                    self.def_fixnum_value(dst, result);
+                    return true;
+                }
+            }
+            BinOpK::Mul => {
+                if let Some(result) = lhs.checked_mul(rhs)
+                    && Value::is_i63(result)
+                {
+                    self.def_fixnum_value(dst, result);
+                    return true;
+                }
+            }
+            BinOpK::Div => {
+                if let Some(result) = lhs.checked_div(rhs)
+                    && Value::is_i63(result)
+                {
+                    self.def_fixnum_value(dst, result);
+                    return true;
+                }
+            }
+            BinOpK::Rem => {
+                if let Some(result) = lhs.checked_rem(rhs)
+                    && Value::is_i63(result)
+                {
+                    self.def_fixnum_value(dst, result);
+                    return true;
+                }
+            }
+            BinOpK::Exp => {}
+            BinOpK::BitOr => {
+                self.def_fixnum_value(dst, lhs | rhs);
+                return true;
+            }
+            BinOpK::BitAnd => {
+                self.def_fixnum_value(dst, lhs & rhs);
+                return true;
+            }
+            BinOpK::BitXor => {
+                self.def_fixnum_value(dst, lhs ^ rhs);
+                return true;
+            }
+        }
+        false
     }
 
     ///
@@ -48,62 +190,10 @@ impl BBContext {
         dst: Option<SlotId>,
         mode: OpMode,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
-            match kind {
-                BinOpK::Add => {
-                    if let Some(result) = lhs.checked_add(rhs)
-                        && Value::is_i63(result)
-                    {
-                        self.def_fixnum_value(dst, result);
-                        return;
-                    }
-                }
-                BinOpK::Sub => {
-                    if let Some(result) = lhs.checked_sub(rhs)
-                        && Value::is_i63(result)
-                    {
-                        self.def_fixnum_value(dst, result);
-                        return;
-                    }
-                }
-                BinOpK::Mul => {
-                    if let Some(result) = lhs.checked_mul(rhs)
-                        && Value::is_i63(result)
-                    {
-                        self.def_fixnum_value(dst, result);
-                        return;
-                    }
-                }
-                BinOpK::Div => {
-                    if let Some(result) = lhs.checked_div(rhs)
-                        && Value::is_i63(result)
-                    {
-                        self.def_fixnum_value(dst, result);
-                        return;
-                    }
-                }
-                BinOpK::Rem => {
-                    if let Some(result) = lhs.checked_rem(rhs)
-                        && Value::is_i63(result)
-                    {
-                        self.def_fixnum_value(dst, result);
-                        return;
-                    }
-                }
-                BinOpK::Exp => {}
-                BinOpK::BitOr => {
-                    self.def_fixnum_value(dst, lhs | rhs);
-                    return;
-                }
-                BinOpK::BitAnd => {
-                    self.def_fixnum_value(dst, lhs & rhs);
-                    return;
-                }
-                BinOpK::BitXor => {
-                    self.def_fixnum_value(dst, lhs ^ rhs);
-                    return;
-                }
-            }
+        if let Some((lhs, rhs)) = self.check_concrete_integer(mode)
+            && self.binop_integer_folded(kind, lhs, rhs, dst)
+        {
+            return;
         };
 
         match kind {
@@ -151,39 +241,26 @@ impl BBContext {
     }
 
     pub(super) fn gen_binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, info: BinOpInfo) {
-        if let Some((lhs, rhs)) = match info.mode {
-            OpMode::RR(l, r) => {
-                if let Some(lhs) = self.is_float_literal(l)
-                    && let Some(rhs) = self.is_float_literal(r)
-                {
-                    Some((lhs, rhs))
-                } else {
-                    None
-                }
-            }
-            OpMode::RI(l, r) => {
-                if let Some(lhs) = self.is_float_literal(l) {
-                    Some((lhs, r as f64))
-                } else {
-                    None
-                }
-            }
-            OpMode::IR(l, r) => {
-                if let Some(rhs) = self.is_float_literal(r) {
-                    Some((l as f64, rhs))
-                } else {
-                    None
-                }
-            }
-        } {
+        if let Some((lhs, rhs)) = self.check_concrete_float(info.mode) {
             match kind {
-                BinOpK::Add => self.def_float_value(info.dst, lhs + rhs),
-                BinOpK::Sub => self.def_float_value(info.dst, lhs - rhs),
-                BinOpK::Mul => self.def_float_value(info.dst, lhs * rhs),
-                BinOpK::Div => self.def_float_value(info.dst, lhs / rhs),
+                BinOpK::Add => {
+                    self.def_float_value(info.dst, lhs + rhs);
+                    return;
+                }
+                BinOpK::Sub => {
+                    self.def_float_value(info.dst, lhs - rhs);
+                    return;
+                }
+                BinOpK::Mul => {
+                    self.def_float_value(info.dst, lhs * rhs);
+                    return;
+                }
+                BinOpK::Div => {
+                    self.def_float_value(info.dst, lhs / rhs);
+                    return;
+                }
                 _ => {}
             }
-            return;
         };
 
         let fmode = self.fmode(ir, info);
@@ -209,44 +286,27 @@ impl BBContext {
         dst: Option<SlotId>,
         mode: OpMode,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
-            match kind {
-                CmpKind::Eq => {
-                    let b = lhs == rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                CmpKind::Ne => {
-                    let b = lhs != rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                CmpKind::Lt => {
-                    let b = lhs < rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                CmpKind::Le => {
-                    let b = lhs <= rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                CmpKind::Gt => {
-                    let b = lhs > rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                CmpKind::Ge => {
-                    let b = lhs >= rhs;
-                    self.def_concrete_value(dst, Value::bool(b));
-                    return;
-                }
-                _ => {}
-            }
+        if let Some((lhs, rhs)) = self.check_concrete_integer(mode)
+            && self.cmp_folded(kind, lhs, rhs, dst)
+        {
+            return;
         };
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp(mode, kind, lhs, rhs);
         self.rax2acc(ir, dst);
+    }
+
+    pub(super) fn gen_cmp_float(&mut self, ir: &mut AsmIr, info: BinOpInfo, kind: CmpKind) {
+        if let Some((lhs, rhs)) = self.check_concrete_float(info.mode)
+            && self.cmp_folded(kind, lhs, rhs, info.dst)
+        {
+            return;
+        };
+        let mode = self.fmode(ir, info);
+        self.discard(info.dst);
+        self.clear_above_next_sp();
+        ir.push(AsmInst::FloatCmp { kind, mode });
+        self.rax2acc(ir, info.dst);
     }
 
     pub(super) fn gen_cmpbr_integer(
