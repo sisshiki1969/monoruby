@@ -115,8 +115,20 @@ impl BytecodeGen {
         } else {
             None
         };
+
+        let block = self.push().into();
+        self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+
         Ok(CallSite::new(
-            name, pos_num, kw, splat_pos, None, None, args, recv, dst,
+            name,
+            pos_num,
+            kw,
+            splat_pos,
+            None,
+            Some(block),
+            args,
+            recv,
+            dst,
         ))
     }
 
@@ -175,13 +187,17 @@ impl BytecodeGen {
                 hash_splat_pos,
             })
         };
+
+        let block = self.push().into();
+        self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+
         CallSite::new(
             None,
             pos_len,
             kw,
             splat_pos,
             None,
-            None,
+            Some(block),
             pos_start,
             BcReg::Self_,
             dst,

@@ -143,11 +143,11 @@ end
 class Array
   include Enumerable
 
-  #def self.new(...)
-  #  o = allocate
-  #  o.initialize(...) if o.respond_to?(:initialize)
-  #  o
-  #end
+  def self.new(...)
+    o = allocate
+    o.initialize(...) if o.respond_to?(:initialize)
+    o
+  end
 
   def each
     return self.to_enum(:each) if !block_given?

@@ -509,6 +509,7 @@ impl Funcs {
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
+                    block_param = Some(IdentId::get_id(""));
                 }
                 ParamKind::Keyword(name, init) => {
                     let name = IdentId::get_id_from_string(name);

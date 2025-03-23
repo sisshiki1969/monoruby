@@ -348,7 +348,13 @@ impl Lfp {
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {
-        unsafe { *(self.sub(LFP_BLOCK as _) as *const _) }
+        let block: Option<BlockHandler> = unsafe { *(self.sub(LFP_BLOCK as _) as *const _) };
+        if let Some(BlockHandler(v)) = block
+            && v.is_nil()
+        {
+            return None;
+        }
+        block
     }
 
     ///

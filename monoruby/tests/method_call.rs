@@ -346,7 +346,7 @@ fn hash_splat4() {
 }
 
 #[test]
-fn delegate1() {
+fn forwarding1() {
     run_test_with_prelude(
         r#"
         $res = []
@@ -371,7 +371,7 @@ fn delegate1() {
 }
 
 #[test]
-fn delegate2() {
+fn forwarding2() {
     run_test_with_prelude(
         r##"
         $res = []
@@ -389,6 +389,58 @@ fn delegate2() {
             g(1,2,a:100)
             g(...)
             g(b,a,...)
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding3() {
+    run_test_with_prelude(
+        r##"
+        $res = []
+        C.new.f(1,2,a:3)
+        C.new.f(1,2,a:3) { 100 }
+        $res
+        "##,
+        r##"
+        class C
+          def g(*rest, **kw)
+            $res << "#{rest} #{kw}"
+            $res << "#{yield}" if block_given?
+          end
+                
+          def f(...)
+            g(...)
+            g(10,...)
+          end
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_super() {
+    run_test_with_prelude(
+        r##"
+        $res = []
+        C.new.f(1,2,a:3)
+        C.new.f(1,2,a:3) { 100 }
+        $res
+        "##,
+        r##"
+        class S
+          def f(*rest, **kw)
+            $res << "#{rest} #{kw}"
+            $res << "#{yield}" if block_given?
+          end
+        end
+
+        class C < S     
+          def f(...)
+            super
+            super(10,...)
           end
         end
         "##,

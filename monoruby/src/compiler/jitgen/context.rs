@@ -271,10 +271,10 @@ impl JitContext {
         }
     }
 
-    pub fn has_block_info(&self) -> bool {
+    pub fn has_block(&self) -> Option<bool> {
         match self.jit_type() {
-            JitType::Specialized { args_info, .. } => args_info.block.is_some(),
-            _ => false,
+            JitType::Specialized { args_info, .. } => Some(args_info.block.is_some()),
+            _ => None,
         }
     }
 

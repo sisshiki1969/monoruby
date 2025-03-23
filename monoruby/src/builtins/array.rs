@@ -171,7 +171,7 @@ fn array_allocate(
         }
     });
 
-    bb.reg2acc_fixnum(ir, GP::Rax, dst);
+    bb.reg2acc(ir, GP::Rax, dst);
     true
 }
 
