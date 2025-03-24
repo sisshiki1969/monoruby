@@ -2,22 +2,33 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+fn cmp<T>(kind: CmpKind, lhs: T, rhs: T) -> Option<bool>
+where
+    T: PartialEq + PartialOrd,
+{
+    let b = match kind {
+        CmpKind::Eq | CmpKind::TEq => lhs == rhs,
+        CmpKind::Ne => lhs != rhs,
+        CmpKind::Lt => lhs < rhs,
+        CmpKind::Le => lhs <= rhs,
+        CmpKind::Gt => lhs > rhs,
+        CmpKind::Ge => lhs >= rhs,
+        _ => return None,
+    };
+    Some(b)
+}
+
 impl BBContext {
-    fn cmp_folded<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>) -> bool
+    fn is_cmp_folded<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>) -> bool
     where
         T: PartialEq + PartialOrd,
     {
-        let b = match kind {
-            CmpKind::Eq | CmpKind::TEq => lhs == rhs,
-            CmpKind::Ne => lhs != rhs,
-            CmpKind::Lt => lhs < rhs,
-            CmpKind::Le => lhs <= rhs,
-            CmpKind::Gt => lhs > rhs,
-            CmpKind::Ge => lhs >= rhs,
-            _ => return false,
-        };
-        self.def_concrete_value(dst, Value::bool(b));
-        true
+        if let Some(b) = cmp(kind, lhs, rhs) {
+            self.def_concrete_value(dst, Value::bool(b));
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -65,15 +76,7 @@ impl BBContext {
         brkind: BrKind,
     ) -> Option<CompileResult> {
         if let Some((lhs, rhs)) = self.check_concrete_integer(mode) {
-            let b = match kind {
-                CmpKind::Eq | CmpKind::TEq => lhs == rhs,
-                CmpKind::Ne => lhs != rhs,
-                CmpKind::Lt => lhs < rhs,
-                CmpKind::Le => lhs <= rhs,
-                CmpKind::Gt => lhs > rhs,
-                CmpKind::Ge => lhs >= rhs,
-                _ => return None,
-            } ^ (brkind == BrKind::BrIfNot);
+            let b = cmp(kind, lhs, rhs)? ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
                 CompileResult::Branch
             } else {
@@ -90,15 +93,7 @@ impl BBContext {
         brkind: BrKind,
     ) -> Option<CompileResult> {
         if let Some((lhs, rhs)) = self.check_concrete_float(mode) {
-            let b = match kind {
-                CmpKind::Eq | CmpKind::TEq => lhs == rhs,
-                CmpKind::Ne => lhs != rhs,
-                CmpKind::Lt => lhs < rhs,
-                CmpKind::Le => lhs <= rhs,
-                CmpKind::Gt => lhs > rhs,
-                CmpKind::Ge => lhs >= rhs,
-                _ => return None,
-            } ^ (brkind == BrKind::BrIfNot);
+            let b = cmp(kind, lhs, rhs)? ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
                 CompileResult::Branch
             } else {
@@ -287,7 +282,7 @@ impl BBContext {
         mode: OpMode,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_integer(mode)
-            && self.cmp_folded(kind, lhs, rhs, dst)
+            && self.is_cmp_folded(kind, lhs, rhs, dst)
         {
             return;
         };
@@ -298,7 +293,7 @@ impl BBContext {
 
     pub(super) fn gen_cmp_float(&mut self, ir: &mut AsmIr, info: BinOpInfo, kind: CmpKind) {
         if let Some((lhs, rhs)) = self.check_concrete_float(info.mode)
-            && self.cmp_folded(kind, lhs, rhs, info.dst)
+            && self.is_cmp_folded(kind, lhs, rhs, info.dst)
         {
             return;
         };
