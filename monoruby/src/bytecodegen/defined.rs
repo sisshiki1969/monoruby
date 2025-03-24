@@ -77,6 +77,7 @@ impl BytecodeGen {
                         BinOp::BitOr => IdentId::_BOR,
                         BinOp::BitXor => IdentId::_BXOR,
                         BinOp::Exp => IdentId::_POW,
+                        BinOp::Compare => IdentId::_CMP,
                         BinOp::Cmp(cmp) => match cmp {
                             CmpKind::Eq => IdentId::_EQ,
                             CmpKind::Ne => IdentId::_NEQ,
@@ -85,7 +86,6 @@ impl BytecodeGen {
                             CmpKind::Le => IdentId::_LE,
                             CmpKind::Ge => IdentId::_GE,
                             CmpKind::TEq => IdentId::_TEQ,
-                            CmpKind::Cmp => IdentId::_CMP,
                         },
                         _ => unimplemented!(),
                     };

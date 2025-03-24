@@ -647,7 +647,7 @@ impl Codegen {
         self.icmp_eq()
     }
 
-    ///
+    /*///
     /// Compare(<=>) Fixnums.
     ///
     /// ### in
@@ -669,7 +669,7 @@ impl Codegen {
             movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
             cmovltq rax, rdx;
         };
-    }
+    }*/
 
     ///
     /// Execute garbage collection.

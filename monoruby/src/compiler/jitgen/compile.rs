@@ -440,15 +440,7 @@ impl JitContext {
             }
             TraceIr::GBinOpNotrace { .. } => return CompileResult::Recompile,
             TraceIr::FCmp { kind, info } => {
-                if kind != CmpKind::Cmp {
-                    bbctx.gen_cmp_float(ir, info, kind);
-                } else {
-                    bbctx.fetch_binary(ir, info.mode);
-                    bbctx.discard(info.dst);
-                    ir.generic_cmp(bbctx, kind);
-                    bbctx.rax2acc(ir, info.dst);
-                    bbctx.unset_class_version_guard();
-                }
+                bbctx.gen_cmp_float(ir, info, kind);
             }
             TraceIr::ICmp { kind, dst, mode } => bbctx.gen_cmp_integer(ir, kind, dst, mode),
             TraceIr::GCmp { kind, info } => {
@@ -829,7 +821,6 @@ impl JitContext {
             CmpKind::Gt => IdentId::_GT,
             CmpKind::Ge => IdentId::_GE,
             CmpKind::TEq => IdentId::_TEQ,
-            CmpKind::Cmp => IdentId::_CMP,
         }
     }
 

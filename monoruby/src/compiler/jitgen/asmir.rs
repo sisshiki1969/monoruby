@@ -430,13 +430,6 @@ impl AsmIr {
         self.push(AsmInst::IntegerExp { using_xmm });
     }
 
-    pub(super) fn generic_cmp(&mut self, bb: &BBContext, kind: CmpKind) {
-        let using_xmm = bb.get_using_xmm();
-        let error = self.new_error(bb);
-        self.push(AsmInst::GenericCmp { kind, using_xmm });
-        self.handle_error(error);
-    }
-
     ///
     /// Integer comparison
     ///
@@ -970,18 +963,6 @@ pub(super) enum AsmInst {
         using_xmm: UsingXmm,
     },
 
-    ///
-    /// Generic comparison
-    ///
-    /// Compare two Values in `rdi` and `rsi` with *kind*, and return the result in `rax` as Value.
-    ///
-    /// If error occurs in comparison operation, raise error.
-    ///
-    ///
-    GenericCmp {
-        kind: CmpKind,
-        using_xmm: UsingXmm,
-    },
     ///
     /// Integer comparison
     ///

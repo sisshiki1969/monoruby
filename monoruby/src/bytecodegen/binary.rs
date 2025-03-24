@@ -24,6 +24,7 @@ impl BytecodeGen {
             BinOp::Shr => self.gen_binop_method(IdentId::_SHR, lhs, rhs, use_mode, loc),
             BinOp::Shl => self.gen_binop_method(IdentId::_SHL, lhs, rhs, use_mode, loc),
             BinOp::Match => self.gen_binop_method(IdentId::_MATCH, lhs, rhs, use_mode, loc),
+            BinOp::Compare => self.gen_binop_method(IdentId::_CMP, lhs, rhs, use_mode, loc),
             BinOp::LAnd => self.gen_land(use_mode, lhs, rhs),
             BinOp::LOr => self.gen_lor(use_mode, lhs, rhs),
             BinOp::Cmp(kind) => self.gen_cmp(use_mode, kind, lhs, rhs, false, loc),
@@ -88,15 +89,9 @@ impl BytecodeGen {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
             let cond = self.sp().into();
-            if kind == CmpKind::Cmp {
-                self.gen_cmp(UseMode2::Push, kind, lhs, rhs, false, loc)?; // +1
-                self.pop();
-                self.emit_condbr(cond, else_pos, jmp_if_true, false);
-            } else {
-                self.gen_cmp(UseMode2::Push, kind, lhs, rhs, true, loc)?;
-                self.pop();
-                self.emit_condbr(cond, else_pos, jmp_if_true, true);
-            }
+            self.gen_cmp(UseMode2::Push, kind, lhs, rhs, true, loc)?;
+            self.pop();
+            self.emit_condbr(cond, else_pos, jmp_if_true, true);
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;

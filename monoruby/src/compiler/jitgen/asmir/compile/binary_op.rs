@@ -623,7 +623,6 @@ impl Codegen {
             CmpKind::Gt => monoasm! { &mut self.jit, seta rax; },
             CmpKind::Le => monoasm! { &mut self.jit, setbe rax; },
             CmpKind::Lt => monoasm! { &mut self.jit, setb rax; },
-            _ => unimplemented!(),
         }
         monoasm! { &mut self.jit,
             shlq rax, 3;
@@ -631,54 +630,14 @@ impl Codegen {
         };
     }
 
-    pub(super) fn generic_cmp(&mut self, kind: &CmpKind, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
-        let func = match kind {
-            CmpKind::Eq => cmp_eq_values,
-            CmpKind::Ne => cmp_ne_values,
-            CmpKind::Ge => cmp_ge_values,
-            CmpKind::Gt => cmp_gt_values,
-            CmpKind::Le => cmp_le_values,
-            CmpKind::Lt => cmp_lt_values,
-            CmpKind::TEq => cmp_teq_values,
-            CmpKind::Cmp => cmp_cmp_values,
-        };
-        self.call_binop(func);
-        self.xmm_restore(using_xmm);
-    }
-
     cmp_main!(eq, ne, lt, le, gt, ge);
 
     pub(super) fn integer_cmp(&mut self, kind: CmpKind, mode: OpMode, lhs: GP, rhs: GP) {
-        if matches!(kind, CmpKind::Cmp) {
-            match mode {
-                OpMode::RR(..) => {}
-                OpMode::RI(_, r) => {
-                    monoasm!( &mut self.jit,
-                        movq R(rhs as u64), (Value::i32(r as i32).id());
-                    );
-                }
-                OpMode::IR(l, _) => {
-                    monoasm!( &mut self.jit,
-                        movq R(lhs as u64), (Value::i32(l as i32).id());
-                    );
-                }
-            }
-            monoasm! { &mut self.jit,
-                movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());
-                movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
-                cmpq R(lhs as u64), R(rhs as u64);
-                cmovgtq rax, rdx;
-                movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
-                cmovltq rax, rdx;
-            };
-        } else {
-            monoasm! { &mut self.jit,
-                xorq rax, rax;
-            };
-            self.cmp_integer(&mode, lhs, rhs);
-            self.flag_to_bool(kind);
-        }
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+        };
+        self.cmp_integer(&mode, lhs, rhs);
+        self.flag_to_bool(kind);
     }
 
     fn flag_to_bool(&mut self, kind: CmpKind) {
@@ -690,7 +649,6 @@ impl Codegen {
             CmpKind::Le => self.set_le(),
             CmpKind::Lt => self.set_lt(),
             CmpKind::TEq => self.set_eq(),
-            CmpKind::Cmp => unreachable!(),
         }
     }
 
@@ -719,7 +677,6 @@ impl Codegen {
             CmpKind::Le => self.condbr_int_le(branch_dest, brkind),
             CmpKind::Lt => self.condbr_int_lt(branch_dest, brkind),
             CmpKind::TEq => self.condbr_int_eq(branch_dest, brkind),
-            _ => unreachable!(),
         }
     }
 
@@ -741,7 +698,6 @@ impl Codegen {
             CmpKind::Le => self.condbr_float_le(branch_dest, brkind),
             CmpKind::Lt => self.condbr_float_lt(branch_dest, brkind),
             CmpKind::TEq => self.condbr_float_eq(branch_dest, brkind),
-            _ => unreachable!(),
         }
     }
 

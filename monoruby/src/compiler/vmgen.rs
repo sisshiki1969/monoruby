@@ -84,7 +84,7 @@ macro_rules! vm_cmp_opt {
 }
 
 impl Codegen {
-    vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq, cmp);
+    vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq);
 
     ///
     /// Generate interpreter.
@@ -319,7 +319,7 @@ impl Codegen {
         self.dispatch[138] = self.vm_gt_opt_rr();
         self.dispatch[139] = self.vm_ge_opt_rr();
         self.dispatch[140] = self.vm_teq_opt_rr();
-        self.dispatch[141] = self.vm_cmp_opt_rr();
+        //self.dispatch[141] = self.vm_cmp_opt_rr();
 
         self.dispatch[142] = self.vm_eq_opt_ri();
         self.dispatch[143] = self.vm_ne_opt_ri();
@@ -328,7 +328,7 @@ impl Codegen {
         self.dispatch[146] = self.vm_gt_opt_ri();
         self.dispatch[147] = self.vm_ge_opt_ri();
         self.dispatch[148] = self.vm_teq_opt_ri();
-        self.dispatch[149] = self.vm_cmp_opt_ri();
+        //self.dispatch[149] = self.vm_cmp_opt_ri();
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
@@ -340,7 +340,7 @@ impl Codegen {
         self.dispatch[158] = self.vm_gt_opt_rr();
         self.dispatch[159] = self.vm_ge_opt_rr();
         self.dispatch[160] = self.vm_teq_opt_rr();
-        self.dispatch[161] = self.vm_cmp_opt_rr();
+        //self.dispatch[161] = self.vm_cmp_opt_rr();
 
         self.dispatch[162] = self.vm_eq_opt_ri();
         self.dispatch[163] = self.vm_ne_opt_ri();
@@ -349,7 +349,7 @@ impl Codegen {
         self.dispatch[166] = self.vm_gt_opt_ri();
         self.dispatch[167] = self.vm_ge_opt_ri();
         self.dispatch[168] = self.vm_teq_opt_ri();
-        self.dispatch[169] = self.vm_cmp_opt_ri();
+        //self.dispatch[169] = self.vm_cmp_opt_ri();
 
         self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
@@ -410,7 +410,7 @@ impl Codegen {
         self.dispatch[138] = self.vm_gt_rr();
         self.dispatch[139] = self.vm_ge_rr();
         self.dispatch[140] = self.vm_teq_rr();
-        self.dispatch[141] = self.vm_cmp_rr();
+        //self.dispatch[141] = self.vm_cmp_rr();
 
         self.dispatch[142] = self.vm_eq_ri();
         self.dispatch[143] = self.vm_ne_ri();
@@ -419,7 +419,7 @@ impl Codegen {
         self.dispatch[146] = self.vm_gt_ri();
         self.dispatch[147] = self.vm_ge_ri();
         self.dispatch[148] = self.vm_teq_ri();
-        self.dispatch[149] = self.vm_cmp_ri();
+        //self.dispatch[149] = self.vm_cmp_ri();
 
         self.dispatch[154] = self.vm_eq_rr();
         self.dispatch[155] = self.vm_ne_rr();
@@ -428,7 +428,7 @@ impl Codegen {
         self.dispatch[158] = self.vm_gt_rr();
         self.dispatch[159] = self.vm_ge_rr();
         self.dispatch[160] = self.vm_teq_rr();
-        self.dispatch[161] = self.vm_cmp_rr();
+        //self.dispatch[161] = self.vm_cmp_rr();
 
         self.dispatch[162] = self.vm_eq_ri();
         self.dispatch[163] = self.vm_ne_ri();
@@ -437,7 +437,7 @@ impl Codegen {
         self.dispatch[166] = self.vm_gt_ri();
         self.dispatch[167] = self.vm_ge_ri();
         self.dispatch[168] = self.vm_teq_ri();
-        self.dispatch[169] = self.vm_cmp_ri();
+        //self.dispatch[169] = self.vm_cmp_ri();
 
         let (add_rr, add_ri, add_ir) = self.vm_binops(add_values_no_opt);
         let (sub_rr, sub_ri, sub_ir) = self.vm_binops(sub_values_no_opt);

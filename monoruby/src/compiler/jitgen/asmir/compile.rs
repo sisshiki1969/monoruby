@@ -474,9 +474,6 @@ impl Codegen {
                 self.integer_exp(using_xmm);
             }
 
-            AsmInst::GenericCmp { kind, using_xmm } => {
-                self.generic_cmp(&kind, using_xmm);
-            }
             AsmInst::IntegerCmp {
                 mode,
                 kind,

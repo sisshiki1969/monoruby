@@ -317,53 +317,7 @@ pub(crate) fn cmp_teq_values_bool_no_opt(
         .map(|v| v.as_bool())
 }
 
-pub(crate) extern "C" fn cmp_cmp_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    vm.cmp_cmp_values_inner(globals, lhs, rhs)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}
-
-pub(crate) extern "C" fn cmp_cmp_values_no_opt(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    vm.cmp_cmp_values_no_opt_inner(globals, lhs, rhs)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}
-
 impl Executor {
-    pub(crate) fn cmp_cmp_values_inner(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<Value> {
-        let res = self
-            .compare_values_inner(globals, lhs, rhs)?
-            .map_or(Value::nil(), Value::from_ord);
-        Ok(res)
-    }
-
-    pub(crate) fn cmp_cmp_values_no_opt_inner(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<Value> {
-        let res = self
-            .compare_values_no_opt_inner(globals, lhs, rhs)?
-            .map_or(Value::nil(), Value::from_ord);
-        Ok(res)
-    }
-
     pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,
@@ -371,21 +325,6 @@ impl Executor {
         rhs: Value,
     ) -> Result<std::cmp::Ordering> {
         self.compare_values_inner(globals, lhs, rhs)?
-            .ok_or_else(|| {
-                let lhs = lhs.get_real_class_name(&globals.store);
-                let rhs = rhs.to_s(&globals.store);
-                MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
-            })
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn compare_values_no_opt(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<std::cmp::Ordering> {
-        self.compare_values_no_opt_inner(globals, lhs, rhs)?
             .ok_or_else(|| {
                 let lhs = lhs.get_real_class_name(&globals.store);
                 let rhs = rhs.to_s(&globals.store);
@@ -434,28 +373,6 @@ impl Executor {
                     None
                 }
             }
-        };
-        Ok(res)
-    }
-
-    pub(crate) fn compare_values_no_opt_inner(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<Option<std::cmp::Ordering>> {
-        let res = if let Some(i) = self
-            .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None)?
-            .try_fixnum()
-        {
-            match i {
-                -1 => Some(std::cmp::Ordering::Less),
-                0 => Some(std::cmp::Ordering::Equal),
-                1 => Some(std::cmp::Ordering::Greater),
-                _ => None,
-            }
-        } else {
-            None
         };
         Ok(res)
     }
