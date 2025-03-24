@@ -1,16 +1,7 @@
-use super::*;
-
-#[derive(Debug, Clone)]
-pub(super) struct JitBlockInfo {
-    func_id: FuncId,
-    pub(super) self_class: ClassId,
-}
-
-impl JitBlockInfo {
-    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
-        store[self.func_id].is_iseq()
-    }
-}
+use super::{
+    context::{JitArgumentInfo, JitBlockInfo},
+    *,
+};
 
 impl JitContext {
     ///
@@ -196,7 +187,7 @@ impl JitContext {
             return;
         }
         match self.jit_type() {
-            JitType::Specialized(idx) => {
+            JitType::Specialized { idx, .. } => {
                 ir.push(AsmInst::GuardClassVersionSpecialized {
                     version,
                     idx: *idx,
@@ -236,8 +227,13 @@ impl JitContext {
         bbctx.clear_above_next_sp();
         let error = ir.new_error(bbctx);
         bbctx.writeback_acc(ir);
-        let block_entry =
-            self.compile_specialized_method(store, block_iseq, block_self, None, None);
+        let block_entry = self.compile_specialized_method(
+            store,
+            block_iseq,
+            block_self,
+            None,
+            JitArgumentInfo::new(),
+        );
         let evict = ir.new_evict();
         ir.push(AsmInst::YieldSpecialized {
             callid,
@@ -271,7 +267,6 @@ impl JitContext {
         recv_class: ClassId,
     ) -> CompileResult {
         let CallSiteInfo {
-            name,
             args,
             pos_num,
             dst,
@@ -345,21 +340,36 @@ impl JitContext {
             }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
-                if block_fid.is_some() || name == Some(IdentId::NEW) {
-                    let block_info = block_fid.map(|fid| JitBlockInfo {
-                        func_id: fid,
-                        self_class: self.self_class(),
-                    });
-                    let patch_point = match self.jit_type() {
-                        JitType::Specialized(_) => None,
-                        _ => Some(self.label()),
+                let specializable = callsite.splat_pos.is_empty()
+                    && !store[fid].is_rest()
+                    && !(pos_num == 1 && store[fid].single_arg_expand())
+                    && (bbctx.state(callsite.recv).is_concrete_value()
+                        || (args..args + pos_num).any(|i| bbctx.state(i).is_concrete_value()));
+                if block_fid.is_some() || (specializable && self.specialize_level() < 3)
+                /*name == Some(IdentId::NEW)*/
+                {
+                    let mut slots = vec![];
+                    if specializable {
+                        slots.push(bbctx.state(callsite.recv).clone());
+                        for i in args..args + pos_num {
+                            slots.push(bbctx.state(i).clone());
+                        }
+                    }
+                    let args_info = JitArgumentInfo {
+                        block: block_fid.map(|fid| JitBlockInfo::new(fid, self.self_class())),
+                        args: slots,
+                    };
+                    let patch_point = if self.is_specialized() {
+                        None
+                    } else {
+                        Some(self.label())
                     };
                     let entry = self.compile_specialized_method(
                         store,
                         iseq_id,
                         recv_class,
                         patch_point,
-                        block_info,
+                        args_info,
                     );
                     self.send_specialized(
                         bbctx,
@@ -388,14 +398,14 @@ impl JitContext {
         iseq_id: ISeqId,
         self_class: ClassId,
         patch_point: Option<JitLabel>,
-        block_info: Option<JitBlockInfo>,
+        args_info: JitArgumentInfo,
     ) -> JitLabel {
         let specialize_level = self.specialize_level() + 1;
-        let jit_type = if !self.is_specialized() {
-            JitType::Specialized(self.specialized_methods.len())
-        } else {
-            self.jit_type().clone()
+        let idx = match self.jit_type() {
+            JitType::Specialized { idx, .. } => *idx,
+            _ => self.specialized_methods.len(),
         };
+        let jit_type = JitType::Specialized { idx, args_info };
         let mut ctx = JitContext::new(
             store,
             iseq_id,
@@ -403,7 +413,6 @@ impl JitContext {
             self.class_version(),
             self_class,
             specialize_level,
-            block_info,
         );
         ctx.compile(store);
         let entry = self.label();

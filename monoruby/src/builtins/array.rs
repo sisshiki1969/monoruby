@@ -19,7 +19,13 @@ pub(super) fn init(globals: &mut Globals) {
     //    0,
     //    true,
     //);
-    globals.define_builtin_func(ARRAY_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_class_inline_func(
+        ARRAY_CLASS,
+        "allocate",
+        allocate,
+        Box::new(array_allocate),
+        0,
+    );
     globals.define_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
@@ -144,6 +150,29 @@ fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_empty_with_class(class);
     Ok(obj)
+}
+
+fn array_allocate(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    _: ClassId,
+) -> bool {
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    ir.inline(move |gen, _, _| {
+        monoasm! { &mut gen.jit,
+            movq rax, (allocate_array);
+            call rax;
+        }
+    });
+
+    bb.reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 extern "C" fn allocate_array(class_val: Value) -> Value {

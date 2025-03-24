@@ -130,18 +130,22 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if jitctx.has_block_info() {
+    if let Some(b) = jitctx.has_block() {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(true));
+            bb.def_concrete_value(dst, Value::bool(b));
         }
     } else {
         ir.inline(|gen, _, _| {
+            let exit = gen.jit.label();
             monoasm! { &mut gen.jit,
-                movq rax, [r14 - (LFP_BLOCK)];
-                testq rax, rax;
+                movq rax, (FALSE_VALUE);
+                movq rdi, [r14 - (LFP_BLOCK)];
+                testq rdi, rdi;
+                jz exit;
+                cmpq rdi, (NIL_VALUE);
+                jeq exit;
                 movq rax, (TRUE_VALUE);
-                movq rdi, (FALSE_VALUE);
-                cmoveqq rax, rdi;
+            exit:
             }
         });
         bb.rax2acc(ir, dst);

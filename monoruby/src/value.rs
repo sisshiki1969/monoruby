@@ -230,7 +230,7 @@ impl Value {
         Value::from((num << 1) as u64 | 0b1)
     }
 
-    fn is_i63(num: i64) -> bool {
+    pub fn is_i63(num: i64) -> bool {
         let top = ((num as u64) >> 62) ^ ((num as u64) >> 63);
         top & 0b1 == 0
     }

@@ -78,22 +78,16 @@ prelude: |
 benchmark:
   integer_times: |
     1000.times do end
-  integer_ruby_times: |
-    1000.ruby_times do end
   array_each: |
     a.each do |elem| end
-  array_ruby_each: |
-    a.ruby_each do |elem| end
   array_map: |
     a.map do |elem| elem end
-  array_ruby_map: |
-    a.ruby_map do |elem| elem end
   array_map_: |
     a.map! do |elem| elem end
-  array_ruby_map_: |
-    a.ruby_map! do |elem| elem end
   array_each_with_index: |
     a.each_with_index do |elem| end
-  array_ruby_each_with_index: |
-    a.ruby_each_with_index do |elem| end
+  array_new1: |
+    Array.new(5)
+  array_new2: |
+    Array.new(5) do |x| x + 1 end
 loop_count: 5000

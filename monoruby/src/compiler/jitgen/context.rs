@@ -11,13 +11,53 @@ pub(super) enum JitType {
     /// JIT for loop.
     Loop(BytecodePtr),
     /// specialized JIT method.
-    Specialized(usize),
+    Specialized {
+        idx: usize,
+        args_info: JitArgumentInfo,
+    },
 }
 
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
     pub(super) ctx: JitContext,
     pub(super) patch_point: Option<JitLabel>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct JitBlockInfo {
+    block_fid: FuncId,
+    block_self: ClassId,
+}
+
+impl JitBlockInfo {
+    pub(super) fn new(block_fid: FuncId, block_self: ClassId) -> Self {
+        Self {
+            block_fid,
+            block_self,
+        }
+    }
+
+    pub(super) fn is_iseq(&self, store: &Store) -> Option<ISeqId> {
+        store[self.block_fid].is_iseq()
+    }
+
+    pub(super) fn block_self(&self) -> ClassId {
+        self.block_self
+    }
+}
+#[derive(Debug, Clone)]
+pub(super) struct JitArgumentInfo {
+    pub(super) block: Option<JitBlockInfo>,
+    pub(super) args: Vec<slot::SlotState>,
+}
+
+impl JitArgumentInfo {
+    pub(super) fn new() -> Self {
+        Self {
+            block: None,
+            args: vec![],
+        }
+    }
 }
 
 ///
@@ -32,10 +72,6 @@ pub struct JitContext {
     ///
     ///
     bytecode_top: BytecodePtrBase,
-    ///
-    /// The block given to the method and its `self` class.
-    ///
-    block_info: Option<method_call::JitBlockInfo>,
     ///
     /// The start bytecode position of the loop to be compiled.
     ///
@@ -140,7 +176,6 @@ impl JitContext {
         class_version: u32,
         self_class: ClassId,
         specialize_level: usize,
-        block_info: Option<method_call::JitBlockInfo>,
     ) -> Self {
         let iseq = &store[iseq_id];
         let self_ty = store[self_class].instance_ty();
@@ -157,7 +192,6 @@ impl JitContext {
         Self {
             iseq_id,
             bytecode_top: iseq.get_top_pc(),
-            block_info,
             jit_type,
             basic_block_labels,
             loop_info: HashMap::default(),
@@ -189,7 +223,6 @@ impl JitContext {
         Self {
             iseq_id: self.iseq_id,
             bytecode_top: self.bytecode_top,
-            block_info: self.block_info.clone(),
             jit_type: self.jit_type.clone(),
             basic_block_labels: HashMap::default(),
             loop_info: HashMap::default(),
@@ -228,15 +261,21 @@ impl JitContext {
     }
 
     pub(super) fn is_specialized(&self) -> bool {
-        matches!(self.jit_type, JitType::Specialized(_))
+        matches!(self.jit_type, JitType::Specialized { .. })
     }
 
-    pub(super) fn block_info(&self) -> &Option<method_call::JitBlockInfo> {
-        &self.block_info
+    pub(super) fn block_info(&self) -> Option<&JitBlockInfo> {
+        match self.jit_type() {
+            JitType::Specialized { args_info, .. } => args_info.block.as_ref(),
+            _ => None,
+        }
     }
 
-    pub fn has_block_info(&self) -> bool {
-        self.block_info.is_some()
+    pub fn has_block(&self) -> Option<bool> {
+        match self.jit_type() {
+            JitType::Specialized { args_info, .. } => Some(args_info.block.is_some()),
+            _ => None,
+        }
     }
 
     ///

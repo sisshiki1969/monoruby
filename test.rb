@@ -1,6 +1,11 @@
-a = [1,5.5,"Ruby",:nil]
+def f(x,y)
+  if 7 * x + y + 100 > 111
+    puts "true"
+  end
+end
+
 40.times do
-  a.each do |x|
-    puts x.to_s
+ 10.times do |x|
+    f(1.2, 3.4)
   end
 end
