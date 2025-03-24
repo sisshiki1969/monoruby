@@ -993,4 +993,15 @@ mod tests {
         run_test("a = 3456; a % 4");
         run_test("a = 3456; a % 2");
     }
+
+    #[test]
+    fn constant_folding() {
+        run_test("584+1+5-(3+91)*56");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) == 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) != 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) < 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) <= 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) > 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) >= 0 then 1 else 0 end");
+    }
 }
