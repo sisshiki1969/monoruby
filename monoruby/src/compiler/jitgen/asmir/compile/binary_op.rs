@@ -997,18 +997,18 @@ mod tests {
     #[test]
     fn constant_folding() {
         run_test("584+1+5-(3+91)*56");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) == 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) != 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) < 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) <= 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) > 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) >= 0 then 1 else 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) == 0 then puts 1 else puts 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) != 0 then puts 1 else puts 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) < 0 then puts 1 else puts 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) <= 0 then puts 1 else puts 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) > 0 then puts 1 else puts 0 end");
+        run_test("if 584+(1+5)-(3+91)*56%(1+5) >= 0 then puts 1 else puts 0 end");
 
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) == 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) != 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) < 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) <= 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) > 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then 1 else 0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) == 0 then puts 1 else puts  0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) != 0 then puts 1 else puts 0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) < 0 then puts 1 else puts 0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) <= 0 then puts 1 else puts 0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) > 0 then puts 1 else puts 0 end");
+        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then puts 1 else puts 0 end");
     }
 }
