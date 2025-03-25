@@ -707,6 +707,9 @@ impl Codegen {
             } => {
                 self.concat_string(arg, len, using_xmm);
             }
+            AsmInst::ToA { src, using_xmm } => {
+                self.to_a(src, using_xmm);
+            }
             AsmInst::ConcatRegexp {
                 arg,
                 len,
@@ -865,6 +868,18 @@ impl Codegen {
             lea rdx, [r14 - (conv(arg))];
             movq rcx, (len);
             movq rax, (runtime::concatenate_string);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+    }
+
+    fn to_a(&mut self, src: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (conv(src))];
+            movq rax, (runtime::to_a);
             call rax;
         );
         self.xmm_restore(using_xmm);

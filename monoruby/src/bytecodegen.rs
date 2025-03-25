@@ -845,6 +845,10 @@ impl BytecodeGen {
         }
     }
 
+    fn emit_toa(&mut self, dst: BcReg, src: BcReg, loc: Loc) {
+        self.emit(BytecodeInst::ToA { dst, src }, loc);
+    }
+
     fn emit_br(&mut self, jmp_pos: Label) {
         self.add_merge(jmp_pos);
         self.emit(BytecodeInst::Br(jmp_pos), Loc::default());
@@ -1348,7 +1352,9 @@ impl BytecodeGen {
         let len = args.len();
         for (i, arg) in args.into_iter().enumerate() {
             if let NodeKind::Splat(box expr) = arg.kind {
-                self.push_expr(expr)?;
+                let loc = arg.loc;
+                let temp = self.push_expr(expr)?;
+                self.emit_toa(temp.into(), temp.into(), loc);
                 splat_pos.push(i);
             } else {
                 self.push_expr(arg)?;

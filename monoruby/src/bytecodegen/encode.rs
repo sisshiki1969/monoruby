@@ -561,6 +561,11 @@ impl BytecodeGen {
                 let op2 = self.slot_id(&args);
                 Bytecode::from(enc_www(174, op1.0, op2.0, len))
             }
+            BytecodeInst::ToA { dst, src } => {
+                let op1 = self.slot_id(&dst);
+                let op2 = self.slot_id(&src);
+                Bytecode::from(enc_ww(175, op1.0, op2.0))
+            }
             BytecodeInst::Mov(dst, src) => {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);

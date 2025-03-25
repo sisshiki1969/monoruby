@@ -137,9 +137,13 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
     let bh = if let Some(block_fid) = block_fid {
         let bh = BlockHandler::from_caller(block_fid);
         Some(bh)
+    } else if let Some(block_arg) = block_arg {
+        match caller_lfp.register(block_arg.0 as usize) {
+            Some(v) => Some(BlockHandler::new(v)),
+            None => None,
+        }
     } else {
-        block_arg
-            .map(|block_arg| BlockHandler::new(caller_lfp.register(block_arg.0 as usize).unwrap()))
+        None
     };
     callee_lfp.set_block(bh);
 }
@@ -239,12 +243,8 @@ fn positional(
             if splat_pos.contains(&i) {
                 if let Some(ary) = v.try_array_ty() {
                     push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
-                } else if let Some(_range) = v.is_range() {
-                    unimplemented!()
-                } else if let Some(_hash) = v.is_hash() {
-                    unimplemented!()
                 } else {
-                    push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
+                    unreachable!("splat arguments must be an array");
                 };
             } else {
                 push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
