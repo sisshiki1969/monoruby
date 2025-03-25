@@ -159,11 +159,8 @@ pub(super) extern "C" fn gen_array(
             let mut ary = Array::new_empty();
             for (i, v) in iter.enumerate() {
                 if globals.store[callid].splat_pos.contains(&i) {
-                    if let Some(a) = v.try_array_ty() {
-                        ary.extend_from_slice(&a);
-                    } else {
-                        unreachable!("splat arguments must be Array.");
-                    }
+                    let a = v.try_array_ty().expect("splat arguments must be Array.");
+                    ary.extend_from_slice(&a);
                 } else {
                     ary.push(v);
                 }

@@ -241,11 +241,8 @@ fn positional(
         for i in 0..pos_num {
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
-                if let Some(ary) = v.try_array_ty() {
-                    push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
-                } else {
-                    unreachable!("splat arguments must be an array");
-                };
+                let ary = v.try_array_ty().expect("splat arguments must be an array");
+                push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
             } else {
                 push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
             }
