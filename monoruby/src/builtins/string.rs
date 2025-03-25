@@ -510,71 +510,105 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
     }
 }
 
-fn succ_char(ch: char) -> char {
-    // This logic is not compatible with CRuby.
-    match ch {
-        '9' => return '0',
-        '９' => return '０',
-        'z' => return 'a',
-        'Z' => return 'A',
-        'ｚ' => return 'ａ',
-        'Ｚ' => return 'Ａ',
-        _ => {}
-    }
-    let u = match ch as u32 {
-        0x7f => 0x00,
-        0xdfbf => 0xe0a080,
-        0xefbfbf => 0xf0908080,
-        0xf48fbfbf => 0xc2800,
-        i => i + 1,
-    };
-    std::char::from_u32(u).expect("Error occured in char_forward()")
-}
-
-fn is_carry(ch: char) -> bool {
-    is_carry_alpha(ch) || is_carry_digit(ch)
-}
-
-fn is_carry_digit(ch: char) -> bool {
-    match ch {
-        '9' | '９' => true,
-        _ => false,
-    }
-}
-
-fn is_carry_alpha(ch: char) -> bool {
-    match ch {
-        'z' | 'Z' | 'ｚ' | 'Ｚ' => true,
-        _ => false,
-    }
-}
-
+///
+/// Get the successor of `self_`.
+///
+/// https://hackmd.io/@zuby/BklVXzZ6w
+///
 fn str_next(self_: &str) -> String {
+    use unicode_general_category::{get_general_category, GeneralCategory};
+    #[derive(Clone, Copy)]
+    struct Char(char);
+
+    impl Char {
+        fn from(ch: char) -> Self {
+            Char(ch)
+        }
+
+        fn category(&self) -> Category {
+            use GeneralCategory::*;
+            match get_general_category(self.0) {
+                DecimalNumber => Category::Digit,
+                EnclosingMark | SpacingMark | NonspacingMark | LetterNumber | OtherLetter
+                | ModifierLetter | LowercaseLetter | UppercaseLetter | TitlecaseLetter => {
+                    Category::Alpha
+                }
+                _ => Category::Other,
+            }
+        }
+
+        fn is_alnum(&self) -> bool {
+            self.category() != Category::Other
+        }
+
+        fn is_digit(&self) -> bool {
+            self.category() == Category::Digit
+        }
+
+        fn is_alpha(&self) -> bool {
+            self.category() == Category::Alpha
+        }
+
+        fn succ(&self) -> Self {
+            Self(std::char::from_u32(self.0 as u32 + 1).expect("Error occured in succ_char()"))
+        }
+
+        fn pred(&self) -> Self {
+            Self(std::char::from_u32(self.0 as u32 - 1).expect("Error occured in succ_char()"))
+        }
+
+        fn succ_char(&self) -> (Self, bool) {
+            let cat = self.category();
+            let mut next = self.succ();
+            if cat == next.category() {
+                return (next, false);
+            } else {
+                next = next.succ();
+                if cat == next.category() {
+                    return (next, false);
+                }
+            }
+            next = *self;
+            while next.category() == cat {
+                next = next.pred();
+            }
+            (next.succ(), true)
+        }
+    }
+
+    #[derive(PartialEq, Eq)]
+    enum Category {
+        Alpha,
+        Digit,
+        Other,
+    }
+
     #[derive(PartialEq)]
     enum Type {
         Alpha,
         Digit,
         NotDetermined,
     }
+
     if self_.is_empty() {
         return "".to_string();
     }
-    let chars = self_.chars();
-    let mut buf: Vec<char> = vec![];
+    let chars = self_.chars().map(Char::from);
+    let mut buf = vec![];
     let mut carry_flag = true;
     let mut finish_flag = false;
     let mut last_alnum = 0;
-    if self_.chars().all(|c| !c.is_alphanumeric()) {
+    if self_.chars().map(Char::from).all(|c| !c.is_alnum()) {
         // non-alnum mode
         for c in chars.rev() {
             if carry_flag {
-                buf.push(succ_char(c));
+                buf.push(c.succ());
                 carry_flag = false;
             } else {
                 buf.push(c);
             }
         }
-        return buf.iter().rev().collect::<String>();
+        return buf.iter().rev().map(|c| c.0).collect::<String>();
     }
     let mut pad_flag = false;
     let mut state = Type::NotDetermined;
@@ -583,43 +617,42 @@ fn str_next(self_: &str) -> String {
             buf.push(c);
             continue;
         }
-        if !c.is_alphanumeric() {
+        if !c.is_alnum() {
             pad_flag = true;
             buf.push(c);
             continue;
         }
         if pad_flag {
-            if c.is_numeric() && state == Type::Alpha || c.is_alphabetic() && state == Type::Digit {
+            if c.is_digit() && state == Type::Alpha || c.is_alpha() && state == Type::Digit {
                 finish_flag = true;
                 buf.push(c);
                 continue;
             }
             pad_flag = false;
         } else {
-            if c.is_alphabetic() {
+            if c.is_alpha() {
                 state = Type::Alpha
-            } else if c.is_numeric() {
+            } else if c.is_digit() {
                 state = Type::Digit
             };
         }
-        if is_carry(c) {
+        let (next, is_carry) = c.succ_char();
+        if is_carry {
             last_alnum = buf.len();
         } else {
             carry_flag = false;
         }
-        buf.push(succ_char(c));
+        buf.push(next);
     }
     if carry_flag {
         let c = buf[last_alnum];
-        if c.is_numeric() {
-            buf.insert(last_alnum + 1, succ_char(c));
-        } else if c.is_alphabetic() {
-            buf.insert(last_alnum + 1, c);
+        if c.is_digit() {
+            buf.insert(last_alnum + 1, c.succ_char().0);
         } else {
-            unreachable!()
+            buf.insert(last_alnum + 1, c);
         }
     }
-    buf.iter().rev().collect::<String>()
+    buf.iter().rev().map(|c| c.0).collect::<String>()
 }
 
 ///
@@ -2630,8 +2663,14 @@ mod tests {
         run_test(r#"".".succ"#);
         run_test(r#""".succ"#);
         run_test(r#""AZ".succ"#);
+        run_test(r#""1##9".succ"#);
         run_test(r#""1&&Z".succ"#);
         run_test(r#""z&&Z".succ"#);
+        run_test(r#""Ρ".succ"#);
+        run_test(r#""を".succ"#);
+        run_test(r#####""###".succ"#####);
+        run_test(r#""9Zz9".succ"#);
+        run_test(r#"12.times.reduce("ン"){|c|c.succ}"#);
     }
 
     #[test]
