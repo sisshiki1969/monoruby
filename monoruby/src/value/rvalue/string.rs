@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 pub mod pack;
 mod printable;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Encoding {
     Ascii8,
@@ -30,10 +30,64 @@ impl Encoding {
 /// This struct is used to represent a Ruby-level String.
 /// if ty is Utf8, content is guaranteed to be a valid utf8 string.
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct StringInner {
     content: SmallVec<[u8; STRING_INLINE_CAP]>,
     ty: Encoding,
+}
+
+impl std::ops::Deref for StringInner {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl std::cmp::PartialEq for StringInner {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+    }
+}
+
+impl std::hash::Hash for StringInner {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.content.hash(state);
+    }
+}
+
+impl std::cmp::PartialOrd<Self> for StringInner {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let lhs = self.as_bytes();
+        let rhs = other.as_bytes();
+        let ord = if lhs.len() >= rhs.len() {
+            for (r, l) in rhs.iter().zip(lhs.iter()) {
+                match l.cmp(r) {
+                    Ordering::Equal => {}
+                    ord => return Some(ord),
+                }
+            }
+            if lhs.len() == rhs.len() {
+                Ordering::Equal
+            } else {
+                Ordering::Greater
+            }
+        } else {
+            for (l, r) in lhs.iter().zip(rhs.iter()) {
+                match l.cmp(r) {
+                    Ordering::Equal => {}
+                    ord => return Some(ord),
+                }
+            }
+            Ordering::Less
+        };
+        Some(ord)
+    }
+}
+
+impl std::cmp::Ord for StringInner {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
 }
 
 impl StringInner {
@@ -166,25 +220,6 @@ fn ascii_escape(s: &mut String, ch: u8) {
         }
     };
     s.push_str(str);
-}
-
-impl std::ops::Deref for StringInner {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target {
-        &self.content
-    }
-}
-
-impl std::cmp::PartialEq for StringInner {
-    fn eq(&self, other: &Self) -> bool {
-        self.content == other.content
-    }
-}
-
-impl std::hash::Hash for StringInner {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.content.hash(state);
-    }
 }
 
 impl StringInner {
@@ -358,33 +393,7 @@ impl StringInner {
         StringInner::from(SmallVec::from_vec(vec), ty)
     }
 
-    pub fn string_cmp(&self, other: &Self) -> Ordering {
-        let lhs = self.as_bytes();
-        let rhs = other.as_bytes();
-        if lhs.len() >= rhs.len() {
-            for (r, l) in rhs.iter().zip(lhs.iter()) {
-                match l.cmp(r) {
-                    Ordering::Equal => {}
-                    ord => return ord,
-                }
-            }
-            if lhs.len() == rhs.len() {
-                Ordering::Equal
-            } else {
-                Ordering::Greater
-            }
-        } else {
-            for (l, r) in lhs.iter().zip(rhs.iter()) {
-                match l.cmp(r) {
-                    Ordering::Equal => {}
-                    ord => return ord,
-                }
-            }
-            Ordering::Less
-        }
-    }
-
-    pub fn ord(&self) -> Result<u32> {
+    pub fn first_code(&self) -> Result<u32> {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
         }

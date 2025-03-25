@@ -189,7 +189,7 @@ fn equal(lhs: &StringInner, rhs: Value) -> bool {
 fn string_cmp(lfp: Lfp) -> Result<Option<std::cmp::Ordering>> {
     let self_ = lfp.self_val();
     let lhs = self_.as_bytes();
-    let res = lfp.arg(0).is_bytes().map(|rhs| lhs.string_cmp(rhs));
+    let res = lfp.arg(0).is_bytes().map(|rhs| lhs.cmp(rhs));
     Ok(res)
 }
 
@@ -1360,7 +1360,7 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ord.html]
 #[monoruby_builtin]
 fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().as_bytes().ord()? as _))
+    Ok(Value::integer(lfp.self_val().as_bytes().first_code()? as _))
 }
 
 fn gen_pad(padding: &str, len: usize) -> String {

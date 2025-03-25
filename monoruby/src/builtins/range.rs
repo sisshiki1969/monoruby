@@ -13,12 +13,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
-    globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "collect_concat", flat_map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "flat_map", flat_map, 0);
-    globals.define_builtin_func(RANGE_CLASS, "entries", toa, 0);
-    globals.define_builtin_func(RANGE_CLASS, "to_a", toa, 0);
+    globals.define_builtin_funcs(RANGE_CLASS, "collect", &["map"], map, 0);
+    globals.define_builtin_funcs(RANGE_CLASS, "collect_concat", &["flat_map"], flat_map, 0);
+    globals.define_builtin_funcs(RANGE_CLASS, "entries", &["to_a"], toa, 0);
 }
 
 ///
