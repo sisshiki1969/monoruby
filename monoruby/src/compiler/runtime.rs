@@ -157,23 +157,10 @@ pub(super) extern "C" fn gen_array(
             Some(Value::array_from_iter(iter))
         } else {
             let mut ary = Array::new_empty();
-            let to_a = IdentId::get_id("to_a");
             for (i, v) in iter.enumerate() {
                 if globals.store[callid].splat_pos.contains(&i) {
-                    if let Some(fid) = globals.check_method(v, to_a) {
-                        let a = vm.invoke_func(globals, fid, v, &[], None)?;
-                        if let Some(a) = a.try_array_ty() {
-                            ary.extend_from_slice(&a);
-                        } else {
-                            vm.set_error(MonorubyErr::typeerr(
-                                "`to_a' method should return Array.",
-                                TypeErrKind::Other,
-                            ));
-                            return None;
-                        }
-                    } else {
-                        ary.push(v);
-                    }
+                    let a = v.try_array_ty().expect("splat arguments must be Array.");
+                    ary.extend_from_slice(&a);
                 } else {
                     ary.push(v);
                 }
@@ -737,6 +724,29 @@ pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
     match err_val.is_exception() {
         Some(ex) => vm.set_error(MonorubyErr::new_from_exception(ex)),
         None => unimplemented!(),
+    }
+}
+
+pub(super) extern "C" fn to_a(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: Value,
+) -> Option<Value> {
+    if let Some(func_id) = globals.check_method(src, IdentId::TO_A) {
+        let ary = vm.invoke_func(globals, func_id, src, &[], None)?;
+        if ary.is_array_ty() {
+            Some(ary)
+        } else {
+            let src_class = src.class().get_name_id(&globals.store);
+            let res_class = ary.class().get_name_id(&globals.store);
+            vm.set_error(MonorubyErr::typeerr(
+                format!("can't convert {src_class} to Array ({src_class}#to_a gives {res_class})"),
+                TypeErrKind::Other,
+            ));
+            None
+        }
+    } else {
+        Some(Value::array1(src))
     }
 }
 

@@ -550,6 +550,13 @@ impl JitContext {
                     return CompileResult::Recompile;
                 }
             }
+            TraceIr::ToA { dst, src } => {
+                let error = ir.new_error(bbctx);
+                bbctx.write_back_slot(ir, src);
+                ir.to_a(bbctx, src);
+                ir.handle_error(error);
+                bbctx.rax2acc(ir, dst);
+            }
             TraceIr::Mov(dst, src) => {
                 bbctx.copy_slot(ir, src, dst);
             }

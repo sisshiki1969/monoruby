@@ -309,6 +309,11 @@ impl AsmIr {
         self.push(AsmInst::LoadSVar { id, using_xmm });
     }
 
+    pub(super) fn to_a(&mut self, bb: &BBContext, src: SlotId) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::ToA { src, using_xmm });
+    }
+
     pub(super) fn concat_str(&mut self, bb: &BBContext, arg: SlotId, len: u16) {
         let using_xmm = bb.get_using_xmm();
         self.push(AsmInst::ConcatStr {
@@ -1149,6 +1154,10 @@ pub(super) enum AsmInst {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
+        using_xmm: UsingXmm,
+    },
+    ToA {
+        src: SlotId,
         using_xmm: UsingXmm,
     },
     ConcatStr {

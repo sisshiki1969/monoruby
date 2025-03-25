@@ -933,6 +933,10 @@ impl ISeqInfo {
                     args: SlotId::new(op2_w2),
                     len: op3_w3,
                 },
+                175 => TraceIr::ToA {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                },
                 176 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
                 177..=178 => TraceIr::Range {
                     dst: SlotId::new(op1_w1),

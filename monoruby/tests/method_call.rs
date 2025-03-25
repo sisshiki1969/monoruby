@@ -253,6 +253,26 @@ fn splat() {
         end
         "#,
     );
+    run_test_error(
+        r##"
+    class C
+        def to_a
+            1
+        end
+    end
+    [*C.new]
+    "##,
+    );
+    run_test_error(
+        r##"
+    class C
+        def to_a
+            1
+        end
+    end
+    puts *C.new
+    "##,
+    );
 }
 
 #[test]

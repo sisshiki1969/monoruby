@@ -163,6 +163,10 @@ pub(super) enum BytecodeInst {
     BinOp(BinOpK, Option<BcReg>, BinopMode), // kind, ret, (lhs, rhs)
     Cmp(CmpKind, Option<BcReg>, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
     Mov(BcReg, BcReg),                       // dst, offset
+    ToA {
+        dst: BcReg,
+        src: BcReg,
+    },
     CheckLocal(BcReg, Label),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),

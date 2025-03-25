@@ -235,6 +235,11 @@ pub(crate) enum TraceIr {
     Raise(SlotId),
     /// ensure_end
     EnsureEnd,
+    /// toa{%src, %dst}
+    ToA {
+        dst: SlotId,
+        src: SlotId,
+    },
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
     /// initialize_method
@@ -679,7 +684,8 @@ impl TraceIr {
             TraceIr::BlockBreak(reg) => format!("break {:?}", reg),
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
             TraceIr::EnsureEnd => format!("ensure_end"),
-            TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
+            TraceIr::ToA { dst, src } => format!("{dst:?} = {src:?}.to_a"),
+            TraceIr::Mov(dst, src) => format!("{dst:?} = {src:?}"),
             TraceIr::MethodCall {
                 polymorphic,
                 callid,

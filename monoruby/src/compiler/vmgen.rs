@@ -220,6 +220,24 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
+        //BcOp::ToA
+        let toa = self.jit.get_current_address();
+        let raise = self.entry_raise();
+        self.fetch3();
+        self.vm_get_slot_addr(GP::R15);
+        self.vm_get_slot_value(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::to_a);
+            call rax;
+            testq rax, rax;
+            je  raise;
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+
         //BcOp::Mov
         let mov = self.jit.get_current_address();
         self.fetch3();
@@ -356,6 +374,7 @@ impl Codegen {
         self.dispatch[172] = self.vm_init();
         self.dispatch[173] = self.vm_alias_method();
         self.dispatch[174] = self.vm_hash();
+        self.dispatch[175] = toa;
         self.dispatch[176] = mov;
         self.dispatch[177] = self.vm_range(false);
         self.dispatch[178] = self.vm_range(true);
