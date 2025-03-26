@@ -515,7 +515,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
 ///
 /// https://hackmd.io/@zuby/BklVXzZ6w
 ///
-fn str_next(self_: &str) -> String {
+pub fn str_next(self_: &str) -> String {
     use unicode_general_category::{get_general_category, GeneralCategory};
     #[derive(Clone, Copy)]
     struct Char(char);

@@ -229,15 +229,28 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.expect_integer()?;
-        let mut end = range.end.expect_integer()?;
+    if let Some(start) = range.start.try_fixnum()
+        && let Some(mut end) = range.end.try_fixnum()
+    {
         if !range.exclude_end() {
             end += 1
         }
 
         let vec = (start..end).map(Value::fixnum).collect();
         Ok(Value::array_from_vec(vec))
+    } else if let Some(start) = range.start.is_str()
+        && let Some(end) = range.end.is_str()
+    {
+        let mut start = start.to_string();
+        let mut v = vec![];
+        while start != end {
+            v.push(Value::string_from_str(&start));
+            start = builtins::string::str_next(&start);
+        }
+        if !range.exclude_end() {
+            v.push(Value::string_from_str(&start));
+        }
+        Ok(Value::array_from_vec(v))
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
     }

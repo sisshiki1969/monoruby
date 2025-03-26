@@ -136,7 +136,7 @@ pub(super) extern "C" fn block_arg(
 }
 
 pub(super) extern "C" fn gen_array(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     ptr: *const Value,
