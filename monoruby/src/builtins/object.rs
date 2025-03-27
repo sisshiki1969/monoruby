@@ -134,8 +134,7 @@ pub fn object_send(
     callsite: &CallSiteInfo,
     _: ClassId,
 ) -> bool {
-    let no_splat = !callsite.object_send_single_splat();
-    if !callsite.is_simple() && no_splat {
+    if !callsite.is_simple() {
         return false;
     }
 
@@ -146,7 +145,7 @@ pub fn object_send(
     let callid = callsite.id;
     ir.inline(move |gen, store, labels| {
         let error = &labels[error];
-        gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
+        gen.object_send_inline(callid, store, using_xmm, &error);
     });
     bb.reg2acc(ir, GP::Rax, callsite.dst);
     true

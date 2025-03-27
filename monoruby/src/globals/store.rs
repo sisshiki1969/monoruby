@@ -735,10 +735,6 @@ impl CallSiteInfo {
         self.kw_len() == 0 && !self.has_splat() && self.block_arg.is_none()
     }
 
-    pub(crate) fn object_send_single_splat(&self) -> bool {
-        self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
-    }
-
     #[cfg(feature = "dump-bc")]
     pub fn format_args(&self) -> String {
         let CallSiteInfo {

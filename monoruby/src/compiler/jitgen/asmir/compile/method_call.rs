@@ -649,7 +649,6 @@ impl Codegen {
         store: &Store,
         using_xmm: UsingXmm,
         error: &DestLabel,
-        no_splat: bool,
     ) {
         let CallSiteInfo {
             recv,
@@ -664,22 +663,17 @@ impl Codegen {
         self.check_version_with_cache(&cache);
 
         self.xmm_save(using_xmm);
-        if no_splat {
-            if pos_num < 1 {
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rax, (no_method_name);
-                    call rax;
-                    jmp error;
-                }
-            } else {
-                monoasm! { &mut self.jit,
-                    movq rcx, [r14 - (conv(args))];
-                }
-                self.object_send_inner(recv, cache, &error);
+        if pos_num < 1 {
+            monoasm! { &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (no_method_name);
+                call rax;
+                jmp error;
             }
         } else {
-            self.object_send_splat_arg0(args, &error);
+            monoasm! { &mut self.jit,
+                movq rcx, [r14 - (conv(args))];
+            }
             self.object_send_inner(recv, cache, &error);
         }
         self.handle_error(&error);
@@ -711,15 +705,7 @@ impl Codegen {
             addq  rsp, 64;
         );
 
-        if no_splat {
-            self.object_send_handle_arguments(args, pos_num, callid, &error);
-        } else {
-            monoasm! { &mut self.jit,
-                movl r8, (callid.get()); // CallSiteId
-            }
-            self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send_splat);
-            self.handle_error(&error);
-        }
+        self.object_send_handle_arguments(args, pos_num, callid, &error);
         self.call_funcdata();
         self.xmm_restore(using_xmm);
         self.handle_error(&error);
@@ -750,36 +736,6 @@ impl Codegen {
             jmp exit;
         }
         self.jit.select_page(0);
-    }
-
-    ///
-    /// ### out
-    /// - rcx: arg0
-    ///
-    fn object_send_splat_arg0(&mut self, args: SlotId, error: &DestLabel) {
-        let exit = self.jit.label();
-        let heap = self.jit.label();
-        monoasm! { &mut self.jit,
-            movq rcx, [r14 - (conv(args))];
-            testq rcx, 0b111;
-            jnz  exit;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
-            jne  exit;
-            movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
-            cmpq rax, (ARRAY_INLINE_CAPA);
-            jgt  heap;
-            movq rcx, [rcx + (RVALUE_OFFSET_INLINE)];
-            testq rcx, rcx;
-            jne  exit;
-            movq rdi, rbx;
-            movq rax, (no_method_name);
-            call rax;
-            jmp error;
-        heap:
-            movq rcx, [rcx + (RVALUE_OFFSET_HEAP_PTR)];
-            movq rcx, [rcx];
-        exit:
-        }
     }
 
     fn object_send_handle_arguments(
