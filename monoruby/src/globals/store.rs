@@ -250,7 +250,7 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let func_id = self.functions.add_classdef(info, sourceinfo.clone())?;
+        let func_id = self.functions.add_classdef(info)?;
         let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
         let iseq = self.add_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
@@ -265,7 +265,7 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (func_id, params) = self.functions.add_method(info, sourceinfo.clone())?;
+        let (func_id, params) = self.functions.add_method(info)?;
         let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
         let iseq = self.add_iseq(info);
         let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
@@ -283,9 +283,7 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (func_id, params) =
-            self.functions
-                .add_block(optional_params, info, sourceinfo.clone())?;
+        let (func_id, params) = self.functions.add_block(optional_params, info)?;
         let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
         let iseq = self.add_iseq(info);
         let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);

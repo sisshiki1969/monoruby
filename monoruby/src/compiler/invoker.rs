@@ -737,7 +737,7 @@ extern "C" fn handle_invoker_arguments(
 
     // keyword
     let params = info.kw_names();
-    let callee_kw_pos = info.pos_num() + 1;
+    let callee_kw_pos = info.kw_reg_pos();
     for (id, _) in params.iter().enumerate() {
         unsafe {
             *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());

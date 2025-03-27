@@ -72,8 +72,7 @@ impl BytecodeGen {
         let (_, mother_args, outer) = self.mother.clone();
         let (args, pos_num, splat_pos) = if !arglist.args.is_empty() {
             let (args, mut len, mut splat_pos) = self.ordinary_args(arglist.args)?;
-            if mother_args.is_rest() {
-                let rest_pos = mother_args.pos_num() as u16 - 1;
+            if let Some(rest_pos) = mother_args.is_rest() {
                 let dst = self.push().into();
                 let src = BcLocal(rest_pos).into();
                 if outer == 0 {
@@ -85,8 +84,7 @@ impl BytecodeGen {
                 len += 1;
             }
             (args, len, splat_pos)
-        } else if mother_args.is_rest() {
-            let rest_pos = mother_args.pos_num() as u16 - 1;
+        } else if let Some(rest_pos) = mother_args.is_rest() {
             let pos_start = if outer == 0 {
                 BcLocal(rest_pos).into()
             } else {
@@ -135,8 +133,8 @@ impl BytecodeGen {
     fn handle_super_delegate(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
         let (_, mother_args, outer) = self.mother.clone();
         let pos_len = mother_args.pos_num();
-        let splat_pos = if mother_args.is_rest() {
-            vec![pos_len - 1]
+        let splat_pos = if let Some(rest_pos) = mother_args.is_rest() {
+            vec![rest_pos as usize]
         } else {
             vec![]
         };

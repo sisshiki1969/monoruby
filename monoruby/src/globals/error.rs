@@ -1,4 +1,4 @@
-use ruruby_parse::{Loc, ParamKind, ParseErr, ParseErrKind, SourceInfoRef};
+use ruruby_parse::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
 
 use super::*;
 
@@ -143,15 +143,6 @@ impl MonorubyErr {
 
 // Bytecodegen level errors.
 impl MonorubyErr {
-    pub(crate) fn unsupported_parameter_kind(
-        param: ParamKind,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> MonorubyErr {
-        let msg = format!("unsupported parameter kind {param:?}");
-        MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
-    }
-
     pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         let msg = format!("unsupported lhs {:?}", lhs.kind);
         MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)

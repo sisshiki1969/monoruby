@@ -1087,10 +1087,13 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 ///
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ParamsInfo {
+    /// required
     required_num: usize,
-    // required + optional
-    reqopt_num: usize,
-    // required + optional + rest
+    /// optional
+    optional_num: usize,
+    /// post
+    post_num: usize,
+    /// required + optional + post + rest
     pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, kw_rest, destructed local, block
     pub args_names: Vec<Option<IdentId>>,
@@ -1102,7 +1105,8 @@ pub(crate) struct ParamsInfo {
 impl ParamsInfo {
     pub fn new(
         required_num: usize,
-        reqopt_num: usize,
+        optional_num: usize,
+        post_num: usize,
         pos_num: usize,
         args_names: Vec<Option<IdentId>>,
         keyword_names: Vec<IdentId>,
@@ -1111,7 +1115,8 @@ impl ParamsInfo {
     ) -> Self {
         ParamsInfo {
             required_num,
-            reqopt_num,
+            optional_num,
+            post_num,
             pos_num,
             args_names,
             kw_names: keyword_names,
@@ -1127,7 +1132,8 @@ impl ParamsInfo {
     pub fn new_attr_writer() -> Self {
         ParamsInfo {
             required_num: 1,
-            reqopt_num: 1,
+            optional_num: 0,
+            post_num: 0,
             pos_num: 1,
             args_names: vec![],
             kw_names: vec![],
@@ -1139,7 +1145,8 @@ impl ParamsInfo {
     pub fn new_native(min: usize, max: usize, rest: bool, kw_names: Vec<IdentId>) -> Self {
         ParamsInfo {
             required_num: min,
-            reqopt_num: max,
+            optional_num: max - min,
+            post_num: 0,
             pos_num: max + rest as usize,
             args_names: vec![],
             kw_names,
@@ -1159,25 +1166,21 @@ impl ParamsInfo {
     /// The number of required + optional arguments.
     ///
     pub(crate) fn reqopt_num(&self) -> usize {
-        self.reqopt_num
+        self.required_num + self.optional_num
     }
 
     ///
-    /// The number of optional + rest arguments.
+    /// The number of required + optional + post + rest arguments.
     ///
-    pub(crate) fn opt_rest_num(&self) -> usize {
-        self.pos_num - self.required_num
-    }
-
-    ///
-    /// The number of required + optional + rest arguments.
-    ///
-    pub fn pos_num(&self) -> usize {
+    pub(crate) fn pos_num(&self) -> usize {
         self.pos_num
     }
 
+    ///
+    /// The number of required + optional + post arguments.
+    ///
     pub fn max_positional_args(&self) -> usize {
-        self.reqopt_num
+        self.required_num + self.optional_num + self.post_num
     }
 
     pub fn total_args(&self) -> usize {
@@ -1187,17 +1190,23 @@ impl ParamsInfo {
             + self.block_param.is_some() as usize
     }
 
-    pub fn is_rest(&self) -> bool {
-        self.pos_num != self.reqopt_num
+    pub fn is_rest(&self) -> Option<u16> {
+        if self.pos_num != self.required_num + self.optional_num + self.post_num {
+            Some(self.pos_num as u16 - 1)
+        } else {
+            None
+        }
     }
 
     ///
     /// If `self` is "simple", return true.
     ///
-    /// "simple" means that the function has no optional, rest, keyword, keywoed rest, and block parameters.
+    /// "simple" means that the function has no optional, post, rest, keyword, keywoed rest, and block parameters.
     ///
     pub fn is_simple(&self) -> bool {
-        self.opt_rest_num() == 0
+        self.optional_num == 0
+            && self.post_num == 0
+            && self.is_rest().is_none()
             && self.kw_names.is_empty()
             && self.kw_rest.is_none()
             && self.block_param.is_none()

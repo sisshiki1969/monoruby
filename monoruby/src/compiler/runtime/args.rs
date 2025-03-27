@@ -25,8 +25,7 @@ pub(crate) fn handle_positional(
 ) -> Result<()> {
     let req_num = info.req_num();
     let reqopt_num = info.reqopt_num();
-    let pos_num = info.pos_num();
-    let is_rest = pos_num != reqopt_num;
+    let is_rest = info.is_rest();
     let is_block_style = info.is_block_style();
     unsafe {
         if arg_num > reqopt_num {
@@ -228,7 +227,7 @@ fn positional(
             (max_pos, rest)
         }
     } else if callee.is_rest()
-        && callee.reqopt_num() == 0
+        && callee.max_positional_args() == 0
         && pos_num == 1
         && unsafe { (*src).is_array_ty() }
         && ex.is_none()
@@ -420,7 +419,7 @@ fn handle_keyword(
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
-    let callee_kw_pos = callee.pos_num() + 1;
+    let callee_kw_pos = callee.kw_reg_pos();
     for (id, _) in callee.kw_names().iter().enumerate() {
         unsafe {
             callee_lfp.set_register(callee_kw_pos + id, None);
@@ -444,7 +443,7 @@ fn ordinary_keyword(
         kw_pos, kw_args, ..
     } = callsite;
 
-    let callee_kw_pos = info.pos_num() + 1;
+    let callee_kw_pos = info.kw_reg_pos();
     let mut used = 0;
     for (id, param_name) in info.kw_names().iter().enumerate() {
         unsafe {
@@ -483,7 +482,7 @@ fn hash_splat_and_kw_rest(
         ..
     } = caller;
 
-    let callee_kw_pos = callee.pos_num() + 1;
+    let callee_kw_pos = callee.kw_reg_pos();
 
     for h in hash_splat_pos
         .iter()
