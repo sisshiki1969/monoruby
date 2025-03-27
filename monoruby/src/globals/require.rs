@@ -12,6 +12,16 @@ impl Globals {
         is_relative: bool,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
         if !is_relative {
+            let mut file = PathBuf::from(file_name);
+            file.set_extension("rb");
+            if self.loaded_canonicalized_files.get(&file).is_some() {
+                return Ok(None);
+            }
+            file.set_extension("so");
+            if self.loaded_canonicalized_files.get(&file).is_some() {
+                return Ok(None);
+            }
+
             if let Some(file) = self.search_lib(file_name) {
                 return self.load_file(file);
             }

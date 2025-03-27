@@ -159,6 +159,11 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
+        let mut loaded_canonicalized_files = IndexSet::default();
+        ["thread.rb"].iter().for_each(|f| {
+            loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
+        });
+
         let mut globals = Self {
             main_object,
             codegen: Codegen::new(no_jit),
@@ -169,7 +174,7 @@ impl Globals {
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
-            loaded_canonicalized_files: IndexSet::default(),
+            loaded_canonicalized_files,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
