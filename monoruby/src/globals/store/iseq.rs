@@ -1170,6 +1170,13 @@ impl ParamsInfo {
     }
 
     ///
+    /// The number of required + optional arguments.
+    ///
+    pub(crate) fn post_num(&self) -> usize {
+        self.post_num
+    }
+
+    ///
     /// The number of required + optional + post + rest arguments.
     ///
     pub(crate) fn pos_num(&self) -> usize {

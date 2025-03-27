@@ -158,15 +158,13 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
 fn positional(
     caller: &CallSiteInfo,
     callee: &FuncInfo,
-    mut callee_lfp: Lfp,
+    callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
-    let max_pos = callee.max_positional_args();
-    let no_push = callee.discard_excess_positional_args();
     let splat_pos = &caller.splat_pos;
-    let src = caller_lfp.register_ptr(caller.args.0 as usize) as _;
-    let dst = callee_lfp.register_ptr(1) as *mut Value;
-    let pos_num = caller.pos_num;
+    let src = caller_lfp.register_ptr(caller.args.0 as usize) as *mut Value;
+    let dst = callee_lfp.register_ptr(1);
+    let pos_args = caller.pos_num;
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
@@ -193,97 +191,100 @@ fn positional(
         None
     };
 
-    let (mut arg_num, mut rest) = if splat_pos.is_empty() {
-        if pos_num <= max_pos {
-            memcpy(src, dst, pos_num);
-            (pos_num, vec![])
+    let mut buf = vec![];
+    for i in 0..pos_args {
+        let v = unsafe { *src.sub(i) };
+        if splat_pos.contains(&i) {
+            let ary = v.try_array_ty().expect("splat arguments must be an array");
+            buf.extend_from_slice(&ary);
         } else {
-            memcpy(src, dst, max_pos);
-            // handle the rest arguments.
-            let rest = if !no_push {
-                unsafe { std::slice::from_raw_parts(src.sub(pos_num - 1), pos_num - max_pos) }
-                    .iter()
-                    .cloned()
-                    .rev()
-                    .collect()
-            } else {
-                vec![]
-            };
-            (max_pos, rest)
+            buf.push(v);
         }
-    } else if callee.is_rest()
-        && callee.max_positional_args() == 0
-        && pos_num == 1
-        && unsafe { (*src).is_array_ty() }
-        && ex.is_none()
-    {
-        memcpy(src, dst, 1);
-        return Ok(());
-    } else {
-        let mut arg_num = 0;
-        let mut rest = vec![];
-        for i in 0..pos_num {
-            let v = unsafe { *src.sub(i) };
-            if splat_pos.contains(&i) {
-                let ary = v.try_array_ty().expect("splat arguments must be an array");
-                push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
-            } else {
-                push(&mut arg_num, &mut rest, max_pos, dst, v, no_push);
-            }
-        }
-        (arg_num, rest)
-    };
+    }
+    if let Some(v) = ex {
+        buf.push(v);
+    }
+
+    let is_block_style = callee.is_block_style();
 
     // single array argument expansion for blocks
-    if arg_num == 1 && callee.single_arg_expand() {
-        let v = unsafe { *dst };
-        if let Some(ary) = v.try_array_ty() {
-            arg_num = 0;
-            push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary, no_push);
+    if buf.len() == 1
+        && callee.single_arg_expand()
+        && let Some(ary) = buf[0].try_array_ty()
+    {
+        buf = ary.to_vec();
+    }
+
+    let ary_len = buf.len();
+    let mut iter = buf.into_iter();
+    let min_args = callee.req_num() + callee.post_num();
+    let max_args = callee.max_positional_args();
+    if !is_block_style && (ary_len < min_args || (ary_len > max_args && !callee.is_rest())) {
+        return Err(MonorubyErr::wrong_number_of_arg_range(
+            ary_len,
+            min_args..=max_args,
+        ));
+    }
+
+    fn fill(dst: *mut Option<Value>, start: usize, end: usize, val: Option<Value>) {
+        for i in start..end {
+            unsafe { *dst.sub(i) = val };
         }
     }
 
-    let req_num = callee.req_num();
-    let ex_num = ex.is_some() as usize;
-    let is_rest = callee.is_rest();
-    let total_pos_args = arg_num + rest.len() + ex_num;
-    let is_block_style = callee.is_block_style();
-    if total_pos_args > max_pos {
-        if is_rest {
-            if let Some(h) = ex {
-                rest.push(h);
-            }
-            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
-        } else if !is_block_style {
-            return Err(MonorubyErr::wrong_number_of_arg_range(
-                total_pos_args,
-                req_num..=max_pos,
-            ));
+    if ary_len <= callee.req_num() {
+        for (i, v) in iter.enumerate() {
+            unsafe { *dst.sub(i) = Some(v) };
         }
-        return Ok(());
-    }
-
-    if total_pos_args >= req_num {
-        let len = max_pos - arg_num;
-        fill(callee_lfp, max_pos, len, None);
+        fill(dst, ary_len, callee.req_num(), Some(Value::nil()));
+        fill(dst, callee.req_num(), callee.reqopt_num(), None);
+        fill(
+            dst,
+            callee.reqopt_num(),
+            callee.max_positional_args(),
+            Some(Value::nil()),
+        );
+        if let Some(rest) = callee.rest_pos() {
+            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
+        }
+    } else if ary_len <= callee.req_num() + callee.post_num() {
+        for i in 0..callee.req_num() {
+            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
+        }
+        fill(dst, callee.req_num(), callee.reqopt_num(), None);
+        let args_num = ary_len - callee.req_num();
+        for (i, v) in iter.enumerate() {
+            unsafe { *dst.sub(i + callee.reqopt_num()) = Some(v) };
+        }
+        fill(
+            dst,
+            callee.reqopt_num() + args_num,
+            callee.max_positional_args(),
+            Some(Value::nil()),
+        );
+        if let Some(rest) = callee.rest_pos() {
+            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
+        }
+    } else if ary_len <= callee.max_positional_args() {
+        let args_num = ary_len - callee.req_num() - callee.post_num();
+        for i in 0..callee.req_num() + args_num {
+            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
+        }
+        fill(dst, callee.req_num() + args_num, callee.reqopt_num(), None);
+        for i in callee.reqopt_num()..callee.max_positional_args() {
+            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
+        }
+        assert_eq!(iter.next(), None);
+        if let Some(rest) = callee.rest_pos() {
+            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
+        }
     } else {
-        if !is_block_style {
-            return Err(MonorubyErr::wrong_number_of_arg_range(
-                total_pos_args,
-                req_num..=max_pos,
-            ));
+        for i in 0..callee.max_positional_args() {
+            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
         }
-        let len = req_num - (arg_num + ex_num);
-        fill(callee_lfp, req_num, len, Some(Value::nil()));
-        let len = max_pos - req_num;
-        fill(callee_lfp, max_pos, len, None);
-    }
-    if let Some(ex) = ex {
-        unsafe { callee_lfp.set_register(1 + arg_num, Some(ex)) };
-    }
-
-    if is_rest {
-        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+        if let Some(rest) = callee.rest_pos() {
+            unsafe { *dst.sub(rest as usize) = Some(Value::array_from_iter(iter)) };
+        }
     }
 
     Ok(())
@@ -469,52 +470,6 @@ fn hash_splat_and_kw_rest(
 }
 
 // Utility functions.
-
-fn push(
-    arg_num: &mut usize,
-    rest: &mut Vec<Value>,
-    max_pos: usize,
-    dst: *mut Value,
-    v: Value,
-    no_push: bool,
-) {
-    if *arg_num >= max_pos {
-        if !no_push {
-            rest.push(v);
-        }
-    } else {
-        unsafe { *dst.sub(*arg_num) = v };
-        *arg_num += 1;
-    }
-}
-
-fn push_ary(
-    arg_num: &mut usize,
-    rest: &mut Vec<Value>,
-    max_pos: usize,
-    dst: *mut Value,
-    ary: &[Value],
-    no_push: bool,
-) {
-    if *arg_num >= max_pos {
-        if !no_push {
-            rest.extend_from_slice(ary);
-        }
-    } else if *arg_num + ary.len() <= max_pos {
-        for (i, v) in ary.iter().enumerate() {
-            unsafe { *dst.sub(*arg_num + i) = *v };
-        }
-        *arg_num += ary.len();
-    } else {
-        for (i, v) in ary[0..max_pos - *arg_num].iter().enumerate() {
-            unsafe { *dst.sub(*arg_num + i) = *v };
-        }
-        if !no_push {
-            rest.extend_from_slice(&ary[max_pos - *arg_num..]);
-        }
-        *arg_num = max_pos;
-    }
-}
 
 fn memcpy(src: *const Value, dst: *mut Value, len: usize) {
     if len != 0 {

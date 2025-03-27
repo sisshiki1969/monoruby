@@ -652,7 +652,7 @@ impl JitModule {
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
         // So several conditions are met, we can optimize this.
         // the conditions are:
-        // - the callee is_simple (no optional, no rest, no keyword, no keyword rest, no block arguments)
+        // - the callee is_simple (no optional, no post, no rest, no keyword, no keyword rest, no block arguments)
         // - req == pos_num
         // - thus, no single argument expansion
         let generic = self.jit.label();

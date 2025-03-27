@@ -791,6 +791,11 @@ impl FuncInfo {
         self.ext.params.reqopt_num()
     }
 
+    /// The number of required + optional arguments.
+    pub(crate) fn post_num(&self) -> usize {
+        self.ext.params.post_num()
+    }
+
     /// The posiiton of keyword arguments.
     pub(crate) fn kw_reg_pos(&self) -> usize {
         // 1 is for self.
@@ -811,6 +816,10 @@ impl FuncInfo {
 
     pub(crate) fn is_rest(&self) -> bool {
         self.ext.params.is_rest().is_some()
+    }
+
+    pub(crate) fn rest_pos(&self) -> Option<u16> {
+        self.ext.params.is_rest()
     }
 
     pub(crate) fn is_block_style(&self) -> bool {
@@ -836,11 +845,6 @@ impl FuncInfo {
         let is_rest = self.ext.params.is_rest().is_some();
         self.meta().is_block_style()
             && (self.ext.params.max_positional_args() + if is_rest { 1 } else { 0 } > 1)
-    }
-
-    pub(crate) fn discard_excess_positional_args(&self) -> bool {
-        let is_rest = self.ext.params.is_rest().is_some();
-        self.meta().is_block_style() && !is_rest
     }
 
     ///
