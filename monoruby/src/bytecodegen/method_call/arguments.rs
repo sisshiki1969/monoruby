@@ -221,13 +221,15 @@ impl BytecodeGen {
         {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
-                let local = self.refer_local(ident).unwrap();
-                return Ok((local, 1, vec![]));
+                if let Some(local) = self.refer_local(ident) {
+                    return Ok((local, 1, vec![]));
+                }
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
-                    let local = self.refer_local(ident).unwrap();
-                    return Ok((local, 1, vec![0]));
+                    if let Some(local) = self.refer_local(ident) {
+                        return Ok((local, 1, vec![0]));
+                    }
                 }
             }
         };

@@ -161,6 +161,33 @@ fn positional(
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    fn check_single_arg_expand(
+        splat_pos: &[usize],
+        pos_args: usize,
+        src: *const Value,
+        ex: Option<Value>,
+    ) -> Option<(*const Value, usize)> {
+        if pos_args == 1 && ex.is_none() {
+            if splat_pos.is_empty()
+                && let Some(ary) = unsafe { *src }.try_array_ty()
+            {
+                return Some((ary.as_ref().as_ptr(), ary.len()));
+            } else if splat_pos == &[0usize]
+                && let Some(ary) = unsafe { *src }.try_array_ty()
+                && ary.len() == 1
+                && let Some(ary) = ary[0].try_array_ty()
+            {
+                return Some((ary.as_ref().as_ptr(), ary.len()));
+            }
+        } else if pos_args == 0
+            && let Some(ex) = ex
+            && let Some(ary) = ex.try_array_ty()
+        {
+            return Some((ary.as_ref().as_ptr(), ary.len()));
+        }
+        None
+    }
+
     let splat_pos = &caller.splat_pos;
     let src = caller_lfp.register_ptr(caller.args.0 as usize) as *mut Value;
     let dst = callee_lfp.register_ptr(1);
@@ -191,6 +218,25 @@ fn positional(
         None
     };
 
+    // single array argument expansion for blocks
+    if callee.single_arg_expand()
+        && let Some((ptr, len)) = check_single_arg_expand(splat_pos, pos_args, src, ex)
+    {
+        return fill_positional_args(dst, callee, ptr, len, true);
+    }
+
+    if splat_pos.is_empty() && ex.is_none() {
+        return fill_positional_args2(dst, callee, src, pos_args);
+    }
+
+    if pos_args == 1
+        && ex.is_none()
+        && splat_pos == &[0]
+        && let Some(ary) = unsafe { *src }.try_array_ty()
+    {
+        return fill_positional_args1(dst, callee, ary.as_ref());
+    }
+
     let mut buf = vec![];
     for i in 0..pos_args {
         let v = unsafe { *src.sub(i) };
@@ -205,30 +251,51 @@ fn positional(
         buf.push(v);
     }
 
-    // single array argument expansion for blocks
-    if buf.len() == 1
-        && callee.single_arg_expand()
-        && let Some(ary) = buf[0].try_array_ty()
-    {
-        return fill_positional_args(dst, callee, &ary);
-    }
-
-    fill_positional_args(dst, callee, &buf)
+    fill_positional_args1(dst, callee, &buf)
 }
 
-fn fill_positional_args(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
+fn fill_positional_args1(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
+    fill_positional_args(dst, callee, buf.as_ptr(), buf.len(), true)
+}
+
+fn fill_positional_args2(
+    dst: *mut Option<Value>,
+    callee: &FuncInfo,
+    ptr: *const Value,
+    len: usize,
+) -> Result<()> {
+    fill_positional_args(dst, callee, ptr, len, false)
+}
+
+fn fill_positional_args(
+    dst: *mut Option<Value>,
+    callee: &FuncInfo,
+    buf_ptr: *const Value,
+    buf_len: usize,
+    upward: bool,
+) -> Result<()> {
     fn fill(dst: *mut Option<Value>, start: usize, end: usize, val: Option<Value>) {
         unsafe { std::slice::from_raw_parts_mut(dst.sub(end).add(1), end - start).fill(val) }
     }
 
-    fn memcpy<'a>(dst: *mut Option<Value>, offset: usize, buf: &[Value]) {
-        let ptr = buf.as_ptr();
-        let len = buf.len();
+    fn memcpy<'a>(
+        dst: *mut Option<Value>,
+        offset: usize,
+        ptr: *const Value,
+        range: std::ops::Range<usize>,
+        upward: bool,
+    ) {
+        let len = range.len();
         for i in 0..len {
-            unsafe { *dst.sub(i + offset) = Some(*ptr.add(i)) };
+            unsafe {
+                *dst.sub(offset + i) = Some(if upward {
+                    *ptr.add(range.start + i)
+                } else {
+                    *ptr.sub(range.start + i)
+                })
+            };
         }
     }
-    let buf_len = buf.len();
     let min_args = callee.req_num() + callee.post_num();
     let max_args = callee.max_positional_args();
     let is_block_style = callee.is_block_style();
@@ -243,41 +310,60 @@ fn fill_positional_args(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value
     let rest_pos = callee.reqopt_num();
     let post_pos = callee.reqopt_num() + callee.is_rest() as usize;
     let end_pos = callee.total_positional_args();
-    if buf_len <= callee.req_num() {
-        memcpy(dst, 0, &buf);
+    let (slice0, slice1, rest) = if buf_len <= callee.req_num() {
         fill(dst, buf_len, opt_pos, Some(Value::nil()));
         fill(dst, opt_pos, rest_pos, None);
-        if let Some(rest) = callee.rest_pos() {
-            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
-        }
         fill(dst, post_pos, end_pos, Some(Value::nil()));
+        (
+            (0, 0..buf_len),
+            (buf_len, buf_len..buf_len),
+            buf_len..buf_len,
+        )
     } else if buf_len <= callee.req_num() + callee.post_num() {
-        memcpy(dst, 0, &buf[0..opt_pos]);
         fill(dst, opt_pos, rest_pos, None);
-        if let Some(rest) = callee.rest_pos() {
-            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
-        }
         let args_num = buf_len - opt_pos;
-        memcpy(dst, post_pos, &buf[opt_pos..]);
         fill(dst, post_pos + args_num, end_pos, Some(Value::nil()));
+        (
+            (0, 0..opt_pos),
+            (post_pos, opt_pos..buf_len),
+            buf_len..buf_len,
+        )
     } else if buf_len <= callee.max_positional_args() {
         let args_num = buf_len - callee.req_num() - callee.post_num();
-        memcpy(dst, 0, &buf[0..opt_pos + args_num]);
         fill(dst, opt_pos + args_num, rest_pos, None);
-        if let Some(rest) = callee.rest_pos() {
-            unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
-        }
-        memcpy(dst, post_pos, &buf[opt_pos + args_num..]);
+        (
+            (0, 0..opt_pos + args_num),
+            (post_pos, opt_pos + args_num..buf_len),
+            buf_len..buf_len,
+        )
     } else {
-        memcpy(dst, 0, &buf[0..rest_pos]);
-        if let Some(rest) = callee.rest_pos() {
-            unsafe {
-                *dst.sub(rest as usize) = Some(Value::array_from_iter(
-                    buf[rest_pos..buf_len + post_pos - end_pos].iter().cloned(),
-                ))
-            };
-        }
-        memcpy(dst, post_pos, &buf[buf_len + post_pos - end_pos..]);
+        (
+            (0, 0..rest_pos),
+            (post_pos, buf_len + post_pos - end_pos..buf_len),
+            rest_pos..buf_len + post_pos - end_pos,
+        )
+    };
+
+    memcpy(dst, slice0.0, buf_ptr, slice0.1, upward);
+    memcpy(dst, slice1.0, buf_ptr, slice1.1, upward);
+    if let Some(rest_pos) = callee.rest_pos() {
+        let ary = unsafe {
+            if upward {
+                Value::array_from_iter(
+                    std::slice::from_raw_parts(buf_ptr.add(rest.start), rest.len())
+                        .iter()
+                        .cloned(),
+                )
+            } else {
+                Value::array_from_iter(
+                    std::slice::from_raw_parts(buf_ptr.sub(rest.end).add(1), rest.len())
+                        .iter()
+                        .rev()
+                        .cloned(),
+                )
+            }
+        };
+        unsafe { *dst.sub(rest_pos as usize) = Some(ary) };
     }
 
     Ok(())
