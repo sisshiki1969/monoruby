@@ -254,13 +254,6 @@ impl ISeqInfo {
     }
 
     ///
-    /// Get a number of required + optional + rest arguments.
-    ///
-    pub(crate) fn pos_num(&self) -> usize {
-        self.args.pos_num
-    }
-
-    ///
     /// Get a block argument name.
     ///
     pub(crate) fn block_param(&self) -> Option<IdentId> {
@@ -1091,10 +1084,10 @@ pub(crate) struct ParamsInfo {
     required_num: usize,
     /// optional
     optional_num: usize,
+    /// rest
+    rest: Option<usize>,
     /// post
     post_num: usize,
-    /// required + optional + post + rest
-    pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, kw_rest, destructed local, block
     pub args_names: Vec<Option<IdentId>>,
     pub kw_names: Vec<IdentId>,
@@ -1106,8 +1099,8 @@ impl ParamsInfo {
     pub fn new(
         required_num: usize,
         optional_num: usize,
+        rest: Option<usize>,
         post_num: usize,
-        pos_num: usize,
         args_names: Vec<Option<IdentId>>,
         keyword_names: Vec<IdentId>,
         kw_rest: Option<SlotId>,
@@ -1116,8 +1109,8 @@ impl ParamsInfo {
         ParamsInfo {
             required_num,
             optional_num,
+            rest,
             post_num,
-            pos_num,
             args_names,
             kw_names: keyword_names,
             kw_rest,
@@ -1133,8 +1126,8 @@ impl ParamsInfo {
         ParamsInfo {
             required_num: 1,
             optional_num: 0,
+            rest: None,
             post_num: 0,
-            pos_num: 1,
             args_names: vec![],
             kw_names: vec![],
             kw_rest: None,
@@ -1146,8 +1139,8 @@ impl ParamsInfo {
         ParamsInfo {
             required_num: min,
             optional_num: max - min,
+            rest: if rest { Some(max) } else { None },
             post_num: 0,
-            pos_num: max + rest as usize,
             args_names: vec![],
             kw_names,
             kw_rest: None,
@@ -1170,39 +1163,43 @@ impl ParamsInfo {
     }
 
     ///
-    /// The number of required + optional arguments.
+    /// The number of post arguments.
     ///
     pub(crate) fn post_num(&self) -> usize {
         self.post_num
     }
 
     ///
-    /// The number of required + optional + post + rest arguments.
-    ///
-    pub(crate) fn pos_num(&self) -> usize {
-        self.pos_num
+    pub fn is_rest(&self) -> Option<u16> {
+        self.rest.map(|i| i as u16)
     }
 
-    ///
     /// The number of required + optional + post arguments.
     ///
     pub fn max_positional_args(&self) -> usize {
         self.required_num + self.optional_num + self.post_num
     }
 
+    /// The number of required + optional + rest + post arguments.
+    ///
+    pub fn total_positional_args(&self) -> usize {
+        self.max_positional_args() + self.is_rest().is_some() as usize
+    }
+
+    /// The posiiton of keyword arguments.
+    pub(crate) fn kw_reg_pos(&self) -> usize {
+        // 1 is for self.
+        self.total_positional_args() + 1
+    }
+
     pub fn total_args(&self) -> usize {
-        self.pos_num
+        self.required_num
+            + self.optional_num
+            + self.rest.is_some() as usize
+            + self.post_num
             + self.kw_names.len()
             + self.kw_rest.is_some() as usize
             + self.block_param.is_some() as usize
-    }
-
-    pub fn is_rest(&self) -> Option<u16> {
-        if self.pos_num != self.required_num + self.optional_num + self.post_num {
-            Some(self.pos_num as u16 - 1)
-        } else {
-            None
-        }
     }
 
     ///

@@ -132,7 +132,7 @@ impl BytecodeGen {
 
     fn handle_super_delegate(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
         let (_, mother_args, outer) = self.mother.clone();
-        let pos_len = mother_args.pos_num();
+        let pos_len = mother_args.total_positional_args();
         let splat_pos = if let Some(rest_pos) = mother_args.is_rest() {
             vec![rest_pos as usize]
         } else {

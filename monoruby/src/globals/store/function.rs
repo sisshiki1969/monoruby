@@ -458,7 +458,7 @@ impl Funcs {
         let mut required_num = 0;
         let mut optional_num = 0;
         let mut post_num = 0;
-        let mut rest = 0;
+        let mut rest = None;
         let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
@@ -487,20 +487,19 @@ impl Funcs {
                     optional_num += 1;
                     optional_info.push(OptionalInfo::new(local, initializer));
                 }
+                ParamKind::Rest(name) => {
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    args_names.push(name.map(IdentId::get_id_from_string));
+                }
                 ParamKind::Post(name) => {
                     args_names.push(Some(IdentId::get_id_from_string(name)));
                     post_num += 1;
                 }
-                ParamKind::Rest(name) => {
-                    args_names.push(name.map(IdentId::get_id_from_string));
-                    assert_eq!(0, rest);
-                    rest = 1;
-                }
                 ParamKind::Delegate => {
-                    if rest == 0 {
-                        args_names.push(None);
-                        rest = 1;
-                    }
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    args_names.push(None);
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
@@ -541,8 +540,8 @@ impl Funcs {
         let params_info = ParamsInfo::new(
             required_num,
             optional_num,
+            rest,
             post_num,
-            required_num + optional_num + post_num + rest,
             args_names,
             keyword_names,
             kw_rest_param,
@@ -799,7 +798,7 @@ impl FuncInfo {
     /// The posiiton of keyword arguments.
     pub(crate) fn kw_reg_pos(&self) -> usize {
         // 1 is for self.
-        self.ext.params.pos_num() + 1
+        self.ext.params.kw_reg_pos()
     }
 
     pub(crate) fn kw_names(&self) -> &[IdentId] {
@@ -841,10 +840,12 @@ impl FuncInfo {
         self.ext.params.max_positional_args()
     }
 
+    pub(crate) fn total_positional_args(&self) -> usize {
+        self.ext.params.total_positional_args()
+    }
+
     pub(crate) fn single_arg_expand(&self) -> bool {
-        let is_rest = self.ext.params.is_rest().is_some();
-        self.meta().is_block_style()
-            && (self.ext.params.max_positional_args() + if is_rest { 1 } else { 0 } > 1)
+        self.meta().is_block_style() && (self.ext.params.total_positional_args() > 1)
     }
 
     ///

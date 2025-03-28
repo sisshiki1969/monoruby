@@ -205,86 +205,79 @@ fn positional(
         buf.push(v);
     }
 
-    let is_block_style = callee.is_block_style();
-
     // single array argument expansion for blocks
     if buf.len() == 1
         && callee.single_arg_expand()
         && let Some(ary) = buf[0].try_array_ty()
     {
-        buf = ary.to_vec();
+        return fill_positional_args(dst, callee, &ary);
     }
 
-    let ary_len = buf.len();
-    let mut iter = buf.into_iter();
+    fill_positional_args(dst, callee, &buf)
+}
+
+fn fill_positional_args(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
+    fn fill(dst: *mut Option<Value>, start: usize, end: usize, val: Option<Value>) {
+        unsafe { std::slice::from_raw_parts_mut(dst.sub(end).add(1), end - start).fill(val) }
+    }
+
+    fn memcpy<'a>(dst: *mut Option<Value>, offset: usize, buf: &[Value]) {
+        let ptr = buf.as_ptr();
+        let len = buf.len();
+        for i in 0..len {
+            unsafe { *dst.sub(i + offset) = Some(*ptr.add(i)) };
+        }
+    }
+    let buf_len = buf.len();
     let min_args = callee.req_num() + callee.post_num();
     let max_args = callee.max_positional_args();
-    if !is_block_style && (ary_len < min_args || (ary_len > max_args && !callee.is_rest())) {
+    let is_block_style = callee.is_block_style();
+    if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_rest())) {
         return Err(MonorubyErr::wrong_number_of_arg_range(
-            ary_len,
+            buf_len,
             min_args..=max_args,
         ));
     }
 
-    fn fill(dst: *mut Option<Value>, start: usize, end: usize, val: Option<Value>) {
-        for i in start..end {
-            unsafe { *dst.sub(i) = val };
-        }
-    }
-
-    if ary_len <= callee.req_num() {
-        for (i, v) in iter.enumerate() {
-            unsafe { *dst.sub(i) = Some(v) };
-        }
-        fill(dst, ary_len, callee.req_num(), Some(Value::nil()));
-        fill(dst, callee.req_num(), callee.reqopt_num(), None);
-        fill(
-            dst,
-            callee.reqopt_num(),
-            callee.max_positional_args(),
-            Some(Value::nil()),
-        );
+    let opt_pos = callee.req_num();
+    let rest_pos = callee.reqopt_num();
+    let post_pos = callee.reqopt_num() + callee.is_rest() as usize;
+    let end_pos = callee.total_positional_args();
+    if buf_len <= callee.req_num() {
+        memcpy(dst, 0, &buf);
+        fill(dst, buf_len, opt_pos, Some(Value::nil()));
+        fill(dst, opt_pos, rest_pos, None);
         if let Some(rest) = callee.rest_pos() {
             unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
         }
-    } else if ary_len <= callee.req_num() + callee.post_num() {
-        for i in 0..callee.req_num() {
-            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
-        }
-        fill(dst, callee.req_num(), callee.reqopt_num(), None);
-        let args_num = ary_len - callee.req_num();
-        for (i, v) in iter.enumerate() {
-            unsafe { *dst.sub(i + callee.reqopt_num()) = Some(v) };
-        }
-        fill(
-            dst,
-            callee.reqopt_num() + args_num,
-            callee.max_positional_args(),
-            Some(Value::nil()),
-        );
+        fill(dst, post_pos, end_pos, Some(Value::nil()));
+    } else if buf_len <= callee.req_num() + callee.post_num() {
+        memcpy(dst, 0, &buf[0..opt_pos]);
+        fill(dst, opt_pos, rest_pos, None);
         if let Some(rest) = callee.rest_pos() {
             unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
         }
-    } else if ary_len <= callee.max_positional_args() {
-        let args_num = ary_len - callee.req_num() - callee.post_num();
-        for i in 0..callee.req_num() + args_num {
-            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
-        }
-        fill(dst, callee.req_num() + args_num, callee.reqopt_num(), None);
-        for i in callee.reqopt_num()..callee.max_positional_args() {
-            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
-        }
-        assert_eq!(iter.next(), None);
+        let args_num = buf_len - opt_pos;
+        memcpy(dst, post_pos, &buf[opt_pos..]);
+        fill(dst, post_pos + args_num, end_pos, Some(Value::nil()));
+    } else if buf_len <= callee.max_positional_args() {
+        let args_num = buf_len - callee.req_num() - callee.post_num();
+        memcpy(dst, 0, &buf[0..opt_pos + args_num]);
+        fill(dst, opt_pos + args_num, rest_pos, None);
         if let Some(rest) = callee.rest_pos() {
             unsafe { *dst.sub(rest as usize) = Some(Value::array_empty()) };
         }
+        memcpy(dst, post_pos, &buf[opt_pos + args_num..]);
     } else {
-        for i in 0..callee.max_positional_args() {
-            unsafe { *dst.sub(i) = Some(iter.next().unwrap()) };
-        }
+        memcpy(dst, 0, &buf[0..rest_pos]);
         if let Some(rest) = callee.rest_pos() {
-            unsafe { *dst.sub(rest as usize) = Some(Value::array_from_iter(iter)) };
+            unsafe {
+                *dst.sub(rest as usize) = Some(Value::array_from_iter(
+                    buf[rest_pos..buf_len + post_pos - end_pos].iter().cloned(),
+                ))
+            };
         }
+        memcpy(dst, post_pos, &buf[buf_len + post_pos - end_pos..]);
     }
 
     Ok(())

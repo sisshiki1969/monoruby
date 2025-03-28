@@ -95,8 +95,8 @@ fn bytecode_compile_func(
         gen.gen_store_expr(local, initializer)?;
         gen.apply_label(next);
     }
-    let kw_reg = info.pos_num();
     // keyword args preparation
+    let kw_reg = info.args.total_positional_args();
     for (id, initializer) in keyword_initializers.into_iter().enumerate() {
         let local = BcLocal((kw_reg + id) as u16).into();
         let next = gen.new_label();
