@@ -45,6 +45,10 @@ impl MethodTableEntry {
     pub fn owner(&self) -> ClassId {
         self.owner
     }
+
+    pub fn is_public(&self) -> bool {
+        self.visibility == Visibility::Public
+    }
 }
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
