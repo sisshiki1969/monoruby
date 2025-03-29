@@ -296,7 +296,7 @@ fn fill_positional_args(
             };
         }
     }
-    let min_args = callee.req_num() + callee.post_num();
+    let min_args = callee.min_positional_args();
     let max_args = callee.max_positional_args();
     let is_block_style = callee.is_block_style();
     if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_rest())) {
@@ -319,7 +319,7 @@ fn fill_positional_args(
             (buf_len, buf_len..buf_len),
             buf_len..buf_len,
         )
-    } else if buf_len <= callee.req_num() + callee.post_num() {
+    } else if buf_len <= callee.min_positional_args() {
         fill(dst, opt_pos, rest_pos, None);
         let args_num = buf_len - opt_pos;
         fill(dst, post_pos + args_num, end_pos, Some(Value::nil()));

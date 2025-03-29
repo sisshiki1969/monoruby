@@ -763,9 +763,6 @@ fn block_expand_array(src: Array, dst: *mut Value, min_len: usize) -> usize {
     for i in 0..len {
         unsafe { *dst.sub(i) = src[i] }
     }
-    for i in 0..len {
-        unsafe { *dst.sub(i) = src[i] }
-    }
     if min_len <= len {
         len
     } else {

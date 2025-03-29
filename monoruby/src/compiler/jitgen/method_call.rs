@@ -1,5 +1,6 @@
 use super::{
     context::{JitArgumentInfo, JitBlockInfo},
+    slot::SlotState,
     *,
 };
 
@@ -351,8 +352,24 @@ impl JitContext {
                     let mut slots = vec![];
                     if specializable {
                         slots.push(bbctx.state(callsite.recv).clone());
-                        for i in args..args + pos_num {
-                            slots.push(bbctx.state(i).clone());
+                        let (filled_req, filled_opt, filled_post) = store[fid].apply_args(pos_num);
+                        for i in 0..filled_req {
+                            slots.push(bbctx.state(args + i).clone());
+                        }
+                        for _ in filled_req..store[fid].req_num() {
+                            slots.push(SlotState::default());
+                        }
+                        for i in filled_req..filled_req + filled_opt {
+                            slots.push(bbctx.state(args + i).clone());
+                        }
+                        for _ in filled_opt..store[fid].opt_num() {
+                            slots.push(SlotState::default());
+                        }
+                        for i in filled_req + filled_opt..filled_req + filled_opt + filled_post {
+                            slots.push(bbctx.state(args + i).clone());
+                        }
+                        for _ in filled_post..store[fid].post_num() {
+                            slots.push(SlotState::default());
                         }
                     }
                     let args_info = JitArgumentInfo {

@@ -1156,6 +1156,13 @@ impl ParamsInfo {
     }
 
     ///
+    /// The number of required arguments.
+    ///
+    pub(crate) fn opt_num(&self) -> usize {
+        self.optional_num
+    }
+
+    ///
     /// The number of required + optional arguments.
     ///
     pub(crate) fn reqopt_num(&self) -> usize {
@@ -1174,12 +1181,21 @@ impl ParamsInfo {
         self.rest.map(|i| i as u16)
     }
 
+    ///
+    /// The number of required + post arguments.
+    ///
+    pub fn min_positional_args(&self) -> usize {
+        self.required_num + self.post_num
+    }
+
+    ///
     /// The number of required + optional + post arguments.
     ///
     pub fn max_positional_args(&self) -> usize {
         self.required_num + self.optional_num + self.post_num
     }
 
+    ///
     /// The number of required + optional + rest + post arguments.
     ///
     pub fn total_positional_args(&self) -> usize {

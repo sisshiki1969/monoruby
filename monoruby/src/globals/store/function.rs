@@ -785,6 +785,11 @@ impl FuncInfo {
         self.ext.params.req_num()
     }
 
+    /// The number of optional arguments.
+    pub(crate) fn opt_num(&self) -> usize {
+        self.ext.params.opt_num()
+    }
+
     /// The number of required + optional arguments.
     pub(crate) fn reqopt_num(&self) -> usize {
         self.ext.params.reqopt_num()
@@ -834,6 +839,13 @@ impl FuncInfo {
     }
 
     ///
+    /// Get the minimal number of positional arguments (= required + post) of this function.
+    ///
+    pub(crate) fn min_positional_args(&self) -> usize {
+        self.ext.params.min_positional_args()
+    }
+
+    ///
     /// Get the max number of positional arguments (= required + optional + post) of this function.
     ///
     pub(crate) fn max_positional_args(&self) -> usize {
@@ -846,6 +858,22 @@ impl FuncInfo {
 
     pub(crate) fn single_arg_expand(&self) -> bool {
         self.meta().is_block_style() && (self.ext.params.total_positional_args() > 1)
+    }
+
+    pub(crate) fn apply_args(&self, pos_num: usize) -> (usize, usize, usize) {
+        if pos_num <= self.req_num() {
+            (pos_num, 0, 0)
+        } else if pos_num <= self.min_positional_args() {
+            (self.req_num(), 0, pos_num - self.req_num())
+        } else if pos_num > self.max_positional_args() {
+            (self.req_num(), self.opt_num(), self.post_num())
+        } else {
+            (
+                self.req_num(),
+                pos_num - self.min_positional_args(),
+                self.post_num(),
+            )
+        }
     }
 
     ///
@@ -869,8 +897,8 @@ impl FuncInfo {
             && !ex_positional
             && !single_arg_expand
             && !self.is_rest()
-            && (self.is_block_style() || (pos_num <= self.max_positional_args()))
-            && self.req_num() <= pos_num
+            && (self.is_block_style()
+                || (pos_num <= self.max_positional_args() && self.min_positional_args() <= pos_num))
     }
 
     ///

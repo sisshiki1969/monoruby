@@ -109,7 +109,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
         r##"
       {prelude}
       res = ({code})
-      for __i in 0..25 do
+      for __i in 0..100 do
           res2 = ({code})
           __assert(res, res2)
       end

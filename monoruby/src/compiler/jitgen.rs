@@ -311,20 +311,53 @@ impl BBContext {
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
             }
+
             // fetch positional arguments.
-            for i in 0..pos_num {
+            let (filled_req, filled_opt, filled_post) = callee.apply_args(pos_num);
+
+            // fill required params.
+            for i in 0..filled_req {
                 let reg = args + i;
                 let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, reg, offset);
             }
-            if pos_num != callee.max_positional_args() {
-                ir.push(AsmInst::I32ToReg(0, GP::Rax));
-                for i in pos_num..callee.max_positional_args() {
-                    let offset =
-                        stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 as i32 + (8 * i) as i32);
+            if filled_req != callee.req_num() {
+                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
+                for i in filled_req..callee.req_num() {
+                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
                     ir.reg2rsp_offset(GP::Rax, offset);
                 }
             }
+
+            // fill optional params.
+            for i in callee.req_num()..callee.req_num() + filled_opt {
+                let reg = args + filled_req + (i - callee.req_num());
+                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, offset);
+            }
+            if filled_opt != callee.opt_num() {
+                ir.push(AsmInst::I32ToReg(0, GP::Rax));
+                for i in callee.req_num() + filled_opt..callee.reqopt_num() {
+                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                    ir.reg2rsp_offset(GP::Rax, offset);
+                }
+            }
+
+            // fill post params.
+            let start = callee.reqopt_num() + callee.is_rest() as usize;
+            for i in start..start + filled_post {
+                let reg = args + filled_req + filled_opt + (i - start);
+                let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                self.fetch_for_callee(ir, reg, offset);
+            }
+            if filled_post != callee.post_num() {
+                ir.push(AsmInst::I32ToReg(NIL_VALUE as _, GP::Rax));
+                for i in start + filled_post..start + callee.post_num() {
+                    let offset = stack_offset - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32);
+                    ir.reg2rsp_offset(GP::Rax, offset);
+                }
+            }
+
             ir.reg_add(GP::Rsp, stack_offset);
         } else {
             self.write_back_args(ir, callsite);
