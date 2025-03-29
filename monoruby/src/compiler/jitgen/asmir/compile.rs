@@ -874,15 +874,29 @@ impl Codegen {
     }
 
     fn to_a(&mut self, src: SlotId, using_xmm: UsingXmm) {
+        let toa = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!( &mut self.jit,
+            movq rax, [r14 - (conv(src))];
+        );
+        self.guard_rvalue(GP::Rax, ARRAY_CLASS, &toa);
+        self.bind_label(exit.clone());
+
+        self.select_page(1);
+        self.bind_label(toa);
         self.xmm_save(using_xmm);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (conv(src))];
+            movq rdx, rax;
             movq rax, (runtime::to_a);
             call rax;
         );
         self.xmm_restore(using_xmm);
+        monoasm!( &mut self.jit,
+            jmp  exit;
+        );
+        self.select_page(0);
     }
 
     fn concat_regexp(&mut self, arg: SlotId, len: u16, using_xmm: UsingXmm) {

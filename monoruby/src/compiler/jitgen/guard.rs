@@ -405,7 +405,7 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
+    pub(super) fn guard_rvalue(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
         monoasm!( &mut self.jit,
             testq R(reg as _), 0b111;
             jnz deopt;
