@@ -681,8 +681,8 @@ impl Codegen {
         let exec_gc = self.exec_gc();
         assert_eq!(0, self.jit.get_page());
         monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 0;
-            jne  gc;
+            cmpl [rip + alloc_flag], 8;
+            jge  gc;
         exit:
         };
         assert_eq!(0, self.jit.get_page());

@@ -857,7 +857,7 @@ impl FuncInfo {
     }
 
     pub(crate) fn single_arg_expand(&self) -> bool {
-        self.meta().is_block_style() && (self.ext.params.total_positional_args() > 1)
+        self.is_block_style() && (self.total_positional_args() > 1)
     }
 
     pub(crate) fn apply_args(&self, pos_num: usize) -> (usize, usize, usize) {
