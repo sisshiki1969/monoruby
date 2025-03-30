@@ -580,6 +580,10 @@ impl JitModule {
     /// - r8: *args
     /// - r9: len
     ///
+    /// ### out
+    /// - rdi: len
+    /// - r8: *args
+    ///
     /// ### destroy
     /// - rax, rdi, r9, r10
     ///
@@ -610,6 +614,10 @@ impl JitModule {
     /// ### in
     /// - r8: *args
     /// - r9: len
+    ///
+    /// ### out
+    /// - rdi: len
+    /// - r8: *args
     ///
     /// ### destroy
     /// - rax, rdi, r9
