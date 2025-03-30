@@ -45,6 +45,10 @@ impl MethodTableEntry {
     pub fn owner(&self) -> ClassId {
         self.owner
     }
+
+    pub fn is_public(&self) -> bool {
+        self.visibility == Visibility::Public
+    }
 }
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
@@ -426,7 +430,7 @@ impl Globals {
         lfp.set_outer(Some(binding.outer_lfp()));
         if let Some(binding_lfp) = binding.binding() {
             let locals_len = self.locals_len(binding_lfp.meta().func_id());
-            for i in 1..1 + locals_len {
+            for i in SlotId(1)..SlotId(1) + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
             }
@@ -450,7 +454,7 @@ impl Globals {
         if let Some(binding_lfp) = binding_lfp {
             lfp.set_outer(binding_lfp.outer());
             let locals_len = self.locals_len(binding_lfp.meta().func_id());
-            for i in 1..1 + locals_len {
+            for i in SlotId(1)..SlotId(1) + locals_len {
                 let v = binding_lfp.register(i);
                 unsafe { lfp.set_register(i, v) }
             }

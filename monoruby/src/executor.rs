@@ -136,7 +136,7 @@ impl Executor {
     }
 
     pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
-        self.cfp().lfp().register(index.0 as usize)
+        self.cfp().lfp().register(index)
     }
 
     pub(crate) fn method_func_id(&self) -> FuncId {
@@ -1171,7 +1171,7 @@ pub enum FiberState {
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub(crate) struct SlotId(pub u16);
+pub struct SlotId(pub u16);
 
 impl std::iter::Step for SlotId {
     fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {

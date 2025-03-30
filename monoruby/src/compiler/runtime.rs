@@ -325,7 +325,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     callee_lfp: Lfp,
     callid: CallSiteId,
 ) -> Option<Value> {
-    let src = caller_lfp.register_ptr(globals.store[callid].args.0 as usize) as *const Value;
+    let src = caller_lfp.register_ptr(globals.store[callid].args) as *const Value;
     match set_frame_arguments_simple(
         globals,
         callee_lfp,
@@ -350,7 +350,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     callid: CallSiteId,
 ) -> Option<Value> {
     assert_eq!(globals.store[callid].pos_num, 1);
-    let src = caller_lfp.register_ptr(globals.store[callid].args.0 as usize) as _;
+    let src = caller_lfp.register_ptr(globals.store[callid].args) as _;
     match set_frame_arguments_send_splat(globals, callee_lfp, src) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
@@ -812,7 +812,7 @@ pub(super) extern "C" fn handle_error(
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
-                    unsafe { lfp.set_register(err_reg.0 as _, Some(err_val)) };
+                    unsafe { lfp.set_register(err_reg, Some(err_val)) };
                 }
                 return ErrorReturn::goto(bc_base + rescue);
             }

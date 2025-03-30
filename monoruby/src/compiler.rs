@@ -394,6 +394,38 @@ impl JitModule {
             popq r15;
         };
     }
+
+    ///
+    /// Push stack offset for callee.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    /// ### destoroy
+    /// - rdi
+    ///
+    fn push_stack_offset(&mut self) {
+        monoasm! { &mut self.jit,
+            movzxw rdi, [r15 + (FUNCDATA_OFS)];
+            shlq rdi, 4;
+            addq rdi, 8;
+            subq rsp, rdi;
+            pushq rdi;
+        }
+    }
+
+    ///
+    /// Pop stack offset for callee.
+    ///
+    /// ### destoroy
+    /// - rdi
+    ///
+    fn pop_stack_offset(&mut self) {
+        monoasm! { &mut self.jit,
+            popq rdi;
+            addq rsp, rdi;
+        }
+    }
 }
 
 ///
@@ -681,8 +713,8 @@ impl Codegen {
         let exec_gc = self.exec_gc();
         assert_eq!(0, self.jit.get_page());
         monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 0;
-            jne  gc;
+            cmpl [rip + alloc_flag], 8;
+            jge  gc;
         exit:
         };
         assert_eq!(0, self.jit.get_page());
@@ -931,12 +963,9 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
             lea  rcx, [rsp - (RSP_LOCAL_FRAME)];
-            // rdi <- stack_offset
-            movzxw rdi, [r15 + (FUNCDATA_OFS)];
-            shlq rdi, 4;
-            addq rdi, 8;
-            subq rsp, rdi;
-            pushq rdi;
+        }
+        self.push_stack_offset();
+        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             // rdi: &mut Executor
@@ -947,9 +976,8 @@ impl Codegen {
             movq rax, (f);
             movq rdx, r14;
             call rax;
-            popq rdi;
-            addq rsp, rdi;
-        };
+        }
+        self.pop_stack_offset();
     }
 
     #[cfg(feature = "emit-asm")]

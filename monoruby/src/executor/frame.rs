@@ -155,7 +155,7 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
 impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         let meta = self.meta();
-        for r in 0..meta.reg_num() as usize {
+        for r in SlotId(0)..SlotId(0) + meta.reg_num() as usize {
             if let Some(v) = self.register(r) {
                 v.mark(alloc);
             }
@@ -364,20 +364,20 @@ impl Lfp {
         unsafe { *(self.sub(LFP_BLOCK as _) as *mut _) = bh }
     }
 
-    pub fn register_ptr(&self, index: usize) -> *mut Option<Value> {
-        self.sub(LFP_SELF as i64 + 8 * index as i64) as _
+    pub fn register_ptr(&self, index: SlotId) -> *mut Option<Value> {
+        self.sub(LFP_SELF as i64 + 8 * index.0 as i64) as _
     }
 
     ///
     /// Get a value of a register slot *index*.
     ///
-    pub fn register(&self, index: usize) -> Option<Value> {
+    pub fn register(&self, index: SlotId) -> Option<Value> {
         unsafe { std::ptr::read(self.register_ptr(index)) }
     }
 
     pub fn locals(&self, len: usize) -> Vec<Value> {
         let mut v = vec![];
-        for i in 1..1 + len {
+        for i in SlotId(1)..SlotId(1) + len {
             if let Some(val) = self.register(i) {
                 v.push(val);
             }
@@ -388,13 +388,13 @@ impl Lfp {
     /// Get a value of a register slot *index*.
     ///
     pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
-        self.register(index.0 as usize)
+        self.register(index)
     }
 
     ///
     /// Set a value to a register *index*.
     ///
-    pub(crate) unsafe fn set_register(&mut self, index: usize, val: Option<Value>) {
+    pub(crate) unsafe fn set_register(&mut self, index: SlotId, val: Option<Value>) {
         std::ptr::write(self.register_ptr(index), val);
     }
 }
@@ -460,7 +460,7 @@ impl Lfp {
         self.iter_inner().cloned()
     }
 
-    pub fn slice(&self, start_pos: usize, len: usize) -> impl DoubleEndedIterator<Item = Value> {
+    /*pub fn slice(&self, start_pos: usize, len: usize) -> impl DoubleEndedIterator<Item = Value> {
         unsafe {
             let ptr = self.register_ptr(start_pos + len);
             std::slice::from_raw_parts(ptr, len)
@@ -468,7 +468,7 @@ impl Lfp {
                 .rev()
                 .map(|v| v.unwrap())
         }
-    }
+    }*/
 
     pub fn arg(&self, i: usize) -> Value {
         self.try_arg(i).unwrap()

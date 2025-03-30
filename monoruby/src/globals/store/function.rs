@@ -351,12 +351,8 @@ impl Funcs {
         self.compile_info.remove(0)
     }
 
-    pub(super) fn add_method(
-        &mut self,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<(FuncId, ParamsInfo)> {
-        let (params_info, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
+    pub(super) fn add_method(&mut self, info: BlockInfo) -> Result<(FuncId, ParamsInfo)> {
+        let (params_info, compile_info) = Self::handle_args(info, vec![])?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         Ok((func_id, params_info))
@@ -366,20 +362,15 @@ impl Funcs {
         &mut self,
         for_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
-        sourceinfo: SourceInfoRef,
     ) -> Result<(FuncId, ParamsInfo)> {
-        let (params_info, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
+        let (params_info, compile_info) = Self::handle_args(info, for_params)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         Ok((func_id, params_info))
     }
 
-    pub(super) fn add_classdef(
-        &mut self,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        let (_, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
+    pub(super) fn add_classdef(&mut self, info: BlockInfo) -> Result<FuncId> {
+        let (_, compile_info) = Self::handle_args(info, vec![])?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         Ok(func_id)
@@ -451,7 +442,6 @@ impl Funcs {
     fn handle_args(
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
-        sourceinfo: &SourceInfoRef,
     ) -> Result<(ParamsInfo, CompileInfo)> {
         let BlockInfo {
             params,
@@ -467,7 +457,8 @@ impl Funcs {
         let mut optional_info = vec![];
         let mut required_num = 0;
         let mut optional_num = 0;
-        let mut rest = 0;
+        let mut post_num = 0;
+        let mut rest = None;
         let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
@@ -497,15 +488,18 @@ impl Funcs {
                     optional_info.push(OptionalInfo::new(local, initializer));
                 }
                 ParamKind::Rest(name) => {
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
                     args_names.push(name.map(IdentId::get_id_from_string));
-                    assert_eq!(0, rest);
-                    rest = 1;
+                }
+                ParamKind::Post(name) => {
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    post_num += 1;
                 }
                 ParamKind::Delegate => {
-                    if rest == 0 {
-                        args_names.push(None);
-                        rest = 1;
-                    }
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    args_names.push(None);
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(None);
@@ -527,17 +521,9 @@ impl Funcs {
                     let name = IdentId::get_id_from_string(name.clone());
                     block_param = Some(name);
                 }
-                _ => {
-                    return Err(MonorubyErr::unsupported_parameter_kind(
-                        param.kind,
-                        param.loc,
-                        sourceinfo.clone(),
-                    ))
-                }
             }
         }
 
-        let reqopt_num = required_num + optional_num;
         let expand_info: Vec<_> = expand
             .into_iter()
             .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
@@ -553,8 +539,9 @@ impl Funcs {
         );
         let params_info = ParamsInfo::new(
             required_num,
-            reqopt_num,
-            reqopt_num + rest,
+            optional_num,
+            rest,
+            post_num,
             args_names,
             keyword_names,
             kw_rest_param,
@@ -609,7 +596,7 @@ impl FuncInfo {
     ) -> Self {
         let name = name.into();
         let min = params.req_num() as u16;
-        let max = params.reqopt_num() as u16;
+        let max = params.max_positional_args() as u16;
         let mut data = FuncData {
             codeptr: None,
             pc: None,
@@ -793,16 +780,30 @@ impl FuncInfo {
         self.data.codeptr()
     }
 
+    /// The number of required arguments.
     pub(crate) fn req_num(&self) -> usize {
         self.ext.params.req_num()
     }
 
+    /// The number of optional arguments.
+    pub(crate) fn opt_num(&self) -> usize {
+        self.ext.params.opt_num()
+    }
+
+    /// The number of required + optional arguments.
     pub(crate) fn reqopt_num(&self) -> usize {
         self.ext.params.reqopt_num()
     }
 
-    pub(crate) fn pos_num(&self) -> usize {
-        self.ext.params.pos_num()
+    /// The number of required + optional arguments.
+    pub(crate) fn post_num(&self) -> usize {
+        self.ext.params.post_num()
+    }
+
+    /// The posiiton of keyword arguments.
+    pub(crate) fn kw_reg_pos(&self) -> SlotId {
+        // 1 is for self.
+        self.ext.params.kw_reg_pos()
     }
 
     pub(crate) fn kw_names(&self) -> &[IdentId] {
@@ -818,6 +819,10 @@ impl FuncInfo {
     }
 
     pub(crate) fn is_rest(&self) -> bool {
+        self.ext.params.is_rest().is_some()
+    }
+
+    pub(crate) fn rest_pos(&self) -> Option<u16> {
         self.ext.params.is_rest()
     }
 
@@ -834,21 +839,45 @@ impl FuncInfo {
     }
 
     ///
-    /// Get the max number of positional arguments (= required + optional) of this function.
+    /// Get the minimal number of positional arguments (= required + post) of this function.
+    ///
+    pub(crate) fn min_positional_args(&self) -> usize {
+        self.ext.params.min_positional_args()
+    }
+
+    ///
+    /// Get the max number of positional arguments (= required + optional + post) of this function.
     ///
     pub(crate) fn max_positional_args(&self) -> usize {
         self.ext.params.max_positional_args()
     }
 
-    pub(crate) fn single_arg_expand(&self) -> bool {
-        let is_rest = self.ext.params.is_rest();
-        self.meta().is_block_style()
-            && (self.ext.params.max_positional_args() + if is_rest { 1 } else { 0 } > 1)
+    pub(crate) fn total_positional_args(&self) -> usize {
+        self.ext.params.total_positional_args()
     }
 
     pub(crate) fn discard_excess_positional_args(&self) -> bool {
-        let is_rest = self.ext.params.is_rest();
-        self.meta().is_block_style() && !is_rest
+        self.is_block_style() && !self.is_rest()
+    }
+
+    pub(crate) fn single_arg_expand(&self) -> bool {
+        self.is_block_style() && (self.total_positional_args() > 1)
+    }
+
+    pub(crate) fn apply_args(&self, pos_num: usize) -> (usize, usize, usize) {
+        if pos_num <= self.req_num() {
+            (pos_num, 0, 0)
+        } else if pos_num <= self.min_positional_args() {
+            (self.req_num(), 0, pos_num - self.req_num())
+        } else if pos_num > self.max_positional_args() {
+            (self.req_num(), self.opt_num(), self.post_num())
+        } else {
+            (
+                self.req_num(),
+                pos_num - self.min_positional_args(),
+                self.post_num(),
+            )
+        }
     }
 
     ///
@@ -872,8 +901,8 @@ impl FuncInfo {
             && !ex_positional
             && !single_arg_expand
             && !self.is_rest()
-            && (self.is_block_style() || (pos_num <= self.max_positional_args()))
-            && self.req_num() <= pos_num
+            && (self.is_block_style()
+                || (pos_num <= self.max_positional_args() && self.min_positional_args() <= pos_num))
     }
 
     ///

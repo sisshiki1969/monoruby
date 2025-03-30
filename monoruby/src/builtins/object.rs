@@ -300,17 +300,29 @@ fn object_respond_to(
     } else {
         return false;
     };
-    if pos_num != 1 {
-        return false;
-    }
+    let include_all = if pos_num != 1 {
+        if bb.is_truthy(args + 1usize) {
+            true
+        } else if bb.is_falsy(args + 1usize) {
+            false
+        } else {
+            return false;
+        }
+    } else {
+        false
+    };
     let method_name = if let Some(name) = bb.is_symbol_literal(args) {
         name
     } else {
         return false;
     };
-    let b = store
-        .check_method_for_class(recv_class, method_name, ctx.class_version())
-        .is_some();
+    let b = if let Some(entry) =
+        store.check_method_for_class(recv_class, method_name, ctx.class_version())
+    {
+        include_all || entry.is_public()
+    } else {
+        false
+    };
     bb.def_concrete_value(dst, Value::bool(b));
     true
 }
@@ -655,6 +667,7 @@ mod tests {
         list = [F.new, D.new]
         res = []
         list.each{|it| res << it.hello if it.respond_to?(:hello)}
+        list.each{|it| res << it.hello if it.respond_to?(:hello, false)}
         list.each{|it| it.instance_eval("res << hello if it.respond_to?(:hello, true)")}
         res
         "#,

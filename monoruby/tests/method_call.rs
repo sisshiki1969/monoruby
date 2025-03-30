@@ -49,6 +49,16 @@ fn method_rest() {
     );
     run_test_with_prelude(
         r#"
+        f(1,2,3,4,5,6,7,a:1,b:2)
+        "#,
+        r#"
+        def f(x,y,a=42,b=55,*z)
+            [x,y,a,b,z]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
         f(1,2,3,4,5,6,7)
         "#,
         r#"
@@ -88,6 +98,74 @@ fn method_rest() {
         r#"
         def f(*x)
           x
+        end
+        "#,
+    );
+}
+
+#[test]
+fn method_post() {
+    run_test_with_prelude(
+        r#"
+        f(1,2,3,4)
+        "#,
+        r#"
+        def f(x,y,a=42,b=55,*z,c,d)
+            [x,y,a,b,c,d,z]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        f(1,2,3,4,5,6,7,8)
+        "#,
+        r#"
+        def f(x,y,a=42,b=55,*z,c,d)
+            [x,y,a,b,z]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        f(1,2,3,4,5,6,7)
+        "#,
+        r#"
+        def f(x,y,*z,a)
+            [x,y,z,a]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        f { |a,b,x=42,y=12,*c,d,e|
+          [a,b,c,d,e,x,y]
+        }
+        "#,
+        r#"
+        def f
+          yield [1,2,3,4,5]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        f { |a,b,x=42,y=12,*c,d,e|
+          [a,b,c,d,e,x,y]
+        }
+        "#,
+        r#"
+        def f
+          yield [1,2,3,4,5,6,7,8]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        f(0,1,2,3,4,5,6,7,8)
+        "#,
+        r#"
+        def f(*x,a,b)
+          [x,a,b]
         end
         "#,
     );
