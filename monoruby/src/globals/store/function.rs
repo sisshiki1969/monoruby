@@ -801,7 +801,7 @@ impl FuncInfo {
     }
 
     /// The posiiton of keyword arguments.
-    pub(crate) fn kw_reg_pos(&self) -> usize {
+    pub(crate) fn kw_reg_pos(&self) -> SlotId {
         // 1 is for self.
         self.ext.params.kw_reg_pos()
     }

@@ -476,7 +476,7 @@ impl Codegen {
         let CallSiteInfo {
             kw_pos, kw_args, ..
         } = caller;
-        let mut callee_ofs = (callee.kw_reg_pos() as i32) * 8 + LFP_SELF;
+        let mut callee_ofs = (callee.kw_reg_pos().0 as i32) * 8 + LFP_SELF;
         for param_name in callee.kw_names() {
             match kw_args.get(param_name) {
                 Some(caller) => {

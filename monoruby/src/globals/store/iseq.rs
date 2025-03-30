@@ -1203,9 +1203,9 @@ impl ParamsInfo {
     }
 
     /// The posiiton of keyword arguments.
-    pub(crate) fn kw_reg_pos(&self) -> usize {
+    pub(crate) fn kw_reg_pos(&self) -> SlotId {
         // 1 is for self.
-        self.total_positional_args() + 1
+        SlotId(self.total_positional_args() as u16 + 1)
     }
 
     pub fn total_args(&self) -> usize {

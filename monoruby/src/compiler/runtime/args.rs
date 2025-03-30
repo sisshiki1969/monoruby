@@ -88,7 +88,7 @@ pub(crate) fn set_frame_block(caller: &CallSiteInfo, callee_lfp: Lfp, caller_lfp
         let bh = BlockHandler::from_caller(block_fid);
         Some(bh)
     } else if let Some(block_arg) = block_arg {
-        match caller_lfp.register(block_arg.0 as usize) {
+        match caller_lfp.register(block_arg) {
             Some(v) => Some(BlockHandler::new(v)),
             None => None,
         }
@@ -155,21 +155,21 @@ fn positional(
     caller_lfp: Lfp,
 ) -> Result<()> {
     let splat_pos = &caller.splat_pos;
-    let src = caller_lfp.register_ptr(caller.args.0 as usize) as *mut Value;
-    let dst = callee_lfp.register_ptr(1);
+    let src = caller_lfp.register_ptr(caller.args) as *mut Value;
+    let dst = callee_lfp.register_ptr(SlotId(1));
     let pos_args = caller.pos_num;
 
     let ex = if callee.no_keyword() && caller.kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = IndexMap::default();
         for (k, id) in caller.kw_args.iter() {
-            let v = caller_lfp.register(caller.kw_pos.0 as usize + *id).unwrap();
+            let v = caller_lfp.register(caller.kw_pos + *id).unwrap();
             h.insert(HashKey(Value::symbol(*k)), v);
         }
         for v in caller
             .hash_splat_pos
             .iter()
-            .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
+            .map(|pos| caller_lfp.register(*pos).unwrap())
         {
             for (k, v) in v.expect_hash()?.iter() {
                 h.insert(HashKey(k), v);
@@ -230,7 +230,7 @@ pub(crate) fn positional_invoker(
     pos_args: usize,
     upward: bool,
 ) -> Result<()> {
-    let dst = callee_lfp.register_ptr(1);
+    let dst = callee_lfp.register_ptr(SlotId(1));
 
     // single array argument expansion for blocks
     if callee.single_arg_expand()
@@ -364,7 +364,7 @@ fn positional_simple(
     mut callee_lfp: Lfp,
 ) -> Result<()> {
     let max_pos = callee.max_positional_args();
-    let dst = callee_lfp.register_ptr(1) as *mut Value;
+    let dst = callee_lfp.register_ptr(SlotId(1)) as *mut Value;
 
     let (arg_num, rest) = if pos_num <= max_pos {
         memcpy(src, dst, pos_num);
@@ -385,7 +385,9 @@ fn positional_simple(
     let total_pos_args = arg_num + rest.len();
     if total_pos_args > max_pos {
         if is_rest {
-            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
+            unsafe {
+                callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_from_vec(rest)))
+            };
         } else {
             return Err(MonorubyErr::wrong_number_of_arg_range(
                 total_pos_args,
@@ -406,7 +408,7 @@ fn positional_simple(
     }
 
     if is_rest {
-        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+        unsafe { callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_empty())) };
     }
 
     Ok(())
@@ -416,7 +418,7 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
     let max_pos = callee.max_positional_args();
     let no_push = callee.discard_excess_positional_args();
 
-    let dst = callee_lfp.register_ptr(1) as *mut Value;
+    let dst = callee_lfp.register_ptr(SlotId(1)) as *mut Value;
 
     let mut arg_num = 0;
     let mut rest = vec![];
@@ -431,7 +433,9 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
     let total_pos_args = arg_num + rest.len();
     if total_pos_args > max_pos {
         if is_rest {
-            unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_from_vec(rest))) };
+            unsafe {
+                callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_from_vec(rest)))
+            };
             return Ok(());
         } else {
             return Err(MonorubyErr::wrong_number_of_arg_range(
@@ -452,7 +456,7 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: L
     }
 
     if is_rest {
-        unsafe { callee_lfp.set_register(1 + max_pos, Some(Value::array_empty())) };
+        unsafe { callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_empty())) };
     }
 
     Ok(())
@@ -481,7 +485,7 @@ fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
 
     if let Some(rest) = callee.kw_rest() {
         let kw_rest = IndexMap::default();
-        unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
+        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
     }
     Ok(())
 }
@@ -539,7 +543,7 @@ fn hash_splat_and_kw_rest(
 
     for h in hash_splat_pos
         .iter()
-        .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
+        .map(|pos| caller_lfp.register(*pos).unwrap())
     {
         let mut used = 0;
         for (id, param_name) in callee.kw_names().iter().enumerate() {
@@ -580,7 +584,7 @@ fn hash_splat_and_kw_rest(
         }
         for h in hash_splat_pos
             .iter()
-            .map(|pos| caller_lfp.register(pos.0 as usize).unwrap())
+            .map(|pos| caller_lfp.register(*pos).unwrap())
         {
             let mut h = h.as_hashmap_inner().clone();
             for name in callee.kw_names().iter() {
@@ -592,7 +596,7 @@ fn hash_splat_and_kw_rest(
             }
         }
 
-        unsafe { callee_lfp.set_register(rest.0 as usize, Some(Value::hash(kw_rest))) }
+        unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
     }
     Ok(())
 }
@@ -609,7 +613,7 @@ fn memcpy(src: *const Value, dst: *mut Value, len: usize) {
 
 fn fill(lfp: Lfp, start_pos: usize, len: usize, val: Option<Value>) {
     unsafe {
-        let ptr = lfp.register_ptr(start_pos);
+        let ptr = lfp.register_ptr(SlotId(start_pos as u16));
         std::slice::from_raw_parts_mut(ptr, len).fill(val);
     }
 }
