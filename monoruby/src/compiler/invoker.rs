@@ -20,8 +20,7 @@ impl JitModule {
         }
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
-        self.invoker_prep();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, true);
         self.invoker_call();
         self.invoker_epilogue(&error_exit);
 
@@ -50,8 +49,7 @@ impl JitModule {
         }
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
-        self.invoker_prep2();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, false);
         self.invoker_call();
         self.invoker_epilogue(&error_exit);
 
@@ -76,8 +74,7 @@ impl JitModule {
         let error_exit = self.jit.label();
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
-        self.invoker_prep();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, true);
         self.invoker_call();
         self.invoker_epilogue(&error_exit);
 
@@ -102,8 +99,7 @@ impl JitModule {
         let error_exit = self.jit.label();
         self.invoker_prologue();
         self.invoker_frame_setup(true, true);
-        self.invoker_prep();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, true);
         self.invoker_call();
         self.invoker_epilogue(&error_exit);
 
@@ -175,8 +171,7 @@ impl JitModule {
             movq r12, rsi;
         }
         self.invoker_frame_setup(true, false);
-        self.invoker_prep();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, true);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -221,8 +216,7 @@ impl JitModule {
             movq r12, rsi;
         }
         self.invoker_frame_setup(true, true);
-        self.invoker_prep();
-        self.invoker_args(&error_exit);
+        self.invoker_args_setup(&error_exit, true);
         self.invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -574,113 +568,78 @@ impl JitModule {
     }
 
     ///
-    /// Arguments preparation.
-    ///
-    /// ### in
-    /// - r8: *args
-    /// - r9: len
-    ///
-    /// ### out
-    /// - rdi: len
-    /// - r8: *args
-    ///
-    /// ### destroy
-    /// - rax, rdi, r9, r10
-    ///
-    fn invoker_prep(&mut self) {
-        let loop_exit = self.jit.label();
-        let loop_ = self.jit.label();
-        monoasm! { &mut self.jit,
-            // r8 : *args
-            // r9 : len
-            movq rdi, r9;
-            testq r9, r9;
-            jeq  loop_exit;
-            movq r10, r9;
-            negq r9;
-        loop_:
-            movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
-            subq r10, 1;
-            addq r9, 1;
-            jne  loop_;
-        loop_exit:
-        };
-    }
-
-    ///
-    /// Arguments preparation.
-    ///
-    /// ### in
-    /// - r8: *args
-    /// - r9: len
-    ///
-    /// ### out
-    /// - rdi: len
-    /// - r8: *args
-    ///
-    /// ### destroy
-    /// - rax, rdi, r9
-    ///
-    fn invoker_prep2(&mut self) {
-        let loop_exit = self.jit.label();
-        let loop_ = self.jit.label();
-        monoasm! { &mut self.jit,
-            // set block
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], r11;
-            // r8 <- *args
-            // r9 <- len
-            movq rdi, r9;
-            testq r9, r9;
-            jeq  loop_exit;
-            negq r9;
-        loop_:
-            movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
-            addq r9, 1;
-            jne  loop_;
-        loop_exit:
-        };
-    }
-
-    ///
     /// Handle arguments.
     ///
     /// ### in
     /// - rdi: arg_num
     /// - rsi: Meta
     /// - r15: &FuncData
-    /// - r8:  args: *const Value
+    /// - r8: args: *const Value
+    /// - r9: len: usize
     ///
     /// ### destroy
     /// - caller save registers
     ///
-    fn invoker_args(&mut self, error_exit: &DestLabel) {
+    fn invoker_args_setup(&mut self, error_exit: &DestLabel, upward: bool) {
+        //
         // In invoker call, CallSiteInfo is not available.
         // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
-        // So several conditions are met, we can optimize this.
-        // the conditions are:
+        // So conditions below are met, we can optimize this.
         // - the callee is_simple (no optional, no post, no rest, no keyword, no keyword rest, no block arguments)
         // - req == pos_num
         // - thus, no single argument expansion
+        //
         let generic = self.jit.label();
         let exit = self.jit.label();
-        //self.guard_simple_call(GP::Rsi, GP::Rdi, GP::R8, exit, generic);
         monoasm! { &mut self.jit,
             // check if the callee is_simple
             shrq rsi, 56;
             testq rsi, 0b1_0000;
             jz  generic;
             // check if req == pos_num
-            cmpw rdi, [r15 + (FUNCDATA_MIN)];
-            jeq exit;
+            cmpw r9, [r15 + (FUNCDATA_MIN)];
+            jne generic;
+        }
+
+        let loop_ = self.jit.label();
+        monoasm! { &mut self.jit,
+            // r8 : *args
+            // r9 : len
+            testq r9, r9;
+            jeq  exit;
+        };
+        if upward {
+            monoasm! { &mut self.jit,
+                movq rdi, r9;
+                negq r9;
+            loop_:
+                movq rax, [r8 + rdi * 8 - 8];
+                movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+                subq rdi, 1;
+                addq r9, 1;
+                jne  loop_;
+                jmp exit;
+            };
+        } else {
+            monoasm! { &mut self.jit,
+                negq r9;
+            loop_:
+                movq rax, [r8 + r9 * 8 + 8];
+                movq [rsp + r9 * 8 - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+                addq r9, 1;
+                jne  loop_;
+                jmp exit;
+            };
+        }
+
+        monoasm! { &mut self.jit,
         generic:
             lea  rdx, [rsp - (RSP_LOCAL_FRAME)]; // callee lfp: Lfp
             subq rsp, 4096;
-            movq rcx, rdi; // arg_num
+            movq rcx, r9; // arg_num
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
-            movq rax, (handle_invoker_arguments);
+            movq rax, (if upward {handle_invoker_arguments} else {handle_invoker_arguments2});
             call rax;
             addq rsp, 4096;
             testq rax, rax;
@@ -728,17 +687,14 @@ extern "C" fn handle_invoker_arguments(
     vm: &mut Executor,
     globals: &Globals,
     callee_lfp: Lfp,
-    mut arg_num: usize,
+    arg_num: usize,
+    args: *const Value,
 ) -> Option<Value> {
     let callee_fid = callee_lfp.meta().func_id();
     let info = &globals.store[callee_fid];
-    // expand array for block
-    if info.single_arg_expand() && arg_num == 1 {
-        arg_num = expand_array_for_block(info, arg_num, callee_lfp);
-    }
 
     // required + optional + rest
-    if let Err(err) = super::runtime::handle_positional(info, arg_num, callee_lfp) {
+    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, true) {
         vm.set_error(err);
         return None;
     };
@@ -755,28 +711,30 @@ extern "C" fn handle_invoker_arguments(
     Some(Value::nil())
 }
 
-/// deconstruct array for block
-fn expand_array_for_block(info: &FuncInfo, arg_num: usize, callee_lfp: Lfp) -> usize {
-    let req_num = info.req_num();
-    let v = callee_lfp.register(1).unwrap();
-    if let Some(src) = v.try_array_ty() {
-        let ptr = callee_lfp.register_ptr(1);
-        return block_expand_array(src, ptr as _, req_num);
-    }
-    arg_num
-}
+extern "C" fn handle_invoker_arguments2(
+    vm: &mut Executor,
+    globals: &Globals,
+    callee_lfp: Lfp,
+    arg_num: usize,
+    args: *const Value,
+) -> Option<Value> {
+    let callee_fid = callee_lfp.meta().func_id();
+    let info = &globals.store[callee_fid];
 
-fn block_expand_array(src: Array, dst: *mut Value, min_len: usize) -> usize {
-    let len = src.len();
-    for i in 0..len {
-        unsafe { *dst.sub(i) = src[i] }
-    }
-    if min_len <= len {
-        len
-    } else {
+    // required + optional + post + rest
+    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, false) {
+        vm.set_error(err);
+        return None;
+    };
+
+    // keyword
+    let params = info.kw_names();
+    let callee_kw_pos = info.kw_reg_pos();
+    for (id, _) in params.iter().enumerate() {
         unsafe {
-            std::slice::from_raw_parts_mut(dst.sub(len), min_len - len - 1).fill(Value::nil());
+            *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
         }
-        min_len
     }
+
+    Some(Value::nil())
 }

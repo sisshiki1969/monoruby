@@ -15,55 +15,6 @@ pub(crate) fn jit_hash_splat_kw_rest(
     let caller = &globals.store[callid];
     hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
 }
-///
-/// if argument mismatch occurs, return None.
-///
-pub(crate) fn handle_positional(
-    info: &FuncInfo,
-    arg_num: usize,
-    mut callee_lfp: Lfp,
-) -> Result<()> {
-    let req_num = info.req_num();
-    let reqopt_num = info.reqopt_num();
-    let is_rest = info.is_rest();
-    let is_block_style = info.is_block_style();
-    unsafe {
-        if arg_num > reqopt_num {
-            if is_rest {
-                let len = arg_num - reqopt_num;
-                let ary: Vec<_> = callee_lfp.slice(reqopt_num, len).collect();
-                callee_lfp.set_register(1 + reqopt_num, Some(Value::array_from_vec(ary)));
-            } else if !is_block_style {
-                return Err(MonorubyErr::wrong_number_of_arg_range(
-                    arg_num,
-                    req_num..=reqopt_num,
-                ));
-            }
-            return Ok(());
-        }
-
-        if arg_num >= req_num {
-            let len = reqopt_num - arg_num;
-            fill(callee_lfp, reqopt_num, len, None);
-        } else {
-            if !is_block_style {
-                return Err(MonorubyErr::wrong_number_of_arg_range(
-                    arg_num,
-                    req_num..=reqopt_num,
-                ));
-            }
-            let len = req_num - arg_num;
-            fill(callee_lfp, req_num, len, Some(Value::nil()));
-            let len = reqopt_num - req_num;
-            fill(callee_lfp, reqopt_num, len, None);
-        }
-
-        if is_rest {
-            callee_lfp.set_register(1 + reqopt_num, Some(Value::array_empty()));
-        }
-    }
-    Ok(())
-}
 
 ///
 /// Set positional arguments (req, opt, rest) and keyword arguments (kw, kw_rest) to the callee frame.
@@ -152,6 +103,33 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     }
 }
 
+fn check_single_arg_expand(
+    splat_pos: &[usize],
+    pos_args: usize,
+    src: *const Value,
+    ex: Option<Value>,
+) -> Option<(*const Value, usize)> {
+    if pos_args == 1 && ex.is_none() {
+        if splat_pos.is_empty()
+            && let Some(ary) = unsafe { *src }.try_array_ty()
+        {
+            return Some((ary.as_ref().as_ptr(), ary.len()));
+        } else if splat_pos == &[0usize]
+            && let Some(ary) = unsafe { *src }.try_array_ty()
+            && ary.len() == 1
+            && let Some(ary) = ary[0].try_array_ty()
+        {
+            return Some((ary.as_ref().as_ptr(), ary.len()));
+        }
+    } else if pos_args == 0
+        && let Some(ex) = ex
+        && let Some(ary) = ex.try_array_ty()
+    {
+        return Some((ary.as_ref().as_ptr(), ary.len()));
+    }
+    None
+}
+
 ///
 /// Set positional arguments.
 ///
@@ -161,33 +139,6 @@ fn positional(
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
-    fn check_single_arg_expand(
-        splat_pos: &[usize],
-        pos_args: usize,
-        src: *const Value,
-        ex: Option<Value>,
-    ) -> Option<(*const Value, usize)> {
-        if pos_args == 1 && ex.is_none() {
-            if splat_pos.is_empty()
-                && let Some(ary) = unsafe { *src }.try_array_ty()
-            {
-                return Some((ary.as_ref().as_ptr(), ary.len()));
-            } else if splat_pos == &[0usize]
-                && let Some(ary) = unsafe { *src }.try_array_ty()
-                && ary.len() == 1
-                && let Some(ary) = ary[0].try_array_ty()
-            {
-                return Some((ary.as_ref().as_ptr(), ary.len()));
-            }
-        } else if pos_args == 0
-            && let Some(ex) = ex
-            && let Some(ary) = ex.try_array_ty()
-        {
-            return Some((ary.as_ref().as_ptr(), ary.len()));
-        }
-        None
-    }
-
     let splat_pos = &caller.splat_pos;
     let src = caller_lfp.register_ptr(caller.args.0 as usize) as *mut Value;
     let dst = callee_lfp.register_ptr(1);
@@ -252,6 +203,28 @@ fn positional(
     }
 
     fill_positional_args1(dst, callee, &buf)
+}
+
+///
+/// Set positional arguments.
+///
+pub(crate) fn positional_invoker(
+    callee: &FuncInfo,
+    callee_lfp: Lfp,
+    args: *const Value,
+    pos_args: usize,
+    upward: bool,
+) -> Result<()> {
+    let dst = callee_lfp.register_ptr(1);
+
+    // single array argument expansion for blocks
+    if callee.single_arg_expand()
+        && let Some((ptr, len)) = check_single_arg_expand(&vec![], pos_args, args, None)
+    {
+        return fill_positional_args(dst, callee, ptr, len, true);
+    }
+
+    fill_positional_args(dst, callee, args, pos_args, upward)
 }
 
 fn fill_positional_args1(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
