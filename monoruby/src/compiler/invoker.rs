@@ -570,25 +570,25 @@ impl JitModule {
     ///
     /// Handle arguments.
     ///
+    /// In invoker call, CallSiteInfo is not available.
+    /// All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
+    /// So conditions below are met, we can optimize this.
+    /// - the callee is_simple (no optional, no post, no rest, no keyword, no keyword rest, no block arguments)
+    /// - req == pos_num
+    /// - thus, no single argument expansion
+    ///
     /// ### in
     /// - rdi: arg_num
     /// - rsi: Meta
     /// - r15: &FuncData
     /// - r8: args: *const Value
     /// - r9: len: usize
+    /// - r15: &FuncData
     ///
     /// ### destroy
     /// - caller save registers
     ///
     fn invoker_args_setup(&mut self, error_exit: &DestLabel, upward: bool) {
-        //
-        // In invoker call, CallSiteInfo is not available.
-        // All invoker callsites have no splat arguments, no keyword arguments, and no hash splat arguments (thus, no extra positional arguments).
-        // So conditions below are met, we can optimize this.
-        // - the callee is_simple (no optional, no post, no rest, no keyword, no keyword rest, no block arguments)
-        // - req == pos_num
-        // - thus, no single argument expansion
-        //
         let generic = self.jit.label();
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
@@ -635,13 +635,17 @@ impl JitModule {
         monoasm! { &mut self.jit,
         generic:
             lea  rdx, [rsp - (RSP_LOCAL_FRAME)]; // callee lfp: Lfp
-            subq rsp, 4096;
+        }
+        self.push_stack_offset();
+        monoasm! { &mut self.jit,
             movq rcx, r9; // arg_num
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
             movq rax, (if upward {handle_invoker_arguments} else {handle_invoker_arguments2});
             call rax;
-            addq rsp, 4096;
+        }
+        self.pop_stack_offset();
+        monoasm! { &mut self.jit,
             testq rax, rax;
             jz  error_exit;
         }
@@ -690,25 +694,7 @@ extern "C" fn handle_invoker_arguments(
     arg_num: usize,
     args: *const Value,
 ) -> Option<Value> {
-    let callee_fid = callee_lfp.meta().func_id();
-    let info = &globals.store[callee_fid];
-
-    // required + optional + rest
-    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, true) {
-        vm.set_error(err);
-        return None;
-    };
-
-    // keyword
-    let params = info.kw_names();
-    let callee_kw_pos = info.kw_reg_pos();
-    for (id, _) in params.iter().enumerate() {
-        unsafe {
-            *callee_lfp.register_ptr(callee_kw_pos + id) = Some(Value::nil());
-        }
-    }
-
-    Some(Value::nil())
+    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true)
 }
 
 extern "C" fn handle_invoker_arguments2(
@@ -718,11 +704,22 @@ extern "C" fn handle_invoker_arguments2(
     arg_num: usize,
     args: *const Value,
 ) -> Option<Value> {
+    invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false)
+}
+
+fn invoker_arguments_inner(
+    vm: &mut Executor,
+    globals: &Globals,
+    callee_lfp: Lfp,
+    arg_num: usize,
+    args: *const Value,
+    upward: bool,
+) -> Option<Value> {
     let callee_fid = callee_lfp.meta().func_id();
     let info = &globals.store[callee_fid];
 
     // required + optional + post + rest
-    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, false) {
+    if let Err(err) = super::runtime::positional_invoker(info, callee_lfp, args, arg_num, upward) {
         vm.set_error(err);
         return None;
     };
