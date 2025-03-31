@@ -224,12 +224,7 @@ impl Codegen {
         // rdi <- outer, r15 <- &FuncData
 
         monoasm! { &mut self.jit,
-            subq  rsp, 16;
-            // set prev_cfp
-            pushq [rbx + (EXECUTOR_CFP)];
-            // set lfp
-            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
-            pushq rax;
+            subq  rsp, 32;
             // set outer
             pushq rdi;
             // set meta
@@ -443,27 +438,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             call (codeptr - src_point - 5); // CALL_SITE
         }
-    }
-
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    fn call_funcdata(&mut self) -> CodePtr {
-        monoasm! { &mut self.jit,
-            // push cfp
-            lea  rsi, [rsp - (RSP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-        }
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-        }
-        let return_addr = self.jit.get_current_address();
-        self.pop_frame();
-        return_addr
     }
 
     ///
@@ -691,12 +665,7 @@ impl Codegen {
         // r15 <- &FuncData
 
         monoasm! { &mut self.jit,
-            subq  rsp, 16;
-            // set prev_cfp
-            pushq [rbx + (EXECUTOR_CFP)];
-            // set lfp
-            lea   rax, [rsp + (24 - RSP_LOCAL_FRAME)];
-            pushq rax;
+            subq  rsp, 32;
             // set outer
             xorq rax, rax;
             pushq rax;

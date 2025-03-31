@@ -21,7 +21,7 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, true);
-        self.invoker_call();
+        self.call_invoker();
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
@@ -50,7 +50,7 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, false);
-        self.invoker_call();
+        self.call_invoker();
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
@@ -75,7 +75,7 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
-        self.invoker_call();
+        self.call_invoker();
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
@@ -100,7 +100,7 @@ impl JitModule {
         self.invoker_prologue();
         self.invoker_frame_setup(true, true);
         self.invoker_args_setup(&error_exit, true);
-        self.invoker_call();
+        self.call_invoker();
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
@@ -123,20 +123,11 @@ impl JitModule {
         monoasm! { &mut self.jit,
             // set lfp
             movq r14, rdx;
-            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
             // set FuncId
             movl rdx, [r14 - (LFP_META)];
         };
         self.get_func_data();
-        self.push_frame();
-        monoasm! { &mut self.jit,
-            // r15 : &FuncData
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-            movq rdi, [rsp - (RSP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-        };
+        self.call_invoker_with_binding();
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]
@@ -172,7 +163,7 @@ impl JitModule {
         }
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
-        self.invoker_call();
+        self.call_invoker();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
@@ -217,7 +208,7 @@ impl JitModule {
         }
         self.invoker_frame_setup(true, true);
         self.invoker_args_setup(&error_exit, true);
-        self.invoker_call();
+        self.call_invoker();
         monoasm! { &mut self.jit,
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
@@ -650,28 +641,6 @@ impl JitModule {
             jz  error_exit;
         }
         self.jit.bind_label(exit);
-    }
-
-    ///
-    /// Invoke the function.
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn invoker_call(&mut self) {
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // r15 : &FuncData
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-            movq rdi, [rsp - (RSP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-        };
     }
 
     fn invoker_epilogue(&mut self, error_exit: &DestLabel) {

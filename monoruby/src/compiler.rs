@@ -373,6 +373,69 @@ impl JitModule {
         }
     }
 
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    fn call_funcdata(&mut self) -> CodePtr {
+        self.push_frame();
+        self.set_lfp();
+        monoasm! { &mut self.jit,
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
+        }
+        let return_addr = self.jit.get_current_address();
+        self.pop_frame();
+        return_addr
+    }
+
+    ///
+    /// Invoke the function.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn call_invoker(&mut self) {
+        self.push_frame();
+        self.set_lfp();
+        monoasm! { &mut self.jit,
+            // r15 : &FuncData
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
+            movq rdi, [rsp - (RSP_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rdi;
+        };
+    }
+
+    ///
+    /// Invoke the function.
+    ///
+    /// ### in
+    /// - r15: &FuncData
+    /// - r14: callee's Lfp
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn call_invoker_with_binding(&mut self) {
+        self.push_frame();
+        monoasm! { &mut self.jit,
+            // set lfp
+            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
+            // r15 : &FuncData
+            // set pc
+            movq r13, [r15 + (FUNCDATA_PC)];
+            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
+            movq rdi, [rsp - (RSP_CFP)];
+            movq [rbx + (EXECUTOR_CFP)], rdi;
+        };
+    }
+
     fn push_callee_save(&mut self) {
         monoasm! { &mut self.jit,
             pushq r15;
@@ -728,20 +791,6 @@ impl Codegen {
             jmp  exit;
         }
         self.jit.select_page(0);
-    }
-
-    /// ## in
-    /// - rax : CodePtr
-    ///
-    /// ## out
-    /// - rax : result
-    fn call_rax(&mut self) {
-        self.push_frame();
-        self.set_lfp();
-        monoasm!( &mut self.jit,
-            call rax;   // CALL_SITE
-        );
-        self.pop_frame();
     }
 
     ///

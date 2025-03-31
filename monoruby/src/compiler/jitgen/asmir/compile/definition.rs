@@ -128,11 +128,9 @@ impl Codegen {
         }
         self.set_method_outer();
         monoasm! { &mut self.jit,
-            movq r13 , [r8 + (FUNCDATA_PC)];
-            movq rax, [r8 + (FUNCDATA_CODEPTR)];
-            xorq rdx, rdx;
+            movq r15 , r8;
         }
-        self.call_rax();
+        self.call_funcdata();
         self.store_rax(dst);
         // pop class context.
         monoasm! { &mut self.jit,

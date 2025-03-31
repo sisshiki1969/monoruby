@@ -195,14 +195,7 @@ impl Codegen {
             self.generic_handle_arguments(runtime::vm_handle_arguments);
             self.vm_handle_error();
         }
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];    // r13: BcPc
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-        }
-        self.pop_frame();
+        self.call_funcdata();
         monoasm! { &mut self.jit,
             addq rsp, 8;
             popq r13;   // pop pc
