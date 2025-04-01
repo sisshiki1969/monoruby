@@ -506,7 +506,7 @@ fn ordinary_keyword(
         unsafe {
             let v = kw_args
                 .get(param_name)
-                .map(|i| caller_lfp.get_slot(*kw_pos + *i).unwrap());
+                .map(|i| caller_lfp.register(*kw_pos + *i).unwrap());
             if v.is_some() {
                 used += 1;
             }
@@ -579,7 +579,7 @@ fn hash_splat_and_kw_rest(
             if callee.kw_names().contains(name) {
                 continue;
             }
-            let v = unsafe { caller_lfp.get_slot(*kw_pos + *i).unwrap() };
+            let v = caller_lfp.register(*kw_pos + *i).unwrap();
             kw_rest.insert(HashKey(Value::symbol(*name)), v);
         }
         for h in hash_splat_pos
