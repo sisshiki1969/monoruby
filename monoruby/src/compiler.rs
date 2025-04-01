@@ -999,9 +999,6 @@ impl Codegen {
     /// - r15: &FuncData
     /// - r8: CallsiteId
     ///
-    /// ### out
-    /// - rax: arg_num: Value
-    ///
     /// ### destroy
     /// - caller save registers
     ///

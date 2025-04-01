@@ -361,105 +361,25 @@ fn positional_simple(
     callee: &FuncInfo,
     src: *const Value,
     pos_num: usize,
-    mut callee_lfp: Lfp,
+    callee_lfp: Lfp,
 ) -> Result<()> {
-    let max_pos = callee.max_positional_args();
-    let dst = callee_lfp.register_ptr(SlotId(1)) as *mut Value;
+    let dst = callee_lfp.register_ptr(SlotId(1));
+    let pos_args = pos_num;
 
-    let (arg_num, rest) = if pos_num <= max_pos {
-        memcpy(src, dst, pos_num);
-        (pos_num, vec![])
-    } else {
-        memcpy(src, dst, max_pos);
-        // handle the rest arguments.
-        let rest = unsafe { std::slice::from_raw_parts(src.sub(pos_num - 1), pos_num - max_pos) }
-            .iter()
-            .cloned()
-            .rev()
-            .collect();
-        (max_pos, rest)
-    };
-
-    let req_num = callee.req_num();
-    let is_rest = callee.is_rest();
-    let total_pos_args = arg_num + rest.len();
-    if total_pos_args > max_pos {
-        if is_rest {
-            unsafe {
-                callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_from_vec(rest)))
-            };
-        } else {
-            return Err(MonorubyErr::wrong_number_of_arg_range(
-                total_pos_args,
-                req_num..=max_pos,
-            ));
-        }
-        return Ok(());
+    // single array argument expansion for blocks
+    if callee.single_arg_expand()
+        && let Some((ptr, len)) = check_single_arg_expand(&[], pos_args, src, None)
+    {
+        return fill_positional_args(dst, callee, ptr, len, true);
     }
 
-    if total_pos_args >= req_num {
-        let len = max_pos - arg_num;
-        fill(callee_lfp, max_pos, len, None);
-    } else {
-        return Err(MonorubyErr::wrong_number_of_arg_range(
-            total_pos_args,
-            req_num..=max_pos,
-        ));
-    }
-
-    if is_rest {
-        unsafe { callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_empty())) };
-    }
-
-    Ok(())
+    fill_positional_args2(dst, callee, src, pos_args)
 }
 
-fn positional_send_splat(callee: &FuncInfo, src: *const Value, mut callee_lfp: Lfp) -> Result<()> {
-    let max_pos = callee.max_positional_args();
-    let no_push = callee.discard_excess_positional_args();
-
-    let dst = callee_lfp.register_ptr(SlotId(1)) as *mut Value;
-
-    let mut arg_num = 0;
-    let mut rest = vec![];
-    if let Some(ary) = unsafe { *src }.try_array_ty()
-        && ary.len() > 1
-    {
-        push_ary(&mut arg_num, &mut rest, max_pos, dst, &ary[1..], no_push);
-    }
-
-    let req_num = callee.req_num();
-    let is_rest = callee.is_rest();
-    let total_pos_args = arg_num + rest.len();
-    if total_pos_args > max_pos {
-        if is_rest {
-            unsafe {
-                callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_from_vec(rest)))
-            };
-            return Ok(());
-        } else {
-            return Err(MonorubyErr::wrong_number_of_arg_range(
-                total_pos_args,
-                req_num..=max_pos,
-            ));
-        }
-    }
-
-    if total_pos_args >= req_num {
-        let len = max_pos - arg_num;
-        fill(callee_lfp, max_pos, len, None);
-    } else {
-        return Err(MonorubyErr::wrong_number_of_arg_range(
-            total_pos_args,
-            req_num..=max_pos,
-        ));
-    }
-
-    if is_rest {
-        unsafe { callee_lfp.set_register(SlotId(1) + max_pos, Some(Value::array_empty())) };
-    }
-
-    Ok(())
+fn positional_send_splat(callee: &FuncInfo, src: *const Value, callee_lfp: Lfp) -> Result<()> {
+    let dst = callee_lfp.register_ptr(SlotId(1));
+    let ary = unsafe { *src }.try_array_ty().unwrap();
+    fill_positional_args1(dst, callee, ary[1..].as_ref())
 }
 
 ///
@@ -599,49 +519,4 @@ fn hash_splat_and_kw_rest(
         unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
     }
     Ok(())
-}
-
-// Utility functions.
-
-fn memcpy(src: *const Value, dst: *mut Value, len: usize) {
-    if len != 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(src.sub(len - 1), dst.sub(len - 1), len);
-        }
-    }
-}
-
-fn fill(lfp: Lfp, start_pos: usize, len: usize, val: Option<Value>) {
-    unsafe {
-        let ptr = lfp.register_ptr(SlotId(start_pos as u16));
-        std::slice::from_raw_parts_mut(ptr, len).fill(val);
-    }
-}
-
-fn push_ary(
-    arg_num: &mut usize,
-    rest: &mut Vec<Value>,
-    max_pos: usize,
-    dst: *mut Value,
-    ary: &[Value],
-    no_push: bool,
-) {
-    if *arg_num >= max_pos {
-        if !no_push {
-            rest.extend_from_slice(ary);
-        }
-    } else if *arg_num + ary.len() <= max_pos {
-        for (i, v) in ary.iter().enumerate() {
-            unsafe { *dst.sub(*arg_num + i) = *v };
-        }
-        *arg_num += ary.len();
-    } else {
-        for (i, v) in ary[0..max_pos - *arg_num].iter().enumerate() {
-            unsafe { *dst.sub(*arg_num + i) = *v };
-        }
-        if !no_push {
-            rest.extend_from_slice(&ary[max_pos - *arg_num..]);
-        }
-        *arg_num = max_pos;
-    }
 }
