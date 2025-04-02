@@ -1060,6 +1060,9 @@ impl Codegen {
             cmoveqq rax, rdi;
             testq rax, 0b1;
             jeq exit;
+            movsxl rdi, [r13 - 16];
+            shlq rdi, 1;
+            addq rax, rdi;
             addq rax, 0b10;
         exit:
         };

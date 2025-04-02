@@ -1,19 +1,20 @@
-class F
-  def hello
-    "Bonjour"
+def foo(&block)
+  a = 1
+  loop do
+    {a:1,b:2}.each &block
+    a += 1
+    if a > 50
+      break
+    end
   end
 end
 
-class D
-  private
-  def hello
-    "Guten Tag"
-  end
-end
-
-list = [F.new, D.new]
-
+E=100
+a=77
 100.times do
-  list.each{|it| puts it.hello if it.respond_to?(:hello)}
-  list.each{|it| it.instance_eval("puts hello if it.respond_to?(:hello, true)")}
+foo do |k,v|
+  __dump
+  exit
+  puts "Hello key=#{k} value=#{v} a=#{a} E=#{E}"
+end
 end

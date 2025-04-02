@@ -869,6 +869,28 @@ fn block_arg() {
         end
     "##,
     );
+    run_test_with_prelude(
+        r##"
+        $res = []
+        foo do |k,v|
+          $res << [k, v, E]
+        end
+        $res
+        "##,
+        r##"
+        E = 100
+        def foo(&block)
+          a = 1
+          loop do
+            {a:1,b:2}.each &block
+            a += 1
+            if a > 50
+              break
+            end
+          end
+        end
+"##,
+    );
 }
 
 #[test]

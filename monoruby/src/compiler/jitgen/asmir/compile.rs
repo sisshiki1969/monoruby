@@ -585,7 +585,7 @@ impl Codegen {
 
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.get_method_lfp(outer);
-                self.block_arg_proxy();
+                self.block_arg_proxy(outer);
                 self.store_rax(ret);
             }
             AsmInst::BlockArg {
@@ -921,14 +921,14 @@ impl Codegen {
     /// ### out
     /// - rax: block handler
     ///
-    fn block_arg_proxy(&mut self) {
+    fn block_arg_proxy(&mut self, outer: usize) {
+        let exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq rax, [rax - (LFP_BLOCK)];
-            xorq rdi, rdi;
-            movq rsi, 0b10;
             testq rax, 0b1;
-            cmovneq rdi, rsi;
-            addq rax, rdi;
+            jeq exit;
+            addq rax, ((outer + 1) << 1);
+        exit:
         };
     }
 
