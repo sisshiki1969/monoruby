@@ -101,7 +101,10 @@ impl alloc::GC<RValue> for Executor {
 }
 
 impl Executor {
-    pub fn init(globals: &mut Globals) -> Self {
+    pub fn init(globals: &mut Globals, program_name: &str) -> Self {
+        let program_name = Value::string_from_str(program_name);
+        globals.set_gvar(IdentId::get_id("$0"), program_name);
+        globals.set_gvar(IdentId::get_id("$PROGRAM_NAME"), program_name);
         let mut executor = Self::default();
         let path = dirs::home_dir()
             .unwrap()

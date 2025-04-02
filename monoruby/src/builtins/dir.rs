@@ -10,6 +10,8 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Dir").id();
     globals.define_builtin_class_func_with_kw(klass, "glob", glob, 1, 2, false, &["base", "sort"]);
     globals.define_builtin_class_func(klass, "home", home, 0);
+    globals.define_builtin_class_funcs(klass, "pwd", &["getwd"], pwd, 0);
+    globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +171,57 @@ fn home(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
     Ok(Value::string(home.to_string_lossy().to_string()))
 }
 
+///
+/// ### Dir.getwd
+///
+/// - getwd -> String
+/// - pwd -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/getwd.html]
+#[monoruby_builtin]
+fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
+    let pwd = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    Ok(Value::string(pwd))
+}
+
+///
+/// ### Dir.chdir
+///
+/// - chdir -> 0
+/// - chdir(path) -> 0
+/// - chdir {|path| ... } -> object
+/// - chdir(path) {|path| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/chdir.html]
+#[monoruby_builtin]
+fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let path = if let Some(path) = lfp.try_arg(0) {
+        path.expect_string()?
+    } else {
+        dirs::home_dir().unwrap().to_string_lossy().to_string()
+    };
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        let old_pwd = std::env::current_dir().unwrap();
+        match std::env::set_current_dir(&path) {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(MonorubyErr::runtimeerr(dbg!(err).to_string()));
+            }
+        }
+        let path = Value::string(path);
+        let res = vm.invoke_block(globals, &data, &[path]);
+        std::env::set_current_dir(old_pwd).unwrap();
+        res
+    } else {
+        std::env::set_current_dir(path).unwrap();
+        Ok(Value::integer(0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -194,5 +247,22 @@ mod tests {
     #[test]
     fn home() {
         run_test(r#"Dir.home"#);
+    }
+
+    #[test]
+    fn pwd() {
+        run_test(r#"Dir.pwd"#);
+        run_test(r#"Dir.getwd"#);
+        run_test(
+            r##"
+        $x = []
+        $x << Dir.getwd
+        Dir.chdir("../") do |path|
+            $x << path
+            $x << Dir.getwd
+        end
+        $x << Dir.getwd
+        "##,
+        );
     }
 }

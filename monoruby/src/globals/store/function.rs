@@ -856,9 +856,9 @@ impl FuncInfo {
         self.ext.params.total_positional_args()
     }
 
-    pub(crate) fn discard_excess_positional_args(&self) -> bool {
+    /*pub(crate) fn discard_excess_positional_args(&self) -> bool {
         self.is_block_style() && !self.is_rest()
-    }
+    }*/
 
     pub(crate) fn single_arg_expand(&self) -> bool {
         self.is_block_style() && (self.total_positional_args() > 1)
@@ -947,7 +947,7 @@ impl FuncInfo {
     pub fn as_iseq(&self) -> ISeqId {
         match &self.kind {
             FuncKind::ISeq(info) => *info,
-            _ => unreachable!(),
+            _ => unreachable!("{:?}", self),
         }
     }
 

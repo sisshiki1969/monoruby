@@ -34,7 +34,7 @@ fn main() {
     let mut cont_mode = false;
     let mut buf = String::new();
     let mut script_line = 0;
-    let mut executor = Executor::init(&mut globals);
+    let mut executor = Executor::init(&mut globals, "irm");
 
     let parse_result = ruruby_parse::Parser::parse_program(
         String::new(),

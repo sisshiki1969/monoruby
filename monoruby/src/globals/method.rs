@@ -456,6 +456,18 @@ impl Globals {
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
+    pub(crate) fn define_builtin_class_funcs(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        arg_num: usize,
+    ) -> FuncId {
+        let class_id = self.store.get_metaclass(class_id).id();
+        self.define_builtin_funcs(class_id, name, alias, address, arg_num)
+    }
+
     pub(crate) fn define_builtin_class_func_rest(
         &mut self,
         class_id: ClassId,

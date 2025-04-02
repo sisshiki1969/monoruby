@@ -265,7 +265,11 @@ impl Globals {
 
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
         let code = code.into();
-        let mut executor = Executor::init(self);
+        let program_name = match path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => ".".to_string(),
+        };
+        let mut executor = Executor::init(self, &program_name);
         let res = executor.exec_script(self, code, path);
         self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]

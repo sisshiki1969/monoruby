@@ -343,6 +343,7 @@ class Errno
   ENOSYS = 38
   ENOTSUP = 95
   ENOENT = 2
+  EACCES = 13
 end
 
 class GC
