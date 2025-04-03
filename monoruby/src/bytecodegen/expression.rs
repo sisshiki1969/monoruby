@@ -701,7 +701,10 @@ impl BytecodeGen {
             NodeKind::Defined(box node) => {
                 self.gen_defined(node)?;
             }
-            NodeKind::Splat(..) | NodeKind::DiscardLhs => unreachable!(),
+            NodeKind::Splat(..) => {
+                return Err(MonorubyErr::unsupported_lhs(&expr, self.sourceinfo.clone()));
+            }
+            NodeKind::DiscardLhs => unreachable!(),
         }
         match use_mode {
             UseMode2::Ret => {
