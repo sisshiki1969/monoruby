@@ -9,6 +9,11 @@ class Object
 
   def initialize(*arg)
   end
+
+  def tap
+    yield self
+    self
+  end
 end
 
 #class Class

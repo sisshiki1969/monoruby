@@ -303,7 +303,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
             return Err(err);
         }
-    } else if let Some(message) = lfp.arg(0).is_bytes() {
+    } else if let Some(message) = lfp.arg(0).is_rstring() {
         return Err(MonorubyErr::runtimeerr(message.to_str()?));
     }
     Err(MonorubyErr::typeerr(
@@ -811,14 +811,13 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         libc::RTLD_LAZY
     };
-    let lib = if let Some(s) = arg0.try_bytes() {
-        Some(s.as_bytes().to_vec())
-    } else if arg0.is_nil() {
+    let lib = if arg0.is_nil() {
         None
     } else {
         Some(
-            vm.invoke_method_inner(globals, IdentId::get_id("to_str"), arg0, &[], None)?
-                .expect_string()?
+            arg0.convert_to_rstring(vm, globals)?
+                .to_str()?
+                .to_string()
                 .into_bytes(),
         )
     };
@@ -889,7 +888,7 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         // UINT = -4
         match ty {
             0 => Ok(0u64),
-            1 => Ok(arg.as_bytes().as_ptr() as u64),
+            1 => Ok(arg.as_rstring_inner().as_ptr() as u64),
             2 => Ok(arg.expect_integer()? as i8 as u8 as u64),
             4 => Ok(arg.expect_integer()? as i32 as u32 as u64),
             _ => Err(MonorubyErr::runtimeerr("not supported")),

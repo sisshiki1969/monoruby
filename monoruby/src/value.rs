@@ -330,7 +330,7 @@ impl Value {
         RValue::new_string_from_vec(b).pack()
     }
 
-    pub fn string_from_inner(inner: StringInner) -> Self {
+    pub fn string_from_inner(inner: RStringInner) -> Self {
         RValue::new_string_from_inner(inner).pack()
     }
 
@@ -751,6 +751,16 @@ impl Value {
         self.try_array_ty().is_some()
     }
 
+    pub(crate) fn as_rstring_inner(&self) -> &RStringInner {
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        self.rvalue().as_rstring()
+    }
+
+    pub(crate) fn as_rstring_inner_mut(&mut self) -> &mut RStringInner {
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        self.rvalue_mut().as_rstring_mut()
+    }
+
     ///
     /// Try to convert `self` to i64.
     ///
@@ -982,15 +992,27 @@ impl Value {
     }
 
     pub(crate) fn expect_str(&self) -> Result<&str> {
-        self.expect_bytes()?.check_utf8()
-    }
-
-    fn expect_bytes(&self) -> Result<&StringInner> {
-        if let Some(s) = self.is_bytes() {
-            Ok(s)
+        if let Some(s) = self.is_rstring_inner() {
+            s.check_utf8()
         } else {
             Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
         }
+    }
+
+    pub(crate) fn convert_to_rstring(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<RString> {
+        if let Some(s) = self.is_rstring() {
+            return Ok(s);
+        } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_str")) {
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            if let Some(s) = v.is_rstring() {
+                return Ok(s);
+            }
+        }
+        Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
     }
 
     pub(crate) fn expect_regexp_or_string(&self) -> Result<RegexpInner> {
@@ -1027,10 +1049,10 @@ impl Value {
         }
     }
 
-    pub(crate) fn try_bytes(&self) -> Option<&StringInner> {
+    pub(crate) fn try_bytes(&self) -> Option<&RStringInner> {
         if let Some(rv) = self.try_rvalue() {
             match rv.ty() {
-                ObjTy::STRING => Some(rv.as_bytes()),
+                ObjTy::STRING => Some(rv.as_rstring()),
                 _ => None,
             }
         } else {
@@ -1038,20 +1060,18 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_bytes(&self) -> &StringInner {
-        assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        self.rvalue().as_bytes()
-    }
-
-    pub(crate) fn as_bytes_mut(&mut self) -> &mut StringInner {
-        assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        self.rvalue_mut().as_bytes_mut()
-    }
-
-    pub(crate) fn is_bytes(&self) -> Option<&StringInner> {
+    pub(crate) fn is_rstring_inner(&self) -> Option<&RStringInner> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
-            ObjTy::STRING => Some(rv.as_bytes()),
+            ObjTy::STRING => Some(rv.as_rstring()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_rstring(&self) -> Option<RString> {
+        let rv = self.try_rvalue()?;
+        match rv.ty() {
+            ObjTy::STRING => Some(RString::new_unchecked(*self)),
             _ => None,
         }
     }
@@ -1071,12 +1091,12 @@ impl Value {
 
     pub(crate) fn replace_string(&mut self, replace: String) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        *self.rvalue_mut().as_bytes_mut() = StringInner::from_string(replace);
+        *self.rvalue_mut().as_rstring_mut() = RStringInner::from_string(replace);
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        *self.rvalue_mut().as_bytes_mut() = StringInner::from_str(replace);
+        *self.rvalue_mut().as_rstring_mut() = RStringInner::from_str(replace);
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
@@ -1303,7 +1323,7 @@ pub enum RV<'a> {
     Float(f64),
     Symbol(IdentId),
     Complex(&'a num::complex::Complex<Real>),
-    String(&'a StringInner),
+    String(&'a RStringInner),
     Object(&'a RValue),
 }
 

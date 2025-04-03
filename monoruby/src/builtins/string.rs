@@ -126,10 +126,10 @@ fn encoding_class(globals: &Globals) -> ClassId {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
-fn add(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val().dup();
-    lfp.arg(0).expect_string()?;
-    self_.as_bytes_mut().extend(lfp.arg(0).as_bytes())?;
+    let other = lfp.arg(0).convert_to_rstring(vm, globals)?;
+    self_.as_rstring_inner_mut().extend(&other)?;
     Ok(self_)
 }
 
@@ -147,7 +147,7 @@ fn mul(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
 
     let self_ = lfp.self_val();
-    let res = Value::string_from_inner(self_.as_bytes().repeat(count));
+    let res = Value::string_from_inner(self_.as_rstring_inner().repeat(count));
     Ok(res)
 }
 
@@ -161,7 +161,7 @@ fn mul(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_bytes();
+    let lhs = self_.as_rstring_inner();
     let b = equal(lhs, lfp.arg(0));
     Ok(Value::bool(b))
 }
@@ -175,13 +175,13 @@ fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_bytes();
+    let lhs = self_.as_rstring_inner();
     let b = equal(lhs, lfp.arg(0));
     Ok(Value::bool(!b))
 }
 
-fn equal(lhs: &StringInner, rhs: Value) -> bool {
-    match rhs.is_bytes() {
+fn equal(lhs: &RStringInner, rhs: Value) -> bool {
+    match rhs.is_rstring_inner() {
         Some(rhs) => lhs == rhs,
         None => false,
     }
@@ -189,8 +189,8 @@ fn equal(lhs: &StringInner, rhs: Value) -> bool {
 
 fn string_cmp(lfp: Lfp) -> Result<Option<std::cmp::Ordering>> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_bytes();
-    let res = lfp.arg(0).is_bytes().map(|rhs| lhs.cmp(rhs));
+    let lhs = self_.as_rstring_inner();
+    let res = lfp.arg(0).is_rstring().map(|rhs| lhs.cmp(&rhs));
     Ok(res)
 }
 
@@ -271,14 +271,14 @@ fn gt(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    if let Some(other) = lfp.arg(0).is_bytes() {
-        self_.as_bytes_mut().extend(other)?;
+    if let Some(other) = lfp.arg(0).is_rstring() {
+        self_.as_rstring_inner_mut().extend(&other)?;
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
         };
-        let bytes = self_.as_bytes_mut();
+        let bytes = self_.as_rstring_inner_mut();
         if let Ok(ch) = u8::try_from(ch) {
             bytes.extend_from_slice_checked(&[ch])?;
         } else {
@@ -372,7 +372,7 @@ fn get_range(s: &str, index: usize, len: usize) -> std::ops::Range<usize> {
 #[monoruby_builtin]
 fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_bytes();
+    let lhs = self_.as_rstring_inner();
     let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
         let index = match lhs.conv_char_index(i)? {
@@ -386,13 +386,13 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 i => i as usize,
             };
             let r = lhs.get_range(index, len);
-            Ok(Value::string_from_inner(StringInner::from_encoding(
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
                 &lhs[r], enc,
             )))
         } else {
             let r = lhs.get_range(index, 1);
             if !r.is_empty() {
-                Ok(Value::string_from_inner(StringInner::from_encoding(
+                Ok(Value::string_from_inner(RStringInner::from_encoding(
                     &lhs[r], enc,
                 )))
             } else {
@@ -415,7 +415,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             _ => return Ok(Value::nil()),
         };
         let r = lhs.get_range(start, len);
-        Ok(Value::string_from_inner(StringInner::from_encoding(
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
@@ -432,7 +432,7 @@ fn index(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 fn string_match_index(
     vm: &mut Executor,
-    s: &StringInner,
+    s: &RStringInner,
     re: &RegexpInner,
     nth: i64,
 ) -> Result<Value> {
@@ -504,7 +504,7 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
             lhs.len()
         };
         lhs.replace_range(start..end, &subst);
-        *lfp.self_val().as_bytes_mut() = StringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
         Ok(lfp.self_val())
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
@@ -875,7 +875,7 @@ fn slice_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
         let res = Value::string_from_str(&lhs[r.clone()]);
         lhs.replace_range(r, "");
-        *lfp.self_val().as_bytes_mut() = StringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
         res
     }
     let self_ = lfp.self_val();
@@ -1029,7 +1029,7 @@ fn chomp_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     if res.len() == self_s.len() {
         Ok(Value::nil())
     } else {
-        *lfp.self_val().as_bytes_mut() = StringInner::from_str(res);
+        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_str(res);
         Ok(lfp.self_val())
     }
 }
@@ -1356,7 +1356,7 @@ fn string_index(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         0
     };
     let self_ = lfp.self_val();
-    let given = self_.is_bytes().unwrap();
+    let given = self_.is_rstring().unwrap();
     let re = lfp.arg(0).expect_regexp_or_string()?;
 
     let char_pos = match given.conv_char_index(char_pos)? {
@@ -1397,7 +1397,7 @@ fn tos(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
 #[monoruby_builtin]
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let length = lfp.self_val().as_bytes().char_length()?;
+    let length = lfp.self_val().as_rstring_inner().char_length()?;
     Ok(Value::integer(length as i64))
 }
 
@@ -1409,7 +1409,9 @@ fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ord.html]
 #[monoruby_builtin]
 fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().as_bytes().first_code()? as _))
+    Ok(Value::integer(
+        lfp.self_val().as_rstring_inner().first_code()? as _,
+    ))
 }
 
 fn gen_pad(padding: &str, len: usize) -> String {
@@ -1504,7 +1506,7 @@ fn lines(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn bytes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let receiver = lfp.self_val();
     let iter = receiver
-        .as_bytes()
+        .as_rstring_inner()
         .iter()
         .map(|b| Value::integer(*b as i64));
     if let Some(bh) = lfp.block() {
@@ -1547,7 +1549,7 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/empty=3f.html]
 #[monoruby_builtin]
 fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_bytes().is_empty()))
+    Ok(Value::bool(lfp.self_val().as_rstring_inner().is_empty()))
 }
 
 ///
@@ -1777,7 +1779,7 @@ fn sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         16
     };
     let self_val = lfp.self_val();
-    let bytes = self_val.as_bytes();
+    let bytes = self_val.as_rstring_inner();
     let mut sum = 0;
     for b in bytes.as_bytes() {
         sum += *b as u64;
@@ -1894,7 +1896,7 @@ fn next(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let enc = self_.as_bytes().encoding();
+    let enc = self_.as_rstring_inner().encoding();
     let enc_class = vm
         .get_constant_checked(globals, OBJECT_CLASS, IdentId::get_id("Encoding"))?
         .expect_class(globals)?
@@ -1917,7 +1919,7 @@ fn encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut res = lfp.self_val().dup();
-    res.as_bytes_mut().set_encoding(Encoding::Ascii8);
+    res.as_rstring_inner_mut().set_encoding(Encoding::Ascii8);
     Ok(res)
 }
 
@@ -1930,7 +1932,7 @@ fn b(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack(self_.as_bytes(), lfp.arg(0).expect_str()?)
+    rvalue::unpack(self_.as_rstring_inner(), lfp.arg(0).expect_str()?)
 }
 
 ///
@@ -1942,7 +1944,7 @@ fn unpack(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    rvalue::unpack1(self_.as_bytes(), lfp.arg(0).expect_str()?)
+    rvalue::unpack1(self_.as_rstring_inner(), lfp.arg(0).expect_str()?)
 }
 
 ///
@@ -1955,7 +1957,7 @@ fn unpack1(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(Value::string(format!(
         r#""{}""#,
-        lfp.self_val().as_bytes().dump()
+        lfp.self_val().as_rstring_inner().dump()
     )))
 }
 
@@ -1976,7 +1978,7 @@ fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     } else {
         return Err(MonorubyErr::argumenterr("1st arg must be String."));
     };
-    lfp.self_val().as_bytes_mut().set_encoding(enc);
+    lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
     Ok(lfp.self_val())
 }
 
@@ -1988,7 +1990,7 @@ fn force_encoding(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/valid_encoding=3f.html]
 #[monoruby_builtin]
 fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_bytes().valid()))
+    Ok(Value::bool(lfp.self_val().as_rstring_inner().valid()))
 }
 
 #[cfg(test)]

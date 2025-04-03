@@ -5,6 +5,9 @@ use std::cmp::Ordering;
 pub mod pack;
 mod printable;
 
+#[monoruby_object]
+pub struct RString(Value);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Encoding {
@@ -31,31 +34,31 @@ impl Encoding {
 /// if ty is Utf8, content is guaranteed to be a valid utf8 string.
 ///
 #[derive(Debug, Clone, Eq)]
-pub struct StringInner {
+pub struct RStringInner {
     content: SmallVec<[u8; STRING_INLINE_CAP]>,
     ty: Encoding,
 }
 
-impl std::ops::Deref for StringInner {
+impl std::ops::Deref for RStringInner {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.content
     }
 }
 
-impl std::cmp::PartialEq for StringInner {
+impl std::cmp::PartialEq for RStringInner {
     fn eq(&self, other: &Self) -> bool {
         self.content == other.content
     }
 }
 
-impl std::hash::Hash for StringInner {
+impl std::hash::Hash for RStringInner {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.content.hash(state);
     }
 }
 
-impl std::cmp::PartialOrd<Self> for StringInner {
+impl std::cmp::PartialOrd<Self> for RStringInner {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let lhs = self.as_bytes();
         let rhs = other.as_bytes();
@@ -84,13 +87,13 @@ impl std::cmp::PartialOrd<Self> for StringInner {
     }
 }
 
-impl std::cmp::Ord for StringInner {
+impl std::cmp::Ord for RStringInner {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
 }
 
-impl StringInner {
+impl RStringInner {
     pub fn to_str(&self) -> Result<std::borrow::Cow<str>> {
         match self.ty {
             Encoding::Ascii8 => {
@@ -222,9 +225,9 @@ fn ascii_escape(s: &mut String, ch: u8) {
     s.push_str(str);
 }
 
-impl StringInner {
+impl RStringInner {
     fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
-        StringInner { content, ty }
+        RStringInner { content, ty }
     }
 
     pub fn encoding(&self) -> Encoding {
@@ -246,23 +249,23 @@ impl StringInner {
     }
 
     pub fn from_str(s: &str) -> Self {
-        StringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
+        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
     }
 
     pub fn from_string(s: String) -> Self {
-        StringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
+        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
-        StringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8)
+        RStringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8)
     }
 
     pub fn bytes_from_vec(vec: Vec<u8>) -> Self {
-        StringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8)
+        RStringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8)
     }
 
     pub fn from_encoding(slice: &[u8], encoding: Encoding) -> Self {
-        StringInner::from(SmallVec::from_slice(slice), encoding)
+        RStringInner::from(SmallVec::from_slice(slice), encoding)
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
@@ -271,7 +274,7 @@ impl StringInner {
         } else {
             Encoding::Ascii8
         };
-        StringInner::from(SmallVec::from_vec(vec), enc)
+        RStringInner::from(SmallVec::from_vec(vec), enc)
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -387,10 +390,10 @@ impl StringInner {
         Ok(())
     }
 
-    pub fn repeat(&self, len: usize) -> StringInner {
+    pub fn repeat(&self, len: usize) -> RStringInner {
         let ty = self.ty;
         let vec = self.content.repeat(len);
-        StringInner::from(SmallVec::from_vec(vec), ty)
+        RStringInner::from(SmallVec::from_vec(vec), ty)
     }
 
     pub fn first_code(&self) -> Result<u32> {

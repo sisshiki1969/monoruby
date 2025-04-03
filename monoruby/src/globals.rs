@@ -404,8 +404,8 @@ impl Globals {
     }
 
     pub fn print_value(&mut self, val: Value) {
-        if let Some(s) = val.is_bytes() {
-            self.stdout.write_all(s)
+        if let Some(s) = val.is_rstring() {
+            self.stdout.write_all(&s)
         } else {
             let v = val.to_s(&self.store).into_bytes();
             self.stdout.write_all(&v)

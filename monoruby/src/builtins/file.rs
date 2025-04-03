@@ -49,8 +49,8 @@ fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };
     let val = lfp.arg(1);
-    let len = if let Some(s) = val.is_bytes() {
-        if let Err(err) = file.write_all(s) {
+    let len = if let Some(s) = val.is_rstring() {
+        if let Err(err) = file.write_all(&s) {
             return Err(MonorubyErr::runtimeerr(err));
         };
         s.len()
@@ -187,7 +187,7 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
-fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn expand_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
@@ -195,11 +195,12 @@ fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
         }
     };
 
+    let arg0 = lfp.arg(0);
     let path = if lfp.try_arg(1).is_none() {
-        string_to_path(lfp.arg(0), globals)?
+        stringish_to_path(arg0, vm, globals)?
     } else {
         let mut path = string_to_path(lfp.arg(1), globals)?;
-        let rel_path = string_to_path(lfp.arg(0), globals)?;
+        let rel_path = stringish_to_path(arg0, vm, globals)?;
         path.push(rel_path);
         path
     };
@@ -378,7 +379,7 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let path = lfp.arg(0).expect_string()?;
+    let path = lfp.arg(0).convert_to_rstring(vm, globals)?;
     let mode = if let Some(arg1) = lfp.try_arg(1) {
         arg1.expect_string()?
     } else {
@@ -399,6 +400,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             )))
         }
     };
+    let path = path.to_str()?.to_string();
     let file = match opt.open(&path) {
         Ok(file) => file,
         Err(err) => {
@@ -461,6 +463,24 @@ fn string_to_canonicalized_path(
 /// Convert `file` to PathBuf.
 fn string_to_path(file: Value, _globals: &mut Globals) -> Result<std::path::PathBuf> {
     let file = file.expect_string()?;
+    let mut path = std::path::PathBuf::new();
+    for p in std::path::PathBuf::from(file).iter() {
+        if p == ".." && path.file_name().is_some() {
+            path.pop();
+        } else {
+            path.push(p);
+        };
+    }
+    Ok(path)
+}
+
+/// Convert `file` to PathBuf.
+fn stringish_to_path(
+    file: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<std::path::PathBuf> {
+    let file = file.convert_to_rstring(vm, globals)?.to_str()?.to_string();
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {

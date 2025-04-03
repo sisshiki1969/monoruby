@@ -117,8 +117,8 @@ fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 fn io_writeline(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_bytes() {
-        io.write(s)?;
+    if let Some(s) = v.is_rstring() {
+        io.write(&s)?;
         if s.last() != Some(&b'\n') {
             io.write(b"\n")?;
         }
@@ -133,8 +133,8 @@ fn io_writeline(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
 }
 
 fn io_write(globals: &Globals, io: &mut IoInner, v: Value) -> Result<()> {
-    if let Some(s) = v.is_bytes() {
-        io.write(s)
+    if let Some(s) = v.is_rstring() {
+        io.write(&s)
     } else {
         let v = v.to_s(globals).into_bytes();
         io.write(&v)

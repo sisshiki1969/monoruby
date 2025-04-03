@@ -840,12 +840,12 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn join(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let sep = if let Some(sep) = &arg0 {
-        sep.expect_str()?
+        sep.expect_string()?
     } else {
-        ""
+        "".to_string()
     };
     let ary = lfp.self_val().as_array();
-    let res = array_join(&globals.store, ary, sep);
+    let res = array_join(&globals.store, ary, &sep);
     Ok(Value::string(res))
 }
 

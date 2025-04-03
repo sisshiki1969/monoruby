@@ -210,9 +210,13 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
 #[monoruby_builtin]
-fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string()?;
-    let feature = lfp.arg(1).expect_string()?;
+    let feature = lfp
+        .arg(1)
+        .convert_to_rstring(vm, globals)?
+        .to_str()?
+        .to_string();
     globals
         .store
         .set_constant_autoload(lfp.self_val().as_class_id(), const_name, feature);
@@ -240,7 +244,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         vm.pop_class_context();
         res
     } else if let Some(arg0) = lfp.try_arg(0) {
-        let expr = arg0.expect_string()?;
+        let expr = arg0.convert_to_rstring(vm, globals)?.to_str()?.to_string();
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
         let path = if let Some(arg1) = lfp.try_arg(1) {

@@ -12,4 +12,8 @@ class Pathname
   def initialize(path)
     self.path = path
   end
+
+  def to_str
+    path
+  end
 end

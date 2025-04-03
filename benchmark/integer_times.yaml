@@ -1,83 +1,10 @@
 prelude: |
-  class Integer
-    def ruby_times
-      if block_given?
-        i = 0
-        while i < self
-          yield i
-          i += 1
-        end
-        self
-      else
-        self.to_enum(:times)
-      end
-    end
-  end
-
-  class Array
-    def ruby_each
-      if block_given?
-        i = 0
-        while i < self.size
-          yield(self[i])
-          i += 1
-        end
-        self
-      else
-        self.to_enum(:ruby_each)
-      end
-    end
-
-    def ruby_each_with_index
-      return self.to_enum(:ruby_each_with_index) if !block_given?
-      i = 0
-      while i < self.size
-        yield self[i], i
-        i += 1
-      end
-      self
-    end
-
-    def ruby_map!
-      if block_given?
-        i = 0
-        while i < self.size
-          self[i] = yield(self[i])
-          i += 1
-        end
-        self
-      else
-        self.to_enum(:ruby_map!)
-      end
-    end
-
-    def ruby_map
-      return self.to_enum(:ruby_map) if !block_given?
-      res = self.dup
-      i = 0
-      while i < self.size
-        res[i] = yield(self[i])
-        i += 1
-      end
-      res
-    end
-
-    def ruby_map!
-      return self.to_enum(:ruby_map!) if !block_given?
-      i = 0
-      while i < self.size
-        self[i] = yield(self[i])
-        i += 1
-      end
-      self
-    end
-
-  end
-
   a = [*(0..999)]
 benchmark:
   integer_times: |
     1000.times do end
+  integer_step: |
+    0.step(1000, 1) do end
   array_each: |
     a.each do |elem| end
   array_map: |
@@ -90,4 +17,6 @@ benchmark:
     Array.new(5)
   array_new2: |
     Array.new(5) do |x| x + 1 end
+  tap: |
+    a.tap do |x| end
 loop_count: 5000

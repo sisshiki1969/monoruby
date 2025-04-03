@@ -199,7 +199,7 @@ fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let path = if let Some(path) = lfp.try_arg(0) {
-        path.expect_string()?
+        path.convert_to_rstring(vm, globals)?.to_str()?.to_string()
     } else {
         dirs::home_dir().unwrap().to_string_lossy().to_string()
     };

@@ -16,7 +16,7 @@ pub use method::*;
 pub use module::*;
 pub use regexp::RegexpInner;
 pub(crate) use string::pack::*;
-pub use string::{Encoding, StringInner};
+pub use string::{Encoding, RString, RStringInner};
 
 mod array;
 mod binding;
@@ -119,7 +119,7 @@ pub union ObjKind {
     bignum: ManuallyDrop<BigInt>,
     float: f64,
     complex: ManuallyDrop<ComplexInner>,
-    string: ManuallyDrop<StringInner>,
+    string: ManuallyDrop<RStringInner>,
     time: ManuallyDrop<TimeInner>,
     array: ManuallyDrop<ArrayInner>,
     range: ManuallyDrop<RangeInner>,
@@ -186,7 +186,7 @@ impl ObjKind {
         }
     }
 
-    fn string_from_inner(inner: StringInner) -> Self {
+    fn string_from_inner(inner: RStringInner) -> Self {
         Self {
             string: ManuallyDrop::new(inner),
         }
@@ -194,31 +194,31 @@ impl ObjKind {
 
     fn bytes_from_slice(slice: &[u8]) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::bytes(slice)),
+            string: ManuallyDrop::new(RStringInner::bytes(slice)),
         }
     }
 
     fn bytes_from_vec(vec: Vec<u8>) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::bytes_from_vec(vec)),
+            string: ManuallyDrop::new(RStringInner::bytes_from_vec(vec)),
         }
     }
 
     fn string_from_string(s: String) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::from_string(s)),
+            string: ManuallyDrop::new(RStringInner::from_string(s)),
         }
     }
 
     fn string_from_str(s: &str) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::from_str(s)),
+            string: ManuallyDrop::new(RStringInner::from_str(s)),
         }
     }
 
     fn string_from_vec(vec: Vec<u8>) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner::string_from_vec(vec)),
+            string: ManuallyDrop::new(RStringInner::string_from_vec(vec)),
         }
     }
 
@@ -415,7 +415,7 @@ impl std::hash::Hash for RValue {
                 //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
                 ObjTy::BIGNUM => self.as_bignum().hash(state),
                 ObjTy::FLOAT => self.as_float().to_bits().hash(state),
-                ObjTy::STRING => self.as_bytes().hash(state),
+                ObjTy::STRING => self.as_rstring().hash(state),
                 ObjTy::ARRAY => self.as_array().hash(state),
                 ObjTy::RANGE => self.as_range().hash(state),
                 ObjTy::HASH => self.as_hashmap().hash(state),
@@ -590,7 +590,7 @@ impl RValue {
                 (ObjTy::BIGNUM, ObjTy::BIGNUM) => self.as_bignum() == other.as_bignum(),
                 (ObjTy::FLOAT, ObjTy::FLOAT) => self.as_float() == other.as_float(),
                 (ObjTy::COMPLEX, ObjTy::COMPLEX) => self.as_complex().eql(other.as_complex()),
-                (ObjTy::STRING, ObjTy::STRING) => self.as_bytes() == other.as_bytes(),
+                (ObjTy::STRING, ObjTy::STRING) => self.as_rstring() == other.as_rstring(),
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = self.as_array();
                     let rhs = other.as_array();
@@ -846,7 +846,7 @@ impl RValue {
                         self.as_complex().re().deep_copy(),
                         self.as_complex().im().deep_copy(),
                     ),
-                    ObjTy::STRING => ObjKind::string_from_inner(self.as_bytes().clone()),
+                    ObjTy::STRING => ObjKind::string_from_inner(self.as_rstring().clone()),
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
                     ObjTy::ARRAY => ObjKind::array(ArrayInner::from_iter(
                         self.as_array().iter().map(|v| v.deep_copy()),
@@ -1060,7 +1060,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_string_from_inner(inner: StringInner) -> Self {
+    pub(super) fn new_string_from_inner(inner: RStringInner) -> Self {
         RValue {
             header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_inner(inner),
@@ -1308,7 +1308,7 @@ impl RValue {
                 match ty {
                     ObjTy::BIGNUM => RV::BigInt(self.as_bignum()),
                     ObjTy::FLOAT => RV::Float(self.as_float()),
-                    ObjTy::STRING => RV::String(self.as_bytes()),
+                    ObjTy::STRING => RV::String(self.as_rstring()),
                     ObjTy::COMPLEX => RV::Complex(self.as_complex()),
                     _ => RV::Object(self),
                 }
@@ -1330,7 +1330,7 @@ impl RValue {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()
                 }
-                (ObjTy::STRING, ObjTy::STRING) => lhs.as_bytes() == rhs.as_bytes(),
+                (ObjTy::STRING, ObjTy::STRING) => lhs.as_rstring() == rhs.as_rstring(),
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();
@@ -1398,11 +1398,11 @@ impl RValue {
         &mut self.kind.complex
     }*/
 
-    pub(super) fn as_bytes(&self) -> &StringInner {
+    pub(super) fn as_rstring(&self) -> &RStringInner {
         unsafe { &self.kind.string }
     }
 
-    pub(super) fn as_bytes_mut(&mut self) -> &mut StringInner {
+    pub(super) fn as_rstring_mut(&mut self) -> &mut RStringInner {
         unsafe { &mut self.kind.string }
     }
 
