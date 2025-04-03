@@ -927,7 +927,7 @@ impl Codegen {
             movq rax, [rax - (LFP_BLOCK)];
             testq rax, 0b1;
             jeq exit;
-            addq rax, ((outer + 1) << 1);
+            addq rax, ((outer << 2) + 2);
         exit:
         };
     }

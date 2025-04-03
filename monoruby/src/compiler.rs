@@ -930,7 +930,7 @@ impl Codegen {
     ///
     /// Gen code for break in block.
     ///
-    /// rbp <- bp for a context which called the block.
+    /// rbp <- bp for a context of the outer of the block.
     ///
     fn block_break(&mut self) {
         monoasm! { &mut self.jit,

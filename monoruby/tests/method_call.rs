@@ -872,8 +872,11 @@ fn block_arg() {
     run_test_with_prelude(
         r##"
         $res = []
-        foo do |k,v|
-          $res << [k, v, E]
+        a = 77
+        1.times do
+            $res << foo do |k,v|
+              $res << [k, v, E, a]
+            end
         end
         $res
         "##,
@@ -885,7 +888,7 @@ fn block_arg() {
             {a:1,b:2}.each &block
             a += 1
             if a > 50
-              break
+              return a
             end
           end
         end

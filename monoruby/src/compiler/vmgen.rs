@@ -1061,7 +1061,7 @@ impl Codegen {
             testq rax, 0b1;
             jeq exit;
             movsxl rdi, [r13 - 16];
-            shlq rdi, 1;
+            shlq rdi, 2;
             addq rax, rdi;
             addq rax, 0b10;
         exit:

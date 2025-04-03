@@ -1,20 +1,18 @@
-def foo(&block)
-  a = 1
-  loop do
-    {a:1,b:2}.each &block
-    a += 1
-    if a > 50
-      break
-    end
-  end
+$i = 0
+
+def bar(&b)
+  10.times &b
+  puts "done: bar"
 end
 
-E=100
-a=77
-100.times do
-foo do |k,v|
-  __dump
-  exit
-  puts "Hello key=#{k} value=#{v} a=#{a} E=#{E}"
+def foo(&b)
+  bar &b
+  puts "done: foo"
 end
+
+foo do |i|
+  puts i
+  next if i < 5
+  puts "break:#{i}"
+  break
 end
