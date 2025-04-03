@@ -115,7 +115,7 @@ impl MonorubyErr {
             MonorubyErrKind::Frozen => "FrozenError",
             MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Internal => "InternalError",
-            MonorubyErrKind::Regex => "RegexError",
+            MonorubyErrKind::Regex => "RegexpError",
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",

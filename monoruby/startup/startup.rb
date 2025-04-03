@@ -309,6 +309,22 @@ class Process
   end
 end
 
+module File::Constants
+  FNM_SYSCASE = 0
+  FNM_CASEFOLD = 8
+end
+
+class File
+  include File::Constants
+  FNM_SYSCASE = 0
+  FNM_CASEFOLD = 8
+
+  Separator = "/"
+  SEPARATOR = "/"
+  ALT_SEPARATOR = nil
+  PATH_SEPARATOR = ":"
+end
+
 class Thread
   @@current = Thread.new
   def self.current
@@ -354,4 +370,3 @@ class GC
   end
 end
 
-File::ALT_SEPARATOR = nil

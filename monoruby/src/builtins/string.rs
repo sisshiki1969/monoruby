@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
     globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
+    globals.define_builtin_func(STRING_CLASS, "include?", include_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
     globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
@@ -672,6 +673,21 @@ fn start_with(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
         }
     }
     Ok(Value::bool(false))
+}
+
+///
+/// ### String#include?
+///
+/// - include?(substr) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/include=3f.html]
+#[monoruby_builtin]
+fn include_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let string = self_.expect_str()?;
+    let substr = lfp.arg(0);
+    let b = string.contains(substr.expect_str()?);
+    Ok(Value::bool(b))
 }
 
 ///
