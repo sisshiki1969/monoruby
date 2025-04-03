@@ -22,7 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["module_eval"],
         class_eval,
         0,
-        2,
+        3,
         false,
     );
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);

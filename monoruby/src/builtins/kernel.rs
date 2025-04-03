@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
+    globals.define_builtin_module_func(kernel_class, "autoload", autoload, 2);
     globals.define_builtin_module_func_eval_with(kernel_class, "eval", eval, 1, 4, false);
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
@@ -571,6 +572,22 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
+}
+
+///
+/// ### Kernel.#autoload
+///
+/// - autoload(const_name, feature) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload.html]
+#[monoruby_builtin]
+fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let const_name = lfp.arg(0).expect_symbol_or_string()?;
+    let feature = lfp.arg(1).expect_string()?;
+    globals
+        .store
+        .set_constant_autoload(lfp.self_val().class(), const_name, feature);
+    Ok(Value::nil())
 }
 
 ///
