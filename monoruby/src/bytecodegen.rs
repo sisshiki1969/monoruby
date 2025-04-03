@@ -1353,8 +1353,12 @@ impl BytecodeGen {
         for (i, arg) in args.into_iter().enumerate() {
             if let NodeKind::Splat(box expr) = arg.kind {
                 let loc = arg.loc;
-                let temp = self.push_expr(expr)?;
-                self.emit_toa(temp.into(), temp.into(), loc);
+                if matches!(expr.kind, NodeKind::Array(..)) {
+                    self.push_expr(expr)?;
+                } else {
+                    let temp = self.push_expr(expr)?;
+                    self.emit_toa(temp.into(), temp.into(), loc);
+                }
                 splat_pos.push(i);
             } else {
                 self.push_expr(arg)?;

@@ -503,8 +503,21 @@ impl TraceIr {
                 format!("{:?} = literal[{}]", reg, val.debug(store))
             }
             TraceIr::Array { dst, callid } => {
-                let CallSiteInfo { args, pos_num, .. } = store[*callid];
-                format!("{:?} = array[{:?}; {}]", dst, args, pos_num)
+                let CallSiteInfo {
+                    args,
+                    pos_num,
+                    splat_pos,
+                    ..
+                } = &store[*callid];
+                let mut s = format!("{:?} = array[", dst);
+                for i in 0..*pos_num {
+                    let prefix = if splat_pos.contains(&i) { "*" } else { "" };
+                    if i != 0 {
+                        s += ",";
+                    }
+                    s += &format!("{prefix}{:?}", *args + i);
+                }
+                format!("{s}]")
             }
             TraceIr::Lambda { dst, func_id } => {
                 format!("{:?} = lambda[{:?}]", dst, func_id)
