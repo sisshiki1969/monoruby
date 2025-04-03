@@ -695,7 +695,7 @@ fn include_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// - delete_prefix!(prefix) -> self | nil
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix=21.html]
 #[monoruby_builtin]
 fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
@@ -2416,6 +2416,9 @@ mod tests {
         run_test(r##""string".end_with?("ing")"##);
         run_test(r##""string".end_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
+        run_test(r##""string".include?("str")"##);
+        run_test(r##""string".include?("ing")"##);
+        run_test(r##""string".include?("ingi")"##);
     }
 
     #[test]
