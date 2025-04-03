@@ -933,9 +933,18 @@ impl Codegen {
     /// rbp <- bp for a context of the outer of the block.
     ///
     fn block_break(&mut self) {
+        let loop_ = self.jit.label();
+        let exit = self.jit.label();
         monoasm! { &mut self.jit,
+            movq r14, [r14];
             movq rdi, [rbx + (EXECUTOR_CFP)];
-            movq rdi, [rdi];    // rdi <- caller's cfp
+        loop_:
+            movq rsi, [rdi];    // rdi <- caller's cfp
+            cmpq r14, [rsi - (CFP_LFP)];
+            je  exit;
+            movq rdi, rsi;
+            jmp loop_;
+        exit:
             lea  rbp, [rdi + (BP_CFP)];
         }
     }

@@ -158,6 +158,10 @@ impl ArrayInner {
         Ok(removed)
     }
 
+    pub fn remove(&mut self, index: usize) -> Value {
+        self.0.remove(index)
+    }
+
     pub fn debug(&self, store: &Store) -> String {
         match self.len() {
             0 => "[]".to_string(),

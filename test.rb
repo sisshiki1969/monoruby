@@ -16,3 +16,5 @@ foo do |i|
   puts "break:#{i}"
   break
 end
+
+puts "done: main"

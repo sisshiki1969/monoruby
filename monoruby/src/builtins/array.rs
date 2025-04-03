@@ -106,6 +106,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "delete", delete, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "delete_at", delete_at, 1);
     globals.define_builtin_funcs_with(
         ARRAY_CLASS,
         "find_index",
@@ -1875,6 +1876,30 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Array#delete_at
+///
+/// - delete_at(pos) -> object | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete_at.html]
+#[monoruby_builtin]
+fn delete_at(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    let pos = lfp.arg(0).coerce_to_i64()?;
+    let pos = if pos < 0 {
+        let pos = pos + ary.len() as i64;
+        if pos < 0 {
+            return Ok(Value::nil());
+        }
+        pos as usize
+    } else if pos >= ary.len() as i64 {
+        return Ok(Value::nil());
+    } else {
+        pos as usize
+    };
+    Ok(ary.remove(pos))
+}
+
+///
 /// ### Array#find_index
 ///
 /// - find_index(val) -> Integer | nil
@@ -2815,6 +2840,22 @@ mod tests {
         res << a
         res << a.delete(1) {"wow"}
         res << a.delete(1) {"wow"}
+        res << a
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn delete_at() {
+        run_test(
+            r##"
+        res = []
+        a = [1, 2, 3, 2.0, 1]
+        res << a.delete_at(7)
+        res << a.delete_at(-10)
+        res << a.delete_at(3)
+        res << a.delete_at(-1)
         res << a
         res
         "##,
