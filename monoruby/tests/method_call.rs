@@ -1576,3 +1576,33 @@ fn attr_reader_in_different_class() {
             "##,
     );
 }
+
+#[test]
+fn flow_control() {
+    run_test_with_prelude(
+        r##"
+    $i = []
+
+    foo do |i|
+      $i << i
+      next if i < 5
+      $i << "break:#{i}"
+      break
+    end
+
+    $i << "done: main"
+    $i
+    "##,
+        r##"
+    def bar(&b)
+      10.times &b
+      $i << "done: bar"
+    end
+
+    def foo(&b)
+      bar &b
+      $i << "done: foo"
+    end
+    "##,
+    );
+}

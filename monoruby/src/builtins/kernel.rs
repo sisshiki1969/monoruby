@@ -131,9 +131,9 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if let Some(b) = jitctx.has_block() {
+    if let Some(true) = jitctx.has_block() {
         if let Some(dst) = dst {
-            bb.def_concrete_value(dst, Value::bool(b));
+            bb.def_concrete_value(dst, Value::bool(true));
         }
     } else {
         ir.inline(|gen, _, _| {
