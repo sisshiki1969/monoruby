@@ -128,7 +128,7 @@ fn encoding_class(globals: &Globals) -> ClassId {
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val().dup();
-    let other = lfp.arg(0).convert_to_rstring(vm, globals)?;
+    let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     self_.as_rstring_inner_mut().extend(&other)?;
     Ok(self_)
 }

@@ -581,12 +581,12 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload.html]
 #[monoruby_builtin]
-fn autoload(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let const_name = lfp.arg(0).expect_symbol_or_string()?;
-    let feature = lfp.arg(1).expect_string()?;
+    let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
     globals
         .store
-        .set_constant_autoload(lfp.self_val().class(), const_name, feature);
+        .set_constant_autoload(vm.context_class_id(), const_name, feature);
     Ok(Value::nil())
 }
 
@@ -814,14 +814,8 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lib = if arg0.is_nil() {
         None
     } else {
-        Some(
-            arg0.convert_to_rstring(vm, globals)?
-                .to_str()?
-                .to_string()
-                .into_bytes(),
-        )
+        Some(std::ffi::CString::new(arg0.coerce_to_string(vm, globals)?).unwrap())
     };
-    let lib = lib.map(|s| std::ffi::CString::new(s).unwrap());
     let handle = unsafe {
         libc::dlopen(
             match &lib {

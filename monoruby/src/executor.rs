@@ -303,7 +303,7 @@ impl Executor {
             .unwrap_or_else(|| Cref::new(OBJECT_CLASS, false, Visibility::Private))
     }
 
-    fn context_class_id(&self) -> ClassId {
+    pub fn context_class_id(&self) -> ClassId {
         self.lexical_class
             .last()
             .unwrap()

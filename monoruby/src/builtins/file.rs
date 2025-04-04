@@ -379,7 +379,6 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let path = lfp.arg(0).convert_to_rstring(vm, globals)?;
     let mode = if let Some(arg1) = lfp.try_arg(1) {
         arg1.expect_string()?
     } else {
@@ -400,7 +399,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             )))
         }
     };
-    let path = path.to_str()?.to_string();
+    let path = lfp.arg(0).coerce_to_string(vm, globals)?;
     let file = match opt.open(&path) {
         Ok(file) => file,
         Err(err) => {
@@ -480,7 +479,7 @@ fn stringish_to_path(
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<std::path::PathBuf> {
-    let file = file.convert_to_rstring(vm, globals)?.to_str()?.to_string();
+    let file = file.coerce_to_string(vm, globals)?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {

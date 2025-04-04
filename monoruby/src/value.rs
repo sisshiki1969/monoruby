@@ -999,7 +999,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn convert_to_rstring(
+    pub(crate) fn coerce_to_rstring(
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
@@ -1013,6 +1013,14 @@ impl Value {
             }
         }
         Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+    }
+
+    pub(crate) fn coerce_to_string(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<String> {
+        Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
     }
 
     pub(crate) fn expect_regexp_or_string(&self) -> Result<RegexpInner> {
