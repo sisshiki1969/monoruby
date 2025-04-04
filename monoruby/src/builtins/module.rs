@@ -1153,6 +1153,18 @@ mod tests {
             end
         "#,
         );
+        run_test_with_prelude(
+            r##"
+            [Foo.instance_methods(false).sort, Foo.instance_methods(true).sort - Object.instance_methods(true)]
+        "##,
+            r##"
+        class Foo
+          private;   def private_foo()   end
+          protected; def protected_foo() end
+          public;    def public_foo()    end
+        end
+        "##,
+        );
     }
 
     #[test]

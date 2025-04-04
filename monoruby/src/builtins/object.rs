@@ -60,6 +60,14 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func_with(
+        OBJECT_CLASS,
+        "singleton_methods",
+        singleton_methods,
+        0,
+        1,
+        false,
+    );
 }
 
 #[monoruby_builtin]
@@ -425,6 +433,29 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))
     }
+}
+
+///
+/// ### Object#singleton_methods
+///
+/// - singleton_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_methods.html]
+#[monoruby_builtin]
+fn singleton_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = match globals.store.has_singleton(lfp.self_val()) {
+        Some(module) => module.id(),
+        None => return Ok(Value::array_empty()),
+    };
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let iter = if !inherited_too {
+        globals.store.get_method_names(class_id)
+    } else {
+        globals.store.get_method_names_inherit(class_id)
+    }
+    .into_iter()
+    .map(Value::symbol);
+    Ok(Value::array_from_iter(iter))
 }
 
 ///
@@ -905,6 +936,47 @@ mod tests {
             o.send(:b, x, 2, 3)
           end 
             "##,
+        );
+    }
+
+    #[test]
+    fn singleton_methods() {
+        run_test_with_prelude(
+            r##"
+        [obj.singleton_methods(false).sort, Foo.singleton_methods(false).sort]
+        "##,
+            r##"
+        Parent = Class.new
+
+        class <<Parent
+          private;   def private_class_parent() end
+          protected; def protected_class_parent() end
+          public;    def public_class_parent() end
+        end
+
+        Foo = Class.new(Parent)
+
+        class <<Foo
+          private;   def private_class_foo() end
+          protected; def protected_class_foo() end
+          public;    def public_class_foo() end
+        end
+
+        module Bar
+          private;   def private_bar()   end
+          protected; def protected_bar() end
+          public;    def public_bar()    end
+        end
+
+        obj = Foo.new
+
+        class << obj
+          include Bar
+          private;   def private_self()   end
+          protected; def protected_self() end
+          public;    def public_self()    end
+        end
+        "##,
         );
     }
 }

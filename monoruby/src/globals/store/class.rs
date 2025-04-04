@@ -393,6 +393,20 @@ impl ClassInfoTable {
     }
 
     ///
+    /// Get a singleton class of *obj*: Value.
+    ///
+    /// If not exists, create a new singleton class.
+    ///
+    pub(crate) fn has_singleton(&self, obj: Value) -> Option<Module> {
+        let org_class = self[obj.class()].get_module();
+        if org_class.is_singleton().is_some() {
+            Some(org_class)
+        } else {
+            None
+        }
+    }
+
+    ///
     /// Get a method with *name* in the class of *class_id*.
     ///   
     /// If not found, simply return None with no error.
@@ -456,16 +470,35 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Get method names in the class of *class_id*.
+    /// Get public and protected method names in the class of *class_id*.
     ///  
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id].methods.keys().cloned().collect()
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.visibility != Visibility::Private {
+                    Some(*name)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
+    ///
+    /// Get public and protected method names in the class of *class_id* and its ancesters.
+    ///
     pub(crate) fn get_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
         let mut names = vec![];
         loop {
-            names.extend(self[class_id].methods.keys().cloned());
+            names.extend(self[class_id].methods.iter().filter_map(|(name, entry)| {
+                if entry.visibility != Visibility::Private {
+                    Some(*name)
+                } else {
+                    None
+                }
+            }));
             match self.get_module(class_id).superclass_id() {
                 Some(superclass) => {
                     if superclass == OBJECT_CLASS {
