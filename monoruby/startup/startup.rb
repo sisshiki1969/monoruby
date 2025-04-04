@@ -1,4 +1,5 @@
 RUBY_PLATFORM = "x86_64-linux"
+RUBY_PATCHLEVEL = 0
 
 require 'rbconfig' 
 
@@ -130,6 +131,14 @@ module Enumerable
     self
   end
 
+  def each_with_object(obj)
+    return self.to_enum(:each_with_object) if !block_given?
+    self.each do |x|
+      yield x, obj
+    end
+    obj
+  end
+
   def map
     return self.to_enum(:map) if !block_given?
     res = []
@@ -240,6 +249,21 @@ class Integer
       i += step
     end
     self
+  end
+
+  def digits(base = 10)
+    if base < 0
+      raise Math::DomainError, "out of domain"
+    elsif base == 0
+      raise ArgumentError, "invalid radix #{base}"
+    end
+    res = []
+    n = self
+    while n > 0
+      res << n % base
+      n /= base
+    end
+    res
   end
 end
 
