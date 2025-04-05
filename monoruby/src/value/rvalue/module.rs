@@ -232,4 +232,8 @@ impl ModuleInner {
     pub fn has_origin(&self) -> bool {
         self.origin.is_some()
     }
+
+    pub fn origin(&self) -> Option<Module> {
+        self.origin
+    }
 }

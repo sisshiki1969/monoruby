@@ -1,22 +1,14 @@
-$i = 0
-
-def bar(&b)
-  10.times &b
-  puts "done: bar"
-end
-
-def foo(&b)
-  bar &b
-  puts "done: foo"
-end
-
-30.times {
-  foo do |i|
-    puts i
-    next if i < 5
-    puts "break:#{i}"
-    break
+class S
+  def f
   end
+end
 
-  puts "done: main"
-}
+class C < S
+  def f(x,y)
+    super()
+  end
+end
+
+100.times do
+  C.new.f(1,2)
+end

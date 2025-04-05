@@ -490,8 +490,8 @@ impl JitContext {
         // for super
         let iseq_id = self.iseq_id;
         let mother = store[iseq_id].mother().0;
-        let class_context = store[mother].owner_class().unwrap();
+        let owner = store[mother].owner_class().unwrap();
         let func_name = store[mother].name().unwrap();
-        store.check_super(recv_class, class_context, func_name)
+        store.check_super(recv_class, owner, func_name)
     }
 }

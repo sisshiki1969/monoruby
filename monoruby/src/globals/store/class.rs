@@ -454,12 +454,12 @@ impl ClassInfoTable {
     pub(crate) fn check_super(
         &self,
         self_class: ClassId,
-        class_context: ClassId,
+        owner: ClassId,
         name: IdentId,
     ) -> Option<FuncId> {
         let mut module = self.get_module(self_class);
         loop {
-            if module.id() == class_context {
+            if module.id() == owner {
                 module = module.superclass().unwrap();
                 break;
             }

@@ -154,6 +154,26 @@ impl Store {
         let iseq = self[func_id].as_iseq();
         &mut self[iseq]
     }
+
+    pub fn show_ancestors(&self, class_id: ClassId) {
+        let mut class = self[class_id].get_module();
+        eprint!(
+            "ancestors of {:?}<{}>{}: ",
+            class.id(),
+            class.id().get_name_id(self),
+            class.has_origin()
+        );
+        while let Some(class_) = class.superclass() {
+            eprint!(
+                "{:?}<{}>{} ",
+                class_.id(),
+                class_.id().get_name_id(self),
+                class.has_origin()
+            );
+            class = class_;
+        }
+        eprintln!("");
+    }
 }
 
 impl Store {

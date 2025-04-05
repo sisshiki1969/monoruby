@@ -48,13 +48,11 @@ pub(super) extern "C" fn find_method(
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
-    let class_context = globals.store[func_id].owner_class().unwrap();
+    let owner = globals.store[func_id].owner_class().unwrap();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    match globals
-        .store
-        .check_super(self_class, class_context, func_name)
-    {
+    //globals.store.show_ancestors(self_class);
+    match globals.store.check_super(self_class, owner, func_name) {
         Some(func_id) => Some(func_id),
         None => {
             let err = MonorubyErr::method_not_found(func_name, self_val);
