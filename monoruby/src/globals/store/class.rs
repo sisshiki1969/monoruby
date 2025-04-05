@@ -459,14 +459,13 @@ impl ClassInfoTable {
     ) -> Option<FuncId> {
         let mut module = self.get_module(self_class);
         loop {
-            if module.id() == owner {
-                module = module.superclass().unwrap();
+            if !module.has_origin() && module.id() == owner {
                 break;
             }
             module = module.superclass().unwrap();
         }
-        let MethodTableEntry { func_id, .. } = self.search_method(module, name)?;
-        func_id
+        let module = module.superclass()?;
+        self.search_method(module, name)?.func_id()
     }
 
     ///

@@ -51,7 +51,6 @@ fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     let owner = globals.store[func_id].owner_class().unwrap();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    //globals.store.show_ancestors(self_class);
     match globals.store.check_super(self_class, owner, func_name) {
         Some(func_id) => Some(func_id),
         None => {
