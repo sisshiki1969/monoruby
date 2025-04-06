@@ -929,7 +929,7 @@ impl Executor {
         base: Option<Value>,
         name: IdentId,
         superclass: Option<Value>,
-        is_module: u32,
+        is_module: bool,
     ) -> Result<Value> {
         let parent = match base {
             Some(base) => base.expect_class_or_module(&globals.store)?.id(),
@@ -939,7 +939,7 @@ impl Executor {
             Some(val) => {
                 let val = val.expect_class_or_module(&globals.store)?;
                 if let Some(superclass) = superclass {
-                    assert!(is_module != 1);
+                    assert!(!is_module);
                     let superclass_id = superclass.expect_class(globals)?.id();
                     if Some(superclass_id) != val.get_real_superclass().map(|m| m.id()) {
                         return Err(MonorubyErr::superclass_mismatch(name));
@@ -950,12 +950,12 @@ impl Executor {
             None => {
                 let superclass = match superclass {
                     Some(superclass) => {
-                        assert!(is_module != 1);
+                        assert!(!is_module);
                         superclass.expect_class(globals)?
                     }
                     None => globals.store.object_class(),
                 };
-                if is_module == 1 {
+                if is_module {
                     globals.define_module_with_identid(name, parent)
                 } else {
                     globals.define_class_with_identid(name, Some(superclass), parent)

@@ -88,7 +88,7 @@ impl ClassInfoTable {
             eprintln!("warning: already initialized constant {name}")
         }
         if let Some(klass) = val.is_class() {
-            self[klass.id()].set_name_id(name)
+            self[klass.id()].set_name(name)
         }
     }
 }

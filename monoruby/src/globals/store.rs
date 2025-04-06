@@ -155,6 +155,16 @@ impl Store {
         &mut self[iseq]
     }
 
+    pub fn ancestors(&self, class_id: ClassId) -> Vec<Module> {
+        let mut class = self[class_id].get_module();
+        let mut v = vec![class];
+        while let Some(super_class) = class.superclass() {
+            v.push(super_class);
+            class = super_class;
+        }
+        v
+    }
+
     pub fn show_ancestors(&self, class_id: ClassId) {
         let mut class = self[class_id].get_module();
         eprint!(
@@ -184,7 +194,7 @@ impl Store {
     pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
             let class_obj = self.classes[class].get_module();
-            match self.classes[class].get_name_id() {
+            match self.classes[class].get_name() {
                 Some(_) => {
                     let v: Vec<_> = self
                         .classes
@@ -474,7 +484,7 @@ impl Store {
     pub(crate) fn debug_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
         if let Some(class) = class.into() {
             let class_obj = self.classes[class].get_module();
-            match self.classes[class].get_name_id() {
+            match self.classes[class].get_name() {
                 Some(_) => {
                     let v: Vec<_> = self
                         .classes

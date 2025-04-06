@@ -112,7 +112,7 @@ impl Module {
 
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
-        while class.is_singleton().is_some() {
+        while class.is_singleton().is_some() || class.is_iclass() {
             class = class.superclass().unwrap();
         }
         class

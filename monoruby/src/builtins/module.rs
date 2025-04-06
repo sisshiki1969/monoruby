@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
         3,
         false,
     );
+    globals.define_builtin_func(MODULE_CLASS, "ancestors", ancestors, 0);
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
@@ -36,6 +37,14 @@ pub(super) fn init(globals: &mut Globals) {
         MODULE_CLASS,
         "instance_methods",
         instance_methods,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "private_instance_methods",
+        private_instance_methods,
         0,
         1,
         false,
@@ -261,6 +270,23 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 }
 
 ///
+/// ### Module#ancestors
+///
+/// - ancestors -> [Class, Module]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/ancestors.html]
+#[monoruby_builtin]
+fn ancestors(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let v = globals
+        .ancestors(class_id)
+        .into_iter()
+        .map(|m| m.into())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
 /// ### Module#const_defined?
 ///
 /// - const_defined?(name, inherit = true) -> bool
@@ -386,6 +412,7 @@ fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Val
 
 ///
 /// ### Module#instance_methods
+///
 /// - instance_methods(inherited_too = true) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
@@ -396,7 +423,27 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
     let iter = if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
-        globals.store.get_method_names_inherit(class_id)
+        globals.store.get_method_names_inherit(class_id, false)
+    }
+    .into_iter()
+    .map(Value::symbol);
+    Ok(Value::array_from_iter(iter))
+}
+
+///
+/// ### Module#private_instance_methods
+///
+/// - private_instance_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_instance_methods.html]
+#[monoruby_builtin]
+fn private_instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let iter = if !inherited_too {
+        globals.store.get_private_method_names(class_id)
+    } else {
+        globals.store.get_private_method_names_inherit(class_id)
     }
     .into_iter()
     .map(Value::symbol);
@@ -1134,6 +1181,24 @@ mod tests {
     }
 
     #[test]
+    fn ancestors() {
+        run_test_with_prelude(
+            r#"
+            (C.ancestors - S.ancestors).map(&:to_s)
+            "#,
+            r#"
+            module M
+            end
+            class S
+            end
+            class C < S
+              include M
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn instance_methods() {
         run_test_with_prelude(
             r#"
@@ -1151,7 +1216,12 @@ mod tests {
         );
         run_test_with_prelude(
             r##"
-            [Foo.instance_methods(false).sort, Foo.instance_methods(true).sort - Object.instance_methods(true)]
+            [
+              Foo.instance_methods(false).sort,
+              Foo.instance_methods(true).sort - Object.instance_methods(true),
+              Foo.private_instance_methods(false).sort,
+              Foo.private_instance_methods(true).sort - Object.private_instance_methods(true)
+            ]
         "##,
             r##"
         class Foo

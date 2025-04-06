@@ -60,6 +60,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func_with(OBJECT_CLASS, "methods", methods, 0, 1, false);
     globals.define_builtin_func_with(
         OBJECT_CLASS,
         "singleton_methods",
@@ -436,6 +437,30 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 }
 
 ///
+/// ### Object#methods
+///
+/// - methods(include_inherited = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/methods.html]
+#[monoruby_builtin]
+fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    let iter = if !inherited_too {
+        let class_id = match globals.store.has_singleton(lfp.self_val()) {
+            Some(module) => module.id(),
+            None => return Ok(Value::array_empty()),
+        };
+        globals.store.get_method_names(class_id)
+    } else {
+        let class_id = lfp.self_val().class();
+        globals.store.get_method_names_inherit(class_id, true)
+    }
+    .into_iter()
+    .map(Value::symbol);
+    Ok(Value::array_from_iter(iter))
+}
+
+///
 /// ### Object#singleton_methods
 ///
 /// - singleton_methods(inherited_too = true) -> [Symbol]
@@ -451,7 +476,7 @@ fn singleton_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
     let iter = if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
-        globals.store.get_method_names_inherit(class_id)
+        globals.store.get_method_names_inherit(class_id, true)
     }
     .into_iter()
     .map(Value::symbol);
@@ -940,10 +965,17 @@ mod tests {
     }
 
     #[test]
-    fn singleton_methods() {
+    fn methods() {
         run_test_with_prelude(
             r##"
-        [obj.singleton_methods(false).sort, Foo.singleton_methods(false).sort]
+        [
+          obj.singleton_methods(false).sort,
+          (obj.singleton_methods(true) - obj2.singleton_methods(true)).sort,
+          obj.methods(false).sort,
+          (obj.methods(true) - obj2.methods(true)).sort,
+          Foo.singleton_methods(false).sort,
+          (Foo.singleton_methods(true) - Foo2.singleton_methods(true)).sort
+        ]
         "##,
             r##"
         Parent = Class.new
@@ -955,6 +987,7 @@ mod tests {
         end
 
         Foo = Class.new(Parent)
+        Foo2 = Class.new()
 
         class <<Foo
           private;   def private_class_foo() end
@@ -969,6 +1002,7 @@ mod tests {
         end
 
         obj = Foo.new
+        obj2 = Foo.new
 
         class << obj
           include Bar

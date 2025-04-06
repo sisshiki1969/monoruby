@@ -26,25 +26,6 @@ pub(super) extern "C" fn find_method(
     }
 }
 
-/*pub(super) extern "C" fn vm_find_method(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    callid: CallSiteId,
-) -> Option<FuncId> {
-    let func_id = if let Some(func_name) = globals.store[callid].name {
-        let recv_reg = globals.store[callid].recv;
-        let recv = unsafe { vm.get_slot(recv_reg).unwrap() };
-        let is_func_call = globals.store[callid].recv.is_self();
-        globals
-            .find_method(recv, func_name, is_func_call)
-            .map_err(|err| vm.set_error(err))
-            .ok()?
-    } else {
-        find_super(vm, globals)?
-    };
-    Some(func_id)
-}*/
-
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
@@ -639,7 +620,7 @@ pub(super) extern "C" fn define_class(
     is_module: u32,
     base: Option<Value>,
 ) -> Option<Value> {
-    match vm.define_class(globals, base, name, superclass, is_module) {
+    match vm.define_class(globals, base, name, superclass, is_module == 1) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);

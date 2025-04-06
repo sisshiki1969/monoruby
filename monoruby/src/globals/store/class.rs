@@ -238,15 +238,11 @@ impl ClassInfo {
         self.ivar_names.iter()
     }
 
-    pub(crate) fn set_name(&mut self, name: &str) {
-        self.name = Some(IdentId::get_id(name));
-    }
-
-    pub(crate) fn set_name_id(&mut self, name: IdentId) {
+    pub(crate) fn set_name(&mut self, name: IdentId) {
         self.name = Some(name);
     }
 
-    pub(crate) fn get_name_id(&self) -> Option<IdentId> {
+    pub(crate) fn get_name(&self) -> Option<IdentId> {
         self.name
     }
 
@@ -307,19 +303,6 @@ impl ClassInfoTable {
         let id = self.copy_class(original_class);
         let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
         self[id].object = Some(class_obj);
-        class_obj
-    }
-
-    // TODO: we must name the unnamed class when the class object is assigned to constant later.
-    pub(crate) fn new_unnamed_class(&mut self, superclass: Option<Module>) -> Value {
-        let class_id = self.add_class();
-        let superclass = match superclass {
-            Some(class) => class,
-            None => self.object_class(),
-        };
-        let class_obj = Value::class_empty(class_id, Some(superclass));
-        self[class_id].object = Some(class_obj.as_class());
-        self[class_id].instance_ty = Some(ObjTy::OBJECT);
         class_obj
     }
 
@@ -486,13 +469,68 @@ impl ClassInfoTable {
     }
 
     ///
+    /// Get private method names in the class of *class_id*.
+    ///  
+    pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.visibility == Visibility::Private {
+                    Some(*name)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    ///
     /// Get public and protected method names in the class of *class_id* and its ancesters.
     ///
-    pub(crate) fn get_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
+    pub(crate) fn get_method_names_inherit(
+        &self,
+        class_id: ClassId,
+        only_singleton: bool,
+    ) -> Vec<IdentId> {
+        let mut names = vec![];
+        let mut module = self.get_module(class_id);
+        loop {
+            if !only_singleton || module.is_singleton().is_some() || module.is_iclass() {
+                names.extend(
+                    self[module.id()]
+                        .methods
+                        .iter()
+                        .filter_map(|(name, entry)| {
+                            if entry.visibility != Visibility::Private {
+                                Some(*name)
+                            } else {
+                                None
+                            }
+                        }),
+                );
+            }
+            match module.superclass() {
+                Some(superclass) => {
+                    if superclass.id() == OBJECT_CLASS {
+                        break;
+                    }
+                    module = superclass;
+                }
+                None => break,
+            }
+        }
+        names
+    }
+
+    ///
+    /// Get public and protected method names in the class of *class_id* and its ancesters.
+    ///
+    pub(crate) fn get_private_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
         let mut names = vec![];
         loop {
             names.extend(self[class_id].methods.iter().filter_map(|(name, entry)| {
-                if entry.visibility != Visibility::Private {
+                if entry.visibility == Visibility::Private {
                     Some(*name)
                 } else {
                     None
@@ -513,10 +551,10 @@ impl ClassInfoTable {
 
     fn generate_class_obj(
         &mut self,
-        name_id: IdentId,
+        name_id: Option<IdentId>,
         class_id: ClassId,
         superclass: Option<Module>,
-        parent: ClassId,
+        parent: Option<ClassId>,
         is_module: bool,
         instance_ty: Option<ObjTy>,
     ) -> Module {
@@ -535,10 +573,12 @@ impl ClassInfoTable {
             Value::class_empty(class_id, superclass)
         };
         self[class_id].object = Some(class_obj.as_class());
-        self[class_id].name = Some(name_id);
-        self[class_id].parent = Some(parent);
+        self[class_id].name = name_id;
+        self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
-        self.set_constant(parent, name_id, class_obj);
+        if let Some(name) = name_id {
+            self.set_constant(parent.unwrap(), name, class_obj);
+        }
         class_obj.as_class()
     }
 }
@@ -550,7 +590,7 @@ impl ClassInfoTable {
         parent: ClassId,
     ) -> Module {
         let object_class = self.object_class();
-        self.define_class_inner(name_id, Some(object_class), parent, true)
+        self.define_class_inner(Some(name_id), Some(object_class), Some(parent), true, None)
     }
 
     pub(crate) fn define_toplevel_module(&mut self, name: &str) -> Module {
@@ -564,7 +604,7 @@ impl ClassInfoTable {
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Module {
-        self.define_class_inner(name_id, superclass, parent, false)
+        self.define_class_inner(Some(name_id), superclass, Some(parent), false, None)
     }
 
     pub(crate) fn define_class(
@@ -577,12 +617,22 @@ impl ClassInfoTable {
         self.define_class_with_identid(name_id, superclass, parent)
     }
 
-    pub fn define_class_inner(
+    // TODO: we must name the unnamed class when the class object is assigned to constant later.
+    pub(crate) fn define_unnamed_class(&mut self, superclass: Option<Module>) -> Module {
+        let superclass = match superclass {
+            Some(class) => class,
+            None => self.object_class(),
+        };
+        self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
+    }
+
+    fn define_class_inner(
         &mut self,
-        name_id: IdentId,
+        name_id: Option<IdentId>,
         superclass: impl Into<Option<Module>>,
-        parent: ClassId,
+        parent: Option<ClassId>,
         is_module: bool,
+        instance_ty: Option<ObjTy>,
     ) -> Module {
         let class_id = self.add_class();
         let obj = self.generate_class_obj(
@@ -591,7 +641,7 @@ impl ClassInfoTable {
             superclass.into(),
             parent,
             is_module,
-            None,
+            instance_ty,
         );
         self.get_metaclass(class_id);
         obj
@@ -608,10 +658,10 @@ impl ClassInfoTable {
         let name_id = IdentId::get_id(name);
         self.def_builtin_class(class_id);
         self.generate_class_obj(
-            name_id,
+            Some(name_id),
             class_id,
             superclass.into(),
-            parent,
+            Some(parent),
             false,
             instance_ty.into(),
         )
@@ -636,7 +686,13 @@ impl ClassInfoTable {
     pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
         let name_id = IdentId::get_id(name);
         let object_class = self.object_class();
-        self.define_class_inner(name_id, Some(object_class), OBJECT_CLASS, false)
+        self.define_class_inner(
+            Some(name_id),
+            Some(object_class),
+            Some(OBJECT_CLASS),
+            false,
+            None,
+        )
     }
 }
 
