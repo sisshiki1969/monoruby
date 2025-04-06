@@ -170,10 +170,10 @@ impl Store {
         eprint!(
             "ancestors of {:?}<{}>: ",
             class.id(),
-            class.id().get_name_id(self),
+            class.id().get_name(self),
         );
         while let Some(class_) = class.superclass() {
-            eprint!("{:?}<{}> ", class_.id(), class_.id().get_name_id(self),);
+            eprint!("{:?}<{}> ", class_.id(), class_.id().get_name(self),);
             class = class_;
         }
         eprintln!("");
@@ -196,13 +196,7 @@ impl Store {
             let class_obj = self.classes[class].get_module();
             match self.classes[class].get_name() {
                 Some(_) => {
-                    let v: Vec<_> = self
-                        .classes
-                        .get_parents(class)
-                        .into_iter()
-                        .rev()
-                        .map(|name| name.to_string())
-                        .collect();
+                    let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
                     v.join("::")
                 }
                 None => match class_obj.is_singleton() {
@@ -230,7 +224,7 @@ impl Store {
                 format!("block in {}", self.func_description(mother))
             } else {
                 match info.owner_class() {
-                    Some(owner) => format!("{:?}#{}", owner.get_name_id(self), iseq.name()),
+                    Some(owner) => format!("{}#{}", owner.get_name(self), iseq.name()),
                     None => iseq.name().to_string(),
                 }
             }
@@ -241,7 +235,7 @@ impl Store {
                 String::new()
             };
             match info.owner_class() {
-                Some(owner) => format!("{:?}#{name}", owner.get_name_id(self)),
+                Some(owner) => format!("{}#{name}", owner.get_name(self)),
                 None => name.to_string(),
             }
         }
@@ -486,13 +480,7 @@ impl Store {
             let class_obj = self.classes[class].get_module();
             match self.classes[class].get_name() {
                 Some(_) => {
-                    let v: Vec<_> = self
-                        .classes
-                        .get_parents(class)
-                        .into_iter()
-                        .rev()
-                        .map(|name| name.to_string())
-                        .collect();
+                    let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
                     v.join("::")
                 }
                 None => match class_obj.is_singleton() {

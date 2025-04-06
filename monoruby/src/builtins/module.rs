@@ -520,7 +520,7 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         None => {
             return Err(MonorubyErr::undefined_method(
                 method_name,
-                klass.id().get_name_id(&globals.store),
+                klass.id().get_name(&globals.store),
             ))
         }
     };
@@ -529,7 +529,7 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
         None => {
             return Err(MonorubyErr::undefined_method(
                 method_name,
-                klass.id().get_name_id(&globals.store),
+                klass.id().get_name(&globals.store),
             ))
         }
     };

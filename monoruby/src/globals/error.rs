@@ -264,7 +264,7 @@ impl MonorubyErr {
         Self::nameerr(format!("uninitialized constant {name}"))
     }
 
-    pub(crate) fn uninitialized_cvar(name: IdentId, class_name: IdentId) -> MonorubyErr {
+    pub(crate) fn uninitialized_cvar(name: IdentId, class_name: String) -> MonorubyErr {
         Self::nameerr(format!(
             "uninitialized class variable {name} in {class_name}"
         ))
@@ -274,11 +274,11 @@ impl MonorubyErr {
         Self::nameerr(format!("identifier {name} needs to be constant"))
     }
 
-    pub(crate) fn undefined_method(method_name: IdentId, class_name: IdentId) -> MonorubyErr {
+    pub(crate) fn undefined_method(method_name: IdentId, class_name: String) -> MonorubyErr {
         Self::nameerr(format!(
             "undefined method `{}' for class `{}'",
             method_name.get_name(),
-            class_name.get_name(),
+            class_name,
         ))
     }
 

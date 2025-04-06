@@ -238,7 +238,7 @@ impl ObjKind {
         }
     }
 
-    fn exception(class_name: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
+    fn exception(class_name: String, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
                 class_name,
@@ -249,7 +249,7 @@ impl ObjKind {
     }
 
     fn exception_from(mut err: MonorubyErr, store: &Store) -> Self {
-        let class_name = IdentId::get_id(err.get_class_name());
+        let class_name = err.get_class_name().to_string();
         let msg = err.show(store);
         Self::exception(class_name, msg, err.take_trace())
     }
@@ -1168,7 +1168,7 @@ impl RValue {
     }
 
     pub(super) fn new_exception(
-        kind: IdentId,
+        kind: String,
         msg: String,
         trace: Vec<(Loc, SourceInfoRef)>,
         class_id: ClassId,
@@ -1570,16 +1570,16 @@ impl Header {
 
 #[derive(Debug, Clone)]
 pub struct ExceptionInner {
-    class_name: IdentId,
+    class_name: String,
     msg: String,
     trace: Vec<(Loc, SourceInfoRef)>,
 }
 
 impl ExceptionInner {
     pub fn kind(&self) -> MonorubyErrKind {
-        if self.class_name == IdentId::get_id("StopIteration") {
+        if self.class_name == "StopIteration" {
             return MonorubyErrKind::StopIteration;
-        } else if self.class_name == IdentId::get_id("LoadError") {
+        } else if self.class_name == "LoadError" {
             return MonorubyErrKind::Load(std::path::PathBuf::new());
         }
         MonorubyErrKind::Runtime

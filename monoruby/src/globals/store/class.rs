@@ -122,14 +122,14 @@ impl ClassId {
     }
 
     /// Get class name(IdentId) of *ClassId*.
-    pub(crate) fn get_name_id(self, store: &Store) -> IdentId {
+    pub(crate) fn get_name(self, store: &Store) -> String {
         let class = store.classes.get_module(self);
-        match store.classes[self].name {
-            Some(id) => id,
-            None => IdentId::get_id_from_string(match class.is_singleton() {
+        match &store.classes[self].name {
+            Some(id) => id.clone(),
+            None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().id()),
                 Some(base) => format!("#<Class:{}>", base.to_s(store)),
-            }),
+            },
         }
     }
 }
@@ -146,7 +146,7 @@ pub struct ClassInfo {
     /// the constant name which this class object is bound.
     /// if this class object is not bound to any constant, this is None.
     ///
-    name: Option<IdentId>,
+    name: Option<String>,
     ///
     /// the parent class of this class.
     ///
@@ -238,12 +238,16 @@ impl ClassInfo {
         self.ivar_names.iter()
     }
 
-    pub(crate) fn set_name(&mut self, name: IdentId) {
+    pub(crate) fn set_parent(&mut self, parent: ClassId) {
+        self.parent = Some(parent);
+    }
+
+    pub(crate) fn set_name(&mut self, name: String) {
         self.name = Some(name);
     }
 
-    pub(crate) fn get_name(&self) -> Option<IdentId> {
-        self.name
+    pub(crate) fn get_name(&self) -> Option<&str> {
+        self.name.as_ref().map(|x| x.as_str())
     }
 
     pub(crate) fn instance_ty(&self) -> Option<ObjTy> {
@@ -306,13 +310,13 @@ impl ClassInfoTable {
         class_obj
     }
 
-    pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<IdentId> {
-        let mut parents = vec![self[class].name.unwrap()];
+    pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
+        let mut parents = vec![self[class].name.as_ref().unwrap().to_string()];
         while let Some(parent) = self[class].parent {
             if parent == OBJECT_CLASS {
                 break;
             }
-            parents.push(self[parent].name.unwrap());
+            parents.push(self[parent].name.as_ref().unwrap().to_string());
             class = parent;
         }
         parents
@@ -551,7 +555,7 @@ impl ClassInfoTable {
 
     fn generate_class_obj(
         &mut self,
-        name_id: Option<IdentId>,
+        name: Option<IdentId>,
         class_id: ClassId,
         superclass: Option<Module>,
         parent: Option<ClassId>,
@@ -573,10 +577,10 @@ impl ClassInfoTable {
             Value::class_empty(class_id, superclass)
         };
         self[class_id].object = Some(class_obj.as_class());
-        self[class_id].name = name_id;
+        self[class_id].name = name.map(|id| id.to_string());
         self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
-        if let Some(name) = name_id {
+        if let Some(name) = name {
             self.set_constant(parent.unwrap(), name, class_obj);
         }
         class_obj.as_class()
@@ -624,6 +628,19 @@ impl ClassInfoTable {
             None => self.object_class(),
         };
         self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
+    }
+
+    pub(crate) fn define_struct_class(
+        &mut self,
+        name: Option<IdentId>,
+        superclass: Module,
+    ) -> Module {
+        let parent = if name.is_some() {
+            Some(STRUCT_CLASS)
+        } else {
+            None
+        };
+        self.define_class_inner(name, superclass, parent, false, Some(ObjTy::OBJECT))
     }
 
     fn define_class_inner(

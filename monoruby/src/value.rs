@@ -424,7 +424,7 @@ impl Value {
     }
 
     pub fn new_exception(
-        kind: IdentId,
+        kind: String,
         msg: String,
         trace: Vec<(Loc, SourceInfoRef)>,
         class_id: ClassId,

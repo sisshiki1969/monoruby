@@ -19,24 +19,20 @@ pub(crate) fn init(globals: &mut Globals) {
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let args = lfp.arg(0).as_array();
-
-    let mut new_struct = globals
-        .store
-        .define_unnamed_class(Some(self_val.as_class()))
-        .as_val();
-    let class_id = new_struct.as_class_id();
-    let start_idx = if let Some(arg0) = args.first()
+    let (start_idx, name) = if let Some(arg0) = args.first()
         && let Some(s) = arg0.is_str()
     {
         if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-            globals.store[class_id].set_name(IdentId::get_id_from_string(format!("Struct::{s}")));
-            1
+            (1, Some(IdentId::get_id(s)))
         } else {
             return Err(MonorubyErr::identifier_must_be_constant(s));
         }
     } else {
-        0
+        (0, None)
     };
+
+    let new_struct = globals.store.define_struct_class(name, self_val.as_class());
+    let class_id = new_struct.id();
     globals.define_builtin_class_inline_funcs_rest(
         class_id,
         "new",
@@ -53,6 +49,8 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }
+
+    let mut new_struct = new_struct.as_val();
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
 
     if let Some(bh) = lfp.block() {

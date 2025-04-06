@@ -88,7 +88,17 @@ impl ClassInfoTable {
             eprintln!("warning: already initialized constant {name}")
         }
         if let Some(klass) = val.is_class() {
-            self[klass.id()].set_name(name)
+            if self[klass.id()].get_name().is_none() {
+                self[klass.id()].set_parent(class_id);
+                let name = if class_id != OBJECT_CLASS
+                    && let Some(prefix) = self[class_id].get_name()
+                {
+                    format!("{prefix}::{name}")
+                } else {
+                    format!("{name}")
+                };
+                self[klass.id()].set_name(name);
+            }
         }
     }
 }
@@ -116,8 +126,8 @@ impl Globals {
                     Some((under, _)) => {
                         return Err(MonorubyErr::runtimeerr(format!(
                             "class variable {name} of {} is overtaken by {}",
-                            under.id().get_name_id(&self.store),
-                            module.id().get_name_id(&self.store),
+                            under.id().get_name(&self.store),
+                            module.id().get_name(&self.store),
                         )));
                     }
                     None => {
@@ -134,7 +144,7 @@ impl Globals {
             Some(res) => Ok(res),
             None => Err(MonorubyErr::uninitialized_cvar(
                 name,
-                parent.id().get_name_id(&self.store),
+                parent.id().get_name(&self.store),
             )),
         }
     }
