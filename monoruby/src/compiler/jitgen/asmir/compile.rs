@@ -689,12 +689,19 @@ impl Codegen {
             AsmInst::ExpandArray {
                 dst,
                 len,
+                rest_pos,
                 using_xmm,
             } => {
+                let rest = if let Some(rest_pos) = rest_pos {
+                    rest_pos + 1
+                } else {
+                    0
+                };
                 self.xmm_save(using_xmm);
                 monoasm!( &mut self.jit,
                     lea rsi, [r14 - (conv(dst))];
                     movq rdx, (len);
+                    movq rcx, (rest);
                     movq rax, (runtime::expand_array);
                     call rax;
                 );

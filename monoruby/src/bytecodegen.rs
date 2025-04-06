@@ -86,7 +86,7 @@ fn bytecode_compile_func(
         );
     }
     for DestructureInfo { src, dst, len } in destruct_info {
-        gen.gen_expand_array(src, dst, len);
+        gen.gen_expand_array(src, dst, len, None);
     }
     for OptionalInfo { local, initializer } in optional_info {
         let local = local.into();
@@ -1150,7 +1150,7 @@ impl BytecodeGen {
     /// +-----------------+
     ///
     /// ```
-    fn eval_lvalue(&mut self, lhs: &Node) -> Result<LvalueKind> {
+    fn eval_lvalue(&mut self, lhs: &Node) -> Result<(LvalueKind, bool)> {
         let lhs = match &lhs.kind {
             NodeKind::Const {
                 toplevel,
@@ -1235,9 +1235,14 @@ impl BytecodeGen {
                 return Err(self.cant_set_variable(*id, lhs.loc));
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
+            NodeKind::Splat(node) => {
+                let (lvalue_kind, rest) = self.eval_lvalue(&node)?;
+                assert!(!rest);
+                return Ok((lvalue_kind, true));
+            }
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
         };
-        Ok(lhs)
+        Ok((lhs, false))
     }
 
     fn emit_assign(&mut self, src: BcReg, lhs: LvalueKind, old_temp: Option<u16>, loc: Loc) {
@@ -1374,12 +1379,13 @@ impl BytecodeGen {
         );
     }
 
-    fn gen_expand_array(&mut self, src: usize, dst: usize, len: usize) {
+    fn gen_expand_array(&mut self, src: usize, dst: usize, len: usize, rest_pos: Option<usize>) {
         self.emit(
             BytecodeInst::ExpandArray(
                 BcLocal(src as u16).into(),
                 BcLocal(dst as u16).into(),
                 len as u16,
+                rest_pos.map(|p| p as u16),
             ),
             Loc::default(),
         );

@@ -247,26 +247,89 @@ pub(super) extern "C" fn concatenate_regexp(
     Some(Value::regexp(inner))
 }
 
-pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
+pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize, rest: usize) {
+    let rest_pos: Option<usize> = if rest == 0 { None } else { Some(rest - 1) };
     match src.try_array_ty() {
         Some(ary) => {
-            if len <= ary.len() {
-                for i in 0..len {
-                    unsafe { *dst.sub(i) = ary[i] }
+            if let Some(rest_pos) = rest_pos {
+                if ary.len() >= len - 1 {
+                    for i in 0..rest_pos {
+                        unsafe { *dst.sub(i) = ary[i] }
+                    }
+                    unsafe {
+                        *dst.sub(rest_pos) = Value::array_from_iter(
+                            ary[rest_pos..ary.len() - (len - (rest_pos + 1))]
+                                .iter()
+                                .cloned(),
+                        )
+                    }
+                    for i in rest_pos + 1..len {
+                        unsafe { *dst.sub(i) = ary[ary.len() + i - len] }
+                    }
+                } else if ary.len() <= rest_pos {
+                    for i in 0..ary.len() {
+                        unsafe { *dst.sub(i) = ary[i] }
+                    }
+                    for i in ary.len()..rest_pos {
+                        unsafe { *dst.sub(i) = Value::nil() }
+                    }
+                    unsafe { *dst.sub(rest_pos) = Value::array_empty() }
+                    for i in rest_pos + 1..len {
+                        unsafe { *dst.sub(i) = Value::nil() }
+                    }
+                } else {
+                    for i in 0..rest_pos {
+                        unsafe { *dst.sub(i) = ary[i] }
+                    }
+                    unsafe { *dst.sub(rest_pos) = Value::array_empty() }
+                    for i in rest_pos + 1..ary.len() + 1 {
+                        unsafe { *dst.sub(i) = ary[i - 1] }
+                    }
+                    for i in ary.len() + 1..len {
+                        unsafe { *dst.sub(i) = Value::nil() }
+                    }
                 }
             } else {
-                for i in 0..ary.len() {
-                    unsafe { *dst.sub(i) = ary[i] }
-                }
-                for i in ary.len()..len {
-                    unsafe { *dst.sub(i) = Value::nil() }
+                if len <= ary.len() {
+                    for i in 0..len {
+                        unsafe { *dst.sub(i) = ary[i] }
+                    }
+                } else {
+                    for i in 0..ary.len() {
+                        unsafe { *dst.sub(i) = ary[i] }
+                    }
+                    for i in ary.len()..len {
+                        unsafe { *dst.sub(i) = Value::nil() }
+                    }
                 }
             }
         }
         None => {
-            unsafe { *dst = src };
-            for i in 1..len {
-                unsafe { *dst.sub(i) = Value::nil() }
+            if let Some(rest_pos) = rest_pos {
+                if len == 1 {
+                    assert_eq!(rest_pos, 0);
+                    unsafe { *dst = Value::array1(src) };
+                } else if rest_pos == 0 {
+                    unsafe { *dst = Value::array_empty() };
+                    unsafe { *dst.sub(1) = src }
+                    for i in 2..len {
+                        unsafe { *dst.sub(i) = Value::nil() }
+                    }
+                } else {
+                    unsafe { *dst = src };
+                    for i in 1..len {
+                        if i == rest_pos {
+                            unsafe { *dst.sub(i) = Value::array_empty() };
+                        } else {
+                            unsafe { *dst.sub(i) = Value::nil() }
+                        }
+                    }
+                }
+            } else {
+                unsafe { *dst = src };
+                for i in 1..len {
+                    unsafe { *dst.sub(i) = Value::nil() }
+                }
             }
         }
     }

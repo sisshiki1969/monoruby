@@ -167,7 +167,8 @@ impl BytecodeGen {
                         self.emit_mov(dst, src.into());
                     } else {
                         let temp = self.temp;
-                        let lhs = self.eval_lvalue(&lhs)?;
+                        let (lhs, rest) = self.eval_lvalue(&lhs)?;
+                        assert!(!rest);
                         self.gen_store_expr(dst, rhs)?;
                         self.emit_assign(dst, lhs, Some(temp), loc);
                     }
@@ -391,7 +392,8 @@ impl BytecodeGen {
                 let lhs_loc = lhs.loc;
                 let temp = self.temp;
                 // First, evaluate lvalue.
-                let lhs_kind = self.eval_lvalue(&lhs)?;
+                let (lhs_kind, rest) = self.eval_lvalue(&lhs)?;
+                assert!(!rest);
                 // Evaluate rvalue.
                 let src = self.sp().into();
                 self.gen_binop(op, lhs, rhs, UseMode2::Push, loc)?;
@@ -407,7 +409,8 @@ impl BytecodeGen {
                         return Ok(());
                     }
                     let temp = self.temp;
-                    let lhs = self.eval_lvalue(&lhs)?;
+                    let (lhs, rest) = self.eval_lvalue(&lhs)?;
+                    assert!(!rest);
                     let src = self.gen_expr_reg(rhs)?;
                     return self.assign_with_mode(use_mode, src, lhs, temp, loc);
                 } else {
@@ -791,10 +794,15 @@ impl BytecodeGen {
         let temp = self.temp;
 
         // At first, we evaluate lvalues and save their info(LhsKind).
-        let lhs_kind: Vec<LvalueKind> = mlhs
-            .iter()
-            .map(|lhs| self.eval_lvalue(lhs))
-            .collect::<Result<_>>()?;
+        let mut lhs_kind = vec![];
+        let mut rest_pos = None;
+        for (i, lhs) in mlhs.iter().enumerate() {
+            let (lhs, rest) = self.eval_lvalue(&lhs)?;
+            if rest {
+                rest_pos = Some(i as u16)
+            }
+            lhs_kind.push(lhs);
+        }
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
         let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
@@ -809,7 +817,7 @@ impl BytecodeGen {
                 self.push();
             }
             self.emit(
-                BytecodeInst::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16),
+                BytecodeInst::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16, rest_pos),
                 Loc::default(),
             );
             // lhs0, lhs1, .. = rhs

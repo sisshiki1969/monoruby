@@ -723,17 +723,25 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | op|src|dst|len||       |       |
+    /// |len|dst|src| op||rst|   |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// src: the source resister
     /// dst: the start of destination reginsters
     /// len: the number of destination registers
+    /// rst: the position of *rest* register.
+    ///
+    /// ex)
+    ///     a, *b, c = ...
+    ///     len = 3
+    ///     rst = 1
     /// ~~~
     fn vm_expand_array(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
         monoasm! { &mut self.jit,
+            // rcx <- rst
+            movzxw rcx, [r13 - 8];
             // rdx <- len
             movq rdx, rsi;
             // rsi <- dst

@@ -1,14 +1,2 @@
-class S
-  def f
-  end
-end
-
-class C < S
-  def f(x,y)
-    super()
-  end
-end
-
-100.times do
-  C.new.f(1,2)
-end
+a,b,*c = [1,2,3,4,5]
+puts "#{a} #{b} #{c}"

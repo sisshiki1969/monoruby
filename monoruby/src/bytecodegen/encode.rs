@@ -548,10 +548,15 @@ impl BytecodeGen {
                 Bytecode::from(enc_www(151, op1.0, op2, op3.0))
             }
             BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(170, &fn_info)),
-            BytecodeInst::ExpandArray(src, dst, len) => {
+            BytecodeInst::ExpandArray(src, dst, len, rest_pos) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&dst);
-                Bytecode::from(enc_www(171, op1.0, op2.0, len))
+                let rest = if let Some(rest) = rest_pos {
+                    rest + 1
+                } else {
+                    0
+                };
+                Bytecode::from_u16(enc_www(171, op1.0, op2.0, len), rest)
             }
             BytecodeInst::AliasMethod { new, old } => {
                 Bytecode::from_with_ident2(enc_www(173, 0, 0, 0), new, old)

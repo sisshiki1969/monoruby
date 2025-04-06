@@ -352,7 +352,8 @@ impl BytecodeGen {
             } in rescue
             {
                 if let Some(box assign) = assign {
-                    let lhs = self.eval_lvalue(&assign)?;
+                    let (lhs, rest) = self.eval_lvalue(&assign)?;
+                    assert!(!rest);
                     let loc = assign.loc;
                     self.emit_assign(err_reg, lhs, None, loc);
                 };

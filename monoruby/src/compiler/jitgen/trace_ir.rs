@@ -283,7 +283,7 @@ pub(crate) enum TraceIr {
     ConcatRegexp(Option<SlotId>, SlotId, u16),
     ExpandArray {
         src: SlotId,
-        dst: (SlotId, u16),
+        dst: (SlotId, u16, Option<u16>),
     },
     AliasMethod {
         new: IdentId,
@@ -801,9 +801,17 @@ impl TraceIr {
             }
             TraceIr::ExpandArray {
                 src,
-                dst: (dst, len),
+                dst: (dst, len, rest_pos),
             } => {
-                format!("{:?}; {} = expand({:?})", dst, len, src)
+                let mut s = String::new();
+                for i in 0..*len {
+                    let prefix = if rest_pos == &Some(i) { "*" } else { "" };
+                    if i != 0 {
+                        s += ",";
+                    }
+                    s += &format!("{prefix}{:?}", *dst + i);
+                }
+                format!("{s} = expand({src:?})")
             }
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)

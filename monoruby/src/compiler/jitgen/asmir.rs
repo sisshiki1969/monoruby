@@ -332,12 +332,20 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn expand_array(&mut self, bb: &BBContext, dst: SlotId, len: u16) {
+    pub(super) fn expand_array(
+        &mut self,
+        bb: &BBContext,
+        dst: SlotId,
+        len: u16,
+        rest_pos: Option<u16>,
+    ) {
         let using_xmm = bb.get_using_xmm();
         let len = len as _;
+        let rest_pos = rest_pos.map(|v| v as _);
         self.push(AsmInst::ExpandArray {
             dst,
             len,
+            rest_pos,
             using_xmm,
         });
     }
@@ -1308,6 +1316,7 @@ pub(super) enum AsmInst {
     ExpandArray {
         dst: SlotId,
         len: usize,
+        rest_pos: Option<usize>,
         using_xmm: UsingXmm,
     },
 

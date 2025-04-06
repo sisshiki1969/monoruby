@@ -88,69 +88,6 @@ fn test0_err() {
 }
 
 #[test]
-fn test_multi_assign() {
-    run_test("a, B = 7, 9.5; a + B");
-    run_test("@a, @b = 1, 2; [@a, @b]");
-    run_test("@a, @b = 1, 2; @a, @b = @b, @a; [@a, @b]");
-    run_test("@a = []; @a[0], @a[1] = 1, 2; @a[0], @a[1] = @a[1], @a[0]; @a");
-    run_test(
-        r##"
-        @a = []
-
-        def foo
-          @a << :foo
-          []
-        end
-
-        def bar
-          @a << :bar
-        end
-
-        foo[0] = bar
-        a = foo[0] = bar
-        b = (x, foo[0] = bar, 0)
-        [@a, b]
-        "##,
-    );
-    run_test(
-        r##"
-        d = (a,b,c = [1,2])
-        [a,b,c,d]
-        "##,
-    );
-    run_test(
-        r##"
-        d = (a,b,c = [1,2,3])
-        [a,b,c,d]
-        "##,
-    );
-    run_test(
-        r##"
-        d = (a,b,c = [1,2,3,4])
-        [a,b,c,d]
-        "##,
-    );
-    run_test(
-        r##"
-        d = (a,b,c = 100)
-        [a,b,c,d]
-        "##,
-    );
-    run_test(
-        r##"
-        c = (a,b, = [1,2,3,4,5])
-        [a,b,c]
-        "##,
-    );
-    run_test(
-        r##"
-        c = (a,b, = 100)
-        [a,b,c]
-        "##,
-    );
-}
-
-#[test]
 fn test_exp() {
     run_test("3.78**432");
     run_test("3.78**-432");

@@ -667,7 +667,7 @@ fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
 #[monoruby_builtin]
-fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
     if lfp.try_arg(2).is_none() {
         let i = lfp.arg(0);
@@ -675,7 +675,10 @@ fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else {
-            unimplemented!()
+            Err(MonorubyErr::runtimeerr(format!(
+                "index {:?} is not supported yet.",
+                i.inspect(&globals.store)
+            )))
         }
     } else {
         let i = lfp.arg(0).coerce_to_i64()?;

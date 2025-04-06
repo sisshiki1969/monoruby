@@ -915,7 +915,14 @@ impl ISeqInfo {
                 }),
                 171 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),
-                    dst: (SlotId::new(op2_w2), op3_w3),
+                    dst: (SlotId::new(op2_w2), op3_w3, {
+                        let rest = op2.get_u16();
+                        if rest == 0 {
+                            None
+                        } else {
+                            Some(rest - 1)
+                        }
+                    }),
                 },
                 173 => {
                     let (new, old) = op2.get_ident2();

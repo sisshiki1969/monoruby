@@ -578,13 +578,13 @@ impl JitContext {
             }
             TraceIr::ExpandArray {
                 src,
-                dst: (dst, len),
+                dst: (dst, len, rest_pos),
             } => {
                 bbctx.fetch(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
                     bbctx.discard(SlotId(reg));
                 }
-                ir.expand_array(bbctx, dst, len);
+                ir.expand_array(bbctx, dst, len, rest_pos);
             }
             TraceIr::AliasMethod { new, old } => {
                 ir.alias_method(bbctx, new, old);

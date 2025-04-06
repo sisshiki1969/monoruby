@@ -78,6 +78,13 @@ impl Bytecode {
         }
     }
 
+    pub fn from_u16(op1: u64, op2: u16) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(op2 as u64),
+        }
+    }
+
     pub fn from_u32(op1: u64, op2: u32) -> Self {
         Self {
             op1,
@@ -172,6 +179,10 @@ impl Bc2 {
         let id1 = IdentId::from(self.0 as u32);
         let id2 = IdentId::from((self.0 >> 32) as u32);
         (id1, id2)
+    }
+
+    pub fn get_u16(&self) -> u16 {
+        self.0 as u16
     }
 }
 
