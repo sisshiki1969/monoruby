@@ -410,9 +410,15 @@ impl BytecodeGen {
                     }
                     let temp = self.temp;
                     let (lhs, rest) = self.eval_lvalue(&lhs)?;
-                    assert!(!rest);
-                    let src = self.gen_expr_reg(rhs)?;
-                    return self.assign_with_mode(use_mode, src, lhs, temp, loc);
+                    if rest {
+                        let rhs_loc = rhs.loc;
+                        let src = self.gen_expr_reg(rhs)?;
+                        self.emit_array(src, src, 1, vec![], rhs_loc);
+                        return self.assign_with_mode(use_mode, src, lhs, temp, loc);
+                    } else {
+                        let src = self.gen_expr_reg(rhs)?;
+                        return self.assign_with_mode(use_mode, src, lhs, temp, loc);
+                    }
                 } else {
                     return self.gen_mul_assign(mlhs, mrhs, use_mode);
                 }

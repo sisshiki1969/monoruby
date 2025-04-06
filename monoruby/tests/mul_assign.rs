@@ -102,6 +102,25 @@ fn multi_assign_with_splat() {
         [a,b,c]
         "##,
     );
+    run_test(
+        r##"
+        a,*b,c,d,e,f,g = [11,22,33,44,55]
+        [a,b,c,d,e,f,g]
+        "##,
+    );
+    run_test(
+        r##"
+        a,b,c,d,e,*f,g = [11,22,33,44]
+        [a,b,c,d,e,f,g]
+        "##,
+    );
+    run_test(
+        r##"
+        *a = 100
+        *b,c,d = 200
+        [a,b,c,d]
+        "##,
+    );
 }
 
 #[test]
