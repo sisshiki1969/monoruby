@@ -2784,6 +2784,11 @@ mod tests {
     }
 
     #[test]
+    fn shuffle() {
+        run_test(r#"[*(0..20)].shuffle!.shuffle!().sum"#);
+    }
+
+    #[test]
     fn slice() {
         run_test(
             r#"
