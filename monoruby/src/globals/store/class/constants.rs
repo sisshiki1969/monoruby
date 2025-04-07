@@ -124,11 +124,13 @@ impl Globals {
             if let Some(v) = self.store.classes[module.id()].get_cvar(name) {
                 match res {
                     Some((under, _)) => {
-                        return Err(MonorubyErr::runtimeerr(format!(
-                            "class variable {name} of {} is overtaken by {}",
-                            under.id().get_name(&self.store),
-                            module.id().get_name(&self.store),
-                        )));
+                        if under.id() != module.id() {
+                            return Err(MonorubyErr::runtimeerr(format!(
+                                "class variable {name} of {} is overtaken by {}",
+                                under.id().get_name(&self.store),
+                                module.id().get_name(&self.store),
+                            )));
+                        }
                     }
                     None => {
                         res = Some((module, v));
