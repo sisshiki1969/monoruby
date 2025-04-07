@@ -105,6 +105,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "flatten", flatten, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "compact", compact, 0);
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
+    globals.define_builtin_func_with_kw(
+        ARRAY_CLASS,
+        "shuffle!",
+        shuffle_,
+        0,
+        0,
+        false,
+        &["random"],
+    );
     globals.define_builtin_func(ARRAY_CLASS, "delete", delete, 1);
     globals.define_builtin_func(ARRAY_CLASS, "delete_at", delete_at, 1);
     globals.define_builtin_funcs_with(
@@ -674,6 +683,23 @@ fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         let val = lfp.arg(1);
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
+        } else if let Some(range) = i.is_range() {
+            let start = ary.get_array_index_checked(range.start)?;
+            let end = ary.get_array_index_checked(range.end)?;
+            let len = if range.exclude_end() {
+                end.checked_sub(start)
+            } else {
+                (end + 1).checked_sub(start)
+            };
+            if let Some(len) = len {
+                ary.set_index2(start as usize, len as usize, val)
+            } else if let Some(a) = val.try_array_ty() {
+                ary.insert_many(start, a.iter().cloned());
+                Ok(val)
+            } else {
+                ary.insert(start, val);
+                Ok(val)
+            }
         } else {
             Err(MonorubyErr::runtimeerr(format!(
                 "index {:?} is not supported yet.",
@@ -1858,6 +1884,20 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Array#shuffle!
+///
+/// - shuffle! -> self
+/// - shuffle!(random: Random) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shuffle=21.html]
+#[monoruby_builtin]
+fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().as_array();
+    ary.shuffle(&mut rand::thread_rng());
+    Ok(lfp.self_val())
+}
+
+///
 /// ### Array#delete
 ///
 /// - delete(val) -> object | nil
@@ -2278,6 +2318,28 @@ mod tests {
             r##"
         a = [ "a", "b", "c", "d", "e" ];
         [a[0, 1], a[-1, 1], a[0, 10], a[0, 0], a[0, -1], a[10, 1], a[5], a[5, 1], a[5..10]]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [*(0..10)];
+        x = (a[5..8] = [6,7,8,9,10,11])
+        y = (a[2...-2] = 6)
+        [a, x, y]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [*(0..10)];
+        x = (a[8..6] = 7)
+        [a, x]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [*(0..10)];
+        x = (a[8..-6] = [:a,:b,:c])
+        [a, x]
         "##,
         );
     }

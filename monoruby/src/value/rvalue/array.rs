@@ -1,4 +1,5 @@
 use super::*;
+use rand::seq::SliceRandom;
 use smallvec::smallvec;
 use smallvec::Drain;
 use smallvec::SmallVec;
@@ -118,6 +119,10 @@ impl ArrayInner {
 
     pub fn extend_from_slice(&mut self, slice: &[Value]) {
         self.0.extend_from_slice(slice);
+    }
+
+    pub fn insert(&mut self, index: usize, element: Value) {
+        self.0.insert(index, element)
     }
 
     pub fn insert_many(&mut self, index: usize, iterable: impl IntoIterator<Item = Value>) {
@@ -269,6 +274,14 @@ impl ArrayInner {
         }
     }
 
+    pub(crate) fn get_array_index_checked(&self, index: Value) -> Result<usize> {
+        let index = index.coerce_to_i64()?;
+        match self.get_array_index(index) {
+            Some(i) => Ok(i),
+            None => Err(MonorubyErr::index_too_small(index, -(self.len() as i64))),
+        }
+    }
+
     pub(crate) fn get_elem2(&self, arg0: Value, arg1: Value) -> Result<Value> {
         let index = arg0.coerce_to_i64()?;
         let self_len = self.len();
@@ -322,5 +335,12 @@ impl ArrayInner {
             let val = self.get(index).cloned().unwrap_or_default();
             Ok(val)
         }
+    }
+
+    pub(crate) fn shuffle<R>(&mut self, rng: &mut R)
+    where
+        R: rand::Rng + ?Sized,
+    {
+        self.0.shuffle(rng);
     }
 }
