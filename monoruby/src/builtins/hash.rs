@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
+    globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
     globals.define_builtin_funcs(HASH_CLASS, "collect", &["map"], map, 0);
@@ -272,6 +273,21 @@ extern "C" fn hashindex(
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.self_val().as_hash().clear();
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#replace
+///
+/// - replace(other) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/replace.html]
+#[monoruby_builtin]
+fn replace(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let h = self_.as_hashmap_inner_mut();
+    *h = lfp.arg(0).as_hashmap_inner().clone();
+
     Ok(lfp.self_val())
 }
 
@@ -728,6 +744,24 @@ mod tests {
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
         run_test("{}.empty?");
         run_test("{a:1}.empty?");
+    }
+
+    #[test]
+    fn clear() {
+        run_test(r##"a = {a:1,b:2}; a.clear; a[:c] = 100; a"##);
+    }
+
+    #[test]
+    fn replace() {
+        run_test(
+            r##"
+        a1 = {a:1,b:2}
+        a2 = {c:3,d:4}
+        z = a1.replace(a2)
+        a1[:z] = 100
+        [a1, a2, z]
+        "##,
+        );
     }
 
     #[test]
