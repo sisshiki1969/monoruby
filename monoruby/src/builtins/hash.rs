@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "clone", &["dup"], clone, 0);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -71,6 +72,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
     globals.define_builtin_singleton_func_with(env, "fetch", fetch, 1, 2, false);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
+    globals.define_builtin_singleton_func(env, "to_hash", env_to_hash, 0);
 }
 
 ///
@@ -295,6 +297,19 @@ fn keys(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let keys = lfp.self_val().as_hash().values();
     Ok(Value::array_from_vec(keys))
+}
+
+///
+/// ### Hash#clone
+///
+/// - clone -> Hash
+/// - dup -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clone.html]
+#[monoruby_builtin]
+fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let h = lfp.self_val().as_hashmap_inner().clone();
+    Ok(Value::hash_from_inner(h))
 }
 
 ///
@@ -634,6 +649,11 @@ fn env_index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Val
         .get(key)
         .unwrap_or_default();
     Ok(val)
+}
+
+#[monoruby_builtin]
+fn env_to_hash(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 ///
