@@ -751,6 +751,22 @@ impl Value {
         self.try_array_ty().is_some()
     }
 
+    pub(crate) fn coerce_to_array(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Array> {
+        if let Some(ary) = self.try_array_ty() {
+            return Ok(ary);
+        } else if let Some(fid) = globals.check_method(*self, IdentId::get_id("to_ary")) {
+            let v = vm.invoke_func_inner(globals, fid, *self, &[], None)?;
+            if let Some(ary) = v.try_array_ty() {
+                return Ok(ary);
+            }
+        }
+        Err(MonorubyErr::no_implicit_conversion(*self, ARRAY_CLASS))
+    }
+
     pub(crate) fn as_rstring_inner(&self) -> &RStringInner {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
         self.rvalue().as_rstring()
