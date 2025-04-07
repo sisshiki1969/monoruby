@@ -37,6 +37,32 @@ impl Array {
     pub fn new2(v1: Value, v2: Value) -> Self {
         Self(Value::array2(v1, v2))
     }
+
+    ///
+    /// Uniquify `self`.
+    ///
+    /// Always returns Some(removed: bool).
+    ///
+    /// If some elements were removed, returns Some(true).
+    ///
+    pub fn uniq(&mut self) -> Result<bool> {
+        let mut h = HashSet::default();
+        let mut recursive = false;
+        let self_id = self.id();
+        self.retain(|x| {
+            if self_id == x.id() {
+                if !recursive {
+                    recursive = true;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            } else {
+                Ok(h.insert(HashKey(*x)))
+            }
+        })
+        .map(|removed| removed.is_some())
+    }
 }
 
 #[repr(transparent)]
@@ -136,6 +162,7 @@ impl ArrayInner {
         self.0.drain(range)
     }
 
+    ///
     /// Retains only elements which f(elem) returns true.
     ///
     /// Returns Some(last_value) when one or some elements were removed.

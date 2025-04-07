@@ -86,8 +86,7 @@ pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
+    globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "all?", all_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "any?", any_, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
@@ -1673,9 +1672,9 @@ fn rotate(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = lfp.self_val().dup().as_array();
+    let mut ary = lfp.self_val().dup().as_array();
     match lfp.block() {
-        None => uniq_noblock(ary)?,
+        None => ary.uniq()?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     Ok(ary.into())
@@ -1683,9 +1682,9 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
 #[monoruby_builtin]
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
+    let mut ary = lfp.self_val().as_array();
     let deleted = match lfp.block() {
-        None => uniq_noblock(ary)?,
+        None => ary.uniq()?,
         Some(bh) => uniq_block(vm, globals, ary, bh)?,
     };
     if deleted {
@@ -1693,25 +1692,6 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         Ok(Value::nil())
     }
-}
-
-fn uniq_noblock(mut ary: Array) -> Result<bool> {
-    let mut h = HashSet::default();
-    let mut recursive = false;
-    let self_id = ary.id();
-    ary.retain(|x| {
-        if self_id == x.id() {
-            if !recursive {
-                recursive = true;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Ok(h.insert(HashKey(*x)))
-        }
-    })
-    .map(|removed| removed.is_some())
 }
 
 fn uniq_block(
