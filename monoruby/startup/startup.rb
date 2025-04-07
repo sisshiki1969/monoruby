@@ -148,6 +148,20 @@ module Enumerable
     res
   end
   alias collect map
+
+  def find(ifnone = nil)
+    return self.to_enum(:find) if !block_given?
+    self.each do |x|
+      if yield(x)
+        return x
+      end
+    end
+    if ifnone.nil?
+      nil
+    else
+      ifnone.call
+    end
+  end
 end
 
 class Enumerator
