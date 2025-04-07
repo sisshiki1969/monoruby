@@ -12,6 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
+    globals.define_builtin_func(RANGE_CLASS, "include?", include_, 1);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "collect", &["map"], map, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "collect_concat", &["flat_map"], flat_map, 0);
@@ -118,6 +119,50 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         vm.generate_enumerator(IdentId::get_id("reject"), lfp.self_val(), vec![])
     }
 }*/
+
+///
+/// ### Range#include?
+///
+/// - include?(obj) -> bool
+/// - member?(obj) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/include=3f.html]
+#[monoruby_builtin]
+fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let RangeInner { start, end, .. } = self_.as_range();
+    let exclude_end = self_.as_range().exclude_end();
+    let b = match (start.unpack(), end.unpack()) {
+        (RV::Fixnum(start), RV::Fixnum(end)) => match lfp.arg(0).unpack() {
+            RV::Fixnum(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
+            RV::BigInt(obj) => {
+                let start = num::BigInt::from(start);
+                let end = num::BigInt::from(end);
+                &start <= obj && if exclude_end { obj < &end } else { obj <= &end }
+            }
+            RV::Float(obj) => {
+                let start = start as f64;
+                let end = end as f64;
+                start <= obj && if exclude_end { obj < end } else { obj <= end }
+            }
+            _ => false,
+        },
+        (RV::Float(start), RV::Float(end)) => match lfp.arg(0).unpack() {
+            RV::Fixnum(obj) => {
+                let obj = obj as f64;
+                start <= obj && if exclude_end { obj < end } else { obj <= end }
+            }
+            RV::BigInt(obj) => {
+                let obj = obj.to_f64().unwrap();
+                start <= obj && if exclude_end { obj < end } else { obj <= end }
+            }
+            RV::Float(obj) => start <= obj && if exclude_end { obj < end } else { obj <= end },
+            _ => false,
+        },
+        _ => return Err(MonorubyErr::runtimeerr("Currently, not supported")),
+    };
+    Ok(Value::bool(b))
+}
 
 ///
 /// ### Range#all
@@ -343,6 +388,31 @@ mod tests {
         end
         "#,
         );
+    }
+
+    #[test]
+    fn include() {
+        run_test(r#"(1...5).include?(-1)"#);
+        run_test(r#"(1...5).include?(-1.7)"#);
+        run_test(r#"(1...5).include?(1)"#);
+        run_test(r#"(1...5).include?(0.9)"#);
+        run_test(r#"(1...5).include?(1.1)"#);
+        run_test(r#"(1...5).include?(3)"#);
+        run_test(r#"(1...5).include?(3.9)"#);
+        run_test(r#"(1...5).include?(5)"#);
+        run_test(r#"(1...5).include?(5.0)"#);
+        run_test(r#"(1...5).include?(:a)"#);
+
+        run_test(r#"(1..5).include?(-1)"#);
+        run_test(r#"(1..5).include?(-1.7)"#);
+        run_test(r#"(1..5).include?(1)"#);
+        run_test(r#"(1..5).include?(0.9)"#);
+        run_test(r#"(1..5).include?(1.1)"#);
+        run_test(r#"(1..5).include?(3)"#);
+        run_test(r#"(1..5).include?(3.9)"#);
+        run_test(r#"(1..5).include?(5)"#);
+        run_test(r#"(1..5).include?(5.0)"#);
+        run_test(r#"(1..5).include?(:a)"#);
     }
 
     #[test]
