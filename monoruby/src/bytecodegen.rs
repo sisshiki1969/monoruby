@@ -1192,7 +1192,15 @@ impl BytecodeGen {
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
                 let name = IdentId::get_id(ident);
-                let dst = self.refer_dynamic_local(outer, name).unwrap().into();
+                let dst = match self.refer_dynamic_local(outer, name) {
+                    Some(dst) => dst,
+                    None => {
+                        return Err(MonorubyErr::runtimeerr(format!(
+                            "[FATAL] Bytecodegen: dynamic var {name} not found"
+                        )));
+                    }
+                }
+                .into();
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {

@@ -121,7 +121,7 @@ pub struct Globals {
     /// standard PRNG
     random: Box<Prng>,
     /// loaded libraries (canonical path).
-    loaded_canonicalized_files: IndexSet<PathBuf>,
+    pub(crate) loaded_canonicalized_files: IndexSet<PathBuf>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,

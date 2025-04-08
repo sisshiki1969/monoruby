@@ -10,7 +10,7 @@ impl Globals {
         &mut self,
         file_name: &std::path::Path,
         is_relative: bool,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
+    ) -> Result<Option<(String, std::path::PathBuf, std::path::PathBuf)>> {
         if !is_relative {
             let mut file = PathBuf::from(file_name);
             file.set_extension("rb");
@@ -68,36 +68,45 @@ impl Globals {
     fn load_file(
         &mut self,
         path: std::path::PathBuf,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
-        let path = match path.canonicalize() {
+    ) -> Result<Option<(String, std::path::PathBuf, std::path::PathBuf)>> {
+        let canonicalized_path = match path.canonicalize() {
             Ok(path) => path,
             Err(err) => return Err(MonorubyErr::cant_load(Some(err), &path)),
         };
-        if self.loaded_canonicalized_files.get(&path).is_some() {
+        if self
+            .loaded_canonicalized_files
+            .get(&canonicalized_path)
+            .is_some()
+        {
             return Ok(None);
         }
-        self.load(&path)
-            .map_err(|err| MonorubyErr::cant_load(Some(err), &path))
+        match self.load(&canonicalized_path) {
+            Ok(res) => {
+                Ok(res.map(|(file_body, load_path)| (file_body, load_path, canonicalized_path)))
+            }
+            Err(err) => Err(MonorubyErr::cant_load(Some(err), &canonicalized_path)),
+        }
     }
 
     fn load(
         &mut self,
-        path: &std::path::Path,
+        canonicalized_path: &std::path::Path,
     ) -> std::result::Result<Option<(String, std::path::PathBuf)>, std::io::Error> {
         let mut file_body = String::new();
-        let load_path = if let Some(b"so") = path.extension().map(|s| s.as_bytes()) {
+        let load_path = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let mut lib = dirs::home_dir()
                 .unwrap()
                 .join(".monoruby")
-                .join(path.file_name().unwrap());
+                .join(canonicalized_path.file_name().unwrap());
             lib.set_extension("rb");
             lib
         } else {
-            path.to_path_buf()
+            canonicalized_path.to_path_buf()
         };
         let mut file = std::fs::OpenOptions::new().read(true).open(&load_path)?;
         file.read_to_string(&mut file_body)?;
-        self.loaded_canonicalized_files.insert(path.to_path_buf());
+        self.loaded_canonicalized_files
+            .insert(canonicalized_path.to_path_buf());
         Ok(Some((file_body, load_path)))
     }
 }

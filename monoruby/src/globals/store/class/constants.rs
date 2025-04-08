@@ -106,7 +106,7 @@ impl ClassInfoTable {
 impl Globals {
     pub fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
         let name = IdentId::get_id(name);
-        self.store.classes.set_constant(class_id, name, val);
+        self.set_constant(class_id, name, val);
     }
 
     pub(crate) fn set_class_variable(&mut self, class_id: ClassId, name: IdentId, val: Value) {
