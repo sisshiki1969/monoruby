@@ -119,6 +119,10 @@ impl ArrayInner {
         self.0.clear();
     }
 
+    pub fn replace(&mut self, v: Vec<Value>) {
+        self.0 = SmallVec::from_vec(v);
+    }
+
     pub fn push(&mut self, value: Value) {
         self.0.push(value);
     }
