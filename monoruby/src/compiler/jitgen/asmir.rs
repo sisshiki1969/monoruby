@@ -350,6 +350,20 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Compare `lhs and `rhs` with "===" and return the result in rax.
+    ///
+    /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
+    ///
+    pub(super) fn array_teq(&mut self, bb: &BBContext, lhs: SlotId, rhs: SlotId) {
+        let using_xmm = bb.get_using_xmm();
+        self.push(AsmInst::ArrayTEq {
+            lhs,
+            rhs,
+            using_xmm,
+        });
+    }
+
     pub(super) fn alias_method(&mut self, bb: &BBContext, new: IdentId, old: IdentId) {
         let using_xmm = bb.get_using_xmm();
         let error = self.new_error(bb);
@@ -1012,6 +1026,16 @@ pub(super) enum AsmInst {
         mode: FMode,
         brkind: BrKind,
         branch_dest: JitLabel,
+    },
+    ///
+    /// Compare `lhs and `rhs` with "===" and return the result in rax.
+    ///
+    /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
+    ///
+    ArrayTEq {
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
     },
 
     ///

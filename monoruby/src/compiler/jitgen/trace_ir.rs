@@ -201,6 +201,10 @@ pub(crate) enum TraceIr {
         dest_bb: BasicBlockId,
         brkind: BrKind,
     },
+    ArrayTEq {
+        lhs: SlotId,
+        rhs: SlotId,
+    },
     Index {
         dst: SlotId,
         base: SlotId,
@@ -691,6 +695,9 @@ impl TraceIr {
                 (INTEGER_CLASS, INTEGER_CLASS),
                 true,
             ),
+            TraceIr::ArrayTEq { lhs, rhs } => {
+                format!("{lhs:?} = *{lhs:?} === {rhs:?}")
+            }
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),

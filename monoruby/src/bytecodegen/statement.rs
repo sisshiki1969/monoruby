@@ -165,6 +165,26 @@ impl BytecodeGen {
         Ok(())
     }
 
+    fn gen_case_teq_condbr(
+        &mut self,
+        when: Node,
+        reg: BcReg,
+        cont_pos: Label,
+        jmp_if_true: bool,
+    ) -> Result<()> {
+        if let NodeKind::Splat(box when) = when.kind {
+            let loc = when.loc;
+            let old = self.temp;
+            let lhs = self.push_expr(when)?.into();
+            self.emit(BytecodeInst::ArrayTEq { lhs, rhs: reg }, loc);
+            self.temp = old;
+            self.emit_condbr(lhs, cont_pos, jmp_if_true, false);
+            Ok(())
+        } else {
+            self.gen_teq_condbr(when, reg, cont_pos, jmp_if_true)
+        }
+    }
+
     pub(super) fn gen_case(
         &mut self,
         cond: Option<Box<Node>>,
@@ -246,11 +266,11 @@ impl BytecodeGen {
                     let succ_pos = self.new_label();
                     if when.len() == 1 {
                         let when = when.remove(0);
-                        self.gen_teq_condbr(when, reg, succ_pos, false)?;
+                        self.gen_case_teq_condbr(when, reg, succ_pos, false)?;
                     } else {
                         let then_pos = self.new_label();
                         for when in when {
-                            self.gen_teq_condbr(when, reg, then_pos, true)?;
+                            self.gen_case_teq_condbr(when, reg, then_pos, true)?;
                         }
                         self.emit_br(succ_pos);
                         self.apply_label(then_pos);

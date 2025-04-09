@@ -590,6 +590,13 @@ impl ISeqInfo {
                     dst: SlotId::new(op1_w),
                     callid: CallSiteId::from(op1_l),
                 },
+                40 => {
+                    let (_, op1_w2, op1_w3) = dec_www(op1);
+                    TraceIr::ArrayTEq {
+                        lhs: SlotId::new(op1_w2),
+                        rhs: SlotId::new(op1_w3),
+                    }
+                }
                 _ => unreachable!("{:016x}", op1),
             }
         } else {

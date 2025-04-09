@@ -563,6 +563,13 @@ impl Codegen {
                 self.gen_array_index_assign(using_xmm, &labels[error]);
             }
 
+            AsmInst::ArrayTEq {
+                lhs,
+                rhs,
+                using_xmm,
+            } => {
+                self.array_teq(lhs, rhs, using_xmm);
+            }
             AsmInst::NewArray { callid, using_xmm } => {
                 self.new_array(callid, using_xmm);
             }
@@ -805,6 +812,24 @@ impl Codegen {
                 );
             }
         }
+    }
+
+    ///
+    /// Compare `lhs and `rhs` with "===" and return the result in rax.
+    ///
+    /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
+    ///
+    fn array_teq(&mut self, lhs: SlotId, rhs: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        self.load_rdx(lhs);
+        self.load_rcx(rhs);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::array_teq);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
     }
 
     ///

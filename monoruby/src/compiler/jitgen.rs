@@ -737,6 +737,7 @@ impl Codegen {
     load_store!(rax);
     load_store!(rdi);
     load_store!(rsi);
+    load_store!(rdx);
     load_store!(rcx);
     load_store!(r15);
 

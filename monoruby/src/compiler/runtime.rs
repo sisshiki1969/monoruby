@@ -148,6 +148,24 @@ pub(super) extern "C" fn gen_array(
     }
 }
 
+pub(super) extern "C" fn array_teq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    if let Some(lhs_ary) = lhs.try_array_ty() {
+        for lhs in lhs_ary.iter().cloned() {
+            if op::cmp_teq_values(vm, globals, lhs, rhs)?.as_bool() {
+                return Some(Value::bool(true));
+            }
+        }
+        Some(Value::bool(false))
+    } else {
+        op::cmp_teq_values(vm, globals, lhs, rhs)
+    }
+}
+
 pub(super) extern "C" fn gen_lambda(vm: &mut Executor, _: &mut Globals, func_id: FuncId) -> Value {
     vm.generate_lambda(func_id).into()
 }

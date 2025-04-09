@@ -309,6 +309,7 @@ impl Codegen {
         self.dispatch[37] = self.vm_nilbr(&branch);
         self.dispatch[38] = self.vm_lambda();
         self.dispatch[39] = self.vm_array();
+        self.dispatch[40] = self.vm_array_teq();
 
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
@@ -337,7 +338,6 @@ impl Codegen {
         self.dispatch[138] = self.vm_gt_opt_rr();
         self.dispatch[139] = self.vm_ge_opt_rr();
         self.dispatch[140] = self.vm_teq_opt_rr();
-        //self.dispatch[141] = self.vm_cmp_opt_rr();
 
         self.dispatch[142] = self.vm_eq_opt_ri();
         self.dispatch[143] = self.vm_ne_opt_ri();
@@ -346,7 +346,6 @@ impl Codegen {
         self.dispatch[146] = self.vm_gt_opt_ri();
         self.dispatch[147] = self.vm_ge_opt_ri();
         self.dispatch[148] = self.vm_teq_opt_ri();
-        //self.dispatch[149] = self.vm_cmp_opt_ri();
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
@@ -358,7 +357,6 @@ impl Codegen {
         self.dispatch[158] = self.vm_gt_opt_rr();
         self.dispatch[159] = self.vm_ge_opt_rr();
         self.dispatch[160] = self.vm_teq_opt_rr();
-        //self.dispatch[161] = self.vm_cmp_opt_rr();
 
         self.dispatch[162] = self.vm_eq_opt_ri();
         self.dispatch[163] = self.vm_ne_opt_ri();
@@ -367,7 +365,6 @@ impl Codegen {
         self.dispatch[166] = self.vm_gt_opt_ri();
         self.dispatch[167] = self.vm_ge_opt_ri();
         self.dispatch[168] = self.vm_teq_opt_ri();
-        //self.dispatch[169] = self.vm_cmp_opt_ri();
 
         self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
@@ -935,6 +932,29 @@ impl Codegen {
             movq rax, (runtime::gen_array);
             call rax;
         };
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_array_teq(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movzxw rdi, [r13 - 14];     // rdi <- :2
+            movsxw rsi, [r13 - 16];     // rsi <- :3
+            movl   r15, rdi;
+        }
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;
+            movq rcx, rsi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::array_teq);
+            call rax;
+        };
+        self.vm_handle_error();
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label

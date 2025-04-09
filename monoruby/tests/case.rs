@@ -99,6 +99,27 @@ fn case5() {
 }
 
 #[test]
+fn case6() {
+    run_test(
+        r#"
+        a = []
+
+        10.times do |x|
+          case x
+          when *[1,2],5
+            a << "Matched 1"
+          when 3,*[3,9,:a]
+            a << "Matched 2"
+          else
+            a << "Not matched"
+          end
+        end
+        a
+        "#,
+    );
+}
+
+#[test]
 fn case_opt1() {
     run_test(
         r#"

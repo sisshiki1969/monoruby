@@ -161,8 +161,18 @@ pub(super) enum BytecodeInst {
         src: BcReg,
     },
     BinOp(BinOpK, Option<BcReg>, BinopMode), // kind, ret, (lhs, rhs)
+    ///
+    /// Check equality of `lhs` and `rhs`.( `lhs` === `rhs`)
+    ///
+    /// If `lhs` is Array, check equiality of `rhs` and each element of `lhs`,
+    /// and return true in `lhs` if any of them is equal.
+    ///
+    ArrayTEq {
+        lhs: BcReg,
+        rhs: BcReg,
+    },
     Cmp(CmpKind, Option<BcReg>, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
-    Mov(BcReg, BcReg),                       // dst, offset
+    Mov(BcReg, BcReg),                            // dst, offset
     ToA {
         dst: BcReg,
         src: BcReg,

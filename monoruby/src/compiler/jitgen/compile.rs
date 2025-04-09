@@ -513,6 +513,16 @@ impl JitContext {
                 }
             }
             TraceIr::GCmpBrNotrace { .. } => return CompileResult::Recompile,
+            TraceIr::ArrayTEq { lhs, rhs } => {
+                bbctx.write_back_slot(ir, lhs);
+                bbctx.write_back_slot(ir, rhs);
+                bbctx.discard(lhs);
+                let error = ir.new_error(bbctx);
+                ir.array_teq(bbctx, lhs, rhs);
+                ir.handle_error(error);
+                bbctx.rax2acc(ir, lhs);
+            }
+
             TraceIr::Index {
                 dst,
                 base,
