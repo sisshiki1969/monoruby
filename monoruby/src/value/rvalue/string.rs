@@ -313,6 +313,23 @@ impl RStringInner {
         }
     }
 
+    ///
+    /// Convert `char_pos` to the true position in char of the string `self`.
+    ///
+    /// Return None if `i` is negative.
+    ///
+    pub fn conv_char_index2(&self, char_pos: i64) -> Result<Option<usize>> {
+        let len = self.char_length()?;
+        if char_pos >= 0 {
+            Ok(Some(char_pos as usize))
+        } else {
+            match len as i64 + char_pos {
+                n if n < 0 => Ok(None),
+                n => Ok(Some(n as usize)),
+            }
+        }
+    }
+
     pub fn byte_to_char_index(&self, byte_pos: usize) -> Result<usize> {
         for (i, (pos, _)) in self.check_utf8()?.char_indices().enumerate() {
             match pos {

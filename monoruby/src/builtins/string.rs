@@ -45,6 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
+    globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
@@ -1377,6 +1378,70 @@ fn string_index(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### String#rindex
+///
+/// - rindex(pattern, pos = self.size) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/rindex.html]
+#[monoruby_builtin]
+fn string_rindex(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let given = self_.is_rstring().unwrap();
+    let re = lfp.arg(0).expect_regexp_or_string()?;
+    let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
+        arg1.coerce_to_i64()?
+    } else {
+        -1
+    };
+    let max_char_pos = match given.conv_char_index2(max_char_pos)? {
+        Some(pos) => pos,
+        None => return Ok(Value::nil()),
+    };
+
+    let s = given.check_utf8()?;
+
+    let mut last_byte_pos = match re.captures_from_pos(s, 0, vm)? {
+        None => {
+            return Ok(Value::nil());
+        }
+        Some(captures) => captures.get(0).unwrap().start(),
+    };
+
+    // Option<(char_pos:usize, byte_pos:usize)>
+    let mut last_char_pos: Option<usize> = None;
+    for (char_pos, (byte_pos, _)) in s.char_indices().enumerate() {
+        if last_byte_pos == byte_pos {
+            if char_pos > max_char_pos {
+                return Ok(match last_char_pos {
+                    Some(pos) => Value::integer(pos as i64),
+                    None => Value::nil(),
+                });
+            }
+            last_char_pos = Some(char_pos);
+        }
+        if last_byte_pos >= byte_pos {
+            continue;
+        }
+        match re.captures_from_pos(s, byte_pos, vm)? {
+            None => return Ok(Value::integer(last_char_pos.unwrap() as i64)),
+            Some(captures) => {
+                last_byte_pos = captures.get(0).unwrap().start();
+                if last_byte_pos == byte_pos {
+                    if char_pos > max_char_pos {
+                        return Ok(match last_char_pos {
+                            Some(pos) => Value::integer(pos as i64),
+                            None => Value::nil(),
+                        });
+                    }
+                    last_char_pos = Some(char_pos);
+                }
+            }
+        }
+    }
+    Ok(Value::integer(last_char_pos.unwrap() as i64))
+}
+
+///
 /// ### String#to_s
 ///
 /// - to_s -> String
@@ -2386,6 +2451,23 @@ mod tests {
         run_test(r##""超時空要塞".index(/時/, -3)"##);
         run_test(r##""超時空要塞".index(/時/, -4)"##);
         run_test(r##""超時空要塞".index(/時/, -4.0)"##);
+    }
+
+    #[test]
+    fn rindex() {
+        run_test(r##""astrochemistry".rindex("str")"##);
+        run_test(r##""character".rindex(?c)"##);
+        run_test(r##""regexprindex".rindex(/e.*x/, 2)"##);
+        run_test(r##""foobarfoobar".rindex("bar", 6)"##);
+        run_test(r##""foobarfoobar".rindex("bar", -6)"##);
+        run_test(r##""windows".rindex("w", 100)"##);
+        run_test(r##""windows".rindex("w", -100)"##);
+        run_test(r##""windows".rindex("w", -1)"##);
+        run_test(r##""windows".rindex("w", -3)"##);
+        run_test(r##""windows".rindex("w", -8)"##);
+        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 11)"##);
+        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 1)"##);
+        run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 0)"##);
     }
 
     #[test]
