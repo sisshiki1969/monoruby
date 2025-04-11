@@ -207,7 +207,9 @@ fn positional(
     for i in 0..pos_args {
         let v = unsafe { *src.sub(i) };
         if splat_pos.contains(&i) {
-            let ary = v.try_array_ty().expect("splat arguments must be an array");
+            let ary = v
+                .try_array_ty()
+                .expect("internal error: splat arguments must be an array");
             buf.extend_from_slice(&ary);
         } else {
             buf.push(v);

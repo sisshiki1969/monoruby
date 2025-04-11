@@ -214,9 +214,9 @@ impl BBContext {
             }
             BinOpK::Rem => match mode {
                 OpMode::RI(lhs, rhs) if rhs > 0 && (rhs as u64).is_power_of_two() => {
-                    self.fetch_fixnum_r_nodeopt(ir, lhs, GP::R15);
-                    ir.reg_and(GP::R15, (rhs * 2 - 1) as i64 as u64);
-                    self.reg2acc_fixnum(ir, GP::R15, dst);
+                    self.fetch_fixnum_r_nodeopt(ir, lhs, GP::Rax);
+                    ir.reg_and(GP::Rax, (rhs * 2 - 1) as i64 as u64);
+                    self.reg2acc_fixnum(ir, GP::Rax, dst);
                 }
                 _ => {
                     let lhs = GP::Rdi;

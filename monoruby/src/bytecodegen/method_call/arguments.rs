@@ -224,18 +224,17 @@ impl BytecodeGen {
                 if let Some(local) = self.refer_local(ident) {
                     return Ok((local, 1, vec![]));
                 }
-            } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
-                // in the case of "f(*a)"
-                if let NodeKind::LocalVar(0, ident) = &node.kind {
-                    if let Some(local) = self.refer_local(ident) {
-                        return Ok((local, 1, vec![0]));
-                    }
-                }
-            }
+            } /*  else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
+                  // in the case of "f(*a)"
+                  if let NodeKind::LocalVar(0, ident) = &node.kind {
+                      if let Some(local) = self.refer_local(ident) {
+                          return Ok((local, 1, vec![0]));
+                      }
+                  }
+              }*/
         };
 
-        let (args, arg_len, splat_pos) = self.ordinary_args(std::mem::take(&mut arglist.args))?;
-        Ok((args, arg_len, splat_pos))
+        self.ordinary_args(std::mem::take(&mut arglist.args))
     }
 
     fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {
