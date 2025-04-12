@@ -81,6 +81,16 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn random() {
+        run_test(
+            r#"
+        Random.srand(1234)
+        Random.srand(4567)
+        "#,
+        );
+    }
+
+    #[test]
     fn urandom() {
         run_test(
             r##"
