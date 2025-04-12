@@ -22,6 +22,8 @@ jobs:
           toolchain: nightly
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Test
+        run: bin/test
 
       - name: Generate code coverage
         run: cargo llvm-cov --features deopt --features profile --features perf --features emit-cfg --features emit-asm --features emit-bc --workspace --lcov --output-path lcov.info

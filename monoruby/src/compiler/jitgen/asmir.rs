@@ -379,14 +379,14 @@ impl AsmIr {
         &mut self,
         max: u16,
         min: u16,
-        else_dest: BasicBlockId,
-        branch_table: Box<[BasicBlockId]>,
+        else_label: JitLabel,
+        branch_labels: Box<[JitLabel]>,
     ) {
         self.push(AsmInst::OptCase {
             max,
             min,
-            else_dest,
-            branch_table,
+            else_label,
+            branch_labels,
         });
     }
 
@@ -820,8 +820,8 @@ pub(super) enum AsmInst {
     OptCase {
         max: u16,
         min: u16,
-        else_dest: BasicBlockId,
-        branch_table: Box<[BasicBlockId]>,
+        else_label: JitLabel,
+        branch_labels: Box<[JitLabel]>,
     },
 
     Preparation,

@@ -145,7 +145,7 @@ impl JitContext {
         if let Some(branches) = ctx.branch_map.remove(&loop_start) {
             for BranchEntry { src_bb, bbctx, .. } in branches {
                 liveness.merge(&bbctx);
-                assert!(src_bb > loop_start);
+                assert!(src_bb >= loop_start);
                 // backegde
                 if let Some(ctx) = &mut backedge {
                     ctx.merge(&bbctx);
@@ -788,17 +788,20 @@ impl JitContext {
                 cond,
                 min,
                 max,
-                dest_bb,
+                else_dest,
                 branch_table,
             } => {
-                let else_idx = dest_bb[0];
-                for bbid in dest_bb {
+                let else_label = self.label();
+                self.new_side_branch(iseq, bc_pos, else_dest, bbctx.clone(), else_label);
+                let mut branch_labels = vec![];
+                for bbid in branch_table {
                     let branch_dest = self.label();
+                    branch_labels.push(branch_dest);
                     self.new_side_branch(iseq, bc_pos, bbid, bbctx.clone(), branch_dest);
                 }
                 let deopt = ir.new_deopt(bbctx);
                 bbctx.fetch_fixnum(ir, cond, GP::Rdi, deopt);
-                ir.opt_case(max, min, else_idx, branch_table);
+                ir.opt_case(max, min, else_label, branch_labels.into());
                 return CompileResult::Branch;
             }
         }

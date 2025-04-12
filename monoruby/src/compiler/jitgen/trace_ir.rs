@@ -39,7 +39,7 @@ pub(crate) enum TraceIr {
         cond: SlotId,
         min: u16,
         max: u16,
-        dest_bb: Box<[BasicBlockId]>,
+        else_dest: BasicBlockId,
         branch_table: Box<[BasicBlockId]>,
     },
     CheckLocal(SlotId, BasicBlockId),
@@ -481,12 +481,11 @@ impl TraceIr {
                 cond,
                 min,
                 max,
+                else_dest,
                 branch_table,
-                ..
             } => {
                 format!(
-                    "opt_case {:?}: {min}..{max} -> branch_table:{:?}",
-                    cond, branch_table
+                    "opt_case {cond:?}: else -> {else_dest:?}  {min}..{max} -> branch_table:{branch_table:?}",
                 )
             }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),

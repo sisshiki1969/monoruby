@@ -45,4 +45,8 @@ rm benchmark/*.ppm
 monoruby ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
 ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
 diff -s monoruby.log ruby.log
+
+monoruby ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes > monoruby.log
+ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes > ruby.log
+diff -s monoruby.log ruby.log
 rm *.log

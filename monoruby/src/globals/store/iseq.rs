@@ -561,20 +561,16 @@ impl ISeqInfo {
                         offsets,
                         branch_table,
                     } = &store[optid];
-                    let dest_bb: Box<[_]> = offsets
-                        .iter()
-                        .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
-                        .collect();
+                    let else_dest = self.get_bb(bc_pos + 1 + (offsets[0] as i32));
                     let branch_table: Box<[_]> = branch_table
                         .iter()
                         .map(|ofs| self.get_bb(bc_pos + 1 + (*ofs as i32)))
                         .collect();
-
                     TraceIr::OptCase {
                         cond: SlotId::new(op1_w),
                         min: *min,
                         max: *max,
-                        dest_bb,
+                        else_dest,
                         branch_table,
                     }
                 }

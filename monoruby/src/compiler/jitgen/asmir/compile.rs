@@ -322,19 +322,17 @@ impl Codegen {
             AsmInst::OptCase {
                 max,
                 min,
-                else_dest,
-                branch_table,
+                else_label,
+                branch_labels,
             } => {
                 // generate a jump table.
                 let jump_table = self.jit.const_align8();
-                for bbid in branch_table.iter() {
-                    let dest_label = ctx.get_bb_label(*bbid);
-                    let dest_label = ctx.resolve_label(&mut self.jit, dest_label);
+                for label in branch_labels.iter() {
+                    let dest_label = ctx.resolve_label(&mut self.jit, *label);
                     self.jit.abs_address(dest_label);
                 }
 
-                let else_dest = ctx.get_bb_label(else_dest);
-                let else_dest = ctx.resolve_label(&mut self.jit, else_dest);
+                let else_dest = ctx.resolve_label(&mut self.jit, else_label);
                 monoasm! {&mut self.jit,
                     sarq rdi, 1;
                     cmpq rdi, (max);
