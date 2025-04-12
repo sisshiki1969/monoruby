@@ -50,13 +50,13 @@ smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features
 ] }
 escape_string = "0.1.2"
 hex = "0.4.3"
-rand = "0.8.5"
+rand = "0.9.0"
 indexmap = "2.9.0"
 regex = "1.11.1"
 fancy-regex = "0.14.0"
 libc = "0.2.171"
-getrandom = "0.2.15"
-sfmt = "0.7.0"
+getrandom = "0.3.2"
+rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "6.0.0"

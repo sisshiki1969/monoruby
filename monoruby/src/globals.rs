@@ -842,8 +842,8 @@ impl Globals {
 
 // Random generator
 impl Globals {
-    pub(crate) fn random_seed(&self) -> &[u8; 4] {
-        &self.random.seed
+    pub(crate) fn random_seed(&self) -> i32 {
+        self.random.seed
     }
 
     pub(crate) fn random_init(&mut self, seed: Option<i64>) {
@@ -852,8 +852,8 @@ impl Globals {
 
     pub(crate) fn random_gen<T>(&mut self) -> T
     where
-        rand::distributions::Standard: rand::prelude::Distribution<T>,
+        rand::distr::StandardUniform: rand::prelude::Distribution<T>,
     {
-        self.random.gen()
+        self.random.random()
     }
 }

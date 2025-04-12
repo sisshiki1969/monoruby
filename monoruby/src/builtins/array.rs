@@ -1921,7 +1921,7 @@ fn compact_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn shuffle_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().as_array();
-    ary.shuffle(&mut rand::thread_rng());
+    ary.shuffle(&mut rand::rng());
     Ok(lfp.self_val())
 }
 

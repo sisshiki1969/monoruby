@@ -1,5 +1,4 @@
 use super::*;
-use num::BigInt;
 
 //
 // Random class
@@ -19,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
 #[monoruby_builtin]
 fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
+    let old_seed = globals.random_seed();
     let new_seed = if lfp.try_arg(0).is_none() {
         None
     } else {
@@ -29,7 +28,7 @@ fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     };
     globals.random_init(new_seed);
-    Ok(Value::bigint(old_seed))
+    Ok(Value::integer(old_seed as i64))
 }
 
 // ### Random.rand
