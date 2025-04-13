@@ -1408,7 +1408,7 @@ fn string_rindex(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
     };
 
     // Option<(char_pos:usize, byte_pos:usize)>
-    let mut last_char_pos: Option<usize> = None;
+    let mut last_char_pos = if last_byte_pos == 0 { Some(0) } else { None };
     for (char_pos, (byte_pos, _)) in s.char_indices().enumerate() {
         if last_byte_pos == byte_pos {
             if char_pos > max_char_pos {
@@ -2465,6 +2465,8 @@ mod tests {
         run_test(r##""windows".rindex("w", -1)"##);
         run_test(r##""windows".rindex("w", -3)"##);
         run_test(r##""windows".rindex("w", -8)"##);
+        run_test(r##""".rindex("")"##);
+        run_test(r##""".rindex(".")"##);
         run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 11)"##);
         run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 1)"##);
         run_test(r##""超時空要塞超時空要塞超時空要塞".index(/時/, 0)"##);

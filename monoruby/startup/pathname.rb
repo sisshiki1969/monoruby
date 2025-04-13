@@ -10,20 +10,20 @@ class Pathname
   attr_accessor :path
 
   def initialize(path)
-    self.path = path
+    @path = path
   end
 
   def to_str
-    path
+    @path
   end
 
   alias to_s to_str
 
   def expand_path(default_dir = '.')
-    Pathname.new(File.expand_path(path, default_dir))
+    Pathname.new(File.expand_path(@path, default_dir))
   end
 
   def basename(suffix = "")
-    Pathname.new(File.basename(path, suffix))
+    Pathname.new(File.basename(@path, suffix))
   end
 end
