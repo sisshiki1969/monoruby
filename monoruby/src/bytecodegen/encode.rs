@@ -468,6 +468,11 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&ret);
                 Bytecode::from_u32(enc_www(68, op1.0, 0, 0), name.get())
             }
+            BytecodeInst::DefinedSuper { ret } => {
+                // 69
+                let op1 = self.slot_id(&ret);
+                Bytecode::from_u32(enc_www(69, op1.0, 0, 0), 0)
+            }
             BytecodeInst::EnsureEnd => Bytecode::from(enc_w(85, 0)),
             BytecodeInst::ConcatRegexp(ret, arg, len) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));

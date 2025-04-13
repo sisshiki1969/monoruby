@@ -316,6 +316,7 @@ impl Codegen {
         self.dispatch[66] = self.vm_defined_method();
         self.dispatch[67] = self.vm_defined_gvar();
         self.dispatch[68] = self.vm_defined_ivar();
+        self.dispatch[69] = self.vm_defined_super();
         self.dispatch[70] = self.vm_class_def(false);
         self.dispatch[71] = self.vm_class_def(true);
         self.dispatch[80] = ret;
@@ -1205,6 +1206,23 @@ impl Codegen {
             movq rax, (runtime::defined_method);
             call rax;
         };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_super(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_super);
+            call rax;
+            movzxw r15, [r13 - 12];
+        };
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movq [r15], rax;
+        }
         self.fetch_and_dispatch();
         label
     }

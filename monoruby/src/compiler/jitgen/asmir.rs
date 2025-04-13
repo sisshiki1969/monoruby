@@ -1364,6 +1364,10 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
+    DefinedSuper {
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    },
     DefinedGvar {
         dst: SlotId,
         name: IdentId,

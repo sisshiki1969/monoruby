@@ -1506,6 +1506,23 @@ fn defined() {
     run_test(r#"a = []; defined? (a[1]=5)"#);
     run_test(r#"defined?(1+(2+3))"#);
     run_test(r#"defined? 1+(2+3)"#);
+    run_test_with_prelude(
+        r#"
+            [ C.new.f, S.new.f ]
+        "#,
+        r#"
+            class S
+              def f
+              end
+            end
+
+            class C < S
+              def f
+                defined?(super)
+              end
+            end
+    "#,
+    );
 }
 
 #[test]

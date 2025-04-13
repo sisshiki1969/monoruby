@@ -675,12 +675,12 @@ impl JitContext {
                 bbctx.unset_class_version_guard();
             }
             TraceIr::DefinedYield { dst } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedYield { dst, using_xmm });
             }
             TraceIr::DefinedConst { dst, siteid } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedConst {
                     dst,
@@ -689,7 +689,8 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
-                bbctx.write_back_slots(ir, &[dst, recv]);
+                bbctx.write_back_slots(ir, &[recv]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedMethod {
                     dst,
@@ -698,8 +699,13 @@ impl JitContext {
                     using_xmm,
                 });
             }
+            TraceIr::DefinedSuper { dst } => {
+                bbctx.discard(dst);
+                let using_xmm = bbctx.get_using_xmm();
+                ir.push(AsmInst::DefinedSuper { dst, using_xmm });
+            }
             TraceIr::DefinedGvar { dst, name } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedGvar {
                     dst,
@@ -708,7 +714,7 @@ impl JitContext {
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedIvar {
                     dst,

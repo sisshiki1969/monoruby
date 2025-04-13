@@ -46,6 +46,19 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
+    pub(super) fn defined_super(&mut self, dst: SlotId, using_xmm: UsingXmm) {
+        self.xmm_save(using_xmm);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_super);
+            call rax;
+            lea  rdi, [r14 - (conv(dst))];
+            movq [rdi], rax;
+        };
+        self.xmm_restore(using_xmm);
+    }
+
     pub(super) fn defined_gvar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,

@@ -250,6 +250,9 @@ pub(super) enum BytecodeInst {
         recv: BcReg,
         name: IdentId,
     },
+    DefinedSuper {
+        ret: BcReg,
+    },
     DefinedGvar {
         ret: BcReg,
         name: IdentId,

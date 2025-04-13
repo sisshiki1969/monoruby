@@ -2,16 +2,21 @@ use super::*;
 
 impl BytecodeGen {
     pub(super) fn gen_defined(&mut self, node: Node) -> Result<()> {
-        let res = defined_str(&node);
-        let reg = self.push().into();
-        self.emit_string(reg, res.to_string());
-        let exit_label = self.new_label();
-        let nil_label = self.new_label();
-        self.check_defined(node, nil_label, reg, true)?;
-        self.emit_br(exit_label);
-        self.apply_label(nil_label);
-        self.emit_nil(reg);
-        self.apply_label(exit_label);
+        let ret = self.push().into();
+        if matches!(node.kind, NodeKind::Defined(..)) {
+            self.emit(BytecodeInst::DefinedSuper { ret }, node.loc);
+            return Ok(());
+        } else {
+            let res = defined_str(&node);
+            self.emit_string(ret, res.to_string());
+            let exit_label = self.new_label();
+            let nil_label = self.new_label();
+            self.check_defined(node, nil_label, ret, true)?;
+            self.emit_br(exit_label);
+            self.apply_label(nil_label);
+            self.emit_nil(ret);
+            self.apply_label(exit_label);
+        }
         Ok(())
     }
 
@@ -155,6 +160,9 @@ impl BytecodeGen {
                     self.check_defined(n, nil_label, ret, false)?;
                 }
             }
+            NodeKind::Super { .. } => {
+                self.emit(BytecodeInst::DefinedSuper { ret }, node.loc);
+            }
             NodeKind::Index {
                 base: box b,
                 index: v,
@@ -220,7 +228,7 @@ impl BytecodeGen {
                 self.emit(BytecodeInst::DefinedGvar { ret, name }, node.loc);
             }
             NodeKind::SpecialVar(..) => {}
-            NodeKind::ClassVar(..) | NodeKind::Super(_) | NodeKind::Lambda(_) => {
+            NodeKind::ClassVar(..) | NodeKind::Lambda(_) => {
                 return Err(MonorubyErr::unsupported_node(
                     node.clone(),
                     self.sourceinfo.clone(),
@@ -249,7 +257,6 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Array(..)
         | NodeKind::Lambda(_)
         | NodeKind::AliasMethod(..)
-        | NodeKind::Defined(..)
         | NodeKind::If { .. }
         | NodeKind::While { .. }
         | NodeKind::For { .. }
@@ -263,6 +270,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::MethodDef(..)
         | NodeKind::SingletonMethodDef(..)
         | NodeKind::Splat(_) => "expression",
+        NodeKind::Defined(..) => "super",
         NodeKind::Bool(true) => "true",
         NodeKind::Bool(false) => "false",
         NodeKind::Nil => "nil",

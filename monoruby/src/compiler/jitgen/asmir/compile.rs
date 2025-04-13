@@ -759,6 +759,7 @@ impl Codegen {
                 name,
                 using_xmm,
             } => self.defined_method(dst, recv, name, using_xmm),
+            AsmInst::DefinedSuper { dst, using_xmm } => self.defined_super(dst, using_xmm),
             AsmInst::DefinedGvar {
                 dst,
                 name,

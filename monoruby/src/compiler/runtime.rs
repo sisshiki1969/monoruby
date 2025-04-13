@@ -742,15 +742,28 @@ pub(super) extern "C" fn defined_ivar(
 }
 
 pub(super) extern "C" fn defined_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     reg: *mut Value,
     recv: Value,
     name: IdentId,
 ) {
-    let is_func_call = _vm.cfp().lfp().self_val() == recv;
+    let is_func_call = vm.cfp().lfp().self_val() == recv;
     if globals.find_method(recv, name, is_func_call).is_err() {
         unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals) -> Value {
+    let func_id = vm.method_func_id();
+    let self_val = vm.cfp().lfp().self_val();
+    let owner = globals.store[func_id].owner_class().unwrap();
+    let name = globals.store[func_id].name().unwrap();
+    let self_class = self_val.class();
+    if globals.check_super(self_class, owner, name).is_some() {
+        Value::string_from_str("super")
+    } else {
+        Value::nil()
     }
 }
 

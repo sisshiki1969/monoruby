@@ -305,6 +305,9 @@ pub(crate) enum TraceIr {
         recv: SlotId,
         name: IdentId,
     },
+    DefinedSuper {
+        dst: SlotId,
+    },
     DefinedGvar {
         dst: SlotId,
         name: IdentId,
@@ -827,18 +830,17 @@ impl TraceIr {
                 let s = store[*siteid].format();
                 format!("{:?} = defined?(constant) {s}", dst)
             }
-            TraceIr::DefinedMethod {
-                dst: ret,
-                recv,
-                name,
-            } => {
-                format!("{:?} = defined?(method) {:?}.{}", ret, recv, name)
+            TraceIr::DefinedMethod { dst, recv, name } => {
+                format!("{:?} = defined?(method) {:?}.{}", dst, recv, name)
             }
-            TraceIr::DefinedGvar { dst: ret, name } => {
-                format!("{:?} = defined?(gvar) {}", ret, name)
+            TraceIr::DefinedSuper { dst } => {
+                format!("{:?} = defined?(super)", dst)
             }
-            TraceIr::DefinedIvar { dst: ret, name } => {
-                format!("{:?} = defined?(ivar) {}", ret, name)
+            TraceIr::DefinedGvar { dst, name } => {
+                format!("{:?} = defined?(gvar) {}", dst, name)
+            }
+            TraceIr::DefinedIvar { dst, name } => {
+                format!("{:?} = defined?(ivar) {}", dst, name)
             }
             TraceIr::LoopStart { counter, jit_addr } => {
                 format!("loop_start counter={counter} jit-addr={:?}", jit_addr)

@@ -618,6 +618,9 @@ impl ISeqInfo {
                     dst: SlotId::new(op1_w1),
                     name: IdentId::from(op2.0 as u32),
                 },
+                69 => TraceIr::DefinedSuper {
+                    dst: SlotId::new(op1_w1),
+                },
                 70 => TraceIr::ClassDef {
                     dst: SlotId::from(op1_w1),
                     base: SlotId::from(op2_w2),
