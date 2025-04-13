@@ -197,3 +197,41 @@ fn case_opt4() {
         "#,
     );
 }
+
+#[test]
+fn case_opt5() {
+    run_test(
+        r#"
+      res = []
+      50.times do |x|
+        case x % 20
+        when 0
+          res << "zero"
+        when 1
+          res << "one"
+        when 2
+          res << "two"
+        when 3,4,5,6
+          res << "three-six"
+        when 7
+          res << "seven"
+        when 8
+          res << "eight"
+        when 9
+          res << "nine"
+        when 10,11,12,13,14
+          res << "ten-fourteen"
+        when 15
+          res << "fifteen"
+        when 16
+          res << "sixteen"
+        when 17
+          res << "seventeen"
+        else
+          res << "above eighteen"
+        end
+      end
+      res
+        "#,
+    );
+}
