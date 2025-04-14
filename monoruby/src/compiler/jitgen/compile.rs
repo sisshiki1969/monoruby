@@ -675,7 +675,7 @@ impl JitContext {
                 bbctx.unset_class_version_guard();
             }
             TraceIr::DefinedYield { dst } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedYield { dst, using_xmm });
             }
@@ -705,7 +705,7 @@ impl JitContext {
                 ir.push(AsmInst::DefinedSuper { dst, using_xmm });
             }
             TraceIr::DefinedGvar { dst, name } => {
-                bbctx.write_back_slots(ir, &[dst]);
+                bbctx.discard(dst);
                 let using_xmm = bbctx.get_using_xmm();
                 ir.push(AsmInst::DefinedGvar {
                     dst,

@@ -718,14 +718,20 @@ pub(super) extern "C" fn defined_const(
     }
 }
 
+///
+/// Check if global var `name` exists.
+///
+/// Set `dst`` to `nil` if not exists.
+///
 pub(super) extern "C" fn defined_gvar(
     _vm: &mut Executor,
     globals: &mut Globals,
-    reg: *mut Value,
     name: IdentId,
-) {
-    if globals.get_gvar(name).is_none() {
-        unsafe { *reg = Value::nil() }
+) -> Value {
+    if globals.get_gvar(name).is_some() {
+        Value::string_from_str("global-variable")
+    } else {
+        Value::nil()
     }
 }
 
@@ -754,6 +760,11 @@ pub(super) extern "C" fn defined_method(
     }
 }
 
+///
+/// Check if `super` is callable.
+///
+/// return "super" if callable, `nil` if not.
+///
 pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals) -> Value {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
@@ -767,9 +778,16 @@ pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals)
     }
 }
 
-pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals, reg: *mut Value) {
-    if !vm.cfp().block_given() {
-        unsafe { *reg = Value::nil() }
+///
+/// Check if `super` is callable.
+///
+/// return "super" if callable, `nil` if not.
+///
+pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals) -> Value {
+    if vm.cfp().block_given() {
+        Value::string_from_str("yield")
+    } else {
+        Value::nil()
     }
 }
 

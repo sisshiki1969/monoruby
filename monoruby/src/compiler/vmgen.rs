@@ -1133,20 +1133,6 @@ impl Codegen {
         label
     }
 
-    fn vm_defined_yield(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch_addr_r15();
-        monoasm! { &mut self.jit,
-            movq rdx, r15;
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (runtime::defined_yield);
-            call rax;
-        };
-        self.fetch_and_dispatch();
-        label
-    }
-
     fn vm_defined_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch_addr_r15();
@@ -1166,13 +1152,13 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch_addr_r15();
         monoasm! { &mut self.jit,
-            movq rdx, r15;
-            movl rcx, [r13 - 8];
+            movl rdx, [r13 - 8];
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_gvar);
             call rax;
-        };
+            movq [r15], rax;
+        }
         self.fetch_and_dispatch();
         label
     }
@@ -1210,17 +1196,29 @@ impl Codegen {
         label
     }
 
+    fn vm_defined_yield(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch_addr_r15();
+        monoasm! { &mut self.jit,
+            movq rdx, r15;
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_yield);
+            call rax;
+            movq [r15], rax;
+        }
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_defined_super(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_super);
             call rax;
-            movzxw r15, [r13 - 12];
-        };
-        self.vm_get_slot_addr(GP::R15);
-        monoasm! { &mut self.jit,
             movq [r15], rax;
         }
         self.fetch_and_dispatch();

@@ -2,20 +2,34 @@ use super::*;
 
 impl BytecodeGen {
     pub(super) fn gen_defined(&mut self, node: Node) -> Result<()> {
-        let ret = self.push().into();
-        if matches!(node.kind, NodeKind::Defined(..)) {
-            self.emit(BytecodeInst::DefinedSuper { ret }, node.loc);
-            return Ok(());
-        } else {
-            let res = defined_str(&node);
-            self.emit_string(ret, res.to_string());
-            let exit_label = self.new_label();
-            let nil_label = self.new_label();
-            self.check_defined(node, nil_label, ret, true)?;
-            self.emit_br(exit_label);
-            self.apply_label(nil_label);
-            self.emit_nil(ret);
-            self.apply_label(exit_label);
+        let dst = self.push().into();
+        match &node.kind {
+            NodeKind::Super(..) => {
+                self.emit(BytecodeInst::DefinedSuper { dst }, node.loc);
+            }
+            NodeKind::Yield(..) => {
+                self.emit(BytecodeInst::DefinedYield { dst }, node.loc);
+            }
+            NodeKind::GlobalVar(name) => {
+                self.emit(
+                    BytecodeInst::DefinedGvar {
+                        dst,
+                        name: IdentId::get_id(name),
+                    },
+                    node.loc,
+                );
+            }
+            _ => {
+                let res = defined_str(&node);
+                self.emit_string(dst, res.to_string());
+                let exit_label = self.new_label();
+                let nil_label = self.new_label();
+                self.check_defined(node, nil_label, dst, true)?;
+                self.emit_br(exit_label);
+                self.apply_label(nil_label);
+                self.emit_nil(dst);
+                self.apply_label(exit_label);
+            }
         }
         Ok(())
     }
@@ -161,7 +175,10 @@ impl BytecodeGen {
                 }
             }
             NodeKind::Super { .. } => {
-                self.emit(BytecodeInst::DefinedSuper { ret }, node.loc);
+                self.emit(BytecodeInst::DefinedSuper { dst: ret }, node.loc);
+            }
+            NodeKind::Yield(_) => {
+                self.emit(BytecodeInst::DefinedYield { dst: ret }, node.loc);
             }
             NodeKind::Index {
                 base: box b,
@@ -194,9 +211,6 @@ impl BytecodeGen {
                     self.check_defined(n, nil_label, ret, false)?;
                 }
             }
-            NodeKind::Yield(_) => {
-                self.emit(BytecodeInst::DefinedYield { ret }, node.loc);
-            }
             NodeKind::Const {
                 toplevel,
                 parent: _,
@@ -225,7 +239,7 @@ impl BytecodeGen {
             }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_id_from_string(name);
-                self.emit(BytecodeInst::DefinedGvar { ret, name }, node.loc);
+                self.emit(BytecodeInst::DefinedGvar { dst: ret, name }, node.loc);
             }
             NodeKind::SpecialVar(..) => {}
             NodeKind::ClassVar(..) | NodeKind::Lambda(_) => {
@@ -265,12 +279,13 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Next(_)
         | NodeKind::Return(_)
         | NodeKind::Redo
+        | NodeKind::Defined(_)
         | NodeKind::ClassDef { .. }
         | NodeKind::SingletonClassDef { .. }
         | NodeKind::MethodDef(..)
         | NodeKind::SingletonMethodDef(..)
         | NodeKind::Splat(_) => "expression",
-        NodeKind::Defined(..) => "super",
+        NodeKind::Super(..) => "super",
         NodeKind::Bool(true) => "true",
         NodeKind::Bool(false) => "false",
         NodeKind::Nil => "nil",
@@ -292,7 +307,6 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Ident(_)
         | NodeKind::Index { .. }
         | NodeKind::UnOp(..) => "method",
-        NodeKind::Super(_) => "super",
         NodeKind::Begin { box body, .. } => defined_str(body),
         NodeKind::CompStmt(v) => match v.last() {
             Some(node) => defined_str(node),

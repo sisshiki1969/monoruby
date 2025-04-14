@@ -1,14 +1,20 @@
 use super::*;
 
 impl Codegen {
+    ///
+    /// Check if `yield` is callable.
+    ///
+    /// return "yield" if callable, `nil` if not.
+    ///
     pub(super) fn defined_yield(&mut self, dst: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            lea  rdx, [r14 - (conv(dst))];
             movq rax, (runtime::defined_yield);
             call rax;
+            lea  rdi, [r14 - (conv(dst))];
+            movq [rdi], rax;
         };
         self.xmm_restore(using_xmm);
     }
@@ -46,6 +52,11 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
+    ///
+    /// Check if `super` is callable.
+    ///
+    /// Set `dst` to "super" if callable, `nil` if not.
+    ///
     pub(super) fn defined_super(&mut self, dst: SlotId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
@@ -59,15 +70,21 @@ impl Codegen {
         self.xmm_restore(using_xmm);
     }
 
+    ///
+    /// Check if global var `name` exists.
+    ///
+    /// Set `dst`` to "global-variable" if exists, `nil` if not.
+    ///
     pub(super) fn defined_gvar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            lea  rdx, [r14 - (conv(dst))];
-            movl rcx, (name.get());
+            movl rdx, (name.get());
             movq rax, (runtime::defined_gvar);
             call rax;
+            lea  rdi, [r14 - (conv(dst))];
+            movq [rdi], rax;
         };
         self.xmm_restore(using_xmm);
     }

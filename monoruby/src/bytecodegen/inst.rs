@@ -237,7 +237,7 @@ pub(super) enum BytecodeInst {
         old: IdentId,
     },
     DefinedYield {
-        ret: BcReg,
+        dst: BcReg,
     },
     DefinedConst {
         ret: BcReg,
@@ -250,11 +250,21 @@ pub(super) enum BytecodeInst {
         recv: BcReg,
         name: IdentId,
     },
+    ///
+    /// Check if `super` is callable.
+    ///
+    /// Set `dst` to "super" if callable, `nil` if not.
+    ///
     DefinedSuper {
-        ret: BcReg,
+        dst: BcReg,
     },
+    ///
+    /// Check if global var `name` exists.
+    ///
+    /// Set `dst`` to "global-variable" if exists, `nil` if not.
+    ///
     DefinedGvar {
-        ret: BcReg,
+        dst: BcReg,
         name: IdentId,
     },
     DefinedIvar {

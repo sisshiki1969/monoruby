@@ -293,6 +293,11 @@ pub(crate) enum TraceIr {
         new: IdentId,
         old: IdentId,
     },
+    ///
+    /// Check if `yield` is callable.
+    ///
+    /// Set `dst` to "yield" if callable, `nil` if not.
+    ///
     DefinedYield {
         dst: SlotId,
     },
@@ -305,9 +310,19 @@ pub(crate) enum TraceIr {
         recv: SlotId,
         name: IdentId,
     },
+    ///
+    /// Check if `super` is callable.
+    ///
+    /// Set `dst` to "super" if callable, `nil` if not.
+    ///
     DefinedSuper {
         dst: SlotId,
     },
+    ///
+    /// Check if global var `name` exists.
+    ///
+    /// Set `dst`` to "global-variable" if exists, `nil` if not.
+    ///
     DefinedGvar {
         dst: SlotId,
         name: IdentId,

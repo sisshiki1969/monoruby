@@ -436,9 +436,9 @@ impl BytecodeGen {
                 let callid = self.new_callsite(store, callsite, loc)?;
                 Bytecode::from(enc_wl(39, op1.0, callid.get()))
             }
-            BytecodeInst::DefinedYield { ret } => {
+            BytecodeInst::DefinedYield { dst } => {
                 // 64
-                let op1 = self.slot_id(&ret);
+                let op1 = self.slot_id(&dst);
                 Bytecode::from(enc_www(64, op1.0, 0, 0))
             }
             BytecodeInst::DefinedConst {
@@ -458,9 +458,9 @@ impl BytecodeGen {
                 let op2 = self.slot_id(&recv);
                 Bytecode::from_u32(enc_www(66, op1.0, op2.0, 0), name.get())
             }
-            BytecodeInst::DefinedGvar { ret, name } => {
+            BytecodeInst::DefinedGvar { dst, name } => {
                 // 67
-                let op1 = self.slot_id(&ret);
+                let op1 = self.slot_id(&dst);
                 Bytecode::from_u32(enc_www(67, op1.0, 0, 0), name.get())
             }
             BytecodeInst::DefinedIvar { ret, name } => {
@@ -468,9 +468,9 @@ impl BytecodeGen {
                 let op1 = self.slot_id(&ret);
                 Bytecode::from_u32(enc_www(68, op1.0, 0, 0), name.get())
             }
-            BytecodeInst::DefinedSuper { ret } => {
+            BytecodeInst::DefinedSuper { dst } => {
                 // 69
-                let op1 = self.slot_id(&ret);
+                let op1 = self.slot_id(&dst);
                 Bytecode::from_u32(enc_www(69, op1.0, 0, 0), 0)
             }
             BytecodeInst::EnsureEnd => Bytecode::from(enc_w(85, 0)),

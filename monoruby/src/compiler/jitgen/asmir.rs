@@ -1349,6 +1349,11 @@ pub(super) enum AsmInst {
         old: IdentId,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Check if `yield` is callable.
+    ///
+    /// Set `dst` to "yield" if callable, `nil` if not.
+    ///
     DefinedYield {
         dst: SlotId,
         using_xmm: UsingXmm,
@@ -1364,10 +1369,20 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Check if `super` is callable.
+    ///
+    /// Set `dst` to "super" if callable, `nil` if not.
+    ///
     DefinedSuper {
         dst: SlotId,
         using_xmm: UsingXmm,
     },
+    ///
+    /// Check if global var `name` exists.
+    ///
+    /// Set `dst`` to "global-variable" if exists, `nil` if not.
+    ///
     DefinedGvar {
         dst: SlotId,
         name: IdentId,
