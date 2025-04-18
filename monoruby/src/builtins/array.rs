@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "hash", hash, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "-", sub, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
@@ -383,6 +384,18 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
+}
+
+///
+/// ### Array#hash
+///
+/// - hash -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
+#[monoruby_builtin]
+fn hash(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let h = HashKey(lfp.self_val()).calculate_hash();
+    Ok(Value::integer_from_u64(h))
 }
 
 ///
@@ -2094,6 +2107,7 @@ mod tests {
         end
         "##,
         );
+        run_test_no_result_check("[].hash");
         run_test_error("Array.new(-5)");
         run_test_error("Array.new(:r, 42)");
     }

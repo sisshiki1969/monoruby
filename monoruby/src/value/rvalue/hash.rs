@@ -1,5 +1,5 @@
 use super::*;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 #[monoruby_object]
@@ -334,6 +334,14 @@ impl PartialEq for HashKey {
             (Some(lhs), Some(rhs)) => lhs.eql(rhs),
             _ => false,
         }
+    }
+}
+
+impl HashKey {
+    pub fn calculate_hash(self) -> u64 {
+        let mut s = std::hash::DefaultHasher::new();
+        self.hash(&mut s);
+        s.finish()
     }
 }
 

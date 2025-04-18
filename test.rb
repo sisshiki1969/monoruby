@@ -1,5 +1,7 @@
-100.times {
-  [*(0..100)].each do |i|
-    i
-  end
-}
+b=1
+b.times do
+  a = 100
+  puts <<-RUBY
+    #{a}
+  RUBY
+end

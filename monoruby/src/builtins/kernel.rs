@@ -432,6 +432,18 @@ fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 #[monoruby_builtin]
 fn rand(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
+        if let Some(range) = arg0.is_range() {
+            let start = range.start;
+            let end = range.end;
+            let start = start.expect_integer()?;
+            let end = end.expect_integer()?;
+            if start > end {
+                return Ok(Value::nil());
+            }
+            return Ok(Value::integer(
+                (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
+            ));
+        }
         arg0.coerce_to_i64()?
     } else {
         0i64

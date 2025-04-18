@@ -2,21 +2,39 @@ prelude: |
   a = [*(0..999)]
 benchmark:
   integer_times: |
-    1000.times do end
+    5000.times do
+      100.times do end
+    end
   integer_step: |
-    0.step(1000, 1) do end
+    5000.times do
+      0.step(1000, 1) do end
+    end
   array_each: |
-    a.each do |elem| end
+    5000.times do
+      a.each do |elem| end
+    end
   array_map: |
-    a.map do |elem| elem end
+    5000.times do
+      a.map do |elem| elem end
+    end
   array_map_: |
-    a.map! do |elem| elem end
+    5000.times do
+      a.map! do |elem| elem end
+    end
   array_each_with_index: |
-    a.each_with_index do |elem| end
+    5000.times do
+      a.each_with_index do |elem| end
+    end
   array_new1: |
-    Array.new(5)
+    5000.times do
+      Array.new(5)
+    end
   array_new2: |
-    Array.new(5) do |x| x + 1 end
+    5000.times do
+      Array.new(5) do |x| x + 1 end
+    end
   tap: |
-    a.tap do |x| end
-loop_count: 5000
+    5000.times do
+      a.tap do |x| end
+    end
+loop_count: 20

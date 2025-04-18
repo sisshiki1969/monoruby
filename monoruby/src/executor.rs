@@ -843,12 +843,13 @@ impl Executor {
         receiver: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
-    ) -> Result<Value> {
+    ) -> Result<Option<Value>> {
         if let Some(func_id) = globals.check_method(receiver, method) {
             self.invoke_func(globals, func_id, receiver, args, bh)
                 .ok_or_else(|| self.take_error())
+                .map(|v| Some(v))
         } else {
-            Ok(Value::nil())
+            Ok(None)
         }
     }
 
@@ -916,18 +917,23 @@ impl Executor {
     }
 
     fn val_to_proc(&mut self, globals: &mut Globals, val: Value) -> Result<ProcInner> {
-        if let Ok(proc) = self.invoke_method_inner(globals, IdentId::TO_PROC, val, &[], None) {
-            if let Some(proc) = proc.is_proc() {
-                return Ok(proc.clone());
-            }
-        };
-        Err(MonorubyErr::typeerr(
-            "",
-            TypeErrKind::WrongArgumentType {
-                val,
-                expected: "Proc",
-            },
-        ))
+        if let Some(proc) = val.is_proc() {
+            return Ok(proc.clone());
+        }
+        if let Some(proc) =
+            self.invoke_method_if_exists(globals, IdentId::TO_PROC, val, &[], None)?
+            && let Some(proc) = proc.is_proc()
+        {
+            Ok(proc.clone())
+        } else {
+            Err(MonorubyErr::typeerr(
+                "",
+                TypeErrKind::WrongArgumentType {
+                    val,
+                    expected: "Proc",
+                },
+            ))
+        }
     }
 
     pub(crate) fn define_class(

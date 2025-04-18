@@ -1,4 +1,4 @@
-use num::ToPrimitive;
+use num::{ToPrimitive, Zero};
 
 use super::*;
 
@@ -35,7 +35,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(FLOAT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(FLOAT_CLASS, "floor", floor, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "round", round, 0);
+    globals.define_builtin_func_with(FLOAT_CLASS, "round", round, 0, 1, false);
     globals.define_builtin_func(FLOAT_CLASS, "finite?", finite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "infinite?", infinite, 0);
     globals.define_builtin_func(FLOAT_CLASS, "nan?", nan, 0);
@@ -194,15 +194,42 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// ### Float#round
 ///
-/// - round([NOT SUPPORTED]ndigits = 0) -> Integer | Float
-/// - round([NOT SUPPORTED]ndigits = 0, [NOT SUPPORTED]half: :up) -> Integer | Float
+/// - round(ndigits = 0) -> Integer | Float
+/// - round(ndigits = 0, [NOT SUPPORTED]half: :up) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
 #[monoruby_builtin]
 fn round(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    match lfp.self_val().unpack() {
-        RV::Float(f) => Ok(Value::integer(f.round_ties_even() as i64)),
-        _ => unreachable!(),
+    let ndigits = if let Some(d) = lfp.try_arg(0) {
+        d.expect_integer()?
+    } else {
+        0
+    };
+    let f = lfp.self_val().try_float().unwrap();
+    if ndigits == 0 {
+        return Ok(Value::integer(f.round() as i64));
+    }
+    if ndigits > 0 {
+        if let Ok(ndigits) = u32::try_from(ndigits) {
+            let mul = 10i32.pow(ndigits) as f64;
+            let f = (f * mul).round() / mul;
+            Ok(Value::float(f))
+        } else {
+            Err(MonorubyErr::rangeerr("too big to convert to u32"))
+        }
+    } else {
+        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
+            let mul = 10i32.pow(neg_ndigits) as f64;
+            let f = (f / mul).round() * mul;
+            if let Some(v) = Value::integer_from_f64(f) {
+                return Ok(v);
+            } else {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "[unreachable] invalid f64: {f}"
+                )));
+            }
+        }
+        Err(MonorubyErr::rangeerr("too small to convert to u32"))
     }
 }
 
@@ -279,10 +306,15 @@ mod tests {
     fn round() {
         run_test("1.2.floor");
         run_test("(-1.2).floor");
+        run_test("11.6.round");
         run_test("11.5.round");
         run_test("11.4.round");
         run_test("(-11.4).round");
         run_test("(-11.5).round");
+        run_test("(-11.6).round");
+        run_test("(1000 * Math::PI).round(3)");
+        run_test("(1000 * Math::PI).round(0)");
+        run_test("(1000 * Math::PI).round(-3)");
     }
 
     #[test]

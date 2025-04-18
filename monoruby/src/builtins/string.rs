@@ -8,6 +8,15 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("String", STRING_CLASS, ObjTy::STRING);
+    globals.define_builtin_class_func_with_kw(
+        STRING_CLASS,
+        "new",
+        string_new,
+        0,
+        1,
+        false,
+        &["encoding", "capacity"],
+    );
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
@@ -118,6 +127,23 @@ fn encoding_class(globals: &Globals) -> ClassId {
         .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
         .unwrap()
         .as_class_id()
+}
+
+///
+/// ### String.new
+///
+/// - new(string = "") -> String
+/// - [NOT SUPPORTED] new(string = "", encoding) -> String
+/// - [NOT SUPPORTED] new(string = "", encoding, capacity) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
+#[monoruby_builtin]
+fn string_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let s = match lfp.try_arg(0) {
+        Some(string) => string.expect_string()?,
+        None => "".to_string(),
+    };
+    Ok(Value::string(s))
 }
 
 ///
@@ -2061,6 +2087,12 @@ fn valid_encoding(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn string_new() {
+        run_test(r##"String.new"##);
+        run_test(r##"String.new("Ruby")"##);
+    }
 
     #[test]
     fn string_empty() {

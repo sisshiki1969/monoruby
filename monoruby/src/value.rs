@@ -247,6 +247,29 @@ impl Value {
         }
     }
 
+    pub fn integer_from_u64(num: u64) -> Self {
+        if let Ok(i) = i64::try_from(num) {
+            Value::integer(i)
+        } else {
+            Value::bigint(BigInt::from(num))
+        }
+    }
+
+    const INTEGRAL_LIMIT: f64 = 9007199254740992.0;
+
+    pub fn integer_from_f64(f: f64) -> Option<Value> {
+        if f.is_nan() || f.is_infinite() {
+            return None;
+        }
+
+        let f = f.round();
+        if f < -Self::INTEGRAL_LIMIT || f > Self::INTEGRAL_LIMIT {
+            return Some(Value::bigint(BigInt::from_f64(f)?));
+        }
+
+        Some(Value::integer(f as i64))
+    }
+
     pub fn float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(FLOAT_ZERO);

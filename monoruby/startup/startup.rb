@@ -177,6 +177,11 @@ class Array
     o
   end
 
+  def sample
+    return nil if self.empty?
+    self[rand(self.size)]
+  end
+
   def each
     return self.to_enum(:each) if !block_given?
     i = 0
@@ -245,6 +250,10 @@ class Integer
     self + 1
   end
 
+  def floor
+    self
+  end
+
   def times
     return self.to_enum(:times) if !block_given?
     i = 0
@@ -281,13 +290,20 @@ class Integer
   end
 end
 
+class Float
+  def zero?
+    self == 0.0
+  end
+end
+
 class Symbol
   def match(other)
     self.to_s.match(other)
   end
 
   def to_proc
-    Proc.new do |slf, *args|
+    Proc.new do |*args|
+      slf, *args = args
       slf.send(self, *args)
     end
   end
@@ -361,6 +377,7 @@ class File
   include File::Constants
   FNM_SYSCASE = 0
   FNM_CASEFOLD = 8
+  NULL = "/dev/null"
 
   Separator = "/"
   SEPARATOR = "/"
