@@ -718,7 +718,7 @@ pub(super) enum AsmInst {
     /// - caller save registers
     ///
     DeepCopyLit(Value, UsingXmm),
-    ///
+    /*///
     /// Convert Value to f64.
     ///
     /// go to *deopt* if *reg* was neither Float nor Fixnum(i63).
@@ -735,7 +735,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    NumToXmm(GP, Xmm, AsmDeopt),
+    NumToXmm(GP, Xmm, AsmDeopt),*/
     ///
     /// Convert Fixnum to f64.
     ///

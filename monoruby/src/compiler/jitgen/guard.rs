@@ -313,7 +313,7 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    ///
+    /*///
     /// Convert Value to f64.
     ///
     /// go to *deopt* if *reg* was neither Float nor Fixnum(i63).
@@ -344,7 +344,7 @@ impl Codegen {
         };
         self.integer_val_to_f64(reg, xmm);
         self.jit.bind_label(exit);
-    }
+    }*/
 
     ///
     /// Copy the value(f64) of Float to *xmm*.
@@ -484,7 +484,7 @@ mod tests {
         }
     }
 
-    #[test]
+    /*#[test]
     fn unbox_integer_float() {
         let mut gen = Codegen::new(false);
         let side_exit = gen.entry_panic();
@@ -529,5 +529,5 @@ mod tests {
             let actual = func(Value::integer(i));
             assert_eq!(expected, actual);
         }
-    }
+    }*/
 }

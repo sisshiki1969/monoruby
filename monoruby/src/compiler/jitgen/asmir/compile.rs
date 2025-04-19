@@ -171,9 +171,9 @@ impl Codegen {
                 UnOpK::Pos => {}
             },
 
-            AsmInst::NumToXmm(reg, x, side_exit) => {
+            /*AsmInst::NumToXmm(reg, x, side_exit) => {
                 self.numeric_val_to_f64(reg, x, &labels[side_exit]);
-            }
+            }*/
             AsmInst::F64ToXmm(f, x) => {
                 let f = self.jit.const_f64(f);
                 monoasm!( &mut self.jit,

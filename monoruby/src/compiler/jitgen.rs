@@ -534,7 +534,7 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        is_recompile: bool,
+        _is_recompile: bool,
     ) {
         #[cfg(any(feature = "emit-asm", feature = "jit-log", feature = "jit-debug"))]
         if self.startup_flag {
@@ -548,7 +548,7 @@ impl Codegen {
                 } else {
                     "whole"
                 },
-                if is_recompile { "re" } else { "" },
+                if _is_recompile { "re" } else { "" },
                 iseq.func_id(),
                 name,
                 if position.is_some() {

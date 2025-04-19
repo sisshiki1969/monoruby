@@ -601,7 +601,7 @@ impl JitContext {
                 bbctx.unset_class_version_guard();
             }
             TraceIr::MethodCall {
-                polymorphic: _,
+                _polymorphic: _,
                 callid,
                 cache,
             } => {

@@ -534,7 +534,7 @@ impl ISeqInfo {
                     };
                     if let Some(func_id) = pc.cached_fid() {
                         TraceIr::MethodCall {
-                            polymorphic,
+                            _polymorphic: polymorphic,
                             callid,
                             cache: Some(MethodCacheEntry {
                                 recv_class: pc.cached_class1().unwrap(),
@@ -544,7 +544,7 @@ impl ISeqInfo {
                         }
                     } else {
                         TraceIr::MethodCall {
-                            polymorphic,
+                            _polymorphic: polymorphic,
                             callid,
                             cache: None,
                         }

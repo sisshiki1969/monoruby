@@ -218,7 +218,7 @@ pub(crate) enum TraceIr {
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
     },
     MethodCall {
-        polymorphic: bool,
+        _polymorphic: bool,
         callid: CallSiteId,
         cache: Option<MethodCacheEntry>,
     },
@@ -724,7 +724,7 @@ impl TraceIr {
             TraceIr::ToA { dst, src } => format!("{dst:?} = {src:?}.to_a"),
             TraceIr::Mov(dst, src) => format!("{dst:?} = {src:?}"),
             TraceIr::MethodCall {
-                polymorphic,
+                _polymorphic: polymorphic,
                 callid,
                 cache,
             } => {

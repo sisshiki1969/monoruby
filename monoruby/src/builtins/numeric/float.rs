@@ -1,4 +1,4 @@
-use num::{ToPrimitive, Zero};
+use num::ToPrimitive;
 
 use super::*;
 
