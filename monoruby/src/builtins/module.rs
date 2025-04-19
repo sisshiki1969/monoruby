@@ -963,6 +963,36 @@ mod tests {
 
     #[test]
     fn include() {
+        run_test(
+            r#"
+            module M
+            end
+            class C1
+              include M
+            end
+            class C2 < C1
+              include M   # この include は無視される
+            end
+
+            C2.ancestors.inspect  # => [C2, C1, M, Object, Kernel]
+            "#,
+        );
+        run_test(
+            r#"
+            module M
+            end
+            class C1
+            end
+            class C2 < C1
+              include M
+            end
+            class C1
+              include M
+            end
+
+            C2.ancestors.inspect
+            "#,
+        );
         run_test_with_prelude(
             "C.new.f",
             r#"

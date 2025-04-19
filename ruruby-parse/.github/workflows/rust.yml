@@ -1,0 +1,35 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Cinstrument-coverage
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@nightly
+    - run: |
+        cargo install grcov
+        rustup component add llvm-tools-preview
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: LLVM_PROFILE_FILE="ruruby_parse-%p-%m.profraw" cargo test --verbose
+
+    - name: Run grcov
+      run:  grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
+    - name: Upload to codecov.io
+      uses: codecov/codecov-action@v2
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+

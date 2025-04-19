@@ -43,7 +43,9 @@ impl Module {
         }
         let mut base = *self;
         loop {
-            base.include(module);
+            if !module.is_ancestor_of(*self) {
+                base.include(module);
+            }
             base = base.superclass().unwrap();
             if let Some(superclass) = module.superclass()
                 && superclass.is_iclass()
@@ -62,7 +64,7 @@ impl Module {
     }
 
     ///
-    /// Check whether `self` is cyclically included in `module`.
+    /// Check whether `self` is an ancestor of `module`.
     ///
     fn check_cyclic(self, mut module: Module) -> bool {
         if module.id() == self.id() {

@@ -11,7 +11,6 @@ a Ruby parser written in Rust.
 pub fn parse_program(code: String, path: impl Into<PathBuf>, context_name: &str) -> Result<ParseResult, ParseErr>
 ```
 
-
 ## comand line usage
 
 ### parse script file and print
