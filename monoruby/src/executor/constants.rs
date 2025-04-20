@@ -46,7 +46,9 @@ impl Executor {
             None => return Ok(None),
             Some(ConstState::Loaded(v)) => return Ok(Some(*v)),
             Some(ConstState::Autoload(file_name)) => {
-                self.require(globals, &file_name.clone(), false)?;
+                let file_name = file_name.clone();
+                globals.remove_constant(class_id, name);
+                self.require(globals, &file_name, false)?;
             }
         };
         match globals.get_constant(class_id, name) {

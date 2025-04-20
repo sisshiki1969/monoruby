@@ -572,7 +572,6 @@ impl Executor {
             if module_function {
                 globals.add_singleton_method(class_id, name, func, visibility);
             }
-            globals.class_version_inc();
             if globals.codegen.bop_redefine_flags() != 0 {
                 self.immediate_eviction(globals);
             }

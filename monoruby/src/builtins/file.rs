@@ -244,13 +244,17 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
-fn basename(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = string_to_path(lfp.arg(0), globals)?;
-    let basename = match filename.file_name() {
-        Some(ostr) => ostr.to_string_lossy().to_string(),
-        None => "".to_string(),
+fn basename(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = lfp.arg(0).expect_string()?;
+    if filename.is_empty() {
+        return Ok(Value::string_from_str(""));
+    }
+    let basename = if let Some(s) = filename.split('/').rev().find(|s| !s.is_empty()) {
+        s
+    } else {
+        "/"
     };
-    Ok(Value::string(basename))
+    Ok(Value::string_from_str(basename))
 }
 
 ///
@@ -532,9 +536,18 @@ mod tests {
         run_test(r##"File.dirname("dir/file.ext")"##);
         run_test(r##"File.dirname("file.ext")"##);
         run_test(r##"File.dirname("foo/bar/")"##);
+
         run_test(r##"File.basename("dir/file.ext")"##);
         run_test(r##"File.basename("file.ext")"##);
         run_test(r##"File.basename("foo/bar/")"##);
+        run_test(r##"File.basename("")"##);
+        run_test(r##"File.basename("/")"##);
+        run_test(r##"File.basename("//")"##);
+        run_test(r##"File.basename("..")"##);
+        run_test(r##"File.basename("/..")"##);
+        run_test(r##"File.basename("/../")"##);
+        run_test(r##"File.basename("/../.")"##);
+
         run_test(r##"File.extname("foo/foo.txt")"##);
         run_test(r##"File.extname("foo/foo.tar.gz")"##);
         run_test(r##"File.extname("foo/bar")"##);

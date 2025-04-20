@@ -13,7 +13,7 @@ pub use hash::*;
 pub use io::IoInner;
 pub use ivar_table::*;
 pub use method::*;
-pub use module::*;
+pub use module::{Module, ModuleInner, ModuleType};
 pub use regexp::RegexpInner;
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};

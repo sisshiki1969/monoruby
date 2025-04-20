@@ -277,7 +277,7 @@ impl ClassInfo {
     }
 
     ///
-    /// Remove aa constant with *name* in the class of *class_id*.
+    /// Remove a constant with *name* in the class of *class_id*.
     ///
     /// If not found, return None.
     ///
@@ -727,12 +727,16 @@ impl Globals {
     ///
     /// Add a new public method *func* with *name* to the class of *class_id*.
     ///
+    /// This fn increments class version.
+    ///
     pub(crate) fn add_public_method(&mut self, class_id: ClassId, name: IdentId, func_id: FuncId) {
         self.add_method(class_id, name, func_id, Visibility::Public)
     }
 
     ///
     /// Add a new method *func* with *name* to the class of *class_id*.
+    ///
+    /// This fn increments class version.
     ///
     pub(crate) fn add_method(
         &mut self,
@@ -747,6 +751,8 @@ impl Globals {
     ///
     /// Add a new basic operation method *func* with *name* to the class of *class_id*.
     ///
+    /// This fn increments class version.
+    ///
     pub(crate) fn add_basic_op_method(
         &mut self,
         class_id: ClassId,
@@ -759,6 +765,8 @@ impl Globals {
 
     ///
     /// Add a new method *func* with *name* to the class of *class_id*.
+    ///
+    /// This fn increments class version.
     ///
     fn add_method_inner(
         &mut self,
@@ -787,6 +795,11 @@ impl Globals {
         }
     }
 
+    ///
+    /// Add a new empty method with *name* to the class of *class_id*.
+    ///
+    /// This fn increments class version.
+    ///
     pub(crate) fn add_empty_method(
         &mut self,
         owner: ClassId,
@@ -807,6 +820,8 @@ impl Globals {
 
     ///
     /// Add a new singleton method *func* with *name* to the class of *class_id*.
+    ///
+    /// This fn increments class version.
     ///
     pub(crate) fn add_singleton_method(
         &mut self,
@@ -873,9 +888,12 @@ impl Globals {
     }
 
     ///
-    /// remove method.
+    /// Remove method.
+    ///
+    /// This fn increments class version.
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Option<()> {
+        self.class_version_inc();
         self.store.classes[class_id].methods.remove(&func_name)?;
         Some(())
     }
@@ -959,6 +977,11 @@ impl Globals {
             .check_method_for_class(class_id, name, class_version)
     }
 
+    ///
+    /// Change visibility of methods `names` class *class_id*.
+    ///
+    /// This fn increments class version.
+    ///
     pub(crate) fn change_method_visibility_for_class(
         &mut self,
         class_id: ClassId,
@@ -970,20 +993,23 @@ impl Globals {
             match self.store.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visi;
+                    self.class_version_inc();
                 }
                 None => {
                     self.add_empty_method(class_id, *name, visi);
                 }
             };
         }
-        self.class_version_inc();
         Ok(())
     }
 
     ///
     /// If the re-defined method is "basic operation", return true.
     ///
+    /// This fn increments class version.
+    ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
+        self.class_version_inc();
         if let Some(old) = self.store.classes[class_id].methods.insert(name, entry)
             && old.is_basic_op
         {

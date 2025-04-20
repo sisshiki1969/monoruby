@@ -682,7 +682,6 @@ pub(super) extern "C" fn singleton_define_method(
         globals.store.iseq(current_func).lexical_context.clone();
     let class_id = globals.store.get_singleton(obj).id();
     globals.add_public_method(class_id, name, func);
-    globals.class_version_inc();
 }
 
 pub(super) extern "C" fn alias_method(

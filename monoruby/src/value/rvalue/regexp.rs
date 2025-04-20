@@ -442,3 +442,11 @@ impl RegexpInner {
         }
     }
 }
+
+#[test]
+fn test_regexp() {
+    let re = Regex::new(r#"(?:(?m)\A(?:(?m)/)?\z)"#).unwrap();
+    assert!(re.is_match("").unwrap());
+    assert!(re.is_match("/").unwrap());
+    assert!(!re.is_match("a").unwrap());
+}

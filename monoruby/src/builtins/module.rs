@@ -50,6 +50,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_rest(MODULE_CLASS, "include", include);
+    globals.define_private_builtin_func(MODULE_CLASS, "included", included, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
@@ -456,16 +457,33 @@ fn private_instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
-fn include(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() == 0 {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
     let class = lfp.self_val().as_class();
     for v in args.iter().cloned().rev() {
+        vm.invoke_method_if_exists(
+            globals,
+            IdentId::get_id("included"),
+            v,
+            &[lfp.self_val()],
+            None,
+        )?;
         globals.include_module(class, v.expect_module(globals)?)?;
     }
     Ok(lfp.self_val())
+}
+
+///
+/// ### Module#included
+/// - included(class_or_module) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/included.html]
+#[monoruby_builtin]
+fn included(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+    Ok(Value::nil())
 }
 
 ///

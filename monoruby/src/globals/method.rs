@@ -135,6 +135,25 @@ impl Globals {
         )
     }
 
+    pub(crate) fn define_private_builtin_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arg_num: usize,
+    ) -> FuncId {
+        self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Private,
+            arg_num,
+            arg_num,
+            false,
+            &[],
+        )
+    }
+
     pub(crate) fn define_basic_op(
         &mut self,
         class_id: ClassId,
@@ -650,7 +669,6 @@ impl Globals {
         let func_id = self.store.add_attr_reader(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
-        self.class_version_inc();
         method_name
     }
 
@@ -668,7 +686,6 @@ impl Globals {
         let func_id = self.store.add_attr_writer(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
-        self.class_version_inc();
         method_name
     }
 

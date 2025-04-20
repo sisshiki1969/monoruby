@@ -5,11 +5,7 @@ use super::*;
 //
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_under_obj(
-        "Regexp",
-        REGEXP_CLASS,
-        ObjTy::REGEXP,
-    );
+    globals.define_builtin_class_under_obj("Regexp", REGEXP_CLASS, ObjTy::REGEXP);
     globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
@@ -180,7 +176,7 @@ fn match_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     };
     let byte_pos = match given.char_indices().nth(char_pos) {
         Some((pos, _)) => pos,
-        None => return Ok(Value::bool(false)),
+        None => 0, //return Ok(Value::bool(false)),
     };
     Ok(Value::bool(
         regex.captures_from_pos(given, byte_pos, vm)?.is_some(),
@@ -324,6 +320,12 @@ mod tests {
             res << /R.../.match?("-Ruby", 0)
         end
         res
+        "#,
+        );
+        run_test(
+            r#"
+        SEPARATOR_PAT = /#{Regexp.quote File::SEPARATOR}/
+        /\A#{SEPARATOR_PAT}?\z/.match?("")
         "#,
         );
     }
