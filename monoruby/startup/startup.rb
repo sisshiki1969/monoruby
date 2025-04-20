@@ -192,6 +192,20 @@ class Array
     self
   end
 
+  def reverse_each
+    return self.to_enum(:reverse_each) if !block_given?
+    len = self.size
+    if len == 0
+      return self
+    end
+    i = len - 1
+    while i >= 0
+      yield self[i]
+      i -= 1
+    end
+    self
+  end
+
   def each_with_index
     return self.to_enum(:each_with_index) if !block_given?
     i = 0
@@ -415,11 +429,15 @@ class Marshal
 end
 
 class Errno
+  ENOENT = 2
+  EAGAIN = 11
+  EPROTO = 32
+  ENOSPC = 28
+  EACCES = 13
+  EEXIST = 17
   ENOLCK = 37
   ENOSYS = 38
   ENOTSUP = 95
-  ENOENT = 2
-  EACCES = 13
 end
 
 class GC

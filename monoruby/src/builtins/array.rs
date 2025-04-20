@@ -2611,6 +2611,15 @@ mod tests {
         x
         "##,
         );
+        run_test(
+            r##"
+        x = []
+        [2, 3, 4, 5].reverse_each do |y|
+          x << y
+        end
+        x
+        "##,
+        );
     }
 
     #[test]

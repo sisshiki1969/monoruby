@@ -244,8 +244,8 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
-fn basename(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let filename = lfp.arg(0).expect_string()?;
+fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     if filename.is_empty() {
         return Ok(Value::string_from_str(""));
     }
