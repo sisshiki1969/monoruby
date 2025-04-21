@@ -168,9 +168,11 @@ impl Globals {
             loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
         });
 
+        let codegen = Codegen::new(no_jit);
+
         let mut globals = Self {
             main_object,
-            codegen: Codegen::new(no_jit),
+            codegen,
             store: Store::new(),
             global_vars: HashMap::default(),
             no_jit,

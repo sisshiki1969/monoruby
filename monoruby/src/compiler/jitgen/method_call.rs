@@ -541,6 +541,7 @@ impl BBContext {
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);
         let evict = ir.new_evict();
+        self.exec_gc(ir);
         ir.push(AsmInst::Yield {
             callid,
             using_xmm,

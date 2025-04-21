@@ -1389,10 +1389,14 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
-pub(crate) extern "C" fn execute_gc(globals: &Globals, mut executor: &Executor) {
+pub(crate) extern "C" fn execute_gc(globals: &mut Globals, mut executor: &mut Executor) {
+    if globals.codegen.sigint_flag() {
+        runtime::_dump_stacktrace(executor, globals);
+        unsafe { libc::exit(0) }
+    };
     // Get root Executor.
-    while let Some(parent) = executor.parent_fiber {
-        executor = unsafe { parent.as_ref() };
+    while let Some(mut parent) = executor.parent_fiber {
+        executor = unsafe { parent.as_mut() };
     }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
 }

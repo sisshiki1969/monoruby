@@ -261,7 +261,7 @@ impl Codegen {
             AsmInst::WriteBack(wb) => self.gen_write_back(&wb),
             AsmInst::XmmSave(using_xmm) => self.xmm_save(using_xmm),
             AsmInst::XmmRestore(using_xmm) => self.xmm_restore(using_xmm),
-            AsmInst::ExecGc(wb) => self.execute_gc(Some(&wb)),
+            AsmInst::ExecGc(wb) => self.execute_gc(&wb),
             AsmInst::SetArguments { callid, callee_fid } => {
                 let meta = store[callee_fid].meta();
                 let offset = store[callee_fid].get_offset();

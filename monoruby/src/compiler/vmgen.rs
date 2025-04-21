@@ -833,6 +833,7 @@ impl Codegen {
     fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let compile = self.jit.label();
+        self.vm_execute_gc();
         if !no_jit && !cfg!(feature = "no-jit") {
             let count = self.jit.label();
             monoasm! { &mut self.jit,
