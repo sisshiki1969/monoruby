@@ -68,7 +68,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "downcase!", downcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
@@ -1790,7 +1792,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// ### String#upcase
 ///
-/// - upcase([NOT SUPPORTED]*options) -> String
+/// - upcase([NOT SUPPORTED] *options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
@@ -1798,6 +1800,26 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     Ok(Value::string(s))
+}
+
+///
+/// ### String#upcase!
+///
+/// - upcase!([NOT SUPPORTED] *options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
+#[monoruby_builtin]
+fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str().to_uppercase();
+    let changed = &s != self_val.as_str();
+    self_val.replace_string(s);
+
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 //
@@ -1811,6 +1833,26 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     Ok(Value::string(s))
+}
+
+///
+/// ### String#downcase!
+///
+/// - downcase!([NOT SUPPORTED] *options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
+#[monoruby_builtin]
+fn downcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str().to_lowercase();
+    let changed = &s != self_val.as_str();
+    self_val.replace_string(s);
+
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 ///
@@ -2695,6 +2737,10 @@ mod tests {
     fn upcase() {
         run_test(r"'AkrFj妖精u35]['.upcase");
         run_test(r"'AkrFj妖精u35]['.downcase");
+        run_test(r"s = 'AkrFj妖精u35]['; [s.upcase!, s]");
+        run_test(r"s = 'RUBY'; [s.upcase!, s]");
+        run_test(r"s = 'AkrFj妖精u35]['; [s.downcase!, s]");
+        run_test(r"s = 'rust'; [s.downcase!, s]");
     }
 
     #[test]
