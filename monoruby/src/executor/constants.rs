@@ -48,7 +48,21 @@ impl Executor {
             Some(ConstState::Autoload(file_name)) => {
                 let file_name = file_name.clone();
                 globals.remove_constant(class_id, name);
-                self.require(globals, &file_name, false)?;
+                let level = self.inc_require_level();
+
+                #[cfg(feature = "dump-require")]
+                eprintln!("{} > Autoload:{:?}", "  ".repeat(level), name);
+
+                let res = self.require(globals, &file_name, false);
+
+                #[cfg(feature = "dump-require")]
+                eprintln!("{} < Autoload:{:?}", "  ".repeat(level), name);
+
+                self.dec_require_level();
+                res?;
+                /*if name == IdentId::get_id("FeatureFlag") {
+                    return Err(MonorubyErr::runtimeerr("FeatureFlag is loaded."));
+                }*/
             }
         };
         match globals.get_constant(class_id, name) {
