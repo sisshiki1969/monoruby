@@ -13,6 +13,5 @@ end
 prefix2 = ".."
 while r2 = chop_basename(prefix2)
   puts "#{r2}"
-  gets
   prefix2, basename2 = r2
 end

@@ -271,14 +271,14 @@ impl Executor {
             let _level = self.inc_require_level();
 
             #[cfg(feature = "dump-require")]
-            eprintln!("{} > {:?}", "  ".repeat(_level), file_name);
+            eprintln!("{} > {:?}", "  ".repeat(_level), canonicalized_path);
 
             self.enter_class_context();
             let res = self.exec_script(globals, file_body, &path);
             self.exit_class_context();
 
             #[cfg(feature = "dump-require")]
-            eprintln!("{} < {:?}", "  ".repeat(_level), file_name);
+            eprintln!("{} < {:?}", "  ".repeat(_level), canonicalized_path);
 
             self.dec_require_level();
             if res.is_err() {
