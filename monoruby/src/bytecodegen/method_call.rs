@@ -241,13 +241,18 @@ impl BytecodeGen {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
                             let name = IdentId::get_id(name);
                             self.assign_local(name);
+                        } else if let NodeKind::Splat(n) = &n.kind {
+                            if let NodeKind::LocalVar(0, name) = &n.kind {
+                                let name = IdentId::get_id(name);
+                                self.assign_local(name);
+                            }
                         }
                     }
                     self.level_down(n, level);
                 });
                 n2.iter_mut().for_each(|n| self.level_down(n, level));
             }
-            NodeKind::Lambda(BlockInfo { params, body, .. }) => {
+            NodeKind::Lambda(box BlockInfo { params, body, .. }) => {
                 self.level_down(body, level + 1);
                 for p in params {
                     match &mut p.kind {
@@ -344,7 +349,11 @@ impl BytecodeGen {
                 self.level_down(base, level);
                 index.iter_mut().for_each(|n| self.level_down(n, level));
             }
-            NodeKind::For { param, iter, body } => {
+            NodeKind::For {
+                param,
+                iter,
+                box body,
+            } => {
                 for (outer, name) in param {
                     if level == *outer {
                         let name = IdentId::get_id(name);

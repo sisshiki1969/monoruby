@@ -1195,8 +1195,10 @@ impl BytecodeGen {
                 let dst = match self.refer_dynamic_local(outer, name) {
                     Some(dst) => dst,
                     None => {
+                        self.sourceinfo.show_loc(&lhs.loc);
                         return Err(MonorubyErr::runtimeerr(format!(
-                            "[FATAL] Bytecodegen: dynamic var {name} not found"
+                            "[FATAL] Bytecodegen: dynamic var {name} not found. {lhs:?} {:?}",
+                            self.outer_locals
                         )));
                     }
                 }

@@ -59,7 +59,7 @@ pub enum NodeKind {
     For {
         param: Vec<(usize, String)>,
         iter: Box<Node>,
-        body: BlockInfo,
+        body: Box<BlockInfo>,
     },
     While {
         cond: Box<Node>,
@@ -78,39 +78,39 @@ pub enum NodeKind {
         else_: Option<Box<Node>>,
         ensure: Option<Box<Node>>,
     },
-    Lambda(BlockInfo),
+    Lambda(Box<BlockInfo>),
     Break(Box<Node>),
     Next(Box<Node>),
     Redo,
     Return(Box<Node>),
-    Yield(ArgList),
-    MethodDef(String, BlockInfo),                     // id, params, body
-    SingletonMethodDef(Box<Node>, String, BlockInfo), // singleton_class, id, params, body
+    Yield(Box<ArgList>),
+    MethodDef(String, Box<BlockInfo>), // id, params, body
+    SingletonMethodDef(Box<Node>, String, Box<BlockInfo>), // singleton_class, id, params, body
     ClassDef {
         base: Option<Box<Node>>,
         name: String,
         superclass: Option<Box<Node>>,
-        info: BlockInfo,
+        info: Box<BlockInfo>,
         is_module: bool,
     },
     SingletonClassDef {
         singleton: Box<Node>,
-        info: BlockInfo,
+        info: Box<BlockInfo>,
     },
     MethodCall {
         receiver: Box<Node>,
         method: String,
-        arglist: ArgList,
+        arglist: Box<ArgList>,
         safe_nav: bool,
     },
     FuncCall {
         method: String,
-        arglist: ArgList,
+        arglist: Box<ArgList>,
         safe_nav: bool,
     },
 
     Defined(Box<Node>),
-    Super(Option<ArgList>),
+    Super(Option<Box<ArgList>>),
     AliasMethod(Box<Node>, Box<Node>), // (new_method, old_method)
     DiscardLhs,
 }
@@ -600,7 +600,7 @@ impl Node {
         loc: Loc,
     ) -> Self {
         let info = BlockInfo::new(params, body, lvar, loc);
-        Node::new(NodeKind::MethodDef(name, info), loc)
+        Node::new(NodeKind::MethodDef(name, Box::new(info)), loc)
     }
 
     pub(crate) fn new_singleton_method_decl(
@@ -613,7 +613,7 @@ impl Node {
     ) -> Self {
         let info = BlockInfo::new(params, body, lvar, loc);
         Node::new(
-            NodeKind::SingletonMethodDef(Box::new(singleton), name, info),
+            NodeKind::SingletonMethodDef(Box::new(singleton), name, Box::new(info)),
             loc,
         )
     }
@@ -633,7 +633,7 @@ impl Node {
                 base: base.map(|node| Box::new(node)),
                 name,
                 superclass: superclass.map(|node| Box::new(node)),
-                info,
+                info: Box::new(info),
                 is_module,
             },
             loc,
@@ -650,7 +650,7 @@ impl Node {
         Node::new(
             NodeKind::SingletonClassDef {
                 singleton: Box::new(singleton),
-                info,
+                info: Box::new(info),
             },
             loc,
         )
@@ -667,7 +667,7 @@ impl Node {
             NodeKind::MethodCall {
                 receiver: Box::new(receiver),
                 method,
-                arglist,
+                arglist: Box::new(arglist),
                 safe_nav,
             },
             loc,
@@ -685,7 +685,7 @@ impl Node {
             NodeKind::MethodCall {
                 receiver: Box::new(receiver),
                 method,
-                arglist,
+                arglist: Box::new(arglist),
                 safe_nav,
             },
             loc,
@@ -696,7 +696,7 @@ impl Node {
         Node::new(
             NodeKind::FuncCall {
                 method,
-                arglist,
+                arglist: Box::new(arglist),
                 safe_nav,
             },
             loc,
@@ -708,7 +708,7 @@ impl Node {
         Node::new(
             NodeKind::FuncCall {
                 method,
-                arglist,
+                arglist: Box::new(arglist),
                 safe_nav,
             },
             loc,
@@ -819,11 +819,13 @@ impl Node {
     }
 
     pub(crate) fn new_yield(args: ArgList, loc: Loc) -> Self {
-        Node::new(NodeKind::Yield(args), loc)
+        Node::new(NodeKind::Yield(Box::new(args)), loc)
     }
 
     pub(crate) fn new_super(args: impl Into<Option<ArgList>>, loc: Loc) -> Self {
-        Node::new(NodeKind::Super(args.into()), loc)
+        let args: Option<ArgList> = args.into();
+        let args = args.map(Box::new);
+        Node::new(NodeKind::Super(args), loc)
     }
 
     pub(crate) fn new_lambda(
@@ -833,7 +835,7 @@ impl Node {
         loc: Loc,
     ) -> Self {
         Node::new(
-            NodeKind::Lambda(BlockInfo::new(params, body, lvar, loc)),
+            NodeKind::Lambda(Box::new(BlockInfo::new(params, body, lvar, loc))),
             loc,
         )
     }

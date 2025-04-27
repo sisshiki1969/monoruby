@@ -35,6 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
     globals.define_builtin_func(STRING_CLASS, "include?", include_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
+    globals.define_builtin_func(STRING_CLASS, "delete_prefix", delete_prefix, 1);
     globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
@@ -736,6 +737,25 @@ fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
         Ok(lfp.self_val())
     } else {
         Ok(Value::nil())
+    }
+}
+
+///
+/// ### String#delete_prefix!
+///
+/// - delete_prefix(prefix) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix.html]
+#[monoruby_builtin]
+fn delete_prefix(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let string = self_.expect_str()?;
+    let arg0 = lfp.arg(0);
+    let arg = arg0.expect_str()?;
+    if let Some(stripped) = string.strip_prefix(arg) {
+        Ok(Value::string_from_str(stripped))
+    } else {
+        Ok(Value::string_from_str(string))
     }
 }
 
@@ -2570,8 +2590,10 @@ mod tests {
         run_test(r##""string".start_with?("ing")"##);
         run_test(r##""string".start_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
-        run_test(r##""hello".delete_prefix!("hel")"##);
-        run_test(r##""hello".delete_prefix!("hel")"##);
+        run_test(r##""hello".delete_prefix("hel")"##);
+        run_test(r##""hello".delete_prefix("her")"##);
+        run_test(r##"s = "hello"; [s.delete_prefix!("hel"), s]"##);
+        run_test(r##"s = "hello"; [s.delete_prefix!("her"), s]"##);
         run_test(r##""string".end_with?("str")"##);
         run_test(r##""string".end_with?("ing")"##);
         run_test(r##""string".end_with?("jng", "hng", "ing")"##);

@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals
         .define_builtin_class("File", FILE_CLASS, io_class, OBJECT_CLASS, ObjTy::IO)
         .id();
-    globals.define_builtin_class_func(klass, "write", write, 2);
+    globals.define_builtin_class_func(klass, "write", file_write, 2);
     globals.define_builtin_class_func(klass, "read", file_read, 1);
     globals.define_builtin_class_func_with(klass, "binread", binread, 1, 3, false);
     globals.define_builtin_class_func_rest(klass, "join", join);
@@ -32,6 +32,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "path", path, 1);
     globals.define_builtin_class_func_with(klass, "realpath", realpath, 1, 2, false);
     globals.define_builtin_class_func_with(klass, "open", open, 1, 3, false);
+
+    globals.define_builtin_func_rest(klass, "write", write);
 }
 
 ///
@@ -41,7 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
-fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.arg(0);
     let name = self_.expect_str()?;
     let mut file = match File::create(name) {
@@ -390,12 +392,12 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     let mut opt = File::options();
     let opt = match mode.split(':').next().unwrap() {
-        "r" => opt.read(true),
-        "w" => opt.write(true).create(true).truncate(true),
-        "a" => opt.write(true).create(true).append(true),
-        "r+" => opt.read(true).write(true),
-        "w+" => opt.read(true).write(true).create(true).truncate(true),
-        "a+" => opt.read(true).write(true).create(true).append(true),
+        "r" | "rb" => opt.read(true),
+        "w" | "wb" => opt.write(true).create(true).truncate(true),
+        "a" | "ab" => opt.write(true).create(true).append(true),
+        "r+" | "r+b" => opt.read(true).write(true),
+        "w+" | "w+b" => opt.read(true).write(true).create(true).truncate(true),
+        "a+" | "a+b" => opt.read(true).write(true).create(true).append(true),
         _ => {
             return Err(MonorubyErr::argumenterr(format!(
                 "Invalid access mode {}",
@@ -415,6 +417,24 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         return vm.invoke_block_once(globals, bh, &[res]);
     }
     Ok(res)
+}
+
+///
+/// ### IO#write
+/// - write(*str) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
+#[monoruby_builtin]
+fn write(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let data = lfp.arg(0).as_array();
+    let mut self_ = lfp.self_val();
+    let mut count = 0i64;
+    for s in data.iter() {
+        let s = s.expect_bytes()?;
+        count += s.len() as i64;
+        self_.as_io_inner_mut().write(s)?;
+    }
+    Ok(Value::integer(count))
 }
 
 // Utils

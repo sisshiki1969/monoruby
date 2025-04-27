@@ -1026,6 +1026,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_bytes(&self) -> Result<&[u8]> {
+        if let Some(s) = self.is_rstring_inner() {
+            Ok(&s)
+        } else {
+            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+        }
+    }
+
     pub(crate) fn expect_string(&self) -> Result<String> {
         self.expect_str().map(|s| s.to_string())
     }

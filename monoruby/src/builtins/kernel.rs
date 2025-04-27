@@ -71,6 +71,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "___malloc", malloc, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
+
+    globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
+    globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
+
     klass
 }
 
@@ -1021,6 +1025,84 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     let ary = Value::bytes_from_slice(slice);
     Ok(ary)
+}
+
+///
+/// - ____max(f1:Float, f2:Float) -> Float
+///
+#[monoruby_builtin]
+fn max(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64()?;
+    let f2 = lfp.arg(1).coerce_to_f64()?;
+    Ok(Value::float(f64::max(f1, f2)))
+}
+
+///
+/// - ____min(f1:Float, f2:Float) -> Float
+///
+#[monoruby_builtin]
+fn min(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64()?;
+    let f2 = lfp.arg(1).coerce_to_f64()?;
+    Ok(Value::float(f64::min(f1, f2)))
+}
+
+fn inline_max(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    _: ClassId,
+) -> bool {
+    let CallSiteInfo {
+        args, dst, pos_num, ..
+    } = *callsite;
+    if !callsite.is_simple() || pos_num != 2 {
+        return false;
+    }
+    let deopt = ir.new_deopt(bb);
+    let f1 = bb.fetch_float_for_xmm(ir, args, deopt).enc();
+    let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
+    if let Some(dst) = dst {
+        let fret = bb.xmm_write_enc(dst);
+        ir.inline(move |gen, _, _| {
+            monoasm!( &mut gen.jit,
+                movq xmm(fret), xmm(f1);
+                maxsd xmm(fret), xmm(f2);
+            );
+        });
+    }
+    true
+}
+
+fn inline_min(
+    bb: &mut BBContext,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    _: &Store,
+    callsite: &CallSiteInfo,
+    _: ClassId,
+) -> bool {
+    let CallSiteInfo {
+        args, dst, pos_num, ..
+    } = *callsite;
+    if !callsite.is_simple() || pos_num != 2 {
+        return false;
+    }
+    let deopt = ir.new_deopt(bb);
+    let f1 = bb.fetch_float_for_xmm(ir, args, deopt).enc();
+    let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
+    if let Some(dst) = dst {
+        let fret = bb.xmm_write_enc(dst);
+        ir.inline(move |gen, _, _| {
+            monoasm!( &mut gen.jit,
+                movq xmm(fret), xmm(f1);
+                minsd xmm(fret), xmm(f2);
+            );
+        });
+    }
+    true
 }
 
 #[cfg(test)]
