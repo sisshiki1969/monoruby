@@ -883,6 +883,11 @@ pub(super) extern "C" fn handle_error(
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
             let info = &globals.store[*info];
+            if vm.exception().is_none() {
+                vm.set_error(MonorubyErr::runtimeerr(
+                    "[FATAL] internal error: unknown exception.",
+                ));
+            }
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     ErrorReturn::goto(bc_base + ensure)

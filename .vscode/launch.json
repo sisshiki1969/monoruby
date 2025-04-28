@@ -10,7 +10,7 @@
       "name": "Debug 'optcarrot'",
       "cargo": {
         "args": [
-          "run",
+          "build",
           "--features",
           "jit-log",
           "--bin=monoruby",
@@ -22,9 +22,7 @@
         }
       },
       "args": [
-        "../optcarrot/bin/optcarrot",
-        "-b",
-        "../optcarrot/examples/Lan_Master.nes"
+        "/home/monochrome/yjit-bench/benchmarks/activerecord/benchmark.rb"
       ],
       "cwd": "${workspaceFolder}"
     },
