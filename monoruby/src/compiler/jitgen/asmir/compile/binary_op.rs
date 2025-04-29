@@ -396,18 +396,25 @@ impl Codegen {
                 )
             }
             BinOpK::Exp => {
-                let lhs = l.enc();
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(lhs);
-                    movq xmm1, [rip + rhs_label];
-                    movq rax, (pow_ff_f as u64);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(ret), xmm0;
-                );
+                if r == 2 {
+                    self.xmm_mov(l, dst);
+                    monoasm!( &mut self.jit,
+                        mulsd xmm(ret), xmm(ret);
+                    );
+                } else {
+                    let lhs = l.enc();
+                    self.xmm_save(using_xmm);
+                    monoasm!( &mut self.jit,
+                        movq xmm0, xmm(lhs);
+                        movq xmm1, [rip + rhs_label];
+                        movq rax, (pow_ff_f as u64);
+                        call rax;
+                    );
+                    self.xmm_restore(using_xmm);
+                    monoasm!( &mut self.jit,
+                        movq xmm(ret), xmm0;
+                    );
+                }
             }
             BinOpK::Rem => {
                 let lhs = l.enc();
