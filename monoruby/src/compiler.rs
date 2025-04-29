@@ -100,6 +100,19 @@ pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
     const_version: DestLabel,
+    alloc_flag: DestLabel,
+    sigint_flag: DestLabel,
+    ///
+    /// Generate code for GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - stack
+    ///
+    exec_gc: DestLabel,
     bop_redefined_flags: DestLabel,
     #[cfg(feature = "perf")]
     perf_file: std::fs::File,
@@ -124,7 +137,9 @@ impl JitModule {
         let class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
-        jit.finalize();
+        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
+        let sigint_flag = jit.data_i32(0);
+        let exec_gc = jit.label();
         #[cfg(feature = "perf")]
         let perf_file = {
             let pid = std::process::id();
@@ -135,14 +150,34 @@ impl JitModule {
             };
             file
         };
-        Self {
+        let mut j = Self {
             jit,
             class_version,
             const_version,
+            alloc_flag,
+            sigint_flag,
+            exec_gc,
             bop_redefined_flags,
             #[cfg(feature = "perf")]
             perf_file,
+        };
+        j.gen_exec_gc();
+        j.jit.finalize();
+        j
+    }
+
+    pub(crate) fn signal_handler(
+        &mut self,
+        alloc_flag: DestLabel,
+        sigint_flag: DestLabel,
+    ) -> CodePtr {
+        let codeptr = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            addl [rip + alloc_flag], 10;
+            movl [rip + sigint_flag], 1;
+            ret;
         }
+        codeptr
     }
 
     pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
@@ -246,6 +281,63 @@ impl JitModule {
             movq rax, [rsp + 176];
             addq rsp, 192;
         }
+    }
+
+    ///
+    /// Generate code for GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - stack
+    ///
+    fn gen_exec_gc(&mut self) {
+        let label = self.exec_gc.clone();
+        monoasm! { &mut self.jit,
+        label:
+            subq rsp, 8;
+        }
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq rdi, r12;
+            movq rsi, rbx;
+            movq rax, (executor::execute_gc);
+            call rax;
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+            addq rsp, 8;
+            ret;
+        }
+    }
+
+    ///
+    /// Execute garbage collection.
+    ///
+    /// ### destroy
+    /// - stack
+    ///
+    fn vm_execute_gc(&mut self) {
+        let alloc_flag = self.alloc_flag.clone();
+        let gc = self.jit.label();
+        let exit = self.jit.label();
+        let exec_gc = self.exec_gc.clone();
+        assert_eq!(0, self.jit.get_page());
+        monoasm! { &mut self.jit,
+            cmpl [rip + alloc_flag], 8;
+            jge  gc;
+        exit:
+        };
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        gc:
+            call exec_gc;
+            jmp  exit;
+        }
+        self.jit.select_page(0);
     }
 }
 
@@ -500,7 +592,6 @@ pub struct Codegen {
     pub(crate) jit: JitModule,
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
-    alloc_flag: DestLabel,
 
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
@@ -546,10 +637,6 @@ pub struct Codegen {
     /// - rax: ClassId
     ///
     get_class: DestLabel,
-    ///
-    /// Execute garbage collection.
-    ///
-    exec_gc: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     pub(crate) method_invoker: MethodInvoker,
     pub(crate) method_invoker2: MethodInvoker2,
@@ -594,14 +681,12 @@ impl Codegen {
     pub fn new(no_jit: bool) -> Self {
         let mut jit = JitModule::new();
         let pair = jit.get_address_pair();
-        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
 
         let class_version_addr = jit.get_label_address(&jit.class_version).as_ptr() as *mut u32;
         let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
         let entry_panic = jit.entry_panic();
         let get_class = jit.get_class();
         let f64_to_val = jit.f64_to_val();
-        let exec_gc = jit.exec_gc();
         let entry_unimpl = jit.unimplemented_inst();
         let method_invoker = jit.method_invoker();
         let method_invoker2 = jit.method_invoker2();
@@ -619,7 +704,6 @@ impl Codegen {
             jit,
             class_version_addr,
             const_version_addr,
-            alloc_flag: alloc_flag.clone(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             specialized_patch_point: Vec::new(),
@@ -632,7 +716,6 @@ impl Codegen {
             f64_to_val,
             div_by_zero: entry_panic.clone(),
             get_class,
-            exec_gc,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             method_invoker,
             method_invoker2,
@@ -648,7 +731,21 @@ impl Codegen {
             jit_compile_time: std::time::Duration::default(),
         };
         codegen.construct_vm(no_jit);
+        let signal_handler = codegen.signal_handler();
         codegen.jit.finalize();
+
+        unsafe {
+            use libc::{sighandler_t, SA_RESTART, SIGINT};
+            let mut sa: libc::sigaction = std::mem::zeroed();
+
+            sa.sa_sigaction = signal_handler.as_ptr() as sighandler_t;
+            sa.sa_flags = SA_RESTART;
+            libc::sigemptyset(&mut sa.sa_mask);
+
+            if libc::sigaction(SIGINT, &sa, std::ptr::null_mut()) != 0 {
+                panic!("Failed to set signal handler.");
+            }
+        }
 
         #[cfg(feature = "perf")]
         codegen.perf_info(pair, "monoruby-vm");
@@ -656,10 +753,11 @@ impl Codegen {
         let info = codegen.get_wrapper_info(pair);
         codegen.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
 
-        let address = codegen.jit.get_label_address(&alloc_flag).as_ptr() as *mut u32;
+        let address = codegen.jit.get_label_address(&codegen.alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {
             alloc.borrow_mut().set_alloc_flag_address(address);
         });
+
         codegen
     }
 
@@ -672,6 +770,16 @@ impl Codegen {
 
     pub(crate) fn alloc_flag(&self) -> DestLabel {
         self.alloc_flag.clone()
+    }
+
+    pub(crate) fn sigint_flag(&self) -> bool {
+        let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
+        unsafe { *ptr != 0 }
+    }
+
+    pub(crate) fn signal_handler(&mut self) -> CodePtr {
+        self.jit
+            .signal_handler(self.alloc_flag.clone(), self.sigint_flag.clone())
     }
 
     pub(crate) fn exec_gc(&self) -> DestLabel {
@@ -769,7 +877,10 @@ impl Codegen {
     ///
     /// Execute garbage collection.
     ///
-    fn execute_gc(&mut self, wb: Option<&jitgen::WriteBack>) {
+    /// ### destroy
+    /// - stack
+    ///
+    fn execute_gc(&mut self, wb: &jitgen::WriteBack) {
         let alloc_flag = self.alloc_flag();
         let gc = self.jit.label();
         let exit = self.jit.label();
@@ -783,9 +894,7 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(gc);
-        if let Some(wb) = wb {
-            self.gen_write_back(wb);
-        }
+        self.gen_write_back(wb);
         monoasm! { &mut self.jit,
             call exec_gc;
             jmp  exit;

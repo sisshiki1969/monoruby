@@ -35,6 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
     globals.define_builtin_func(STRING_CLASS, "include?", include_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
+    globals.define_builtin_func(STRING_CLASS, "delete_prefix", delete_prefix, 1);
     globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
     globals.define_builtin_func_with(STRING_CLASS, "split", split, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
@@ -68,7 +69,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "downcase!", downcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
@@ -734,6 +737,25 @@ fn delete_prefix_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Resul
         Ok(lfp.self_val())
     } else {
         Ok(Value::nil())
+    }
+}
+
+///
+/// ### String#delete_prefix!
+///
+/// - delete_prefix(prefix) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete_prefix.html]
+#[monoruby_builtin]
+fn delete_prefix(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let string = self_.expect_str()?;
+    let arg0 = lfp.arg(0);
+    let arg = arg0.expect_str()?;
+    if let Some(stripped) = string.strip_prefix(arg) {
+        Ok(Value::string_from_str(stripped))
+    } else {
+        Ok(Value::string_from_str(string))
     }
 }
 
@@ -1790,7 +1812,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// ### String#upcase
 ///
-/// - upcase([NOT SUPPORTED]*options) -> String
+/// - upcase([NOT SUPPORTED] *options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
@@ -1798,6 +1820,26 @@ fn upcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_uppercase();
     Ok(Value::string(s))
+}
+
+///
+/// ### String#upcase!
+///
+/// - upcase!([NOT SUPPORTED] *options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
+#[monoruby_builtin]
+fn upcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str().to_uppercase();
+    let changed = &s != self_val.as_str();
+    self_val.replace_string(s);
+
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 //
@@ -1811,6 +1853,26 @@ fn downcase(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let self_val = lfp.self_val();
     let s = self_val.as_str().to_lowercase();
     Ok(Value::string(s))
+}
+
+///
+/// ### String#downcase!
+///
+/// - downcase!([NOT SUPPORTED] *options) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
+#[monoruby_builtin]
+fn downcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let s = self_val.as_str().to_lowercase();
+    let changed = &s != self_val.as_str();
+    self_val.replace_string(s);
+
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
 }
 
 ///
@@ -2528,8 +2590,10 @@ mod tests {
         run_test(r##""string".start_with?("ing")"##);
         run_test(r##""string".start_with?("jng", "hng", "ing")"##);
         run_test_error(r##""string".start_with?("jng", 3, "ing")"##);
-        run_test(r##""hello".delete_prefix!("hel")"##);
-        run_test(r##""hello".delete_prefix!("hel")"##);
+        run_test(r##""hello".delete_prefix("hel")"##);
+        run_test(r##""hello".delete_prefix("her")"##);
+        run_test(r##"s = "hello"; [s.delete_prefix!("hel"), s]"##);
+        run_test(r##"s = "hello"; [s.delete_prefix!("her"), s]"##);
         run_test(r##""string".end_with?("str")"##);
         run_test(r##""string".end_with?("ing")"##);
         run_test(r##""string".end_with?("jng", "hng", "ing")"##);
@@ -2695,6 +2759,10 @@ mod tests {
     fn upcase() {
         run_test(r"'AkrFj妖精u35]['.upcase");
         run_test(r"'AkrFj妖精u35]['.downcase");
+        run_test(r"s = 'AkrFj妖精u35]['; [s.upcase!, s]");
+        run_test(r"s = 'RUBY'; [s.upcase!, s]");
+        run_test(r"s = 'AkrFj妖精u35]['; [s.downcase!, s]");
+        run_test(r"s = 'rust'; [s.downcase!, s]");
     }
 
     #[test]

@@ -125,7 +125,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             NodeKind::For {
                 param: vars,
                 iter: Box::new(iter),
-                body,
+                body: Box::new(body),
             },
             loc,
         );

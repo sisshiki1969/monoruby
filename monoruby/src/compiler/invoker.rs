@@ -18,6 +18,7 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
+        //self.vm_execute_gc();
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, true);
@@ -72,6 +73,7 @@ impl JitModule {
         // r8:  *args: *const Value
         // r9:  len: usize
         let error_exit = self.jit.label();
+        //self.vm_execute_gc();
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
@@ -275,7 +277,9 @@ impl JitModule {
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
+}
 
+impl JitModule {
     ///
     /// Get *ClassId* of the *Value*.
     ///
@@ -340,27 +344,6 @@ impl JitModule {
             movl  rax, (FALSE_CLASS.u32());
             ret;
         );
-        label
-    }
-
-    pub(super) fn exec_gc(&mut self) -> DestLabel {
-        let label = self.label();
-        monoasm! { &mut self.jit,
-        label:
-            subq rsp, 8;
-        }
-        self.save_registers();
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movq rsi, rbx;
-            movq rax, (execute_gc);
-            call rax;
-        }
-        self.restore_registers();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            ret;
-        }
         label
     }
 

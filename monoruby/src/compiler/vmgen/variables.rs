@@ -353,6 +353,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        let raise = self.entry_raise();
         self.fetch3();
         monoasm! { &mut self.jit,
             movq rax, [r14];
@@ -363,6 +364,8 @@ impl Codegen {
             jmp  loop_;
         loop_exit:
             negq rdi;
+            testq rax, rax;
+            jz   raise;
             movq rax, [rax + rdi * 8 - (LFP_SELF)];
         };
         self.vm_store_r15(GP::Rax);

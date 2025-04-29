@@ -227,7 +227,7 @@ impl BytecodeGen {
             NodeKind::MethodCall {
                 box receiver,
                 method,
-                arglist,
+                box arglist,
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -242,7 +242,7 @@ impl BytecodeGen {
             }
             NodeKind::FuncCall {
                 method,
-                arglist,
+                box arglist,
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -262,7 +262,7 @@ impl BytecodeGen {
                 base,
                 name,
                 superclass,
-                info,
+                box info,
                 is_module,
             } => {
                 let name = IdentId::get_id_from_string(name);
@@ -458,7 +458,7 @@ impl BytecodeGen {
             NodeKind::MethodCall {
                 box receiver,
                 method,
-                arglist,
+                box arglist,
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -473,14 +473,14 @@ impl BytecodeGen {
             }
             NodeKind::FuncCall {
                 method,
-                arglist,
+                box arglist,
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
                 return self.gen_method_call(method, None, arglist, safe_nav, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
-                return self.gen_super(arglist, use_mode, loc);
+                return self.gen_super(arglist.map(|arglist| *arglist), use_mode, loc);
             }
             NodeKind::Command(box expr) => {
                 let arglist = ArgList::from_args(vec![expr]);
@@ -488,7 +488,7 @@ impl BytecodeGen {
                 return self.gen_method_call(method, None, arglist, false, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
-                return self.gen_yield(arglist, use_mode, loc);
+                return self.gen_yield(*arglist, use_mode, loc);
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
@@ -541,7 +541,7 @@ impl BytecodeGen {
             NodeKind::For {
                 param,
                 box iter,
-                body,
+                box body,
             } => {
                 self.gen_for(param, iter, body, use_mode.use_val())?;
                 if use_mode.is_ret() {
@@ -636,12 +636,12 @@ impl BytecodeGen {
             } => {
                 return self.gen_begin(body, rescue, else_, ensure, use_mode);
             }
-            NodeKind::MethodDef(name, block) => {
+            NodeKind::MethodDef(name, box block) => {
                 let name = IdentId::get_id_from_string(name);
                 self.gen_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
-            NodeKind::SingletonMethodDef(box obj, name, block) => {
+            NodeKind::SingletonMethodDef(box obj, name, box block) => {
                 self.gen_expr(obj, UseMode2::Push)?;
                 let name = IdentId::get_id_from_string(name);
                 self.gen_singleton_method_def(name, block, use_mode, loc)?;
@@ -651,7 +651,7 @@ impl BytecodeGen {
                 base,
                 name,
                 superclass,
-                info,
+                box info,
                 is_module,
             } => {
                 let name = IdentId::get_id_from_string(name);
@@ -660,7 +660,7 @@ impl BytecodeGen {
             }
             NodeKind::SingletonClassDef {
                 box singleton,
-                info,
+                box info,
             } => {
                 self.gen_singleton_class_def(singleton, info, use_mode, loc)?;
                 return Ok(());
@@ -982,12 +982,12 @@ impl BytecodeGen {
         Ok(())
     }
 
-    fn gen_lambda(&mut self, dst: BcReg, info: BlockInfo, loc: Loc) -> Result<()> {
-        let info = self.handle_lambda(info);
+    fn gen_lambda(&mut self, dst: BcReg, info: Box<BlockInfo>, loc: Loc) -> Result<()> {
+        let func = self.handle_lambda(*info);
         self.emit(
             BytecodeInst::Lambda {
                 dst,
-                func: Box::new(info),
+                func: Box::new(func),
             },
             loc,
         );

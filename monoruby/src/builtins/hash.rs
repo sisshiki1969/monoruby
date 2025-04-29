@@ -25,6 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
     globals.define_builtin_funcs(HASH_CLASS, "select", &["filter"], select, 0);
+    globals.define_builtin_funcs(HASH_CLASS, "select!", &["filter!"], select_, 0);
     globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
     globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_funcs(
@@ -475,6 +476,43 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Hash#select
+///
+/// select! -> Enumerator
+/// select! {|key, value| ... } -> self | nil
+/// filter! -> Enumerator
+/// filter! {|key, value| ... } -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/select=21.html]
+#[monoruby_builtin]
+fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("select!");
+            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
+        }
+        Some(block) => block,
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    let mut remove = vec![];
+    for (k, v) in lfp.self_val().as_hash().iter() {
+        if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+            remove.push(k);
+        }
+    }
+    let changed = !remove.is_empty();
+    let mut h = lfp.self_val().as_hash();
+    remove.into_iter().for_each(|k| {
+        h.remove(k);
+    });
+    Ok(if changed {
+        lfp.self_val()
+    } else {
+        Value::nil()
+    })
+}
+
+///
 /// ### Hash#empty?
 ///
 /// - empty? -> bool
@@ -868,6 +906,15 @@ mod tests {
         h = { "a" => 100, "b" => 200, "c" => 300 }
         res << h.select {|k,v| k > "a"}  #=> {"b" => 200, "c" => 300}
         res << h.select {|k,v| v < 200}  #=> {"a" => 100}
+        res
+        "##,
+        );
+        run_test(
+            r##"
+        res = []
+        h = { "a" => 100, "b" => 200, "c" => 300 }
+        res << h.select! {|k,v| k > "a"}  #=> {"b" => 200, "c" => 300}
+        res << h
         res
         "##,
         );

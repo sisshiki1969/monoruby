@@ -168,9 +168,11 @@ impl Globals {
             loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
         });
 
+        let codegen = Codegen::new(no_jit);
+
         let mut globals = Self {
             main_object,
-            codegen: Codegen::new(no_jit),
+            codegen,
             store: Store::new(),
             global_vars: HashMap::default(),
             no_jit,
@@ -237,7 +239,7 @@ impl Globals {
         let pcg_version = env!("CARGO_PKG_VERSION");
         let val = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]",));
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
-        let val = Value::string_from_str("ruby");
+        let val = Value::string_from_str("monoruby");
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
 
         let version_path = dirs::home_dir()

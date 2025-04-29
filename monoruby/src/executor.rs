@@ -58,6 +58,7 @@ pub struct Executor {
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
+    require_level: usize,
     /// error information.
     exception: Option<MonorubyErr>,
 }
@@ -73,6 +74,7 @@ impl std::default::Default for Executor {
             sp_post_match: None,
             sp_matches: vec![],
             temp_stack: vec![],
+            require_level: 0,
             exception: None,
         }
     }
@@ -183,6 +185,18 @@ impl Executor {
             .extend_from_slice(slice);
     }
 
+    pub fn inc_require_level(&mut self) -> usize {
+        let level = self.require_level;
+        self.require_level += 1;
+        level
+    }
+
+    pub fn dec_require_level(&mut self) -> usize {
+        let level = self.require_level;
+        self.require_level -= 1;
+        level
+    }
+
     pub fn parent_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
         self.parent_fiber
     }
@@ -254,9 +268,19 @@ impl Executor {
         if let Some((file_body, path, canonicalized_path)) =
             globals.load_lib(file_name, is_relative)?
         {
+            let _level = self.inc_require_level();
+
+            #[cfg(feature = "dump-require")]
+            eprintln!("{} > {:?}", "  ".repeat(_level), canonicalized_path);
+
             self.enter_class_context();
             let res = self.exec_script(globals, file_body, &path);
             self.exit_class_context();
+
+            #[cfg(feature = "dump-require")]
+            eprintln!("{} < {:?}", "  ".repeat(_level), canonicalized_path);
+
+            self.dec_require_level();
             if res.is_err() {
                 globals
                     .loaded_canonicalized_files
@@ -1389,10 +1413,14 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
-pub(crate) extern "C" fn execute_gc(globals: &Globals, mut executor: &Executor) {
+pub(crate) extern "C" fn execute_gc(globals: &mut Globals, mut executor: &mut Executor) {
+    if globals.codegen.sigint_flag() {
+        runtime::_dump_stacktrace(executor, globals);
+        unsafe { libc::exit(0) }
+    };
     // Get root Executor.
-    while let Some(parent) = executor.parent_fiber {
-        executor = unsafe { parent.as_ref() };
+    while let Some(mut parent) = executor.parent_fiber {
+        executor = unsafe { parent.as_mut() };
     }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
 }
