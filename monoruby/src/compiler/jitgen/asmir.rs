@@ -144,8 +144,19 @@ impl AsmIr {
         self.push(AsmInst::XmmRestore(using_xmm));
     }
 
-    pub(super) fn exec_gc(&mut self, wb: WriteBack) {
-        self.push(AsmInst::ExecGc(wb));
+    ///
+    /// Execute GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
+    pub(super) fn exec_gc(&mut self, wb: WriteBack, error: AsmError) {
+        self.push(AsmInst::ExecGc(wb, error));
     }
 
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
@@ -852,9 +863,17 @@ pub(super) enum AsmInst {
     ///
     XmmRestore(UsingXmm),
     ///
-    /// Execute garbage collection.
+    /// Execute GC.
     ///
-    ExecGc(WriteBack),
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
+    ExecGc(WriteBack, AsmError),
     ///
     /// Set arguments.
     ///

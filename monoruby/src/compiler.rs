@@ -103,13 +103,14 @@ pub struct JitModule {
     alloc_flag: DestLabel,
     sigint_flag: DestLabel,
     ///
-    /// Generate code for GC.
+    /// Execute GC.
     ///
     /// ### in
     /// - rbx: &mut Executor
     /// - r12: &mut Globals
     ///
     /// ### destroy
+    /// - rax
     /// - stack
     ///
     exec_gc: DestLabel,
@@ -225,7 +226,7 @@ impl JitModule {
     fn save_registers(&mut self) {
         monoasm! { &mut self.jit,
             subq rsp, 192;
-            movq [rsp + 176], rax;
+            //movq [rsp + 176], rax;
             movq [rsp + 168], r11;
             movq [rsp + 160], r10;
             movq [rsp + 152], r9;
@@ -278,7 +279,7 @@ impl JitModule {
             movq r9, [rsp + 152];
             movq r10, [rsp + 160];
             movq r11, [rsp + 168];
-            movq rax, [rsp + 176];
+            //movq rax, [rsp + 176];
             addq rsp, 192;
         }
     }
@@ -291,6 +292,7 @@ impl JitModule {
     /// - r12: &mut Globals
     ///
     /// ### destroy
+    /// - rax
     /// - stack
     ///
     fn gen_exec_gc(&mut self) {
@@ -311,33 +313,6 @@ impl JitModule {
             addq rsp, 8;
             ret;
         }
-    }
-
-    ///
-    /// Execute garbage collection.
-    ///
-    /// ### destroy
-    /// - stack
-    ///
-    fn vm_execute_gc(&mut self) {
-        let alloc_flag = self.alloc_flag.clone();
-        let gc = self.jit.label();
-        let exit = self.jit.label();
-        let exec_gc = self.exec_gc.clone();
-        assert_eq!(0, self.jit.get_page());
-        monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 8;
-            jge  gc;
-        exit:
-        };
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        monoasm! { &mut self.jit,
-        gc:
-            call exec_gc;
-            jmp  exit;
-        }
-        self.jit.select_page(0);
     }
 }
 
@@ -777,11 +752,27 @@ impl Codegen {
         unsafe { *ptr != 0 }
     }
 
+    pub(crate) fn unset_sigint_flag(&self) {
+        let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
+        unsafe { *ptr = 0 }
+    }
+
     pub(crate) fn signal_handler(&mut self) -> CodePtr {
         self.jit
             .signal_handler(self.alloc_flag.clone(), self.sigint_flag.clone())
     }
 
+    ///
+    /// Execute GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax
+    /// - stack
+    ///
     pub(crate) fn exec_gc(&self) -> DestLabel {
         self.exec_gc.clone()
     }
@@ -875,12 +866,47 @@ impl Codegen {
     }*/
 
     ///
-    /// Execute garbage collection.
+    /// Execute GC. (for interpreter)
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
     ///
     /// ### destroy
+    /// - rax
     /// - stack
     ///
-    fn execute_gc(&mut self, wb: &jitgen::WriteBack) {
+    fn vm_execute_gc(&mut self) {
+        self.execute_gc_inner(None, &self.entry_raise());
+    }
+
+    ///
+    /// Execute GC. (for JIT code)
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
+    fn execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
+        self.execute_gc_inner(Some(wb), error);
+    }
+
+    ///
+    /// Execute GC.
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
+    fn execute_gc_inner(&mut self, wb: Option<&jitgen::WriteBack>, error: &DestLabel) {
         let alloc_flag = self.alloc_flag();
         let gc = self.jit.label();
         let exit = self.jit.label();
@@ -894,10 +920,14 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(gc);
-        self.gen_write_back(wb);
+        if let Some(wb) = wb {
+            self.gen_write_back(wb);
+        }
         monoasm! { &mut self.jit,
             call exec_gc;
-            jmp  exit;
+            testq rax, rax;
+            jne  exit;
+            jmp  error;
         }
         self.jit.select_page(0);
     }

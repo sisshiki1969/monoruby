@@ -1,3 +1,4 @@
+use core::error;
 use std::collections::HashSet;
 
 use monoasm_macro::monoasm;
@@ -260,7 +261,8 @@ impl BBContext {
 
     pub fn exec_gc(&self, ir: &mut AsmIr) {
         let wb = self.get_gc_write_back();
-        ir.exec_gc(wb);
+        let error = ir.new_error(self);
+        ir.exec_gc(wb, error);
     }
 
     pub fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
@@ -834,6 +836,10 @@ impl Codegen {
     /// Generate a code which write back all xmm registers to corresponding stack slots.
     ///
     /// xmms are not deallocated.
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rcx
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
         for (xmm, v) in &wb.xmm {

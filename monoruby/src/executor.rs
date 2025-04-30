@@ -1413,14 +1413,19 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
-pub(crate) extern "C" fn execute_gc(globals: &mut Globals, mut executor: &mut Executor) {
+pub(crate) extern "C" fn execute_gc(
+    globals: &mut Globals,
+    mut executor: &mut Executor,
+) -> Option<Value> {
     if globals.codegen.sigint_flag() {
-        runtime::_dump_stacktrace(executor, globals);
-        unsafe { libc::exit(0) }
+        executor.set_error(MonorubyErr::runtimeerr("Interrupt"));
+        globals.codegen.unset_sigint_flag();
+        return None;
     };
     // Get root Executor.
     while let Some(mut parent) = executor.parent_fiber {
         executor = unsafe { parent.as_mut() };
     }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
+    Some(Value::nil())
 }
