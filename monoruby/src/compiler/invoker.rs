@@ -18,7 +18,7 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
-        self.invoker_prologue();
+        self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, true);
         self.call_invoker();
@@ -47,7 +47,7 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
-        self.invoker_prologue();
+        self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, false);
         self.call_invoker();
@@ -72,7 +72,7 @@ impl JitModule {
         // r8:  *args: *const Value
         // r9:  len: usize
         let error_exit = self.jit.label();
-        self.invoker_prologue();
+        self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
         self.call_invoker();
@@ -97,7 +97,7 @@ impl JitModule {
         // r8:  *args: *const Value
         // r9:  len: usize
         let error_exit = self.jit.label();
-        self.invoker_prologue();
+        self.invoker_prologue(&error_exit);
         self.invoker_frame_setup(true, true);
         self.invoker_args_setup(&error_exit, true);
         self.call_invoker();
@@ -119,7 +119,7 @@ impl JitModule {
         // rsi: &mut Globals
         // rdx: Lfp
         let error_exit = self.jit.label();
-        self.invoker_prologue();
+        self.invoker_prologue(&error_exit);
         monoasm! { &mut self.jit,
             // set lfp
             movq r14, rdx;
@@ -369,7 +369,7 @@ extern "C" fn illegal_classid(v: Value) {
 }
 
 impl JitModule {
-    fn invoker_prologue(&mut self) {
+    fn invoker_prologue(&mut self, _error: &DestLabel) {
         // rdi: &mut Interp
         // rsi: &mut Globals
         monoasm! { &mut self.jit,
@@ -516,12 +516,7 @@ impl JitModule {
     }
 
     fn invoker_epilogue(&mut self, error_exit: &DestLabel) {
-        //monoasm! { &mut self.jit,
-        //    movq r15, rax;
-        //}
-        //self.vm_execute_gc(error_exit.clone());
         monoasm! { &mut self.jit,
-        //    movq rax, r15;
         error_exit:
             popq r15;
             popq r14;

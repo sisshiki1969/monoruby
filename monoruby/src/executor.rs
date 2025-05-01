@@ -1414,8 +1414,8 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 /// Execute garbage collection.
 ///
 pub(crate) extern "C" fn execute_gc(
-    globals: &mut Globals,
     mut executor: &mut Executor,
+    globals: &mut Globals,
 ) -> Option<Value> {
     if globals.codegen.sigint_flag() {
         executor.set_error(MonorubyErr::runtimeerr("Interrupt"));

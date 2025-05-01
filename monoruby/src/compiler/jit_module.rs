@@ -104,8 +104,8 @@ impl JitModule {
         }
         self.save_registers();
         monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movq rsi, rbx;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (executor::execute_gc);
             call rax;
         }
@@ -224,7 +224,6 @@ impl JitModule {
             jge  gc;
         exit:
         };
-        assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(gc);
         if let Some(wb) = wb {

@@ -446,6 +446,9 @@ impl JitModule {
     /// ### in
     /// - r15: &FuncData
     ///
+    /// ### out
+    /// - rax: return value
+    ///
     /// ### destroy
     /// - caller save registers
     ///
@@ -468,6 +471,9 @@ impl JitModule {
     /// ### in
     /// - r15: &FuncData
     /// - r14: callee's Lfp
+    ///
+    /// ### out
+    /// - rax: return value
     ///
     /// ### destroy
     /// - caller save registers
@@ -556,12 +562,8 @@ impl JitModule {
     /// - rax
     /// - stack
     ///
-    fn vm_execute_gc(&mut self, raise: impl Into<Option<DestLabel>>) {
-        let raise = if let Some(raise) = raise.into() {
-            raise
-        } else {
-            self.entry_raise.clone()
-        };
+    fn vm_execute_gc(&mut self) {
+        let raise = self.entry_raise.clone();
         self.execute_gc_inner(None, &raise);
     }
 
