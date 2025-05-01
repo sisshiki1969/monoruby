@@ -48,15 +48,15 @@ impl Executor {
             Some(ConstState::Autoload(file_name)) => {
                 let file_name = file_name.clone();
                 globals.remove_constant(class_id, name);
-                let level = self.inc_require_level();
+                let _level = self.inc_require_level();
 
                 #[cfg(feature = "dump-require")]
-                eprintln!("{} > Autoload:{:?}", "  ".repeat(level), name);
+                eprintln!("{} > Autoload:{:?}", "  ".repeat(_level), name);
 
                 let res = self.require(globals, &file_name, false);
 
                 #[cfg(feature = "dump-require")]
-                eprintln!("{} < Autoload:{:?}", "  ".repeat(level), name);
+                eprintln!("{} < Autoload:{:?}", "  ".repeat(_level), name);
 
                 self.dec_require_level();
                 res?;

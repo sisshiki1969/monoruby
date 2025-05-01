@@ -4,6 +4,7 @@ use monoasm::*;
 use monoasm_macro::monoasm;
 
 mod invoker;
+mod jit_module;
 pub mod jitgen;
 pub mod runtime;
 mod vmgen;
@@ -14,6 +15,8 @@ use self::jitgen::asmir::AsmEvict;
 use super::*;
 use crate::bytecodegen::inst::*;
 use crate::executor::*;
+
+const OPECODE: i64 = 6;
 
 type MethodInvoker = extern "C" fn(
     &mut Executor,
@@ -103,17 +106,45 @@ pub struct JitModule {
     alloc_flag: DestLabel,
     sigint_flag: DestLabel,
     ///
+    /// Raise error.
+    ///
+    /// ### in
+    /// - r13: PC + 1
+    /// - r14: LFP
+    ///
+    /// ### destroy
+    /// - caller saved registers
+    ///
+    entry_raise: DestLabel,
+    ///
     /// Execute GC.
     ///
     /// ### in
     /// - rbx: &mut Executor
     /// - r12: &mut Globals
     ///
+    /// ### out
+    /// - rax: None if Interrupt is thrown.
+    ///
     /// ### destroy
     /// - rax
     /// - stack
     ///
     exec_gc: DestLabel,
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    /// - xmm0: f64
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - rcx
+    ///
+    f64_to_val: DestLabel,
+    dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
     #[cfg(feature = "perf")]
     perf_file: std::fs::File,
@@ -133,40 +164,6 @@ impl std::ops::DerefMut for JitModule {
 }
 
 impl JitModule {
-    fn new() -> Self {
-        let mut jit = JitMemory::new();
-        let class_version = jit.data_i32(1);
-        let bop_redefined_flags = jit.data_i32(0);
-        let const_version = jit.data_i64(1);
-        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let sigint_flag = jit.data_i32(0);
-        let exec_gc = jit.label();
-        #[cfg(feature = "perf")]
-        let perf_file = {
-            let pid = std::process::id();
-            let temp_file = format!("/tmp/perf-{pid}.map");
-            let file = match std::fs::File::create(&temp_file) {
-                Err(why) => panic!("couldn't create {}: {}", temp_file, why),
-                Ok(file) => file,
-            };
-            file
-        };
-        let mut j = Self {
-            jit,
-            class_version,
-            const_version,
-            alloc_flag,
-            sigint_flag,
-            exec_gc,
-            bop_redefined_flags,
-            #[cfg(feature = "perf")]
-            perf_file,
-        };
-        j.gen_exec_gc();
-        j.jit.finalize();
-        j
-    }
-
     pub(crate) fn signal_handler(
         &mut self,
         alloc_flag: DestLabel,
@@ -221,7 +218,7 @@ impl JitModule {
     }
 
     ///
-    /// Save caller-save registers in stack.
+    /// Save caller-save registers (except rax) in stack.
     ///
     fn save_registers(&mut self) {
         monoasm! { &mut self.jit,
@@ -253,7 +250,7 @@ impl JitModule {
     }
 
     ///
-    /// Restore caller-save registers from stack.
+    /// Restore caller-save registers (except rax) from stack.
     ///
     fn restore_registers(&mut self) {
         monoasm! { &mut self.jit,
@@ -283,40 +280,26 @@ impl JitModule {
             addq rsp, 192;
         }
     }
-
-    ///
-    /// Generate code for GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax
-    /// - stack
-    ///
-    fn gen_exec_gc(&mut self) {
-        let label = self.exec_gc.clone();
-        monoasm! { &mut self.jit,
-        label:
-            subq rsp, 8;
-        }
-        self.save_registers();
-        monoasm! { &mut self.jit,
-            movq rdi, r12;
-            movq rsi, rbx;
-            movq rax, (executor::execute_gc);
-            call rax;
-        }
-        self.restore_registers();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            ret;
-        }
-    }
 }
 
 impl JitModule {
+    ///
+    /// Fetch instruction and dispatch.
+    ///
+    /// ### in
+    /// - r13: BcPc
+    ///
+    /// ### destroy
+    /// - rax, r15
+    ///
+    fn fetch_and_dispatch(&mut self) {
+        monoasm! { &mut self.jit,
+            movq r15, (self.dispatch.as_ptr());
+            movzxb rax, [r13 + (OPECODE)]; // rax <- :0
+            addq r13, 16;
+            jmp [r15 + rax * 8];
+        };
+    }
     /// Set outer and self for block.
     ///
     /// ### in
@@ -556,6 +539,49 @@ impl JitModule {
             addq rsp, rdi;
         }
     }
+
+    ///
+    /// Execute GC. (for interpreter)
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    /// - r13: PC + 1
+    /// - r14: LFP
+    ///
+    /// ### out
+    /// - rax: None if Interrupt is thrown.
+    ///
+    /// ### destroy
+    /// - rax
+    /// - stack
+    ///
+    fn vm_execute_gc(&mut self, raise: impl Into<Option<DestLabel>>) {
+        let raise = if let Some(raise) = raise.into() {
+            raise
+        } else {
+            self.entry_raise.clone()
+        };
+        self.execute_gc_inner(None, &raise);
+    }
+
+    ///
+    /// Execute GC. (for JIT code)
+    ///
+    /// ### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    /// ### out
+    /// - rax: None if Interrupt is thrown.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    /// - stack
+    ///
+    fn execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
+        self.execute_gc_inner(Some(wb), error);
+    }
 }
 
 ///
@@ -577,30 +603,7 @@ pub struct Codegen {
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
     jit_class_guard_fail: DestLabel,
-    ///
-    /// Raise error.
-    ///
-    /// ### in
-    /// - r13: PC + 1
-    /// - r14: LFP
-    ///
-    /// ### destroy
-    /// - caller saved registers
-    ///
-    entry_raise: DestLabel,
-    ///
-    /// Convert f64 to Value.
-    ///
-    /// ### in
-    /// - xmm0: f64
-    ///
-    /// ### out
-    /// - rax: Value
-    ///
-    /// ### destroy
-    /// - rcx
-    ///
-    f64_to_val: DestLabel,
+
     div_by_zero: DestLabel,
     ///
     /// Get class id.
@@ -612,7 +615,7 @@ pub struct Codegen {
     /// - rax: ClassId
     ///
     get_class: DestLabel,
-    dispatch: Box<[CodePtr; 256]>,
+
     pub(crate) method_invoker: MethodInvoker,
     pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
@@ -661,8 +664,6 @@ impl Codegen {
         let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
         let entry_panic = jit.entry_panic();
         let get_class = jit.get_class();
-        let f64_to_val = jit.f64_to_val();
-        let entry_unimpl = jit.unimplemented_inst();
         let method_invoker = jit.method_invoker();
         let method_invoker2 = jit.method_invoker2();
         let block_invoker = jit.block_invoker();
@@ -673,8 +674,6 @@ impl Codegen {
         let resume_fiber = jit.resume_fiber();
         let yield_fiber = jit.yield_fiber();
 
-        // dispatch table.
-        let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,
             class_version_addr,
@@ -687,11 +686,8 @@ impl Codegen {
             vm_code_position: (None, 0, None, 0),
             vm_fetch: entry_panic.clone(),
             jit_class_guard_fail: entry_panic.clone(),
-            entry_raise: entry_panic.clone(),
-            f64_to_val,
             div_by_zero: entry_panic.clone(),
             get_class,
-            dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             method_invoker,
             method_invoker2,
             block_invoker,
@@ -743,10 +739,6 @@ impl Codegen {
         self.const_version.clone()
     }
 
-    pub(crate) fn alloc_flag(&self) -> DestLabel {
-        self.alloc_flag.clone()
-    }
-
     pub(crate) fn sigint_flag(&self) -> bool {
         let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
         unsafe { *ptr != 0 }
@@ -760,21 +752,6 @@ impl Codegen {
     pub(crate) fn signal_handler(&mut self) -> CodePtr {
         self.jit
             .signal_handler(self.alloc_flag.clone(), self.sigint_flag.clone())
-    }
-
-    ///
-    /// Execute GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax
-    /// - stack
-    ///
-    pub(crate) fn exec_gc(&self) -> DestLabel {
-        self.exec_gc.clone()
     }
 
     pub(crate) fn entry_raise(&self) -> DestLabel {
@@ -864,73 +841,6 @@ impl Codegen {
             cmovltq rax, rdx;
         };
     }*/
-
-    ///
-    /// Execute GC. (for interpreter)
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax
-    /// - stack
-    ///
-    fn vm_execute_gc(&mut self) {
-        self.execute_gc_inner(None, &self.entry_raise());
-    }
-
-    ///
-    /// Execute GC. (for JIT code)
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    /// - stack
-    ///
-    fn execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
-        self.execute_gc_inner(Some(wb), error);
-    }
-
-    ///
-    /// Execute GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    /// - stack
-    ///
-    fn execute_gc_inner(&mut self, wb: Option<&jitgen::WriteBack>, error: &DestLabel) {
-        let alloc_flag = self.alloc_flag();
-        let gc = self.jit.label();
-        let exit = self.jit.label();
-        let exec_gc = self.exec_gc();
-        assert_eq!(0, self.jit.get_page());
-        monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 8;
-            jge  gc;
-        exit:
-        };
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        self.jit.bind_label(gc);
-        if let Some(wb) = wb {
-            self.gen_write_back(wb);
-        }
-        monoasm! { &mut self.jit,
-            call exec_gc;
-            testq rax, rax;
-            jne  exit;
-            jmp  error;
-        }
-        self.jit.select_page(0);
-    }
 
     ///
     /// check whether lhs and rhs are fixnum.
@@ -1343,7 +1253,8 @@ mod tests {
             f64::MAX,
             f64::MIN,
         ] {
-            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(&gen.f64_to_val);
+            let f64_to_val = gen.f64_to_val.clone();
+            let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(&f64_to_val);
             if f.is_nan() {
                 assert!(func(f).try_float().unwrap().is_nan())
             } else {

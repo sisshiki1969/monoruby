@@ -108,12 +108,12 @@ pub(crate) enum Reserved {
 
 impl Debug for Reserved {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", self.to_str())
+        write!(f, "{}", self.as_str())
     }
 }
 
 impl Reserved {
-    pub(crate) fn to_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Reserved::BEGIN => "BEGIN",
             Reserved::END => "END",
@@ -315,7 +315,7 @@ impl Token {
                 Ok(s) => s,
                 Err(_) => return None,
             },
-            TokenKind::Reserved(reserved) => reserved.to_str(),
+            TokenKind::Reserved(reserved) => reserved.as_str(),
             _ => return None,
         };
         Some(id)

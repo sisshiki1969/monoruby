@@ -18,7 +18,6 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq r11, [rsp + 8];
         }
-        //self.vm_execute_gc();
         self.invoker_prologue();
         self.invoker_frame_setup(false, true);
         self.invoker_args_setup(&error_exit, true);
@@ -73,7 +72,6 @@ impl JitModule {
         // r8:  *args: *const Value
         // r9:  len: usize
         let error_exit = self.jit.label();
-        //self.vm_execute_gc();
         self.invoker_prologue();
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
@@ -364,119 +362,10 @@ impl JitModule {
         }
         label
     }
-
-    ///
-    /// Convert f64 to Value.
-    ///
-    /// ### in
-    /// - xmm0: f64
-    ///
-    /// ### out
-    /// - rax: Value
-    ///
-    /// ### destroy
-    /// - rcx
-    ///
-    pub(super) fn f64_to_val(&mut self) -> DestLabel {
-        let label = self.label();
-        let normal = self.label();
-        let heap_alloc = self.label();
-        monoasm! {&mut self.jit,
-        label:
-            xorps xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jne normal;
-            jp normal;
-            movq rax, (FLOAT_ZERO);
-            ret;
-        normal:
-            movq rax, xmm0;
-            movq rcx, rax;
-            shrq rcx, 60;
-            addl rcx, 1;
-            andl rcx, 6;
-            cmpl rcx, 4;
-            jne heap_alloc;
-            rolq rax, 3;
-            andq rax, (-4);
-            orq rax, 2;
-            ret;
-        heap_alloc:
-        // we must save rdi for log_deoptimize.
-            subq rsp, 152;
-            movq [rsp + 144], r9;
-            movq [rsp + 136], r8;
-            movq [rsp + 128], rdx;
-            movq [rsp + 120], rsi;
-            movq [rsp + 112], rdi;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-            movq rax, (Value::float_heap);
-            call rax;
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            movq rdi, [rsp + 112];
-            movq rsi, [rsp + 120];
-            movq rdx, [rsp + 128];
-            movq r8, [rsp + 136];
-            movq r9, [rsp + 144];
-            addq rsp, 152;
-            ret;
-        }
-        label
-    }
-
-    pub(super) fn unimplemented_inst(&mut self) -> CodePtr {
-        let label = self.get_current_address();
-        let f = unimplemented_inst as usize;
-        monoasm! { &mut self.jit,
-                movq rdi, rbx;
-                movq rsi, r12;
-                movzxw rdx, [r13 - 10];
-                movq rax, (f);
-                call rax;
-                leave;
-                ret;
-        }
-        label
-    }
 }
 
 extern "C" fn illegal_classid(v: Value) {
     panic!("illegal Value for get_class(): {:016x}", v.id());
-}
-
-extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16) -> Option<Value> {
-    vm.set_error(MonorubyErr::runtimeerr(format!(
-        "unimplemented instruction. {:04x}",
-        opcode
-    )));
-    None
-    //panic!("unimplemented inst. {opcode:016x}");
 }
 
 impl JitModule {
@@ -627,7 +516,12 @@ impl JitModule {
     }
 
     fn invoker_epilogue(&mut self, error_exit: &DestLabel) {
+        //monoasm! { &mut self.jit,
+        //    movq r15, rax;
+        //}
+        //self.vm_execute_gc(error_exit.clone());
         monoasm! { &mut self.jit,
+        //    movq rax, r15;
         error_exit:
             popq r15;
             popq r14;
@@ -635,7 +529,7 @@ impl JitModule {
             popq r12;
             popq rbx;
             ret;
-        };
+        }
     }
 }
 

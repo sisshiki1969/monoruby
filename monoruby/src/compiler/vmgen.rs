@@ -7,8 +7,6 @@ pub mod init_method;
 mod method_call;
 mod variables;
 
-const OPECODE: i64 = 6;
-
 macro_rules! vm_cmp_opt {
   ($op:ident) => {
       paste! {
@@ -128,35 +126,8 @@ impl Codegen {
             jmp vm_entry;
         }
 
-        let vm_raise = self.jit.label();
-        let leave = self.jit.label();
-        let goto = self.jit.label();
-        monoasm! { &mut self.jit,
-        vm_raise:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (LFP_META)];
-            movq rcx, r13;
-            subq rcx, 16;
-            movq rax, (runtime::handle_error);
-            call rax;
-            testq rax, rax;
-            jne  goto;
-            testq rdx, rdx;
-            jz   leave;
-            movq rax, rdx;
-            jmp  leave;
-        goto:
-            movq r13, rax;
-        }
-        self.fetch_and_dispatch();
-        monoasm! { &mut self.jit,
-        leave:
-            leave;
-            ret;
-        }
-
         let div_by_zero = self.jit.label();
+        let vm_raise = self.entry_raise.clone();
         monoasm!( &mut self.jit,
         div_by_zero:
             movq rdi, rbx;
@@ -167,7 +138,6 @@ impl Codegen {
 
         self.vm_fetch = entry_fetch;
         self.vm_entry = vm_entry;
-        self.entry_raise = vm_raise;
         self.jit_class_guard_fail = jit_class_guard_fail;
         self.div_by_zero = div_by_zero;
 
@@ -498,24 +468,6 @@ impl Codegen {
         self.jit.finalize();
     }
 
-    ///
-    /// Fetch instruction and dispatch.
-    ///
-    /// ### in
-    /// - r13: BcPc
-    ///
-    /// ### destroy
-    /// - rax, r15
-    ///
-    fn fetch_and_dispatch(&mut self) {
-        monoasm! { &mut self.jit,
-            movq r15, (self.dispatch.as_ptr());
-            movzxb rax, [r13 + (OPECODE)]; // rax <- :0
-            addq r13, 16;
-            jmp [r15 + rax * 8];
-        };
-    }
-
     fn fetch2(&mut self) {
         monoasm! { &mut self.jit,
             movsxl rdi, [r13 - 16];  // rdi <- :2:3
@@ -833,7 +785,7 @@ impl Codegen {
     fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let compile = self.jit.label();
-        self.vm_execute_gc();
+        self.vm_execute_gc(None);
         if !no_jit && !cfg!(feature = "no-jit") {
             let count = self.jit.label();
             monoasm! { &mut self.jit,

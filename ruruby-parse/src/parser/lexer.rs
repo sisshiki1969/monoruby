@@ -15,12 +15,13 @@ pub(crate) enum ParseMode {
 use enum_iterator::all;
 
 fn check_reserved(maybe_reserved: &str) -> Option<Reserved> {
-    for reserved in all::<Reserved>() {
-        if maybe_reserved == reserved.to_str() {
-            return Some(reserved);
-        }
-    }
-    None
+    all::<Reserved>().find(|&reserved| maybe_reserved == reserved.as_str())
+    //for reserved in all::<Reserved>() {
+    //    if maybe_reserved == reserved.as_str() {
+    //        return Some(reserved);
+    //    }
+    //}
+    //None
 }
 
 #[derive(Debug, Clone)]
@@ -171,8 +172,7 @@ impl<'a> Lexer<'a> {
         match self
             .code
             .get(tok.loc.1 + 1..)
-            .map(|s| s.chars().next())
-            .flatten()
+            .and_then(|s| s.chars().next())
         {
             Some(ch) => ch.is_ascii_whitespace(),
             _ => false,
@@ -187,7 +187,7 @@ impl<'a> Lexer<'a> {
                 postfix,
                 free_format,
             } => Ok(self.new_regexlit(body, postfix, free_format)),
-            InterpolateState::NewInterpolation(s, _) => Ok(self.new_open_reg(s.as_string()?)),
+            InterpolateState::NewInterpolation(s, _) => Ok(self.new_open_reg(s.into_string()?)),
             _ => unreachable!(),
         }
     }
@@ -416,7 +416,7 @@ impl<'a> Lexer<'a> {
             while let Some(ch) = self.consume_numeric() {
                 id = id * 10 + ch as u32 - '0' as u32;
             }
-            Ok(self.new_special_var(id as u32 + 100))
+            Ok(self.new_special_var(id + 100))
         } else {
             let tok = match self.peek() {
                 Some(ch) if ch.is_ascii_punctuation() => {
@@ -769,7 +769,7 @@ impl<'a> Lexer<'a> {
         match self.read_interpolate(open, term, level)? {
             InterpolateState::Finished(s) => Ok(self.new_stringlit(s)),
             InterpolateState::NewInterpolation(s, level) => {
-                Ok(self.new_open_string(s.as_string()?, term, level))
+                Ok(self.new_open_string(s.into_string()?, term, level))
             }
             _ => unreachable!(),
         }
@@ -785,7 +785,7 @@ impl<'a> Lexer<'a> {
         match self.read_interpolate(open, term, level)? {
             InterpolateState::Finished(s) => self.new_commandlit(s),
             InterpolateState::NewInterpolation(s, level) => {
-                Ok(self.new_open_command(s.as_string()?, term, level))
+                Ok(self.new_open_command(s.into_string()?, term, level))
             }
             _ => unreachable!(),
         }
@@ -1022,12 +1022,12 @@ impl<'a> Lexer<'a> {
                         }
                         _ => {
                             body.push('\\');
-                            // TODO: It is necessary to count capture groups
-                            // to determine whether backref or octal digit.
-                            // Current impl. may cause problems.
-                            if '1' >= ch && ch <= '9' && !self.peek_digit() {
+                            if ('1'..='9').contains(&ch) && !self.peek_digit() {
                                 body.push(ch);
                             } else if ('0'..='7').contains(&ch) {
+                                // TODO: It is necessary to count capture groups
+                                // to determine whether backref or octal digit.
+                                // Current impl. may cause problems.
                                 let hex = format!("x{:02x}", self.consume_tri_octal(ch).unwrap());
                                 body += &hex;
                             } else {
@@ -1473,7 +1473,7 @@ impl<'a> Lexer<'a> {
 
     fn new_commandlit(&self, string: RubyString) -> Result<Token, LexerErr> {
         Ok(Annot::new(
-            TokenKind::CommandLit(string.as_string()?),
+            TokenKind::CommandLit(string.into_string()?),
             self.cur_loc(),
         ))
     }

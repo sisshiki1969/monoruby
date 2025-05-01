@@ -1,4 +1,3 @@
-use core::error;
 use std::collections::HashSet;
 
 use monoasm_macro::monoasm;
@@ -739,7 +738,7 @@ macro_rules! load_store {
     };
 }
 
-impl Codegen {
+impl JitModule {
     load_store!(rax);
     load_store!(rdi);
     load_store!(rsi);
@@ -814,44 +813,6 @@ impl Codegen {
             addq rsp, (sp_offset);
         );
     }
-}
-
-impl Codegen {
-    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
-        let raise = self.entry_raise();
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        entry:
-        );
-        self.gen_write_back(&wb);
-        monoasm!( &mut self.jit,
-            movq r13, ((pc + 1).as_ptr());
-            jmp  raise;
-        );
-        self.jit.select_page(0);
-    }
-
-    ///
-    /// Generate a code which write back all xmm registers to corresponding stack slots.
-    ///
-    /// xmms are not deallocated.
-    ///
-    /// ### destroy
-    ///
-    /// - rax, rcx
-    ///
-    pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
-        for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack(*xmm, v);
-        }
-        for (v, slot) in &wb.literal {
-            self.literal_to_stack(*slot, *v);
-        }
-        if let Some(slot) = wb.r15 {
-            self.store_r15(slot);
-        }
-    }
 
     ///
     /// Convert xmm to stack slots *v*.
@@ -915,6 +876,44 @@ impl Codegen {
           call rax;
         );
         self.xmm_restore(using_xmm);
+    }
+
+    ///
+    /// Generate a code which write back all xmm registers to corresponding stack slots.
+    ///
+    /// xmms are not deallocated.
+    ///
+    /// ### destroy
+    ///
+    /// - rax, rcx
+    ///
+    pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
+        for (xmm, v) in &wb.xmm {
+            self.xmm_to_stack(*xmm, v);
+        }
+        for (v, slot) in &wb.literal {
+            self.literal_to_stack(*slot, *v);
+        }
+        if let Some(slot) = wb.r15 {
+            self.store_r15(slot);
+        }
+    }
+}
+
+impl Codegen {
+    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
+        let raise = self.entry_raise();
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        entry:
+        );
+        self.gen_write_back(&wb);
+        monoasm!( &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+            jmp  raise;
+        );
+        self.jit.select_page(0);
     }
 
     ///

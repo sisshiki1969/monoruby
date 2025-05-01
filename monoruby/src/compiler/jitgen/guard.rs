@@ -113,25 +113,31 @@ impl Codegen {
         eprintln!(" => deopt_specialized");
     }
 
+    ///
+    /// Execute recompilation of the loop / method.
+    ///
+    /// ### in
+    /// - r12: &mut Globals
+    /// - r14: Lfp
+    ///
+    /// ### destroy
+    /// - rax
+    ///
     fn exec_recompile(&mut self, position: Option<BytecodePtr>, label: DestLabel) {
         self.jit.bind_label(label);
         self.jit.save_registers();
         monoasm!( &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
+            movq rdi, r12;
+            movq rsi, r14;
         );
         if let Some(pc) = position {
             monoasm!( &mut self.jit,
-                movq rdi, r12;
-                movq rsi, r14;
                 movq rdx, (pc.as_ptr());
                 movq rax, (exec_jit_partial_recompile);
                 call rax;
             );
         } else {
             monoasm!( &mut self.jit,
-                movq rdi, r12;
-                movq rsi, r14;
                 movq rax, (exec_jit_recompile_method);
                 call rax;
             );

@@ -28,7 +28,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     self.read_method_name(true)?.0,
                 )
             }
-            TokenKind::Reserved(r) => (None, self.read_method_ext(r.to_str().to_string())?),
+            TokenKind::Reserved(r) => (None, self.read_method_ext(r.as_str().to_string())?),
             TokenKind::Ident(s) => {
                 if s.as_str() == "self" {
                     self.consume_punct_no_term(Punct::Dot)?;

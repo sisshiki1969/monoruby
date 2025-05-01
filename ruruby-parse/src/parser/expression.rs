@@ -804,12 +804,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                         return Err(error_unexpected(loc, "Expected '=' or ','."));
                     }
                 }
-                _ => {
-                    return Err(error_unexpected(
-                        loc,
-                        format!("Unexpected token: {:?}", tok.kind),
-                    ))
-                }
+                _ => Err(error_unexpected(
+                    loc,
+                    format!("Unexpected token: {:?}", tok.kind),
+                )),
             },
             TokenKind::Reserved(reserved) => match reserved {
                 Reserved::If => self.parse_if(),
@@ -872,12 +870,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 )),
             },
             TokenKind::Eof => Err(error_eof(loc)),
-            _ => {
-                return Err(error_unexpected(
-                    loc,
-                    format!("Unexpected token: {:?}", tok.kind),
-                ))
-            }
+            _ => Err(error_unexpected(
+                loc,
+                format!("Unexpected token: {:?}", tok.kind),
+            )),
         }
     }
 

@@ -206,7 +206,7 @@ impl std::default::Default for ParamKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ArgList {
     /// positional args
     pub args: Vec<Node>,
@@ -223,7 +223,7 @@ pub struct ArgList {
 }
 
 impl ArgList {
-    pub fn default() -> Self {
+    /*pub fn default() -> Self {
         ArgList {
             args: vec![],
             kw_args: vec![],
@@ -232,7 +232,7 @@ impl ArgList {
             forwarding: false,
             splat: false,
         }
-    }
+    }*/
 
     pub fn from_args(args: Vec<Node>) -> Self {
         ArgList {
@@ -630,9 +630,9 @@ impl Node {
         let info = BlockInfo::new(vec![], body, lvar, loc);
         Node::new(
             NodeKind::ClassDef {
-                base: base.map(|node| Box::new(node)),
+                base: base.map(Box::new),
                 name,
-                superclass: superclass.map(|node| Box::new(node)),
+                superclass: superclass.map(Box::new),
                 info: Box::new(info),
                 is_module,
             },
@@ -846,7 +846,7 @@ impl Node {
 
     pub fn is_imm_u32(&self) -> Option<u32> {
         if let NodeKind::Integer(i) = self.kind {
-            if 0 <= i && i <= u32::max_value() as i64 {
+            if 0 <= i && i <= u32::MAX as i64 {
                 Some(i as u32)
             } else {
                 None
@@ -858,7 +858,7 @@ impl Node {
 
     pub fn is_imm_i32(&self) -> Option<i32> {
         if let NodeKind::Integer(i) = self.kind {
-            if i32::min_value() as i64 <= i && i <= i32::max_value() as i64 {
+            if i32::MIN as i64 <= i && i <= i32::MAX as i64 {
                 Some(i as i32)
             } else {
                 None
@@ -898,7 +898,7 @@ impl FreeFormatContext {
         }
     }
 
-    fn put_string(&mut self, body: &String) {
+    fn put_string(&mut self, body: &str) {
         for ch in body.chars() {
             match self.state {
                 FreeFormatMode::Normal => {

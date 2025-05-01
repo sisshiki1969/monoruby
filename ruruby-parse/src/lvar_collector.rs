@@ -157,6 +157,11 @@ impl LvarCollector {
     }
 
     #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.table.0.is_empty()
+    }
+
+    #[inline(always)]
     pub fn table(&self) -> &Vec<String> {
         &self.table.0
     }

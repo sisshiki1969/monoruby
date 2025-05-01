@@ -45,7 +45,7 @@ impl Codegen {
         let slow_path2 = self.jit.label();
         let class_version = self.class_version_label();
         let get_class = self.get_class.clone();
-        self.vm_execute_gc();
+        self.vm_execute_gc(None);
         monoasm! { &mut self.jit,
             pushq r13;
             subq  rsp, 8;
@@ -94,7 +94,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_yield(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_execute_gc();
+        self.vm_execute_gc(None);
         self.get_proc_data();
         // rax: outer, rdx: FuncId
         self.vm_handle_error();

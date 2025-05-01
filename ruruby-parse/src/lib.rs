@@ -102,7 +102,7 @@ impl RubyString {
         }
     }
 
-    fn as_string(self) -> Result<String, LexerErr> {
+    fn into_string(self) -> Result<String, LexerErr> {
         match self {
             RubyString::Bytes(bytes) => {
                 let s = String::from_utf8(bytes).map_err(|_| {
@@ -120,7 +120,7 @@ impl RubyString {
     fn push_char(&mut self, ch: char) {
         match self {
             RubyString::Bytes(bytes) => {
-                bytes.extend_from_slice(&ch.to_string().as_bytes());
+                bytes.extend_from_slice(ch.to_string().as_bytes());
             }
             RubyString::Utf8(string) => {
                 string.push(ch);

@@ -88,7 +88,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 // e.g. "foo\ bar" => "foo bar"
                 'w' => {
                     let ary = content
-                        .split(|c| c == ' ' || c == '\n')
+                        .split([' ', '\n'])
                         .filter(|x| x != &"")
                         .map(|x| Node::new_string(x.to_string().into(), loc))
                         .collect();
@@ -96,7 +96,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
                 'i' => {
                     let ary = content
-                        .split(|c| c == ' ' || c == '\n')
+                        .split([' ', '\n'])
                         .filter(|x| x != &"")
                         .map(|x| Node::new_symbol(x.to_owned(), loc))
                         .collect();
@@ -228,7 +228,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 let loc = symbol_loc.merge(node.loc());
                 return Ok(Node::new_mcall_noarg(node, method, false, loc));
             }
-            TokenKind::StringLit(ident) => ident.to_owned().as_string()?,
+            TokenKind::StringLit(ident) => ident.to_owned().into_string()?,
             _ => return Err(error_unexpected(symbol_loc, "Expect identifier or string.")),
         };
         Ok(Node::new_symbol(id, loc.merge(self.prev_loc())))

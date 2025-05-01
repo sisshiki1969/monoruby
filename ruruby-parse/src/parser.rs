@@ -78,10 +78,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let parse_ctx = LvarScope::new_block(context);
         parse(code, path, extern_context, parse_ctx)
     }
-}
 
-impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
-    fn new(
+    fn parse(
         code: &'a str,
         path: PathBuf,
         extern_context: Option<&'a OuterContext>,
@@ -147,7 +145,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// If the `id` does not exist in the scope chain,
     /// add `id` as a local variable in the current context.
     fn add_local_var_if_new(&mut self, name: &str) -> usize {
-        if let Some(outer) = self.is_local_var(&name) {
+        if let Some(outer) = self.is_local_var(name) {
             return outer;
         } else {
             for c in self.scope.iter_mut().rev() {
@@ -430,9 +428,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     }
 
     fn read_method_name(&mut self, allow_assign_like: bool) -> Result<(String, Loc), LexerErr> {
-        self.lexer
-            .read_method_name(allow_assign_like)
-            .map(|(s, loc)| (s, loc))
+        self.lexer.read_method_name(allow_assign_like)
     }
 
     fn read_method_ext(&mut self, s: String) -> Result<String, LexerErr> {
@@ -757,7 +753,7 @@ fn error_numbered_param(loc: Loc, i: u8) -> LexerErr {
 
 fn error_nested_numbered_param(loc: Loc) -> LexerErr {
     LexerErr(
-        ParseErrKind::SyntaxError(format!("numbered parameter is already used")),
+        ParseErrKind::SyntaxError("numbered parameter is already used".to_string()),
         loc,
     )
 }
@@ -772,7 +768,7 @@ fn parse(
     extern_context: Option<&impl LocalsContext>,
     parse_context: LvarScope,
 ) -> Result<ParseResult, ParseErr> {
-    match Parser::new(&code, path.clone(), extern_context, parse_context) {
+    match Parser::parse(&code, path.clone(), extern_context, parse_context) {
         Ok((node, lvar_collector, tok)) => {
             let source_info = SourceInfoRef::new(SourceInfo::new(path, code));
             if tok.is_eof() {
@@ -789,7 +785,7 @@ fn parse(
         }
         Err(err) => {
             let source_info = SourceInfoRef::new(SourceInfo::new(path, code));
-            return Err(ParseErr::from_lexer_err(err, source_info));
+            Err(ParseErr::from_lexer_err(err, source_info))
         }
     }
 }
@@ -902,7 +898,7 @@ mod test {
     use super::*;
 
     fn parse_test(code: &str) {
-        let node = Parser::<DummyContext>::new(
+        let node = Parser::<DummyContext>::parse(
             code,
             std::path::PathBuf::new(),
             None,
@@ -914,7 +910,7 @@ mod test {
     }
 
     fn parse_node(code: &str, expected: Node) {
-        let node = Parser::<DummyContext>::new(
+        let node = Parser::<DummyContext>::parse(
             code,
             std::path::PathBuf::new(),
             None,
@@ -926,7 +922,7 @@ mod test {
     }
 
     fn parse_test_err(code: &str) {
-        Parser::<DummyContext>::new(
+        Parser::<DummyContext>::parse(
             code,
             std::path::PathBuf::new(),
             None,
