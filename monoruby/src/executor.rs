@@ -1007,7 +1007,7 @@ impl Executor {
     pub fn generate_lambda(&mut self, func_id: FuncId) -> Proc {
         let outer_lfp = self.cfp().lfp();
         outer_lfp.move_frame_to_heap();
-        Proc::from(ProcInner::new(outer_lfp, func_id))
+        Proc::from_parts(outer_lfp, func_id)
     }
 
     pub fn generate_binding(&mut self) -> Binding {
