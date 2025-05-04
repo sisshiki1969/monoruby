@@ -22,6 +22,7 @@ mod id_table;
 pub mod tests;
 mod value;
 
+pub(crate) use crate::compiler::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
 pub use compiler::jitgen::JitContext;

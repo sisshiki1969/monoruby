@@ -260,7 +260,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         };
 
         let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-        let proc = ProcInner::from(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
         vm.pop_class_context();
@@ -371,7 +371,7 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/define_method.html]
 #[monoruby_builtin]
-fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string()?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
@@ -389,6 +389,7 @@ fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             ));
         }
     } else if let Some(bh) = lfp.block() {
+        let proc = vm.generate_proc(bh)?;
         bh.func_id()
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));

@@ -5,6 +5,9 @@ use super::*;
 mod args;
 pub(crate) use args::*;
 
+pub const PROCDATA_OUTER: i64 = std::mem::offset_of!(ProcData, outer) as _;
+pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
+
 //
 // Runtime functions.
 //
@@ -62,6 +65,41 @@ pub(crate) struct ProcData {
     func_id: Option<FuncId>,
 }
 
+impl ProcData {
+    pub(crate) fn new(outer: Lfp, func_id: FuncId) -> Self {
+        Self {
+            outer: Some(outer),
+            func_id: Some(func_id),
+        }
+    }
+
+    pub(crate) fn from_proc(proc: &ProcInner) -> Self {
+        Self {
+            outer: Some(proc.outer_lfp()),
+            func_id: Some(proc.func_id()),
+        }
+    }
+
+    pub(crate) fn from_proxy(executor: &Executor, proxy: (FuncId, u16)) -> Self {
+        let mut cfp = executor.cfp();
+        for _ in 0..proxy.1 {
+            cfp = cfp.prev().unwrap();
+        }
+        ProcData {
+            outer: Some(cfp.lfp()),
+            func_id: Some(proxy.0),
+        }
+    }
+
+    pub(crate) fn to_proc(self) -> Option<ProcInner> {
+        if let Some(func_id) = self.func_id {
+            Some(ProcInner::new(self.outer.unwrap(), func_id))
+        } else {
+            None
+        }
+    }
+}
+
 ///
 /// Get *BlockData* for yield.
 ///
@@ -82,10 +120,7 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
         }
     };
     match vm.get_block_data(globals, bh) {
-        Ok(data) => ProcData {
-            outer: Some(data.outer_lfp()),
-            func_id: Some(data.func_id()),
-        },
+        Ok(data) => data,
         Err(err) => {
             vm.set_error(err);
             ProcData::default()
@@ -95,7 +130,7 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
-    globals: &mut Globals,
+    _: &mut Globals,
     block_handler: Option<BlockHandler>,
 ) -> Option<Value> {
     let bh = match block_handler {
@@ -104,7 +139,7 @@ pub(super) extern "C" fn block_arg(
             return Some(Value::nil());
         }
     };
-    match vm.generate_proc(globals, bh) {
+    match vm.generate_proc(bh) {
         Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);

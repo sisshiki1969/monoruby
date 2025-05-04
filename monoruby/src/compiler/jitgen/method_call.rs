@@ -339,6 +339,7 @@ impl JitContext {
                 bbctx.immediate_evict(ir, evict);
                 bbctx.unset_class_version_guard();
             }
+            FuncKind::Proc(proc) => unimplemented!(),
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 let specializable = callsite.splat_pos.is_empty()

@@ -12,6 +12,7 @@ impl Codegen {
                     self.gen_vm_stub()
                 }
             }
+            FuncKind::Proc(proc) => unimplemented!(),
             FuncKind::Builtin { abs_address } => self.wrap_native_func(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),

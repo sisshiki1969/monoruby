@@ -318,6 +318,12 @@ impl std::default::Default for Funcs {
     }
 }
 
+impl alloc::GC<RValue> for Funcs {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.info.iter().for_each(|info| info.mark(alloc));
+    }
+}
+
 #[monoruby_builtin]
 fn enum_yielder(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let e = Enumerator::new(lfp.self_val());
@@ -554,6 +560,7 @@ impl Funcs {
 #[derive(Debug, Clone)]
 pub(crate) enum FuncKind {
     ISeq(ISeqId),
+    Proc(Proc),
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
@@ -585,6 +592,14 @@ pub struct FuncInfo {
     data: FuncData,
     pub(crate) kind: FuncKind,
     ext: Box<FuncExt>,
+}
+
+impl alloc::GC<RValue> for FuncInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let FuncKind::Proc(proc) = &self.kind {
+            proc.mark(alloc);
+        }
+    }
 }
 
 impl FuncInfo {
@@ -630,6 +645,21 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(iseq),
+            Meta::vm_method(func_id, 0, false, params.is_simple()),
+            params,
+        )
+    }
+
+    pub(super) fn new_method_proc(
+        name: impl Into<Option<IdentId>>,
+        func_id: FuncId,
+        proc: Proc,
+        params: ParamsInfo,
+    ) -> Self {
+        let name = name.into();
+        Self::new(
+            name,
+            FuncKind::Proc(proc),
             Meta::vm_method(func_id, 0, false, params.is_simple()),
             params,
         )
@@ -778,6 +808,10 @@ impl FuncInfo {
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
         self.data.codeptr()
+    }
+
+    pub(crate) fn params(&self) -> &ParamsInfo {
+        &self.ext.params
     }
 
     /// The number of required arguments.

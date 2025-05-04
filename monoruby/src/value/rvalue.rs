@@ -41,9 +41,6 @@ pub const RVALUE_OFFSET_INLINE: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_IN
 pub const RVALUE_OFFSET_HEAP_PTR: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_PTR;
 pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_LEN;
 
-pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
-pub const PROCINNER_FUNCID: i64 = std::mem::offset_of!(ProcInner, func_id) as _;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ObjTy(std::num::NonZeroU8);
 
@@ -1634,17 +1631,24 @@ impl Proc {
         Proc(val)
     }
 
+    pub(crate) fn try_new(val: Value) -> Option<Self> {
+        if val.ty() == Some(ObjTy::PROC) {
+            Some(Proc(val))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn from(block: ProcInner) -> Self {
         Proc(Value::new_proc(block))
     }
 
     pub(crate) fn from_parts(outer_lfp: Lfp, func_id: FuncId) -> Self {
-        Proc(Value::new_proc(ProcInner::from(outer_lfp, func_id)))
+        Proc(Value::new_proc(ProcInner::new(outer_lfp, func_id)))
     }
 }
 
 #[derive(Debug, Clone)]
-#[repr(C)]
 pub struct ProcInner {
     outer_lfp: Lfp,
     func_id: FuncId,
@@ -1657,8 +1661,8 @@ impl alloc::GC<RValue> for ProcInner {
 }
 
 impl ProcInner {
-    pub(crate) fn from(outer_lfp: Lfp, func_id: FuncId) -> Self {
-        Self { outer_lfp, func_id }
+    pub fn new(outer_lfp: Lfp, func_id: FuncId) -> Self {
+        ProcInner { outer_lfp, func_id }
     }
 
     pub fn func_id(&self) -> FuncId {

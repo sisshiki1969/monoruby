@@ -226,9 +226,9 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/lambda.html]
 #[monoruby_builtin]
-fn proc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn proc(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(globals, bh)?;
+        let p = vm.generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -240,7 +240,7 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
-        let p = vm.generate_proc(globals, bh)?;
+        let p = vm.generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -630,7 +630,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else {
         let caller_cfp = cfp.prev().unwrap();
         let fid = globals.compile_script_eval(expr, "(eval)", caller_cfp)?;
-        let proc = ProcInner::from(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block(globals, &proc, &[])
     }
 }

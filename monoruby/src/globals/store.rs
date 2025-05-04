@@ -126,6 +126,7 @@ impl std::ops::Index<OptCaseId> for Store {
 
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.functions.mark(alloc);
         self.iseqs.iter().for_each(|info| info.mark(alloc));
         self.constsite_info.iter().for_each(|info| info.mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));

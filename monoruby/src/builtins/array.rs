@@ -1341,7 +1341,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     fn inner(
         vm: &mut Executor,
         globals: &mut Globals,
-        data: &ProcInner,
+        data: &ProcData,
         ary: Array,
         map: &mut IndexMap<HashKey, Value>,
     ) -> Result<()> {

@@ -44,9 +44,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
-fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn enumerator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(globals, bh)?;
+    let proc = vm.generate_proc(bh)?;
     let obj = Value::new_generator(proc);
     vm.generate_enumerator(IdentId::EACH, obj, vec![])
 }
@@ -88,7 +88,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         vm: &mut Executor,
         globals: &mut Globals,
         mut internal: Fiber,
-        block_data: &ProcInner,
+        block_data: &ProcData,
         self_val: Enumerator,
     ) -> Result<Value> {
         loop {
@@ -127,7 +127,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         vm: &mut Executor,
         globals: &mut Globals,
         mut internal: Fiber,
-        block_data: &ProcInner,
+        block_data: &ProcData,
         mut count: Value,
         self_val: Enumerator,
     ) -> Result<Value> {
@@ -229,9 +229,9 @@ fn yielder_yield(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 /// - new() {|y| ... } -> Enumerator
 ///
 #[monoruby_builtin]
-fn generator_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn generator_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(globals, bh)?;
+    let proc = vm.generate_proc(bh)?;
     Ok(Value::new_generator(proc))
 }
 
@@ -246,7 +246,7 @@ fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         vm: &mut Executor,
         globals: &mut Globals,
         mut internal: Fiber,
-        block_data: &ProcInner,
+        block_data: &ProcData,
     ) -> Result<Value> {
         let yielder = Value::yielder_object();
         loop {
