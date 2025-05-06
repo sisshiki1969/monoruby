@@ -311,7 +311,7 @@ impl ClassInfoTable {
     }
 
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
-        let mut parents = vec![self[class].name.as_ref().unwrap().to_string()];
+        let mut parents = vec![self[class].name.clone().unwrap()];
         while let Some(parent) = self[class].parent {
             if parent == OBJECT_CLASS {
                 break;

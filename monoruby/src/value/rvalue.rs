@@ -1581,6 +1581,8 @@ impl ExceptionInner {
             return MonorubyErrKind::StopIteration;
         } else if self.class_name == "LoadError" {
             return MonorubyErrKind::Load(std::path::PathBuf::new());
+        } else if self.class_name == "ArgumentError" {
+            return MonorubyErrKind::Arguments;
         }
         MonorubyErrKind::Runtime
     }

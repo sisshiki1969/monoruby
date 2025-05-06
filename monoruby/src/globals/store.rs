@@ -191,21 +191,17 @@ impl Store {
     }
 
     /// Get class name of *ClassId*.
-    pub(crate) fn get_class_name(&self, class: impl Into<Option<ClassId>>) -> String {
-        if let Some(class) = class.into() {
-            let class_obj = self.classes[class].get_module();
-            match self.classes[class].get_name() {
-                Some(_) => {
-                    let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
-                    v.join("::")
-                }
-                None => match class_obj.is_singleton() {
-                    None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
-                    Some(base) => format!("#<Class:{}>", base.to_s(self)),
-                },
+    pub(crate) fn get_class_name(&self, class: ClassId) -> String {
+        let class_obj = self.classes[class].get_module();
+        match self.classes[class].get_name() {
+            Some(_) => {
+                let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
+                v.join("::")
             }
-        } else {
-            "<INVALID>".to_string()
+            None => match class_obj.is_singleton() {
+                None => format!("#<Class:{:016x}>", class_obj.as_val().id()),
+                Some(base) => format!("#<Class:{}>", base.to_s(self)),
+            },
         }
     }
 

@@ -317,6 +317,9 @@ class Symbol
 
   def to_proc
     Proc.new do |*args|
+      if args.size == 0
+        raise ArgumentError, "no receiver given"
+      end
       slf, *args = args
       slf.send(self, *args)
     end
