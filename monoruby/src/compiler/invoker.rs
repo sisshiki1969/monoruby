@@ -347,7 +347,7 @@ impl JitModule {
         label
     }
 
-    pub(super) fn entry_panic(&mut self) -> DestLabel {
+    /*pub(super) fn entry_panic(&mut self) -> DestLabel {
         let label = self.label();
         monoasm! {&mut self.jit,
         label:
@@ -363,7 +363,7 @@ impl JitModule {
             ret;
         }
         label
-    }
+    }*/
 }
 
 extern "C" fn illegal_classid(v: Value) {

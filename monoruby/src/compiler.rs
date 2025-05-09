@@ -144,6 +144,14 @@ pub struct JitModule {
     /// - rcx
     ///
     f64_to_val: DestLabel,
+    ///
+    /// Dump stack trace and go panic.
+    ///
+    /// #### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    entry_panic: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
     #[cfg(feature = "perf")]
@@ -664,7 +672,7 @@ impl Codegen {
 
         let class_version_addr = jit.get_label_address(&jit.class_version).as_ptr() as *mut u32;
         let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
-        let entry_panic = jit.entry_panic();
+        let entry_panic = jit.entry_panic.clone();
         let get_class = jit.get_class();
         let method_invoker = jit.method_invoker();
         let method_invoker2 = jit.method_invoker2();

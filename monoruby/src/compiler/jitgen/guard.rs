@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn guard_class() {
         let mut gen = Codegen::new(false);
-        let side_exit = gen.entry_panic();
+        let side_exit = gen.entry_panic.clone();
 
         for (class, value) in [
             (INTEGER_CLASS, Value::integer(-2558)),
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn unbox_float() {
         let mut gen = Codegen::new(false);
-        let side_exit = gen.entry_panic();
+        let side_exit = gen.entry_panic.clone();
         let entry_point = gen.jit.get_current_address();
         let x = Xmm(0);
         gen.float_to_f64(GP::Rdi, x, &side_exit);

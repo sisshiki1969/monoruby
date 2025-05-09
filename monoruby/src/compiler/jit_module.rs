@@ -9,6 +9,7 @@ impl JitModule {
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let sigint_flag = jit.data_i32(0);
         let entry_raise = jit.label();
+        let entry_panic = jit.label();
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
         #[cfg(feature = "perf")]
@@ -42,6 +43,7 @@ impl JitModule {
             entry_raise,
             exec_gc,
             f64_to_val,
+            entry_panic,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
             #[cfg(feature = "perf")]
@@ -94,8 +96,11 @@ impl JitModule {
             ret;
         }
 
+        let label = self.entry_panic.clone();
+        self.gen_entry_panic(label);
+
         let label = self.f64_to_val.clone();
-        self.f64_to_val(label);
+        self.gen_f64_to_val(label);
 
         let label = self.exec_gc.clone();
         monoasm! { &mut self.jit,
@@ -117,6 +122,29 @@ impl JitModule {
     }
 
     ///
+    /// Dump stack trace and go panic.
+    ///
+    /// #### in
+    /// - rbx: &mut Executor
+    /// - r12: &mut Globals
+    ///
+    fn gen_entry_panic(&mut self, label: DestLabel) {
+        monoasm! {&mut self.jit,
+        label:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::_dump_stacktrace);
+            call rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::panic);
+            jmp rax;
+            leave;
+            ret;
+        }
+    }
+
+    ///
     /// Convert f64 to Value.
     ///
     /// ### in
@@ -128,7 +156,7 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
-    fn f64_to_val(&mut self, label: DestLabel) {
+    fn gen_f64_to_val(&mut self, label: DestLabel) {
         let normal = self.label();
         let heap_alloc = self.label();
         monoasm! {&mut self.jit,

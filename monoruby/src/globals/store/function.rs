@@ -572,6 +572,15 @@ impl std::default::Default for FuncKind {
     }
 }
 
+impl alloc::GC<RValue> for FuncKind {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        match self {
+            FuncKind::Proc(proc) => proc.mark(alloc),
+            _ => {}
+        }
+    }
+}
+
 pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
 #[derive(Debug, Clone, Default)]
@@ -645,21 +654,6 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(iseq),
-            Meta::vm_method(func_id, 0, false, params.is_simple()),
-            params,
-        )
-    }
-
-    pub(super) fn new_method_proc(
-        name: impl Into<Option<IdentId>>,
-        func_id: FuncId,
-        proc: Proc,
-        params: ParamsInfo,
-    ) -> Self {
-        let name = name.into();
-        Self::new(
-            name,
-            FuncKind::Proc(proc),
             Meta::vm_method(func_id, 0, false, params.is_simple()),
             params,
         )
@@ -808,10 +802,6 @@ impl FuncInfo {
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
         self.data.codeptr()
-    }
-
-    pub(crate) fn params(&self) -> &ParamsInfo {
-        &self.ext.params
     }
 
     /// The number of required arguments.
