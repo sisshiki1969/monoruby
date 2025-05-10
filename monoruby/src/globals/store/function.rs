@@ -181,6 +181,18 @@ impl Meta {
         Self::new(func_id.into(), reg_num, true, false, false, true, false)
     }
 
+    fn proc(func_id: FuncId, reg_num: usize, is_simple: bool, is_block_style: bool) -> Self {
+        Self::new(
+            Some(func_id),
+            reg_num as u16,
+            is_simple,
+            false,
+            false,
+            false,
+            is_block_style,
+        )
+    }
+
     fn native(func_id: FuncId, reg_num: usize, is_simple: bool) -> Self {
         Self::new(
             Some(func_id),
@@ -357,7 +369,23 @@ impl Funcs {
         self.compile_info.remove(0)
     }
 
-    pub(super) fn add_method(&mut self, info: BlockInfo) -> Result<(FuncId, ParamsInfo)> {
+    pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {
+        let func_id = self.next_func_id();
+        let is_block_style = self[proc.func_id()].is_block_style();
+        let reg_num = self[proc.func_id()].meta().reg_num() as usize;
+        let params = self[proc.func_id()].params();
+        self.info.push(FuncInfo::new_proc(
+            func_id,
+            "proc".to_string(),
+            proc,
+            params,
+            reg_num,
+            is_block_style,
+        ));
+        func_id
+    }
+
+    pub(super) fn add_iseq_method(&mut self, info: BlockInfo) -> Result<(FuncId, ParamsInfo)> {
         let (params_info, compile_info) = Self::handle_args(info, vec![])?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
@@ -382,7 +410,7 @@ impl Funcs {
         Ok(func_id)
     }
 
-    pub(super) fn add_native_func(
+    pub(super) fn new_native_func(
         &mut self,
         name: String,
         address: BuiltinFn,
@@ -398,7 +426,7 @@ impl Funcs {
         id
     }
 
-    pub(super) fn add_native_basic_op(
+    pub(super) fn new_native_basic_op(
         &mut self,
         name: String,
         address: BuiltinFn,
@@ -413,7 +441,7 @@ impl Funcs {
         id
     }
 
-    pub(super) fn add_native_func_eval(
+    pub(super) fn new_native_func_eval(
         &mut self,
         name: String,
         address: BuiltinFn,
@@ -427,14 +455,14 @@ impl Funcs {
         id
     }
 
-    pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+    pub(super) fn new_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
         let info = FuncInfo::new_attr_reader(id, name, ivar_name);
         self.info.push(info);
         id
     }
 
-    pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+    pub(super) fn new_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
         let info = FuncInfo::new_attr_writer(id, name, ivar_name);
         self.info.push(info);
@@ -704,6 +732,22 @@ impl FuncInfo {
         )
     }
 
+    fn new_proc(
+        func_id: FuncId,
+        name: String,
+        proc: Proc,
+        params: ParamsInfo,
+        reg_num: usize,
+        is_block_style: bool,
+    ) -> Self {
+        Self::new(
+            IdentId::get_id_from_string(name),
+            FuncKind::Proc(proc),
+            Meta::proc(func_id, reg_num, params.is_simple(), is_block_style),
+            params,
+        )
+    }
+
     fn new_native_basic_op(
         func_id: FuncId,
         name: String,
@@ -802,6 +846,10 @@ impl FuncInfo {
     ///
     pub(crate) fn codeptr(&self) -> Option<monoasm::CodePtr> {
         self.data.codeptr()
+    }
+
+    pub(crate) fn params(&self) -> ParamsInfo {
+        self.ext.params.clone()
     }
 
     /// The number of required arguments.

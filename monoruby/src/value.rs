@@ -957,10 +957,10 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_proc(&self) -> Option<&ProcInner> {
+    pub(crate) fn is_proc(self) -> Option<Proc> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
-                ObjTy::PROC => Some(self.rvalue().as_proc()),
+                ObjTy::PROC => Some(Proc::new(self)),
                 _ => None,
             }
         } else {

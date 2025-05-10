@@ -242,14 +242,14 @@ impl Store {
         }
     }
 
-    fn add_iseq(&mut self, info: ISeqInfo) -> ISeqId {
+    fn new_iseq(&mut self, info: ISeqInfo) -> ISeqId {
         let id = self.iseqs.len();
         self.iseqs.push(info);
         ISeqId::new(id)
     }
 
-    pub(crate) fn add_main(&mut self, result: ParseResult) -> Result<FuncId> {
-        self.add_method(
+    pub(crate) fn new_main(&mut self, result: ParseResult) -> Result<FuncId> {
+        self.new_iseq_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
                 params: vec![],
@@ -262,7 +262,7 @@ impl Store {
         )
     }
 
-    pub fn add_classdef(
+    pub fn new_classdef(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -271,28 +271,28 @@ impl Store {
     ) -> Result<FuncId> {
         let func_id = self.functions.add_classdef(info)?;
         let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
-        let iseq = self.add_iseq(info);
+        let iseq = self.new_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         self.functions.info.push(info);
         Ok(func_id)
     }
 
-    pub fn add_method(
+    pub fn new_iseq_method(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (func_id, params) = self.functions.add_method(info)?;
+        let (func_id, params) = self.functions.add_iseq_method(info)?;
         let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
-        let iseq = self.add_iseq(info);
+        let iseq = self.new_iseq(info);
         let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
         self.functions.info.push(info);
         Ok(func_id)
     }
 
-    pub(crate) fn add_block(
+    pub(crate) fn new_block(
         &mut self,
         mother: (FuncId, usize),
         outer: (FuncId, ExternalContext),
@@ -304,13 +304,13 @@ impl Store {
     ) -> Result<FuncId> {
         let (func_id, params) = self.functions.add_block(optional_params, info)?;
         let info = ISeqInfo::new_block(func_id, mother, outer, params.clone(), loc, sourceinfo);
-        let iseq = self.add_iseq(info);
+        let iseq = self.new_iseq(info);
         let info = FuncInfo::new_block_iseq(func_id, iseq, params, is_block_style);
         self.functions.info.push(info);
         Ok(func_id)
     }
 
-    pub(crate) fn add_eval(
+    pub(crate) fn new_eval(
         &mut self,
         mother: (FuncId, usize),
         result: ParseResult,
@@ -323,10 +323,10 @@ impl Store {
             lvar: LvarCollector::new(),
             loc,
         };
-        self.add_block(mother, outer, vec![], false, info, loc, result.source_info)
+        self.new_block(mother, outer, vec![], false, info, loc, result.source_info)
     }
 
-    pub(super) fn add_builtin_func(
+    pub(super) fn new_builtin_func(
         &mut self,
         name: &str,
         address: BuiltinFn,
@@ -336,10 +336,10 @@ impl Store {
         kw: &[&str],
     ) -> FuncId {
         self.functions
-            .add_native_func(name.to_string(), address, min, max, rest, kw)
+            .new_native_func(name.to_string(), address, min, max, rest, kw)
     }
 
-    pub(super) fn add_basic_op(
+    pub(super) fn new_basic_op(
         &mut self,
         name: String,
         address: BuiltinFn,
@@ -348,10 +348,10 @@ impl Store {
         rest: bool,
     ) -> FuncId {
         self.functions
-            .add_native_basic_op(name, address, min, max, rest)
+            .new_native_basic_op(name, address, min, max, rest)
     }
 
-    pub(super) fn add_builtin_func_eval(
+    pub(super) fn new_builtin_func_eval(
         &mut self,
         name: String,
         address: BuiltinFn,
@@ -360,18 +360,22 @@ impl Store {
         rest: bool,
     ) -> FuncId {
         self.functions
-            .add_native_func_eval(name, address, min, max, rest)
+            .new_native_func_eval(name, address, min, max, rest)
     }
 
-    pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
-        self.functions.add_attr_reader(name, ivar_name)
+    pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {
+        self.functions.new_proc_method(proc)
     }
 
-    pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
-        self.functions.add_attr_writer(name, ivar_name)
+    pub(super) fn new_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+        self.functions.new_attr_reader(name, ivar_name)
     }
 
-    pub(crate) fn add_callsite(
+    pub(super) fn new_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+        self.functions.new_attr_writer(name, ivar_name)
+    }
+
+    pub(crate) fn new_callsite(
         &mut self,
         name: Option<IdentId>,
         pos_num: usize,
@@ -403,7 +407,7 @@ impl Store {
         id
     }
 
-    pub(crate) fn add_constsite(
+    pub(crate) fn new_constsite(
         &mut self,
         base: Option<SlotId>,
         name: IdentId,
@@ -422,7 +426,7 @@ impl Store {
         ConstSiteId(id as u32)
     }
 
-    pub(crate) fn add_optcase(
+    pub(crate) fn new_optcase(
         &mut self,
         min: u16,
         max: u16,

@@ -187,7 +187,7 @@ impl BytecodeGen {
                     .iter()
                     .map(|label| self[*label].0 - idx as u32 - 1)
                     .collect::<Vec<_>>();
-                let id = store.add_optcase(min, max, branch_table, offsets);
+                let id = store.new_optcase(min, max, branch_table, offsets);
                 let op1 = self.slot_id(&reg);
                 // terminal inst.
                 Bytecode::from(enc_wl(36, op1.0, id.get()))
@@ -276,7 +276,7 @@ impl BytecodeGen {
                 // 10
                 let op1 = self.slot_id(&dst);
                 let base = base.map(|base| self.slot_id(&base));
-                let op2 = store.add_constsite(base, name, prefix, toplevel);
+                let op2 = store.new_constsite(base, name, prefix, toplevel);
                 Bytecode::from(enc_wl(10, op1.0, op2.0))
             }
             BytecodeInst::StoreConst {
@@ -289,7 +289,7 @@ impl BytecodeGen {
                 // 11
                 let op1 = self.slot_id(&src);
                 let base = parent.map(|base| self.slot_id(&base));
-                let op2 = store.add_constsite(base, name, prefix, toplevel);
+                let op2 = store.new_constsite(base, name, prefix, toplevel);
                 Bytecode::from(enc_wl(11, op1.0, op2.0))
             }
             BytecodeInst::LoadIvar(reg, name) => {
@@ -312,7 +312,7 @@ impl BytecodeGen {
                 // 18
                 let op1 = self.slot_id(&dst);
                 let base = base.map(|base| self.slot_id(&base));
-                let op2 = store.add_constsite(base, name, prefix, toplevel);
+                let op2 = store.new_constsite(base, name, prefix, toplevel);
                 Bytecode::from(enc_wl(18, op1.0, op2.0))
             }
             BytecodeInst::ClassDef {
@@ -449,7 +449,7 @@ impl BytecodeGen {
             } => {
                 // 65
                 let op1 = self.slot_id(&ret);
-                let op2 = store.add_constsite(None, name, prefix, toplevel);
+                let op2 = store.new_constsite(None, name, prefix, toplevel);
                 Bytecode::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
             }
             BytecodeInst::DefinedMethod { ret, recv, name } => {
@@ -693,7 +693,7 @@ impl BytecodeGen {
         } else {
             (SlotId(0), IndexMap::default(), vec![])
         };
-        Ok(store.add_callsite(
+        Ok(store.new_callsite(
             name,
             pos_num,
             kw_pos,
@@ -711,15 +711,15 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method { name, info } => store.add_method(name, info, loc, sourceinfo),
-            Functions::ClassDef { name, info } => store.add_classdef(name, info, loc, sourceinfo),
+            Functions::Method { name, info } => store.new_iseq_method(name, info, loc, sourceinfo),
+            Functions::ClassDef { name, info } => store.new_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,
                 outer,
                 optional_params,
                 info,
                 is_block_style,
-            } => store.add_block(
+            } => store.new_block(
                 mother,
                 outer,
                 optional_params,

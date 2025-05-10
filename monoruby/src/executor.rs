@@ -924,12 +924,12 @@ impl Executor {
         if let Some(proxy) = bh.try_proxy() {
             Ok(ProcData::from_proxy(self, proxy))
         } else if let Some(proc) = bh.0.is_proc() {
-            Ok(ProcData::from_proc(proc))
+            Ok(ProcData::from_proc(&proc))
         } else if let Some(proc) =
             self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None)?
             && let Some(proc) = proc.is_proc()
         {
-            Ok(ProcData::from_proc(proc))
+            Ok(ProcData::from_proc(&proc))
         } else {
             Err(MonorubyErr::typeerr(
                 "",

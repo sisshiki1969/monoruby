@@ -264,7 +264,7 @@ impl JitContext {
         ir: &mut AsmIr,
         store: &Store,
         callsite: &CallSiteInfo,
-        fid: FuncId,
+        mut fid: FuncId,
         recv_class: ClassId,
     ) -> CompileResult {
         let CallSiteInfo {
@@ -275,7 +275,7 @@ impl JitContext {
             ..
         } = *callsite;
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        match store[fid].kind {
+        let evict = match store[fid].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, pos_num);
                 assert!(!callsite.kw_may_exists());
@@ -305,6 +305,7 @@ impl JitContext {
                     }
                 }
                 bbctx.reg2acc(ir, GP::R15, dst);
+                return CompileResult::Continue;
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, pos_num);
@@ -331,15 +332,28 @@ impl JitContext {
                     });
                 }
                 bbctx.rax2acc(ir, dst);
+                return CompileResult::Continue;
             }
             FuncKind::Builtin { .. } => {
                 let evict = ir.new_evict();
-                self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
-                bbctx.rax2acc(ir, dst);
-                bbctx.immediate_evict(ir, evict);
-                bbctx.unset_class_version_guard();
+                self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
+                evict
             }
-            FuncKind::Proc(proc) => unimplemented!(),
+            FuncKind::Proc(proc) => {
+                let evict = ir.new_evict();
+                fid = proc.func_id();
+                self.send(
+                    bbctx,
+                    ir,
+                    store,
+                    callsite,
+                    fid,
+                    recv_class,
+                    evict,
+                    Some(proc.outer_lfp()),
+                );
+                evict
+            }
             FuncKind::ISeq(iseq_id) => {
                 let evict = ir.new_evict();
                 let specializable = callsite.splat_pos.is_empty()
@@ -400,13 +414,14 @@ impl JitContext {
                         evict,
                     );
                 } else {
-                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict);
+                    self.send(bbctx, ir, store, callsite, fid, recv_class, evict, None);
                 }
-                bbctx.rax2acc(ir, dst);
-                bbctx.immediate_evict(ir, evict);
-                bbctx.unset_class_version_guard();
+                evict
             }
         };
+        bbctx.rax2acc(ir, dst);
+        bbctx.immediate_evict(ir, evict);
+        bbctx.unset_class_version_guard();
         CompileResult::Continue
     }
 
@@ -455,6 +470,7 @@ impl JitContext {
         callee_fid: FuncId,
         recv_class: ClassId,
         evict: AsmEvict,
+        outer_lfp: Option<Lfp>,
     ) {
         ir.reg_move(GP::Rdi, GP::R13);
         bbctx.exec_gc(ir);
@@ -471,6 +487,7 @@ impl JitContext {
             recv_class,
             error,
             evict,
+            outer_lfp,
         });
         ir.xmm_restore(using_xmm);
         ir.handle_error(error);
