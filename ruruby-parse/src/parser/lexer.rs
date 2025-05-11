@@ -213,8 +213,25 @@ impl<'a> Lexer<'a> {
         loop {
             self.token_start_pos = self.pos;
             if let Some(tok) = self.skip_whitespace() {
+                if self.code[self.pos..].starts_with("=begin") {
+                    self.goto_eol();
+                    if !self.consume('\n') {
+                        return Err(Lexer::error_eof(self.pos));
+                    }
+                    while !self.code[self.pos..].starts_with("=end") {
+                        self.goto_eol();
+                        if !self.consume('\n') {
+                            return Err(Lexer::error_eof(self.pos));
+                        }
+                    }
+                    self.goto_eol();
+                    if !self.consume('\n') {
+                        return Err(Lexer::error_eof(self.pos));
+                    }
+                }
                 return Ok(tok);
             };
+            self.token_start_pos = self.pos;
             let pos = self.pos;
             let ch = match self.get() {
                 Ok(ch) => ch,
