@@ -1429,6 +1429,10 @@ impl RValue {
         unsafe { &self.kind.exception }
     }
 
+    pub fn as_exception_mut(&mut self) -> &mut ExceptionInner {
+        unsafe { &mut self.kind.exception }
+    }
+
     pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         unsafe { &self.kind.hash }
     }
@@ -1575,6 +1579,14 @@ pub struct ExceptionInner {
 }
 
 impl ExceptionInner {
+    pub fn set_class_name(&mut self, class_name: String) {
+        self.class_name = class_name;
+    }
+
+    pub fn set_msg(&mut self, msg: String) {
+        self.msg = msg;
+    }
+
     pub fn kind(&self) -> MonorubyErrKind {
         if self.class_name == "StopIteration" {
             return MonorubyErrKind::StopIteration;

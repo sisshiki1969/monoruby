@@ -34,6 +34,8 @@ class Pathname
       default_dir
     elsif default_dir.respond_to?(:to_str)
       default_dir.to_str
+    elsif default_dir.respond_to?(:to_s)
+      default_dir.to_s
     else
       raise TypeError, "no implicit conversion of #{default_dir.class} into String"
     end
