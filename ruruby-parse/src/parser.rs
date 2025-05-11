@@ -638,7 +638,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     let default = if let Some(Punct::BitOr) = terminator {
                         self.parse_primary(true)?
                     } else {
-                        self.parse_arg()?
+                        self.parse_arg(false)?
                     };
                     loc = loc.merge(self.prev_loc());
                     match state {
@@ -663,10 +663,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             if next == TokenKind::Punct(term) {
                                 None
                             } else {
-                                Some(self.parse_arg()?)
+                                Some(self.parse_arg(false)?)
                             }
                         } else {
-                            Some(self.parse_arg()?)
+                            Some(self.parse_arg(false)?)
                         };
                     loc = loc.merge(self.prev_loc());
                     if state == Kind::KWRest {
@@ -981,6 +981,14 @@ mod test {
         parse_test("a(100)");
         parse_test("a(:a=>1, :b=>2)");
         parse_test("a(:a=>1, :b=>2, )");
+    }
+
+    #[test]
+    fn hash() {
+        parse_test("[:a => 5]");
+        parse_test("[][:a => 5]");
+        parse_test("p(:a => 5)");
+        parse_test("p :a => 5");
     }
 
     #[test]

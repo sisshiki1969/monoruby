@@ -56,7 +56,7 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         instance_eval,
         0,
-        2,
+        3,
         false,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);

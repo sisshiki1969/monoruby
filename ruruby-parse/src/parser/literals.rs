@@ -174,39 +174,55 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(node)
     }
 
-    pub(super) fn parse_hash_literal(&mut self) -> Result<Node, LexerErr> {
+    pub(super) fn parse_hash_literal(
+        &mut self,
+        no_brace: bool,
+        first: Option<(Node, Node)>,
+    ) -> Result<Node, LexerErr> {
+        fn is_symbol_key(node: &Node) -> Option<String> {
+            let s = match &node.kind {
+                NodeKind::Ident(s) => s,
+                NodeKind::LocalVar(_, s) => s,
+                NodeKind::Const {
+                    toplevel: false,
+                    parent: None,
+                    prefix,
+                    name,
+                } if prefix.is_empty() => name,
+                NodeKind::String(s) => s,
+                _ => return None,
+            };
+            Some(s.clone())
+        }
         let mut kvp = vec![];
+        if let Some((k, v)) = first {
+            kvp.push((k, v));
+        }
         let loc = self.prev_loc();
         loop {
-            if self.consume_punct(Punct::RBrace)? {
+            if !no_brace && self.consume_punct(Punct::RBrace)? {
                 return Ok(Node::new_hash(kvp, loc.merge(self.prev_loc())));
-            };
-            let ident_loc = self.loc();
-            let mut symbol_flag = false;
-            let key = match self.peek()?.can_be_symbol() {
-                Some(id) => {
-                    let save = self.save_state();
-                    self.get().unwrap();
-                    if self.consume_punct(Punct::Colon)? {
-                        symbol_flag = true;
-                        Node::new_symbol(id.to_owned(), ident_loc)
-                    } else {
-                        self.restore_state(save);
-                        self.parse_arg()?
-                    }
+            }
+            let mut key = self.parse_arg(false)?;
+            let mut symbol_key_flag = false;
+            if let Some(sym) = is_symbol_key(&key) {
+                if self.consume_punct(Punct::Colon)? {
+                    key = Node::new_symbol(sym, key.loc());
+                    symbol_key_flag = true;
                 }
-                None => self.parse_arg()?,
-            };
-            if !symbol_flag {
-                self.expect_punct(Punct::FatArrow)?
-            };
-            let value = self.parse_arg()?;
+            }
+            if !symbol_key_flag {
+                self.expect_punct(Punct::FatArrow)?;
+            }
+            let value = self.parse_arg(false)?;
             kvp.push((key, value));
             if !self.consume_punct(Punct::Comma)? {
                 break;
             };
         }
-        self.expect_punct(Punct::RBrace)?;
+        if !no_brace {
+            self.expect_punct(Punct::RBrace)?;
+        }
         Ok(Node::new_hash(kvp, loc.merge(self.prev_loc())))
     }
 
