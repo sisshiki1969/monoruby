@@ -87,7 +87,7 @@ impl RubyString {
         RubyString::Utf8(String::new())
     }
 
-    fn as_str(&self) -> Result<&str, LexerErr> {
+    /*fn as_str(&self) -> Result<&str, LexerErr> {
         match self {
             RubyString::Bytes(bytes) => {
                 let s = std::str::from_utf8(bytes).map_err(|_| {
@@ -100,7 +100,7 @@ impl RubyString {
             }
             RubyString::Utf8(string) => Ok(string),
         }
-    }
+    }*/
 
     fn into_string(self) -> Result<String, LexerErr> {
         match self {

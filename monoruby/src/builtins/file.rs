@@ -25,7 +25,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "directory?", directory_, 1);
     globals.define_builtin_class_func(klass, "symlink?", symlink_, 1);
     globals.define_builtin_class_func(klass, "dirname", dirname, 1);
-    globals.define_builtin_class_func(klass, "basename", basename, 1);
+    globals.define_builtin_class_func_with(klass, "basename", basename, 1, 2, false);
     globals.define_builtin_class_func(klass, "extname", extname, 1);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func(klass, "file?", file_, 1);
@@ -242,12 +242,22 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 
 ///
 /// ### File.basename
-/// - basename(filename, [NOT SUPPORTED]suffix = "") -> String
+/// - basename(filename, suffix = "") -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/basename.html]
 #[monoruby_builtin]
 fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let suffix = if let Some(arg1) = lfp.try_arg(1) {
+        let s = arg1.expect_str()?;
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    } else {
+        None
+    };
     if filename.is_empty() {
         return Ok(Value::string_from_str(""));
     }
@@ -256,6 +266,13 @@ fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     } else {
         "/"
     };
+    if let Some(suffix) = suffix {
+        if basename.ends_with(&suffix) {
+            return Ok(Value::string_from_str(
+                &basename[..basename.len() - suffix.len()],
+            ));
+        }
+    }
     Ok(Value::string_from_str(basename))
 }
 

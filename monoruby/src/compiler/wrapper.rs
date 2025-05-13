@@ -12,6 +12,27 @@ impl Codegen {
                     self.gen_vm_stub()
                 }
             }
+            FuncKind::Proc(proc) => {
+                //self.vm_execute_gc();
+                monoasm! { &mut self.jit,
+                    movl rdx, (proc.func_id().get());
+                    movq rax, (proc.outer_lfp().as_ptr());
+                }
+                // rax: outer, rdx: FuncId
+                self.get_func_data();
+                // rax: outer, r15: &FuncData
+                monoasm! { &mut self.jit,
+                    // set outer
+                    movq [r14 - (LFP_OUTER)], rax;
+                    // use given self
+                    // set meta
+                    movq rax, [r15 + (FUNCDATA_META)];
+                    movq [r14 - (LFP_META)], rax;
+                    // set pc
+                    movq r13, [r15 + (FUNCDATA_PC)];
+                    jmp [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
+                }
+            }
             FuncKind::Builtin { abs_address } => self.wrap_native_func(*abs_address),
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),

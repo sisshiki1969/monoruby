@@ -14,6 +14,7 @@ pub use io::IoInner;
 pub use ivar_table::*;
 pub use method::*;
 pub use module::{Module, ModuleInner, ModuleType};
+pub use proc::*;
 pub use regexp::RegexpInner;
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
@@ -28,6 +29,7 @@ mod io;
 mod ivar_table;
 mod method;
 mod module;
+mod proc;
 mod regexp;
 mod string;
 
@@ -40,9 +42,6 @@ pub const RVALUE_OFFSET_ARY_CAPA: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_
 pub const RVALUE_OFFSET_INLINE: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_INLINE;
 pub const RVALUE_OFFSET_HEAP_PTR: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_PTR;
 pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_LEN;
-
-pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
-pub const PROCINNER_FUNCID: i64 = std::mem::offset_of!(ProcInner, func_id) as _;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ObjTy(std::num::NonZeroU8);
@@ -1430,6 +1429,10 @@ impl RValue {
         unsafe { &self.kind.exception }
     }
 
+    pub fn as_exception_mut(&mut self) -> &mut ExceptionInner {
+        unsafe { &mut self.kind.exception }
+    }
+
     pub(crate) fn as_hashmap(&self) -> &HashmapInner {
         unsafe { &self.kind.hash }
     }
@@ -1576,6 +1579,14 @@ pub struct ExceptionInner {
 }
 
 impl ExceptionInner {
+    pub fn set_class_name(&mut self, class_name: String) {
+        self.class_name = class_name;
+    }
+
+    pub fn set_msg(&mut self, msg: String) {
+        self.msg = msg;
+    }
+
     pub fn kind(&self) -> MonorubyErrKind {
         if self.class_name == "StopIteration" {
             return MonorubyErrKind::StopIteration;
@@ -1624,54 +1635,5 @@ impl RangeInner {
 
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
-    }
-}
-
-#[monoruby_object]
-pub struct Proc(Value);
-
-impl Proc {
-    pub(crate) fn new(val: Value) -> Self {
-        assert_eq!(val.ty(), Some(ObjTy::PROC));
-        Proc(val)
-    }
-
-    pub(crate) fn from(block: ProcInner) -> Self {
-        Proc(Value::new_proc(block))
-    }
-
-    pub(crate) fn from_parts(outer_lfp: Lfp, func_id: FuncId) -> Self {
-        Proc(Value::new_proc(ProcInner::from(outer_lfp, func_id)))
-    }
-}
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct ProcInner {
-    outer_lfp: Lfp,
-    func_id: FuncId,
-}
-
-impl alloc::GC<RValue> for ProcInner {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.outer_lfp.mark(alloc)
-    }
-}
-
-impl ProcInner {
-    pub(crate) fn from(outer_lfp: Lfp, func_id: FuncId) -> Self {
-        Self { outer_lfp, func_id }
-    }
-
-    pub fn func_id(&self) -> FuncId {
-        self.func_id
-    }
-
-    pub fn outer_lfp(&self) -> Lfp {
-        self.outer_lfp
-    }
-
-    pub fn self_val(&self) -> Value {
-        self.outer_lfp.self_val()
     }
 }

@@ -56,7 +56,7 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         instance_eval,
         0,
-        2,
+        3,
         false,
     );
     globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
@@ -429,7 +429,7 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         };
 
         let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-        let proc = ProcInner::from(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3))

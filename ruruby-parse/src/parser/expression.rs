@@ -102,10 +102,18 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         // | UNPARENTHESIZED-METHOD
         // | ! UNPARENTHESIZED-METHOD
         // | not NOT
-        let node = self.parse_arg()?;
+        let node = self.parse_arg(false)?;
         if self.consume_punct_no_term(Punct::Comma)? {
             // EXPR : MLHS `=' MRHS
             return self.parse_mul_assign(node);
+        }
+        if self.consume_punct(Punct::FatArrow)? {
+            return Err(LexerErr(
+                ParseErrKind::SyntaxError(
+                    "`=>` is not allowed here. (Pattern match is not supported yet)".to_string(),
+                ),
+                self.prev_loc,
+            ));
         }
         Ok(node)
     }
@@ -164,10 +172,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// If Parser.mul_assign_rhs is true, only a single assignment is allowed.
     fn parse_mul_assign_rhs_if_allowed(&mut self) -> Result<Vec<Node>, LexerErr> {
         if self.suppress_mul_assign {
-            let node = vec![self.parse_arg()?];
+            let node = vec![self.parse_arg(false)?];
             Ok(node)
         } else {
-            let mrhs = self.parse_mul_assign_rhs(None)?;
+            let mrhs = self.parse_mul_assign_rhs(None, false)?;
             Ok(mrhs)
         }
     }
@@ -176,6 +184,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     pub(super) fn parse_mul_assign_rhs(
         &mut self,
         term: impl Into<Option<Punct>>,
+        allow_braceless_hash: bool,
     ) -> Result<Vec<Node>, LexerErr> {
         let term = term.into();
         let old = self.suppress_mul_assign;
@@ -193,10 +202,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             if self.consume_punct(Punct::Mul)? {
                 // splat argument
                 let loc = self.prev_loc();
-                let array = self.parse_arg()?;
+                let array = self.parse_arg(false)?;
                 args.push(Node::new_splat(array, loc));
             } else {
-                let node = self.parse_arg()?;
+                let node = self.parse_arg(allow_braceless_hash)?;
                 args.push(node);
             }
             if !self.consume_punct(Punct::Comma)? {
@@ -210,15 +219,27 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(args)
     }
 
-    pub(super) fn parse_arg(&mut self) -> Result<Node, LexerErr> {
+    pub(super) fn parse_arg(&mut self, allow_braceless_hash: bool) -> Result<Node, LexerErr> {
         let next = self.peek()?;
         if self.lexer.has_trailing_space(&next) && self.consume_reserved(Reserved::Defined)? {
             self.defined_mode = true;
-            let node = self.parse_arg()?;
+            let node = self.parse_arg(false)?;
             self.defined_mode = false;
             return Ok(Node::new_defined(node));
         }
-        self.parse_arg_assign()
+        let arg = self.parse_arg_assign()?;
+        if allow_braceless_hash {
+            if self.consume_punct(Punct::FatArrow)? {
+                let value = self.parse_arg(false)?;
+                if self.consume_punct(Punct::Comma)? {
+                    return self.parse_hash_literal(true, Some((arg, value)));
+                } else {
+                    let loc = arg.loc().merge(value.loc());
+                    return Ok(Node::new_hash(vec![(arg, value)], loc));
+                }
+            }
+        }
+        Ok(arg)
     }
 
     fn parse_arg_assign(&mut self) -> Result<Node, LexerErr> {
@@ -227,7 +248,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             return Ok(lhs);
         }
         if self.consume_punct_no_term(Punct::Assign)? {
-            let mrhs = self.parse_mul_assign_rhs(None)?;
+            let mrhs = self.parse_mul_assign_rhs(None, false)?;
             let lhs = self.check_lhs(lhs)?;
             Ok(Node::new_mul_assign(vec![lhs], mrhs))
         } else if let Some(op) = self.consume_assign_op_no_term()? {
@@ -242,12 +263,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let cond = self.parse_arg_range()?;
         let loc = cond.loc();
         if self.consume_punct_no_term(Punct::Question)? {
-            let then_ = self.parse_arg()?;
+            let then_ = self.parse_arg(false)?;
             if !self.consume_punct_no_term(Punct::Colon)? {
                 let loc = self.loc();
                 return Err(error_unexpected(loc, "Expect ':'."));
             };
-            let else_ = self.parse_arg()?;
+            let else_ = self.parse_arg(false)?;
             let node = Node::new_if(cond, then_, else_, loc);
             Ok(node)
         } else {
@@ -472,7 +493,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         match op {
             BinOp::LOr | BinOp::LAnd => {
                 self.get()?;
-                let rhs = self.parse_arg()?;
+                let rhs = self.parse_arg(false)?;
                 let lhs = self.check_lhs(lhs)?;
                 let node =
                     Node::new_binop(op, lhs.clone(), Node::new_mul_assign(vec![lhs], vec![rhs]));
@@ -480,7 +501,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             }
             _ => {
                 self.get()?;
-                let rhs = self.parse_arg()?;
+                let rhs = self.parse_arg(false)?;
                 let lhs = self.check_lhs(lhs)?;
                 Ok(Node::new_assign_op(op, lhs, rhs))
             }
@@ -559,7 +580,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
             } else if self.consume_punct_no_term(Punct::LBracket)? {
                 let member_loc = self.prev_loc();
-                let args = self.parse_mul_assign_rhs(Punct::RBracket)?;
+                let args = self.parse_mul_assign_rhs(Punct::RBracket, true)?;
                 let member_loc = member_loc.merge(self.prev_loc());
                 Node::new_array_member(node, args, member_loc)
             } else {
@@ -774,11 +795,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
                 Punct::LBracket => {
                     // Array literal
-                    let nodes = self.parse_mul_assign_rhs(Punct::RBracket)?;
+                    let nodes = self.parse_mul_assign_rhs(Punct::RBracket, true)?;
                     let loc = loc.merge(self.prev_loc());
                     Ok(Node::new_array(nodes, loc))
                 }
-                Punct::LBrace => self.parse_hash_literal(),
+                Punct::LBrace => self.parse_hash_literal(false, None),
                 Punct::Colon => self.parse_symbol(),
                 Punct::Arrow => self.parse_lambda_literal(),
                 Punct::Scope => {
@@ -915,20 +936,20 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             } else if self.consume_punct(Punct::Mul)? {
                 // splat argument
                 let loc = self.prev_loc();
-                let array = self.parse_arg()?;
+                let array = self.parse_arg(false)?;
                 arglist.splat = true;
                 arglist.args.push(Node::new_splat(array, loc));
             } else if self.consume_punct(Punct::DMul)? {
                 // double splat argument
-                arglist.hash_splat.push(self.parse_arg()?);
+                arglist.hash_splat.push(self.parse_arg(false)?);
             } else if self.consume_punct(Punct::BitAnd)? {
                 // block argument
-                arglist.block = Some(Box::new(self.parse_arg()?));
+                arglist.block = Some(Box::new(self.parse_arg(false)?));
             } else {
-                let node = self.parse_arg()?;
+                let node = self.parse_arg(false)?;
                 let loc = node.loc();
                 if self.consume_punct(Punct::FatArrow)? {
-                    let value = self.parse_arg()?;
+                    let value = self.parse_arg(false)?;
                     let mut kvp = vec![(node, value)];
                     if self.consume_punct(Punct::Comma)? {
                         loop {
@@ -940,9 +961,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                                     }
                                 }
                             };
-                            let key = self.parse_arg()?;
+                            let key = self.parse_arg(false)?;
                             self.expect_punct(Punct::FatArrow)?;
-                            let value = self.parse_arg()?;
+                            let value = self.parse_arg(false)?;
                             kvp.push((key, value));
                             if !self.consume_punct(Punct::Comma)? {
                                 break;
@@ -960,7 +981,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     NodeKind::Ident(id, ..) | NodeKind::LocalVar(0, id) => {
                         if self.consume_punct_no_term(Punct::Colon)? {
                             // keyword args
-                            arglist.kw_args.push((id.to_string(), self.parse_arg()?));
+                            arglist
+                                .kw_args
+                                .push((id.to_string(), self.parse_arg(false)?));
                         } else {
                             // positional args
                             arglist.args.push(node);
@@ -1002,10 +1025,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let mut exception = vec![];
             if !self.consume_term()? {
                 if !self.peek_punct_no_term(Punct::FatArrow) {
-                    exception = self.parse_mul_assign_rhs(None)?;
+                    exception = self.parse_mul_assign_rhs(None, false)?;
                 };
                 if self.consume_punct_no_term(Punct::FatArrow)? {
-                    let lhs = self.parse_arg()?;
+                    let lhs = self.parse_arg(false)?;
                     assign = Some(self.check_lhs(lhs)?);
                 }
                 self.parse_then()?;

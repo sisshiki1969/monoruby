@@ -15,7 +15,7 @@ mod statement;
 use inst::*;
 
 pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
-    let main_fid = globals.store.add_main(result)?;
+    let main_fid = globals.store.new_main(result)?;
     bytecode_compile(globals, main_fid, None)?;
     Ok(main_fid)
 }
@@ -28,7 +28,7 @@ pub fn bytecode_compile_eval(
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    let main_fid = globals.store.add_eval(mother, result, outer, loc)?;
+    let main_fid = globals.store.new_eval(mother, result, outer, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)
 }

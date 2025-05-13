@@ -23,9 +23,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
-fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn fiber_new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let proc = vm.generate_proc(globals, bh)?;
+    let proc = vm.generate_proc(bh)?;
     Ok(Value::new_fiber(proc))
 }
 

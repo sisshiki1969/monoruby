@@ -868,6 +868,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_exception_mut(&mut self) -> Option<&mut ExceptionInner> {
+        let rv = self.try_rvalue_mut()?;
+        match rv.ty() {
+            ObjTy::EXCEPTION => Some(rv.as_exception_mut()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_hash(self) -> Option<Hashmap> {
         match self.try_rvalue()?.ty() {
             ObjTy::HASH => Some(Hashmap::new(self)),
@@ -957,10 +965,10 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_proc(&self) -> Option<&ProcInner> {
+    pub(crate) fn is_proc(self) -> Option<Proc> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.ty() {
-                ObjTy::PROC => Some(self.rvalue().as_proc()),
+                ObjTy::PROC => Some(Proc::new(self)),
                 _ => None,
             }
         } else {

@@ -53,17 +53,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class("TypeError", standarderr, OBJECT_CLASS);
     globals.define_class("ZeroDivisionError", standarderr, OBJECT_CLASS);
 
-    globals.define_builtin_class_funcs_with(
+    let fid = globals.define_builtin_class_func_rest(EXCEPTION_CLASS, "new", exception_new);
+    globals.add_method(
         EXCEPTION_CLASS,
-        "new",
-        &["exception"],
-        exception_new,
-        0,
-        1,
-        false,
+        IdentId::get_id("exception"),
+        fid,
+        Visibility::Public,
     );
 
+    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
 }
 
 ///
@@ -74,15 +74,40 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
+    let obj = Value::new_exception("".to_string(), "".to_string(), vec![], class_id);
+
+    vm.invoke_method_if_exists(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+    )?;
+
+    Ok(obj)
+}
+
+///
+/// ### Exception#initialize
+///
+/// - new(error_message = nil) -> Exception
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
+#[monoruby_builtin]
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let class_id = self_.real_class(&globals.store).id();
     let msg = if let Some(msg) = lfp.try_arg(0) {
         msg.expect_string()?
     } else {
         globals.store.get_class_name(class_id)
     };
-    let kind = class_id.get_name(&globals.store);
-    Ok(Value::new_exception(kind, msg, vec![], class_id))
+    let class_name = class_id.get_name(&globals.store);
+    self_.is_exception_mut().unwrap().set_msg(msg);
+    self_.is_exception_mut().unwrap().set_class_name(class_name);
+    Ok(Value::nil())
 }
 
 ///
@@ -97,6 +122,31 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let ex = self_.is_exception().unwrap();
     Ok(Value::string(ex.get_error_message()))
+}
+
+///
+/// ### Exception#backtrace
+///
+/// - backtrace -> [String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/backtrace.html]
+#[monoruby_builtin]
+fn backtrace(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let v = self_
+        .is_exception()
+        .unwrap()
+        .trace()
+        .into_iter()
+        .map(|(loc, source)| {
+            Value::string(format!(
+                "{}:{}",
+                source.short_file_name(),
+                source.get_line(&loc)
+            ))
+        })
+        .collect();
+    Ok(Value::array_from_vec(v))
 }
 
 ///

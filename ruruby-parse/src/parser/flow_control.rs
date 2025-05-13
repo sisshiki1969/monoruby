@@ -144,7 +144,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         self.consume_term()?;
         let mut when_ = vec![];
         while self.consume_reserved(Reserved::When)? {
-            let arg = self.parse_mul_assign_rhs(None)?;
+            let arg = self.parse_mul_assign_rhs(None, false)?;
             self.parse_then()?;
             let body = self.parse_comp_stmt()?;
             when_.push(CaseBranch::new(arg, body));
@@ -191,7 +191,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let val = Node::new_nil(loc);
             return Ok((val, loc));
         };
-        let mut args = self.parse_mul_assign_rhs(None)?;
+        let mut args = self.parse_mul_assign_rhs(None, true)?;
         let val = if args.len() == 1 && !matches!(args[0].kind, NodeKind::Splat(..)) {
             args.remove(0)
         } else {
@@ -201,9 +201,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
         let ret_loc = val.loc();
         if self.consume_punct_no_term(Punct::Comma)? {
-            let mut vec = vec![val, self.parse_arg()?];
+            let mut vec = vec![val, self.parse_arg(false)?];
             while self.consume_punct_no_term(Punct::Comma)? {
-                vec.push(self.parse_arg()?);
+                vec.push(self.parse_arg(false)?);
             }
             let val = Node::new_array(vec, ret_loc);
             Ok((val, loc))

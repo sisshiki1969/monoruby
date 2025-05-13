@@ -141,7 +141,7 @@ impl Fiber {
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
         self.initialize();
-        let proc = self.proc;
+        let proc = ProcData::from_proc(&self.proc);
         let handle = &mut self.handle;
         match (globals.codegen.fiber_invoker)(
             vm,
@@ -171,7 +171,7 @@ impl Fiber {
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
         self.initialize();
-        let proc = self.proc;
+        let proc = ProcData::from_proc(&self.proc);
         let handle = &mut self.handle;
         match (globals.codegen.fiber_invoker_with_self)(
             vm,

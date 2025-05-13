@@ -7,7 +7,7 @@ class Pathname
     alias getwd pwd
   end
 
-  attr_accessor :path
+  #attr_accessor :path
 
   def initialize(path)
     @path = if path.is_a?(String)
@@ -15,7 +15,7 @@ class Pathname
     elsif path.respond_to?(:to_str)
       path.to_str
     else
-      raise TypeError, "no implicit conversion of Integer into String"
+      raise TypeError, "no implicit conversion of #{path.class} into String"
     end
   end
 
@@ -25,15 +25,28 @@ class Pathname
 
   alias to_s to_str
 
-  def expand_path(default_dir = '.')
-    Pathname.new(File.expand_path(@path, default_dir))
-  end
-
   def basename(suffix = "")
     Pathname.new(File.basename(@path, suffix))
   end
 
+  def expand_path(default_dir = '.')
+    default_dir = if default_dir.is_a?(String)
+      default_dir
+    elsif default_dir.respond_to?(:to_str)
+      default_dir.to_str
+    elsif default_dir.respond_to?(:to_s)
+      default_dir.to_s
+    else
+      raise TypeError, "no implicit conversion of #{default_dir.class} into String"
+    end
+    Pathname.new(File.expand_path(@path, default_dir))
+  end
+
   def exist?
     File.exist?(@path)
+  end
+
+  def file?
+    File.file?(@path)
   end
 end

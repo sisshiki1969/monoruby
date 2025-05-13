@@ -368,9 +368,11 @@ impl Codegen {
                 recv_class,
                 error,
                 evict,
+                outer_lfp,
             } => {
                 let error = &labels[error];
-                let return_addr = self.gen_send(store, callid, callee_fid, recv_class, error);
+                let return_addr =
+                    self.gen_send(store, callid, callee_fid, recv_class, error, outer_lfp);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SendSpecialized {

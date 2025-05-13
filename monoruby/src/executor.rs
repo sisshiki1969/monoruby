@@ -694,7 +694,7 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        data: &ProcInner,
+        data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
         (globals.codegen.block_invoker)(
@@ -711,7 +711,7 @@ impl Executor {
     pub(crate) fn invoke_block_with_self(
         &mut self,
         globals: &mut Globals,
-        data: &ProcInner,
+        data: &ProcData,
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
@@ -776,7 +776,7 @@ impl Executor {
         fn inner(
             vm: &mut Executor,
             globals: &mut Globals,
-            data: &ProcInner,
+            data: &ProcData,
             iter: impl Iterator<Item = Value>,
         ) -> Result<()> {
             for v in iter {
@@ -803,7 +803,7 @@ impl Executor {
         fn inner(
             vm: &mut Executor,
             globals: &mut Globals,
-            data: &ProcInner,
+            data: &ProcData,
             iter: impl Iterator<Item = Value>,
         ) -> Result<()> {
             for v in iter {
@@ -844,10 +844,10 @@ impl Executor {
     pub(crate) fn invoke_proc(
         &mut self,
         globals: &mut Globals,
-        proc: Proc,
+        proc: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
-        //if globals.store[proc.func_id()].is_block_style() {
+        let proc = ProcData::from_proc(proc);
         (globals.codegen.block_invoker)(
             self,
             globals,
@@ -920,43 +920,30 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
-    ) -> Result<ProcInner> {
-        let mut cfp = self.cfp();
-        if let Some((func_id, idx)) = bh.try_proxy() {
-            for _ in 0..idx {
-                cfp = cfp.prev().unwrap();
-            }
-            Ok(ProcInner::from(cfp.lfp(), func_id))
-        } else if let Some(proc) = bh.try_proc() {
-            Ok(proc.clone())
+    ) -> Result<ProcData> {
+        if let Some(proxy) = bh.try_proxy() {
+            Ok(ProcData::from_proxy(self, proxy))
+        } else if let Some(proc) = bh.0.is_proc() {
+            Ok(ProcData::from_proc(&proc))
+        } else if let Some(proc) =
+            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None)?
+            && let Some(proc) = proc.is_proc()
+        {
+            Ok(ProcData::from_proc(&proc))
         } else {
-            self.val_to_proc(globals, bh.get())
+            Err(MonorubyErr::typeerr(
+                "",
+                TypeErrKind::WrongArgumentType {
+                    val: bh.0,
+                    expected: "Proc",
+                },
+            ))
         }
     }
 
     pub fn to_s(&mut self, globals: &mut Globals, receiver: Value) -> Result<String> {
         self.invoke_method_inner(globals, IdentId::TO_S, receiver, &[], None)?
             .expect_string()
-    }
-
-    fn val_to_proc(&mut self, globals: &mut Globals, val: Value) -> Result<ProcInner> {
-        if let Some(proc) = val.is_proc() {
-            return Ok(proc.clone());
-        }
-        if let Some(proc) =
-            self.invoke_method_if_exists(globals, IdentId::TO_PROC, val, &[], None)?
-            && let Some(proc) = proc.is_proc()
-        {
-            Ok(proc.clone())
-        } else {
-            Err(MonorubyErr::typeerr(
-                "",
-                TypeErrKind::WrongArgumentType {
-                    val,
-                    expected: "Proc",
-                },
-            ))
-        }
     }
 
     pub(crate) fn define_class(
@@ -1004,14 +991,14 @@ impl Executor {
 }
 
 impl Executor {
-    pub fn generate_proc(&mut self, globals: &mut Globals, bh: BlockHandler) -> Result<Proc> {
-        if bh.try_proxy().is_some() {
+    pub fn generate_proc(&mut self, bh: BlockHandler) -> Result<Proc> {
+        if let Some(proxy) = bh.try_proxy() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             outer_lfp.move_frame_to_heap();
-            let proc = Proc::from(self.get_block_data(globals, bh)?);
+            let proc = Proc::from(ProcData::from_proxy(self, proxy).to_proc().unwrap());
             Ok(proc)
-        } else if bh.try_proc().is_some() {
-            Ok(Proc::new(bh.0))
+        } else if let Some(proc) = bh.try_proc() {
+            Ok(proc)
         } else {
             unimplemented!()
         }
@@ -1020,7 +1007,7 @@ impl Executor {
     pub fn generate_lambda(&mut self, func_id: FuncId) -> Proc {
         let outer_lfp = self.cfp().lfp();
         outer_lfp.move_frame_to_heap();
-        Proc::from(ProcInner::from(outer_lfp, func_id))
+        Proc::from_parts(outer_lfp, func_id)
     }
 
     pub fn generate_binding(&mut self) -> Binding {
@@ -1176,8 +1163,8 @@ impl BlockHandler {
         }
     }
 
-    pub fn try_proc(&self) -> Option<&ProcInner> {
-        self.0.is_proc()
+    pub fn try_proc(self) -> Option<Proc> {
+        Proc::try_new(self.0)
     }
 
     pub(crate) fn id(&self) -> u64 {

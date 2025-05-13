@@ -903,6 +903,7 @@ pub(super) enum AsmInst {
         callee_fid: FuncId,
         error: AsmError,
         evict: AsmEvict,
+        outer_lfp: Option<Lfp>,
     },
     ///
     /// Send specialized method

@@ -260,7 +260,7 @@ fn class_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         };
 
         let fid = globals.compile_script_eval(expr, path, caller_cfp)?;
-        let proc = ProcInner::from(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.push_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
         vm.pop_class_context();
@@ -371,14 +371,16 @@ fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/define_method.html]
 #[monoruby_builtin]
-fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string()?;
-    let func_id = if let Some(method) = lfp.try_arg(1) {
+    let proc = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            proc.func_id()
+            proc
         } else if let Some(method) = method.is_method() {
-            method.func_id()
+            let func_id = method.func_id();
+            globals.add_public_method(class_id, name, func_id);
+            return Ok(Value::symbol(name));
         } else {
             return Err(MonorubyErr::typeerr(
                 "",
@@ -389,11 +391,11 @@ fn define_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
             ));
         }
     } else if let Some(bh) = lfp.block() {
-        bh.func_id()
+        vm.generate_proc(bh)?
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    globals.store[func_id].set_method_style();
+    let func_id = globals.define_proc_method(proc);
     globals.add_public_method(class_id, name, func_id);
     Ok(Value::symbol(name))
 }
@@ -900,6 +902,22 @@ mod tests {
               end
             end
             "#,
+        );
+        run_test(
+            r##"
+        class C
+          a = 42
+          define_method :foo do |x|
+            a += x
+          end
+        end
+        c = C.new
+        g = 0
+        100.times { |x|
+            g += c.foo(x)
+        }
+        g
+        "##,
         );
     }
 

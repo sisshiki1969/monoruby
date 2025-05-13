@@ -16,7 +16,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func(name, address, min, max, rest, kw);
+            .new_builtin_func(name, address, min, max, rest, kw);
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
@@ -45,7 +45,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_basic_op(name.to_string(), address, min, max, rest);
+            .new_basic_op(name.to_string(), address, min, max, rest);
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_basic_op_method(class_id, method_name, func_id, visi);
@@ -64,7 +64,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func_eval(name.to_string(), address, min, max, rest);
+            .new_builtin_func_eval(name.to_string(), address, min, max, rest);
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
@@ -326,7 +326,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func(name, address, arg_num, arg_num, false, &[]);
+            .new_builtin_func(name, address, arg_num, arg_num, false, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -337,7 +337,7 @@ impl Globals {
         name: &str,
         address: BuiltinFn,
     ) -> FuncId {
-        let func_id = self.store.add_builtin_func(name, address, 0, 0, true, &[]);
+        let func_id = self.store.new_builtin_func(name, address, 0, 0, true, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -353,7 +353,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func(name, address, min, max, rest, &[]);
+            .new_builtin_func(name, address, min, max, rest, &[]);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -370,7 +370,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func(name, address, min, max, rest, kw);
+            .new_builtin_func(name, address, min, max, rest, kw);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -386,7 +386,7 @@ impl Globals {
     ) -> FuncId {
         let func_id = self
             .store
-            .add_builtin_func_eval(name.to_string(), address, min, max, rest);
+            .new_builtin_func_eval(name.to_string(), address, min, max, rest);
         self.new_builtin_module_fn(class_id, name, func_id);
         func_id
     }
@@ -656,6 +656,12 @@ impl Globals {
         fid
     }
 
+    pub(crate) fn define_proc_method(&mut self, proc: Proc) -> FuncId {
+        let func_id = self.store.new_proc_method(proc);
+        self.gen_wrapper(func_id);
+        func_id
+    }
+
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
@@ -666,7 +672,7 @@ impl Globals {
         visi: Visibility,
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
-        let func_id = self.store.add_attr_reader(method_name, ivar_name);
+        let func_id = self.store.new_attr_reader(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         method_name
@@ -683,7 +689,7 @@ impl Globals {
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let method_name = IdentId::add_assign_postfix(method_name);
-        let func_id = self.store.add_attr_writer(method_name, ivar_name);
+        let func_id = self.store.new_attr_writer(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         method_name

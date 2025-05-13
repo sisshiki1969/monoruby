@@ -1,3 +1,5 @@
+use crate::compiler::runtime::{PROCDATA_FUNCID, PROCDATA_OUTER};
+
 use super::*;
 
 impl JitModule {
@@ -345,7 +347,7 @@ impl JitModule {
         label
     }
 
-    pub(super) fn entry_panic(&mut self) -> DestLabel {
+    /*pub(super) fn entry_panic(&mut self) -> DestLabel {
         let label = self.label();
         monoasm! {&mut self.jit,
         label:
@@ -361,7 +363,7 @@ impl JitModule {
             ret;
         }
         label
-    }
+    }*/
 }
 
 extern "C" fn illegal_classid(v: Value) {
@@ -401,8 +403,8 @@ impl JitModule {
             monoasm! { &mut self.jit,
                 // set block
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
-                movq rax, [rdx + (PROCINNER_OUTER)];        // rax <- outer_lfp
-                movl rdx, [rdx + (PROCINNER_FUNCID)];    // rdx <- FuncId
+                movq rax, [rdx + (PROCDATA_OUTER)];        // rax <- outer_lfp
+                movl rdx, [rdx + (PROCDATA_FUNCID)];    // rdx <- FuncId
             };
             self.get_func_data();
             // r15: &FuncData

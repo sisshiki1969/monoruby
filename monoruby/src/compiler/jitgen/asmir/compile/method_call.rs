@@ -146,11 +146,12 @@ impl Codegen {
         callee_fid: FuncId,
         recv_class: ClassId,
         error: &DestLabel,
+        outer_lfp: Option<Lfp>,
     ) -> CodePtr {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let (meta, codeptr, pc) = callee.get_data();
-        self.setup_method_frame(meta, caller);
+        self.setup_method_frame(meta, caller, outer_lfp);
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_call(store, callee, codeptr, recv_class, pc)
     }
@@ -171,7 +172,7 @@ impl Codegen {
         let caller = &store[callid];
         let callee = &store[callee_fid];
         let meta = callee.meta();
-        self.setup_method_frame(meta, caller);
+        self.setup_method_frame(meta, caller, None);
         self.setup_keyword_args(callid, caller, callee, error);
         self.do_specialized_call(entry_label, patch_point)
     }
@@ -269,11 +270,21 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    fn setup_method_frame(&mut self, meta: Meta, callsite: &CallSiteInfo) {
+    fn setup_method_frame(&mut self, meta: Meta, callsite: &CallSiteInfo, outer_lfp: Option<Lfp>) {
         monoasm! { &mut self.jit,
             subq rsp, 32;
+        }
+        if let Some(outer_lfp) = outer_lfp {
+            monoasm! { &mut self.jit,
+                movq rax, (outer_lfp.as_ptr());
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                xorq rax, rax;
+            }
+        }
+        monoasm! { &mut self.jit,
             // set outer
-            xorq rax, rax;
             pushq rax;
             // set meta.
             movq rax, (meta.get());

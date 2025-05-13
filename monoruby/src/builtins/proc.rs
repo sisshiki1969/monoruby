@@ -17,9 +17,9 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn new(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(globals, bh)?;
+        let p = vm.generate_proc(bh)?;
         Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
@@ -38,8 +38,8 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d=3d.html]
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let p = Proc::new(lfp.self_val());
-    vm.invoke_proc(globals, p, &lfp.arg(0).as_array())
+    let proc = Proc::new(lfp.self_val());
+    vm.invoke_proc(globals, &proc, &lfp.arg(0).as_array())
 }
 
 #[cfg(test)]

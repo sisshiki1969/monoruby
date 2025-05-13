@@ -305,7 +305,7 @@ impl Token {
         )
     }
 
-    pub(crate) fn can_be_symbol(&self) -> Option<&str> {
+    /*pub(crate) fn can_be_symbol(&self) -> Option<&str> {
         let id = match &self.kind {
             TokenKind::Ident(ident) => ident,
             TokenKind::NumberedParam(_, ident) => ident,
@@ -319,7 +319,7 @@ impl Token {
             _ => return None,
         };
         Some(id)
-    }
+    }*/
 
     pub(crate) fn check_stmt_end(&self) -> bool {
         match self.kind {
