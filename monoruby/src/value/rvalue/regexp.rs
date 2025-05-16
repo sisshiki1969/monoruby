@@ -91,7 +91,7 @@ impl RegexpInner {
         match self.0.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
-                    vm.save_capture_special_variables(captures, given)
+                    vm.save_capture_special_variables(captures)
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -244,7 +244,7 @@ impl RegexpInner {
                     Some(captures) => {
                         let m = captures.get(0).unwrap();
                         i = m.end() + usize::from(m.start() == m.end());
-                        vm.save_capture_special_variables(&captures, given);
+                        vm.save_capture_special_variables(&captures);
                         let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                         let matched = Value::string_from_str(matched_str);
                         let result = vm.invoke_block(globals, &data, &[matched])?;
@@ -302,44 +302,40 @@ impl RegexpInner {
         }
     }
 
-    pub(crate) fn find_all(&self, vm: &mut Executor, given: &str) -> Result<Vec<Value>> {
+    pub(crate) fn scan(&self, vm: &mut Executor, given: &str) -> Result<Vec<Value>> {
         let mut ary = vec![];
-        let mut idx = 0;
         let mut last_captures = None;
         vm.clear_capture_special_variables();
-        loop {
-            match self.captures_from_pos_no_save(given, idx)? {
-                None => break,
-                Some(captures) => {
-                    let m = captures.get(0).unwrap();
-                    idx = m.end();
-                    match captures.len() {
-                        1 => {
-                            let val = Value::string_from_str(&given[m.start()..m.end()]);
-                            ary.push(val);
-                        }
-                        len => {
-                            let mut vec = vec![];
-                            for i in 1..len {
-                                match captures.get(i) {
-                                    Some(m) => {
-                                        vec.push(Value::string_from_str(
-                                            &given[m.start()..m.end()],
-                                        ));
-                                    }
-                                    None => vec.push(Value::nil()),
-                                }
+        for cap in self.0.captures_iter(given) {
+            let cap = match cap {
+                Ok(cap) => cap,
+                Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
+            };
+            match cap.len() {
+                0 => unreachable!(),
+                1 => {
+                    let val = Value::string(cap.get(0).unwrap().to_string());
+                    ary.push(val);
+                }
+                len => {
+                    let mut vec = vec![];
+                    for i in 1..len {
+                        match cap.get(i) {
+                            Some(m) => {
+                                vec.push(Value::string(m.to_string()));
                             }
-                            let val = Value::array_from_vec(vec);
-                            ary.push(val);
+                            None => vec.push(Value::nil()),
                         }
                     }
-                    last_captures = Some(captures);
+                    let val = Value::array_from_vec(vec);
+                    ary.push(val);
                 }
-            };
+            }
+            last_captures = Some(cap);
         }
+
         if let Some(c) = last_captures {
-            vm.save_capture_special_variables(&c, given)
+            vm.save_capture_special_variables(&c)
         }
         Ok(ary)
     }
@@ -371,7 +367,7 @@ impl RegexpInner {
                     // the length of matched string can be 0.
                     // this is neccesary to avoid infinite loop.
                     i = if m.end() == m.start() {
-                        m.end() + 1
+                        m.end() + given[m.end()..].chars().next().map_or(1, |c| c.len_utf8())
                     } else {
                         m.end()
                     };
@@ -386,7 +382,7 @@ impl RegexpInner {
         }
 
         if let Some(c) = last_captures {
-            vm.save_capture_special_variables(&c, given)
+            vm.save_capture_special_variables(&c)
         }
 
         Ok((res, !range.is_empty()))

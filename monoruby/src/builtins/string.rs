@@ -864,7 +864,11 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         'l: for c in all_cap {
             let c = c.unwrap();
             let mut iter = c.iter();
-            let m = iter.next().unwrap();
+            let m = if let Some(m) = iter.next().unwrap() {
+                m
+            } else {
+                continue;
+            };
             count += 1;
             if count == lim {
                 break 'l;
@@ -872,6 +876,11 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 res.push(cursor..m.start());
             }
             for m in iter {
+                let m = if let Some(m) = m {
+                    m
+                } else {
+                    continue;
+                };
                 count += 1;
                 if count == lim {
                     cursor = m.start();
@@ -1302,9 +1311,9 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let given = self_.expect_str()?;
     let vec = if let Some(s) = lfp.arg(0).is_str() {
         let re = RegexpInner::from_escaped(s)?;
-        re.find_all(vm, given)?
+        re.scan(vm, given)?
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        re.find_all(vm, given)?
+        re.scan(vm, given)?
     } else {
         return Err(MonorubyErr::argumenterr(
             "1st arg must be RegExp or String.",
