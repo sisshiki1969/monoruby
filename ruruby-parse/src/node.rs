@@ -430,26 +430,7 @@ impl Node {
         Node::new(NodeKind::Hash(key_value, is_const), loc)
     }
 
-    pub(crate) fn new_regexp(
-        mut regex: Vec<Node>,
-        postfix: String,
-        free_format: bool,
-        loc: Loc,
-    ) -> Self {
-        if free_format {
-            let mut context = FreeFormatContext::new();
-            regex.iter_mut().for_each(|node| match &mut node.kind {
-                NodeKind::String(s) => {
-                    context.put_string(s);
-                    *s = context.extract();
-                }
-                kind => {
-                    if context.state == FreeFormatMode::Comment {
-                        *kind = NodeKind::String("".to_string());
-                    }
-                }
-            });
-        };
+    pub(crate) fn new_regexp(regex: Vec<Node>, postfix: String, loc: Loc) -> Self {
         let is_const = regex.iter().all(|n| n.is_const_expr());
         Node::new(NodeKind::RegExp(regex, postfix, is_const), loc)
     }
@@ -875,65 +856,5 @@ impl Node {
             }
             _ => None,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum FreeFormatMode {
-    Normal,
-    Escape,
-    CharacterClass,
-    Comment,
-}
-struct FreeFormatContext {
-    state: FreeFormatMode,
-    body: String,
-}
-
-impl FreeFormatContext {
-    fn new() -> Self {
-        FreeFormatContext {
-            state: FreeFormatMode::Normal,
-            body: String::new(),
-        }
-    }
-
-    fn put_string(&mut self, body: &str) {
-        for ch in body.chars() {
-            match self.state {
-                FreeFormatMode::Normal => {
-                    if ch == '#' {
-                        self.state = FreeFormatMode::Comment;
-                    } else if ch == '[' {
-                        self.body.push(ch);
-                        self.state = FreeFormatMode::CharacterClass;
-                    } else if ch == '\\' {
-                        self.body.push(ch);
-                        self.state = FreeFormatMode::Escape;
-                    } else if !ch.is_ascii_whitespace() {
-                        self.body.push(ch);
-                    }
-                }
-                FreeFormatMode::Escape => {
-                    self.body.push(ch);
-                    self.state = FreeFormatMode::Normal;
-                }
-                FreeFormatMode::CharacterClass => {
-                    self.body.push(ch);
-                    if ch == ']' {
-                        self.state = FreeFormatMode::Normal;
-                    }
-                }
-                FreeFormatMode::Comment => {
-                    if ch == '\n' {
-                        self.state = FreeFormatMode::Normal;
-                    }
-                }
-            }
-        }
-    }
-
-    fn extract(&mut self) -> String {
-        std::mem::take(&mut self.body)
     }
 }
