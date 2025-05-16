@@ -104,20 +104,6 @@ impl RegexpInner {
         }
     }
 
-    pub fn captures_from_pos_no_save<'a>(
-        &self,
-        given: &'a str,
-        pos: usize,
-    ) -> Result<Option<Captures<'a>>> {
-        match self.0.captures_from_pos(given, pos) {
-            Ok(res) => Ok(res),
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
-        }
-    }
-
     pub fn captures_iter<'a>(&self, given: &'a str) -> FindCaptures<'_, 'a> {
         self.0.captures_iter(given)
     }
@@ -236,29 +222,33 @@ impl RegexpInner {
             bh: BlockHandler,
         ) -> Result<(String, bool)> {
             let mut range = vec![];
-            let mut i = 0;
             let data = vm.get_block_data(globals, bh)?;
-            loop {
-                match re.captures_from_pos_no_save(given, i)? {
-                    None => break,
-                    Some(captures) => {
-                        let m = captures.get(0).unwrap();
-                        i = m.end() + usize::from(m.start() == m.end());
-                        vm.save_capture_special_variables(&captures);
-                        let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                        let matched = Value::string_from_str(matched_str);
-                        let result = vm.invoke_block(globals, &data, &[matched])?;
-                        let replace = result.to_s(&globals.store);
-                        range.push((start, end, replace));
-                    }
+
+            vm.clear_capture_special_variables();
+            for cap in re.captures_iter(given) {
+                let cap = match cap {
+                    Ok(cap) => cap,
+                    Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
                 };
+                let m = cap.get(0).unwrap();
+
+                let matched_str = m.as_str();
+                let matched = Value::string_from_str(matched_str);
+                vm.save_capture_special_variables(&cap);
+                let result = vm.invoke_block(globals, &data, &[matched])?;
+                let replace = result.to_s(&globals.store);
+
+                range.push((m.range(), replace));
             }
 
             let mut res = given.to_string();
-            for (start, end, replace) in range.iter().rev() {
-                res.replace_range(start..end, replace);
+            let is_empty = range.is_empty();
+
+            for (range, replace) in range.into_iter().rev() {
+                res.replace_range(range, &replace);
             }
-            Ok((res, !range.is_empty()))
+
+            Ok((res, !is_empty))
         }
 
         if let Some(s) = re_val.is_str() {
@@ -353,39 +343,28 @@ impl RegexpInner {
         replace: &str,
     ) -> Result<(String, bool)> {
         let mut range = vec![];
-        let mut i = 0;
         vm.clear_capture_special_variables();
         let mut last_captures = None;
-        loop {
-            if i >= given.len() {
-                break;
-            }
-            match self.captures_from_pos_no_save(given, i)? {
-                None => break,
-                Some(captures) => {
-                    let m = captures.get(0).unwrap();
-                    // the length of matched string can be 0.
-                    // this is neccesary to avoid infinite loop.
-                    i = if m.end() == m.start() {
-                        m.end() + given[m.end()..].chars().next().map_or(1, |c| c.len_utf8())
-                    } else {
-                        m.end()
-                    };
-                    range.push((m.start(), m.end()));
-                    last_captures = Some(captures);
-                }
+        for cap in self.captures_iter(given) {
+            let cap = match cap {
+                Ok(cap) => cap,
+                Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
             };
+            let m = cap.get(0).unwrap();
+            range.push(m.range());
+            last_captures = Some(cap);
         }
         let mut res = given.to_string();
-        for (start, end) in range.iter().rev() {
-            res.replace_range(start..end, replace);
+        let is_empty = range.is_empty();
+        for r in range.into_iter().rev() {
+            res.replace_range(r, replace);
         }
 
         if let Some(c) = last_captures {
             vm.save_capture_special_variables(&c)
         }
 
-        Ok((res, !range.is_empty()))
+        Ok((res, !is_empty))
     }
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
