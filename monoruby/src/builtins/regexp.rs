@@ -129,7 +129,7 @@ fn regexp_match(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
     let regex = self_.is_regex().unwrap();
     let given = lfp.arg(0).expect_symbol_or_string()?.to_string();
     let res = match regex.find_one(vm, &given)? {
-        Some(mat) => Value::integer(mat.start() as i64),
+        Some(mat) => Value::integer(mat.start as i64),
         None => Value::nil(),
     };
     Ok(res)

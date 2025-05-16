@@ -970,7 +970,7 @@ impl<'a> Lexer<'a> {
                 s.push('i');
             } else if self.consume('m') {
                 // match "." for newline
-                s.push('s');
+                s.push('m');
             } else if self.consume('x') {
                 // free format mode
                 //s.push('x');

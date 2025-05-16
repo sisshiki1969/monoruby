@@ -355,7 +355,7 @@ fn match_(vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let given = self_val.expect_str()?;
     let regex = &lfp.arg(0).expect_regexp_or_string()?;
     let res = match regex.find_one(vm, given)? {
-        Some(mat) => Value::integer(mat.start() as i64),
+        Some(r) => Value::integer(r.start as i64),
         None => Value::nil(),
     };
     Ok(res)
@@ -864,26 +864,26 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         'l: for c in all_cap {
             let c = c.unwrap();
             let mut iter = c.iter();
-            let m = iter.next().unwrap().unwrap();
+            let m = iter.next().unwrap();
             count += 1;
             if count == lim {
                 break 'l;
             } else if cursor != 0 || cursor != m.start() || !m.range().is_empty() {
-                res.push(&string[cursor..m.start()]);
+                res.push(cursor..m.start());
             }
             for m in iter {
                 count += 1;
                 if count == lim {
-                    cursor = m.unwrap().start();
+                    cursor = m.start();
                     break 'l;
                 } else {
-                    res.push(m.unwrap().as_str())
+                    res.push(m.range())
                 }
             }
             cursor = m.end();
         }
         if cursor <= string.len() {
-            res.push(&string[cursor..]);
+            res.push(cursor..string.len());
         }
         // if lim == 0, remove all empty strings from a tail.
         if lim == 0 {
@@ -895,7 +895,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 }
             }
         }
-        let iter = res.into_iter().map(Value::string_from_str);
+        let iter = res.into_iter().map(|r| Value::string_from_str(&string[r]));
         match lfp.block() {
             Some(bh) => {
                 vm.invoke_block_iter1(globals, bh, iter)?;

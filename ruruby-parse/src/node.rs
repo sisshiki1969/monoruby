@@ -432,7 +432,7 @@ impl Node {
 
     pub(crate) fn new_regexp(
         mut regex: Vec<Node>,
-        op: String,
+        postfix: String,
         free_format: bool,
         loc: Loc,
     ) -> Self {
@@ -451,7 +451,7 @@ impl Node {
             });
         };
         let is_const = regex.iter().all(|n| n.is_const_expr());
-        Node::new(NodeKind::RegExp(regex, op, is_const), loc)
+        Node::new(NodeKind::RegExp(regex, postfix, is_const), loc)
     }
 
     pub(crate) fn new_self(loc: Loc) -> Self {

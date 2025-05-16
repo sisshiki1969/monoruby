@@ -1,5 +1,5 @@
 use super::*;
-use fancy_regex::{CaptureMatches, Captures, Match, Regex};
+use onigmo_regex::{Captures, FindCaptures, Regex};
 use std::sync::Arc;
 use std::sync::{LazyLock, RwLock};
 
@@ -51,14 +51,8 @@ impl RegexpInner {
     }
 
     /// Create `RegexpInfo` from `reg_str`.
-    /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
-    /// between fancy_regex crate and Regexp class of Ruby.
     pub fn from_string(reg_str: impl Into<String>) -> Result<Self> {
-        let mut reg_str: String = reg_str.into();
-        let conv = Regex::new(r"\\Z\z").unwrap();
-        if let Some(mat) = conv.find(&reg_str).unwrap() {
-            reg_str.replace_range(mat.range(), r"\z");
-        };
+        let reg_str: String = reg_str.into();
         match HASHMAP_CACHE.write().unwrap().0.entry(reg_str.clone()) {
             std::collections::hash_map::Entry::Occupied(entry) => {
                 Ok(RegexpInner(entry.get().clone()))
@@ -74,11 +68,7 @@ impl RegexpInner {
         }
     }
 
-    pub fn new(mut reg_str: String) -> std::result::Result<Self, String> {
-        let conv = Regex::new(r"\\Z\z").unwrap();
-        if let Some(mat) = conv.find(&reg_str).unwrap() {
-            reg_str.replace_range(mat.range(), r"\z");
-        };
+    pub fn new(reg_str: String) -> std::result::Result<Self, String> {
         match Regex::new(&reg_str) {
             Ok(regexp) => {
                 let regex = Arc::new(regexp);
@@ -128,16 +118,20 @@ impl RegexpInner {
         }
     }
 
-    pub fn captures_iter<'a>(&self, given: &'a str) -> CaptureMatches<'_, 'a> {
+    pub fn captures_iter<'a>(&self, given: &'a str) -> FindCaptures<'_, 'a> {
         self.0.captures_iter(given)
     }
 
     /// Find the leftmost-first match for `given`.
     /// Returns `Match`s.
-    pub fn find_one<'a>(&self, vm: &mut Executor, given: &'a str) -> Result<Option<Match<'a>>> {
+    pub fn find_one<'a>(
+        &self,
+        vm: &mut Executor,
+        given: &'a str,
+    ) -> Result<Option<std::ops::Range<usize>>> {
         match self.captures(given, vm)? {
             None => Ok(None),
-            Some(captures) => Ok(captures.get(0)),
+            Some(captures) => Ok(captures.get(0).map(|m| m.range())),
         }
     }
 }
@@ -180,22 +174,19 @@ impl RegexpInner {
             given: &str,
             bh: BlockHandler,
         ) -> Result<(String, bool)> {
-            let (start, end, matched_str) = match re.captures(given, vm)? {
-                None => {
-                    return Ok((given.to_string(), false));
-                }
+            match re.captures(given, vm)? {
+                None => Ok((given.to_string(), false)),
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
-                    (m.start(), m.end(), m.as_str())
+                    let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
+                    let mut res = given.to_string();
+                    let matched = Value::string_from_str(matched_str);
+                    let result = vm.invoke_block_once(globals, bh, &[matched])?;
+                    let s = result.to_s(&globals.store);
+                    res.replace_range(start..end, &s);
+                    Ok((res, true))
                 }
-            };
-
-            let mut res = given.to_string();
-            let matched = Value::string_from_str(matched_str);
-            let result = vm.invoke_block_once(globals, bh, &[matched])?;
-            let s = result.to_s(&globals.store);
-            res.replace_range(start..end, &s);
-            Ok((res, true))
+            }
         }
 
         if let Some(s) = re_val.is_str() {
@@ -248,19 +239,19 @@ impl RegexpInner {
             let mut i = 0;
             let data = vm.get_block_data(globals, bh)?;
             loop {
-                let (start, end, matched_str) = match re.captures_from_pos_no_save(given, i)? {
+                match re.captures_from_pos_no_save(given, i)? {
                     None => break,
                     Some(captures) => {
                         let m = captures.get(0).unwrap();
                         i = m.end() + usize::from(m.start() == m.end());
                         vm.save_capture_special_variables(&captures, given);
-                        (m.start(), m.end(), m.as_str())
+                        let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
+                        let matched = Value::string_from_str(matched_str);
+                        let result = vm.invoke_block(globals, &data, &[matched])?;
+                        let replace = result.to_s(&globals.store);
+                        range.push((start, end, replace));
                     }
                 };
-                let matched = Value::string_from_str(matched_str);
-                let result = vm.invoke_block(globals, &data, &[matched])?;
-                let replace = result.to_s(&globals.store);
-                range.push((start, end, replace));
             }
 
             let mut res = given.to_string();
@@ -446,7 +437,7 @@ impl RegexpInner {
 #[test]
 fn test_regexp() {
     let re = Regex::new(r#"(?:(?m)\A(?:(?m)/)?\z)"#).unwrap();
-    assert!(re.is_match("").unwrap());
-    assert!(re.is_match("/").unwrap());
-    assert!(!re.is_match("a").unwrap());
+    assert!(re.find("").unwrap().is_some());
+    assert!(re.find("/").unwrap().is_some());
+    assert!(!re.find("a").unwrap().is_some());
 }

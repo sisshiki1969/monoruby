@@ -5,7 +5,6 @@ pub mod frame;
 pub mod inline;
 pub mod op;
 pub use compiler::*;
-use fancy_regex::Captures;
 pub use frame::*;
 pub use op::*;
 use ruruby_parse::{Loc, SourceInfoRef};
@@ -1056,12 +1055,16 @@ impl Executor {
     ///
     /// - $' <- The string after $&.
     ///
-    pub(crate) fn save_capture_special_variables(&mut self, captures: &Captures, given: &str) {
+    pub(crate) fn save_capture_special_variables<'h>(
+        &mut self,
+        captures: &onigmo_regex::Captures<'h>,
+        given: &'h str,
+    ) {
         //let id1 = IdentId::get_id("$&");
         //let id2 = IdentId::get_id("$'");
         match captures.get(0) {
             Some(m) => {
-                self.sp_last_match = Some(Value::string_from_str(&given[m.start()..m.end()]));
+                self.sp_last_match = Some(Value::string_from_str(m.as_str()));
                 self.sp_post_match = Some(Value::string_from_str(&given[m.end()..]));
             }
             None => {
@@ -1072,11 +1075,8 @@ impl Executor {
 
         self.sp_matches.clear();
         for i in 0..captures.len() {
-            self.sp_matches.push(
-                captures
-                    .get(i)
-                    .map(|m| Value::string_from_str(&given[m.start()..m.end()])),
-            );
+            self.sp_matches
+                .push(captures.get(i).map(|m| Value::string_from_str(m.as_str())));
         }
     }
 

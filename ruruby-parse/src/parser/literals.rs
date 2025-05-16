@@ -255,13 +255,13 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let tok = self.lexer.get_regexp()?;
         let mut nodes = match tok.kind {
             TokenKind::Regex {
-                body: s,
-                postfix: op,
+                body,
+                postfix,
                 free_format,
             } => {
                 return Ok(Node::new_regexp(
-                    vec![Node::new_string(s.into(), tok.loc)],
-                    op,
+                    vec![Node::new_string(body.into(), tok.loc)],
+                    postfix,
                     free_format,
                     tok.loc,
                 ));
@@ -275,14 +275,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let loc = tok.loc();
             match tok.kind {
                 TokenKind::Regex {
-                    body: s,
-                    postfix: op,
+                    body,
+                    postfix,
                     free_format,
                 } => {
-                    nodes.push(Node::new_string(s.into(), loc));
+                    nodes.push(Node::new_string(body.into(), loc));
                     return Ok(Node::new_regexp(
                         nodes,
-                        op,
+                        postfix,
                         free_format,
                         start_loc.merge(loc),
                     ));
