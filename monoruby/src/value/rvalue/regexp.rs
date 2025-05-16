@@ -35,7 +35,7 @@ impl RegexpInner {
     pub fn union(v: &[String]) -> Result<Self> {
         let s = v
             .iter()
-            .map(|re| format!("(?:{})", re))
+            .map(|re| format!("(?-mix:{})", re))
             .collect::<Vec<_>>()
             .join("|");
         Self::from_string(s)
