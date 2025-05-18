@@ -22,24 +22,13 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     _ => {}
                 };
 
-                if self.lexer.trailing_lparen() {
-                    return self.parse_func_call(name, loc);
-                };
-                if let Some(outer) = self.is_local_var(&name) {
+                if !self.lexer.trailing_lparen()
+                    && !self.is_var_command()
+                    && let Some(outer) = self.is_local_var(&name)
+                {
                     Ok(Node::new_lvar(name, outer, loc))
                 } else {
-                    // FUNCTION or COMMAND or LHS for assignment
-                    if let Ok(tok) = self.peek_no_term()
-                        && matches!(
-                            tok.kind,
-                            TokenKind::Punct(Punct::LBrace) | TokenKind::Reserved(Reserved::Do)
-                        )
-                    {
-                        // Method call with block and no args
-                        return self.parse_func_call(name, loc);
-                    }
-
-                    if let Some(arglist) = self.parse_arguments_unparen(true)? {
+                    if let Some(arglist) = self.parse_arguments(true)? {
                         Ok(Node::new_fcall(name, arglist, false, loc))
                     } else {
                         let node = Node::new_identifier(name, loc);
@@ -58,11 +47,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     match tok.kind {
                         // Multiple assignment
                         TokenKind::Punct(Punct::Comma) => return Err(error_numbered_param(loc, i)),
-                        // Method call with block and no args
-                        // _1 {}
-                        TokenKind::Punct(Punct::LBrace) | TokenKind::Reserved(Reserved::Do) => {
-                            return self.parse_func_call(name, loc)
-                        }
                         _ => {}
                     }
                 };
@@ -70,7 +54,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 if let Some(arglist) = self.parse_arguments_unparen(true)? {
                     Ok(Node::new_fcall(name, arglist, false, loc))
                 } else {
-                    let node = Node::new_identifier(name.to_string(), loc);
+                    let node = Node::new_identifier(name, loc);
                     Ok(node)
                 }
             }
@@ -488,6 +472,50 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     | TokenKind::FloatLit(_)
                     | TokenKind::BignumLit(_)
                     | TokenKind::IntegerLit(_)
+            )
+        }
+    }
+
+    fn is_var_command(&mut self) -> bool {
+        let tok = match self.peek_no_term() {
+            Ok(tok) => tok,
+            _ => return false,
+        };
+        if self.lexer.trailing_space() {
+            match tok.kind {
+                TokenKind::LineTerm => false,
+                TokenKind::Punct(p) => match p {
+                    Punct::LParen
+                    | Punct::LBracket
+                    | Punct::LBrace
+                    | Punct::Scope
+                    | Punct::Arrow
+                    | Punct::Not => true,
+                    _ => false,
+                },
+                TokenKind::Reserved(r) => !matches!(
+                    r,
+                    Reserved::Do
+                        | Reserved::If
+                        | Reserved::Unless
+                        | Reserved::Rescue
+                        | Reserved::While
+                        | Reserved::Until
+                        | Reserved::And
+                        | Reserved::Or
+                        | Reserved::Then
+                        | Reserved::End
+                ),
+                _ => true,
+            }
+        } else {
+            matches!(
+                tok.kind,
+                TokenKind::GlobalVar(_)
+                    | TokenKind::InstanceVar(_)
+                    | TokenKind::ClassVar(_)
+                    | TokenKind::SpecialVar(_)
+                    | TokenKind::StringLit(_)
             )
         }
     }
