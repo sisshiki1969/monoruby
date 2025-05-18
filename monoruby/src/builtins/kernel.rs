@@ -19,8 +19,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "lambda", lambda, 0);
     globals.define_builtin_module_func(kernel_class, "binding", binding, 0);
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
-    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 1, 2, false);
-    globals.define_builtin_module_func_with(kernel_class, "fail", raise, 1, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "fail", raise, 0, 2, false);
     globals.define_builtin_module_inline_func(
         kernel_class,
         "block_given?",
@@ -292,6 +292,10 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
 #[monoruby_builtin]
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    if lfp.try_arg(0).is_none() {
+        let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
+    }
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
