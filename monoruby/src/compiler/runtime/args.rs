@@ -111,7 +111,8 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let callee = &globals.store[callee_fid];
     match positional(caller, callee, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
-        Err(err) => {
+        Err(mut err) => {
+            err.push_internal_trace(meta.func_id());
             vm.set_error(err);
             None
         }

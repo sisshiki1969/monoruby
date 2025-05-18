@@ -337,7 +337,8 @@ pub(super) extern "C" fn handle_error(
             }
             let sourceinfo = info.sourceinfo.clone();
             let loc = info.sourcemap[pc.0 as usize];
-            vm.push_error_location(loc, sourceinfo);
+            let fid = info.func_id();
+            vm.push_error_location(loc, sourceinfo, fid);
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
@@ -347,7 +348,15 @@ pub(super) extern "C" fn handle_error(
                 return ErrorReturn::goto(bc_base + rescue);
             }
         }
-        FuncKind::Builtin { .. } => {}
+        FuncKind::Builtin { .. } => {
+            // First, we check method_return.
+            if vm.exception().is_none() {
+                vm.set_error(MonorubyErr::runtimeerr(
+                    "[FATAL] internal error: unknown exception.",
+                ));
+            }
+            vm.push_internal_error_location(meta.func_id());
+        }
         _ => unreachable!(),
     }
     ErrorReturn::return_err()

@@ -352,7 +352,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             suppress_acc_assign: false,
             suppress_mul_assign: false,
             suppress_do_block: false,
-            suppress_unparen_call: vec![],
             defined_mode: false,
         }
     }

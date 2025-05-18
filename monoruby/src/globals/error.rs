@@ -9,12 +9,16 @@ use super::*;
 pub struct MonorubyErr {
     kind: MonorubyErrKind,
     msg: String,
-    trace: Vec<(Loc, SourceInfoRef)>,
+    trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
 impl MonorubyErr {
-    pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
-        self.trace.push((loc, sourceinfo));
+    pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
+        self.trace.push((Some((loc, sourceinfo)), Some(fid)));
+    }
+
+    pub fn push_internal_trace(&mut self, fid: FuncId) {
+        self.trace.push((None, Some(fid)));
     }
 }
 
@@ -39,11 +43,13 @@ impl MonorubyErr {
         msg: String,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        func_id: impl Into<Option<FuncId>>,
     ) -> Self {
+        let func_id = func_id.into();
         MonorubyErr {
             kind,
             msg,
-            trace: vec![(loc, sourceinfo)],
+            trace: vec![(Some((loc, sourceinfo)), func_id)],
         }
     }
 
@@ -59,36 +65,49 @@ impl MonorubyErr {
         self.msg = msg;
     }
 
-    pub fn trace(&self) -> &[(Loc, SourceInfoRef)] {
+    pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
         &self.trace
     }
 
-    pub fn take_trace(&mut self) -> Vec<(Loc, SourceInfoRef)> {
+    pub fn take_trace(&mut self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {
         std::mem::take(&mut self.trace)
     }
 
-    pub fn show_all_loc(&self) {
-        for (loc, sourceinfo) in &self.trace {
-            sourceinfo.show_loc(loc);
-        }
-    }
-
-    fn show_loc(&self) {
-        if let Some((loc, sourceinfo)) = self.trace.first() {
-            sourceinfo.show_loc(loc);
+    pub fn show_error_message_and_all_loc(&self, store: &Store) {
+        let mut loc_flag = false;
+        if let Some((source_loc, func_id)) = self.trace.first() {
+            if let Some((loc, source)) = source_loc {
+                eprintln!(
+                    "{}: {}",
+                    store.location(func_id.clone(), source.clone(), *loc),
+                    self.get_error_message(store)
+                );
+                source.show_loc(loc);
+                loc_flag = true;
+            } else if let Some(func_id) = func_id {
+                eprintln!("{}: {}", store.internal_location(*func_id), self.msg);
+            } else {
+                eprintln!("<internal>: {}", self.msg);
+            }
         } else {
             eprintln!("location not defined.");
         }
-    }
-
-    pub fn show_error_message_and_all_loc(&self, store: &Store) {
-        eprintln!("{}", self.get_error_message(store));
-        self.show_all_loc();
-    }
-
-    pub fn show_error_message_and_loc(&self, store: &Store) {
-        eprintln!("{}", self.get_error_message(store));
-        self.show_loc();
+        if self.trace.len() > 1 {
+            for (source_loc, func_id) in &self.trace[1..] {
+                if let Some((loc, source)) = source_loc {
+                    eprintln!(
+                        "        from: {}",
+                        store.location(func_id.clone(), source.clone(), *loc)
+                    );
+                    if !loc_flag {
+                        source.show_loc(loc);
+                        loc_flag = true;
+                    }
+                } else {
+                    eprintln!("        {}", store.internal_location(func_id.unwrap()))
+                }
+            }
+        }
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
@@ -133,7 +152,13 @@ impl MonorubyErr {
             ParseErrKind::SyntaxError(msg) => msg.to_string(),
             ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
         };
-        MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, error.loc, error.source_info)
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Syntax,
+            msg,
+            error.loc,
+            error.source_info,
+            None,
+        )
     }
 
     pub fn is_unexpected_eof(&self) -> bool {
@@ -143,35 +168,73 @@ impl MonorubyErr {
 
 // Bytecodegen level errors.
 impl MonorubyErr {
-    pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn unsupported_lhs(
+        lhs: &Node,
+        sourceinfo: SourceInfoRef,
+        func_id: FuncId,
+    ) -> MonorubyErr {
         let msg = format!("unsupported lhs {:?}", lhs.kind);
-        MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, lhs.loc, sourceinfo)
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Unimplemented,
+            msg,
+            lhs.loc,
+            sourceinfo,
+            func_id,
+        )
     }
 
-    pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn unsupported_node(
+        expr: &Node,
+        sourceinfo: SourceInfoRef,
+        func_id: FuncId,
+    ) -> MonorubyErr {
         let msg = format!("unsupported nodekind {:?}", expr.kind);
-        MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, expr.loc, sourceinfo)
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Unimplemented,
+            msg,
+            expr.loc,
+            sourceinfo,
+            func_id,
+        )
     }
 
     pub(crate) fn unsupported_feature(
         msg: &str,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        func_id: FuncId,
     ) -> MonorubyErr {
         let msg = msg.to_string();
-        MonorubyErr::new_with_loc(MonorubyErrKind::Unimplemented, msg, loc, sourceinfo)
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Unimplemented,
+            msg,
+            loc,
+            sourceinfo,
+            func_id,
+        )
     }
 
-    pub(crate) fn syntax(msg: String, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, loc, sourceinfo)
+    pub(crate) fn syntax(
+        msg: String,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+        func_id: FuncId,
+    ) -> MonorubyErr {
+        MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, loc, sourceinfo, func_id)
     }
 
-    pub(crate) fn escape_from_eval(msg: &str, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn escape_from_eval(
+        msg: &str,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+        func_id: FuncId,
+    ) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax,
             format!("can't escape from eval with {}.", msg),
             loc,
             sourceinfo,
+            func_id,
         )
     }
 }

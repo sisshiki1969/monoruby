@@ -407,10 +407,19 @@ impl Executor {
         self.set_error(MonorubyErr::cant_modify_frozen(store, val));
     }
 
-    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
         match &mut self.exception {
             Some(err) => {
-                err.push_trace(loc, sourceinfo);
+                err.push_trace(loc, sourceinfo, fid);
+            }
+            None => unreachable!(),
+        };
+    }
+
+    pub(crate) fn push_internal_error_location(&mut self, fid: FuncId) {
+        match &mut self.exception {
+            Some(err) => {
+                err.push_internal_trace(fid);
             }
             None => unreachable!(),
         };
