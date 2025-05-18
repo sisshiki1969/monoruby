@@ -711,7 +711,7 @@ impl BytecodeGen {
                 self.gen_defined(node)?;
             }
             NodeKind::Splat(..) => {
-                return Err(MonorubyErr::unsupported_lhs(&expr, self.sourceinfo.clone()));
+                return Err(self.unsupported_lhs(&expr));
             }
             NodeKind::DiscardLhs => unreachable!(),
         }
@@ -790,11 +790,7 @@ impl BytecodeGen {
         let mut mrhs_len = mrhs.len();
         let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
         if mlhs_len != mrhs_len && mrhs_len != 1 {
-            return Err(MonorubyErr::unsupported_feature(
-                "mlhs_len != mrhs_len",
-                loc,
-                self.sourceinfo.clone(),
-            ));
+            return Err(self.unsupported_feature("mlhs_len != mrhs_len", loc));
         };
 
         let temp = self.temp;

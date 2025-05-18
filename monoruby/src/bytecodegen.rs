@@ -1217,10 +1217,9 @@ impl BytecodeGen {
                     self.push(); // register for src.
                     LvalueKind::Index2 { base, index1 }
                 } else {
-                    return Err(MonorubyErr::unsupported_feature(
+                    return Err(self.unsupported_feature(
                         &format!("unsupported index. {}", index.len()),
                         lhs.loc,
-                        self.sourceinfo.clone(),
                     ));
                 }
             }
@@ -1250,7 +1249,7 @@ impl BytecodeGen {
                 assert!(!rest);
                 return Ok((lvalue_kind, true));
             }
-            _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
+            _ => return Err(self.unsupported_lhs(lhs)),
         };
         Ok((lhs, false))
     }
@@ -1412,11 +1411,23 @@ impl BytecodeGen {
 //
 impl BytecodeGen {
     fn syntax_error(&self, msg: impl Into<String>, loc: Loc) -> MonorubyErr {
-        MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone())
+        MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.id)
+    }
+
+    fn unsupported_feature(&self, msg: &str, loc: Loc) -> MonorubyErr {
+        MonorubyErr::unsupported_feature(msg, loc, self.sourceinfo.clone(), self.id)
+    }
+
+    fn unsupported_lhs(&self, lhs: &Node) -> MonorubyErr {
+        MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone(), self.id)
+    }
+
+    fn unsupported_node(&self, expr: &Node) -> MonorubyErr {
+        MonorubyErr::unsupported_node(expr, self.sourceinfo.clone(), self.id)
     }
 
     fn escape_from_eval(&self, msg: &str, loc: Loc) -> MonorubyErr {
-        MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone())
+        MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone(), self.id)
     }
 
     fn cant_set_variable(&self, id: u32, loc: Loc) -> MonorubyErr {

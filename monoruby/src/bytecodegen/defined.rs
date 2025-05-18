@@ -243,10 +243,7 @@ impl BytecodeGen {
             }
             NodeKind::SpecialVar(..) => {}
             NodeKind::ClassVar(..) | NodeKind::Lambda(_) => {
-                return Err(MonorubyErr::unsupported_node(
-                    node.clone(),
-                    self.sourceinfo.clone(),
-                ))
+                return Err(self.unsupported_node(&node))
             }
             _ => {}
         };

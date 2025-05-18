@@ -238,6 +238,23 @@ impl Store {
         }
     }
 
+    pub fn location(&self, func_id: Option<FuncId>, source: SourceInfoRef, loc: Loc) -> String {
+        if let Some(func_id) = func_id {
+            format!(
+                "{}:{}:in '{}'",
+                source.short_file_name(),
+                source.get_line(&loc),
+                self.func_description(func_id)
+            )
+        } else {
+            format!("{}:{}", source.short_file_name(), source.get_line(&loc))
+        }
+    }
+
+    pub fn internal_location(&self, func_id: FuncId) -> String {
+        format!("<internal>:in '{}'", self.func_description(func_id))
+    }
+
     fn new_iseq(&mut self, info: ISeqInfo) -> ISeqId {
         let id = self.iseqs.len();
         self.iseqs.push(info);

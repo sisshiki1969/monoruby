@@ -48,8 +48,6 @@ pub struct Parser<'a, OuterContext: LocalsContext> {
     suppress_mul_assign: bool,
     /// this flag suppress parse do-end style block.
     suppress_do_block: bool,
-    /// this flag suppress unparenthesized call. e.g. f 1,2
-    suppress_unparen_call: Vec<bool>,
     /// defined? mode: allow invalid break/next.
     defined_mode: bool,
 }
@@ -99,7 +97,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             suppress_acc_assign: false,
             suppress_mul_assign: false,
             suppress_do_block: false,
-            suppress_unparen_call: vec![],
             defined_mode: false,
         };
         let node = parser.parse_comp_stmt()?;

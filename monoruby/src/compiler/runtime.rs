@@ -389,7 +389,8 @@ pub(super) extern "C" fn vm_handle_arguments(
             set_frame_block(&globals.store[callid], callee_lfp, caller_lfp);
             Some(Value::nil())
         }
-        Err(err) => {
+        Err(mut err) => {
+            err.push_internal_trace(callee_lfp.meta().func_id());
             vm.set_error(err);
             None
         }
@@ -405,7 +406,8 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
 ) -> Option<Value> {
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
-        Err(err) => {
+        Err(mut err) => {
+            err.push_internal_trace(callee_lfp.meta().func_id());
             vm.set_error(err);
             None
         }

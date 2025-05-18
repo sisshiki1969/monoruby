@@ -20,7 +20,9 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
         ) -> Option<Value> {
             match #wrapped(vm, globals, lfp) {
                 Ok(val) => Some(val),
-                Err(err) => {
+                Err(mut err) => {
+                    let fid = lfp.meta().func_id();
+                    err.push_internal_trace(fid);
                     vm.set_error(err);
                     None
                 }
