@@ -1,0 +1,494 @@
+use super::*;
+
+impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
+    pub(super) fn parse_primary(&mut self) -> Result<Node, LexerErr> {
+        let tok = self.get()?;
+        let loc = tok.loc();
+        match tok.kind {
+            TokenKind::Ident(name) => {
+                match name.as_str() {
+                    "true" => return Ok(Node::new_bool(true, loc)),
+                    "false" => return Ok(Node::new_bool(false, loc)),
+                    "nil" => return Ok(Node::new_nil(loc)),
+                    "self" => return Ok(Node::new_self(loc)),
+                    "__LINE__" => {
+                        let line = self.lexer.get_line(loc.0);
+                        return Ok(Node::new_integer(line as i64, loc));
+                    }
+                    "__FILE__" => {
+                        let file = self.path.to_string_lossy().to_string();
+                        return Ok(Node::new_string(file.into(), loc));
+                    }
+                    _ => {}
+                };
+
+                if self.lexer.trailing_lparen() {
+                    return self.parse_func_call(name, loc);
+                };
+                if let Some(outer) = self.is_local_var(&name) {
+                    Ok(Node::new_lvar(name, outer, loc))
+                } else {
+                    // FUNCTION or COMMAND or LHS for assignment
+                    if let Ok(tok) = self.peek_no_term()
+                        && matches!(
+                            tok.kind,
+                            TokenKind::Punct(Punct::LBrace) | TokenKind::Reserved(Reserved::Do)
+                        )
+                    {
+                        // Method call with block and no args
+                        return self.parse_func_call(name, loc);
+                    }
+
+                    if let Some(arglist) = self.parse_arguments_unparen(true)? {
+                        Ok(Node::new_fcall(name, arglist, false, loc))
+                    } else {
+                        let node = Node::new_identifier(name, loc);
+                        Ok(node)
+                    }
+                }
+            }
+            TokenKind::NumberedParam(i, name) => {
+                if self.lexer.trailing_lparen() {
+                    // _1()
+                    return self.parse_func_call(name, loc);
+                };
+                self.check_outer_numbered_param(loc)?;
+                // FUNCTION or COMMAND or LHS for assignment
+                if let Ok(tok) = self.peek_no_term() {
+                    match tok.kind {
+                        // Multiple assignment
+                        TokenKind::Punct(Punct::Comma) => return Err(error_numbered_param(loc, i)),
+                        // Method call with block and no args
+                        // _1 {}
+                        TokenKind::Punct(Punct::LBrace) | TokenKind::Reserved(Reserved::Do) => {
+                            return self.parse_func_call(name, loc)
+                        }
+                        _ => {}
+                    }
+                };
+
+                if let Some(arglist) = self.parse_arguments_unparen(true)? {
+                    Ok(Node::new_fcall(name, arglist, false, loc))
+                } else {
+                    let node = Node::new_identifier(name.to_string(), loc);
+                    Ok(node)
+                }
+            }
+            TokenKind::Const(name) => {
+                if let Some(arglist) = self.parse_arguments(false)? {
+                    Ok(Node::new_fcall(name, arglist, false, loc))
+                } else {
+                    Ok(Node::new_const(name, false, None, vec![], loc))
+                }
+            }
+            TokenKind::InstanceVar(name) => Ok(Node::new_instance_var(name, loc)),
+            TokenKind::ClassVar(name) => Ok(Node::new_class_var(name, loc)),
+            TokenKind::GlobalVar(name) => Ok(Node::new_global_var(name, loc)),
+            TokenKind::SpecialVar(id) => Ok(Node::new_special_var(id, loc)),
+            TokenKind::IntegerLit(num) => Ok(Node::new_integer(num, loc)),
+            TokenKind::BignumLit(num) => Ok(Node::new_bignum(num, loc)),
+            TokenKind::FloatLit(num) => Ok(Node::new_float(num, loc)),
+            TokenKind::ImaginaryLit(num) => Ok(Node::new_imaginary(num, loc)),
+            TokenKind::StringLit(s) => self.parse_string_literal(s),
+            TokenKind::CommandLit(s) => {
+                let content = Node::new_string(s.into(), loc);
+                Ok(Node::new_command(content))
+            }
+            TokenKind::OpenString(s, term, level) => {
+                self.parse_interporated_string_literal(s.into(), term, level)
+            }
+            TokenKind::OpenCommand(s, term, level) => {
+                let content = self.parse_interporated_string_literal(s.into(), term, level)?;
+                Ok(Node::new_command(content))
+            }
+            TokenKind::Punct(punct) => match punct {
+                Punct::Minus => match self.get()?.kind {
+                    TokenKind::IntegerLit(num) => match num.checked_neg() {
+                        Some(i) => Ok(Node::new_integer(i, loc)),
+                        None => Ok(Node::new_bignum(-BigInt::from(num), loc)),
+                    },
+                    TokenKind::BignumLit(num) => Ok(Node::new_bignum(-num, loc)),
+                    TokenKind::FloatLit(num) => Ok(Node::new_float(-num, loc)),
+                    _ => unreachable!(),
+                },
+                Punct::LParen => {
+                    let old = self.suppress_mul_assign;
+                    self.suppress_mul_assign = false;
+                    let node = self.parse_comp_stmt()?;
+                    self.expect_punct(Punct::RParen)?;
+                    self.suppress_mul_assign = old;
+                    Ok(node)
+                }
+                Punct::LBracket => {
+                    // Array literal
+                    let nodes = self.parse_mul_assign_rhs(Punct::RBracket, true)?;
+                    let loc = loc.merge(self.prev_loc());
+                    Ok(Node::new_array(nodes, loc))
+                }
+                Punct::LBrace => self.parse_hash_literal(false, None),
+                Punct::Colon => self.parse_symbol(),
+                Punct::Arrow => self.parse_lambda_literal(),
+                Punct::Scope => {
+                    let name = self.expect_const()?;
+                    Ok(Node::new_const(name, true, None, vec![], loc))
+                }
+                Punct::Div => self.parse_regexp(),
+                Punct::Rem => self.parse_percent_notation(),
+                Punct::Question => self.parse_char_literal(),
+                Punct::Shl => self.parse_heredocument(),
+                Punct::Mul => self.parse_splat(loc),
+                _ => Err(error_unexpected(
+                    loc,
+                    format!("Unexpected token: {:?}", tok.kind),
+                )),
+            },
+            TokenKind::Reserved(reserved) => match reserved {
+                Reserved::If => self.parse_if(),
+                Reserved::Unless => self.parse_unless(),
+                Reserved::For => self.parse_for(),
+                Reserved::While => self.parse_while(true),
+                Reserved::Until => self.parse_while(false),
+                Reserved::Case => self.parse_case(),
+                Reserved::Def => self.parse_def(),
+                Reserved::Class => {
+                    let loc = self.prev_loc();
+                    if self.consume_punct(Punct::Shl)? {
+                        self.parse_singleton_class(loc)
+                    } else {
+                        if self.is_method_context() {
+                            return Err(error_unexpected(loc, "class definition in method body."));
+                        }
+                        self.parse_class(false)
+                    }
+                }
+                Reserved::Module => {
+                    if self.is_method_context() {
+                        return Err(error_unexpected(
+                            loc,
+                            "SyntaxError: module definition in method body.",
+                        ));
+                    }
+                    self.parse_class(true)
+                }
+                Reserved::Return => self.parse_return(),
+                Reserved::Break => self.parse_break(),
+                Reserved::Next => self.parse_next(),
+                Reserved::Redo => self.parse_redo(),
+                Reserved::Begin => self.parse_begin(),
+                Reserved::Defined => {
+                    if self.consume_punct_no_term(Punct::LParen)? {
+                        self.defined_mode = true;
+                        let node = self.parse_expr()?;
+                        self.defined_mode = false;
+                        self.expect_punct(Punct::RParen)?;
+                        Ok(Node::new_defined(node))
+                    } else {
+                        let tok = self.get()?;
+                        Err(error_unexpected(tok.loc, "expected '('.".to_string()))
+                    }
+                }
+                Reserved::Alias => {
+                    let new_name = self.alias_name()?;
+                    let old_name = self.alias_name()?;
+                    let loc = loc.merge(self.prev_loc());
+                    Ok(Node::new_alias(new_name, old_name, loc))
+                }
+                Reserved::Super => self.parse_super(),
+                _ => Err(error_unexpected(
+                    loc,
+                    format!("Unexpected token: {:?}", tok.kind),
+                )),
+            },
+            TokenKind::Eof => Err(error_eof(loc)),
+            _ => Err(error_unexpected(
+                loc,
+                format!("Unexpected token: {:?}", tok.kind),
+            )),
+        }
+    }
+
+    ///
+    /// Parse function args.
+    ///
+    /// - `method`( arg0, arg1,... )
+    /// - `method` do end
+    /// - `method` {}
+    /// - `method`
+    fn parse_func_call(&mut self, method: String, loc: Loc) -> Result<Node, LexerErr> {
+        let arglist = if let Some(arglist) = self.parse_arguments_paren(true)? {
+            // PRIMARY-METHOD : FNAME ( ARGS ) BLOCK?
+            arglist
+        } else if let Some(block) = self.parse_block()? {
+            // PRIMARY-METHOD : FNAME BLOCK
+            ArgList::with_block(block)
+        } else {
+            ArgList::default()
+        };
+        Ok(Node::new_fcall(method, arglist, false, loc))
+    }
+
+    fn parse_super(&mut self) -> Result<Node, LexerErr> {
+        let loc = self.prev_loc();
+        let arglist = if let Some(arglist) = self.parse_arguments(true)? {
+            arglist
+        } else {
+            return Ok(Node::new_super(None, loc));
+        };
+        let loc = self.prev_loc().merge(loc);
+        Ok(Node::new_super(arglist, loc))
+    }
+
+    ///
+    /// Parse arguments with parentheses.
+    ///
+    /// - (arg0, arg1, ...)
+    pub(super) fn parse_arguments(
+        &mut self,
+        with_block: bool,
+    ) -> Result<Option<ArgList>, LexerErr> {
+        if let Some(arglist) = self.parse_arguments_paren(with_block)? {
+            Ok(Some(arglist))
+        } else if let Some(arglist) = self.parse_arguments_unparen(with_block)? {
+            Ok(Some(arglist))
+        } else if with_block && let Some(block) = self.parse_block()? {
+            Ok(Some(ArgList::with_block(block)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    ///
+    /// Parse arguments with parentheses.
+    ///
+    /// - (arg0, arg1, ...)
+    pub(super) fn parse_arguments_paren(
+        &mut self,
+        allow_block: bool,
+    ) -> Result<Option<ArgList>, LexerErr> {
+        if self.lexer.trailing_lparen() {
+            assert!(self.consume_punct_no_term(Punct::LParen).unwrap());
+            let arglist = self.parse_arglist_block(Punct::RParen, allow_block)?;
+            Ok(Some(arglist))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn parse_arguments_unparen(&mut self, allow_block: bool) -> Result<Option<ArgList>, LexerErr> {
+        if self.is_command() {
+            let arglist = self.parse_arglist_block(None, allow_block)?;
+            Ok(Some(arglist))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn parse_arglist_block(
+        &mut self,
+        delimiter: impl Into<Option<Punct>>,
+        allow_block: bool,
+    ) -> Result<ArgList, LexerErr> {
+        let mut arglist = self.parse_arglist(delimiter)?;
+        if allow_block && let Some(actual_block) = self.parse_block()? {
+            if arglist.block.is_some() {
+                return Err(error_unexpected(
+                    actual_block.loc(),
+                    "Both block arg and actual block given.",
+                ));
+            }
+            arglist.block = Some(actual_block);
+        };
+        Ok(arglist)
+    }
+
+    /// Parse argument list.
+    /// arg, *splat_arg, kw: kw_arg, **double_splat_arg, &block <punct>
+    /// punct: punctuator for terminating arg list. Set None for unparenthesized argument list.
+    fn parse_arglist(&mut self, punct: impl Into<Option<Punct>>) -> Result<ArgList, LexerErr> {
+        let punct = punct.into();
+        let mut arglist = ArgList::default();
+        if self.peek()?.kind == TokenKind::Punct(Punct::Comma) {
+            return Ok(arglist);
+        }
+        loop {
+            if let Some(punct) = punct {
+                if self.consume_punct(punct)? {
+                    return Ok(arglist);
+                }
+            }
+            if self.consume_punct(Punct::Range3)? {
+                self.check_forwarding()?;
+                arglist.forwarding = true;
+            } else if self.consume_punct(Punct::Mul)? {
+                // splat argument
+                let loc = self.prev_loc();
+                let array = self.parse_arg(false)?;
+                arglist.splat = true;
+                arglist.args.push(Node::new_splat(array, loc));
+            } else if self.consume_punct(Punct::DMul)? {
+                // double splat argument
+                arglist.hash_splat.push(self.parse_arg(false)?);
+            } else if self.consume_punct(Punct::BitAnd)? {
+                // block argument
+                arglist.block = Some(Box::new(self.parse_arg(false)?));
+            } else {
+                let node = self.parse_arg(false)?;
+                let loc = node.loc();
+                if self.consume_punct(Punct::FatArrow)? {
+                    let value = self.parse_arg(false)?;
+                    let mut kvp = vec![(node, value)];
+                    if self.consume_punct(Punct::Comma)? {
+                        loop {
+                            // Support trailing comma
+                            if let Some(punct) = punct {
+                                if let TokenKind::Punct(p) = self.peek()?.kind {
+                                    if punct == p {
+                                        break;
+                                    }
+                                }
+                            };
+                            let key = self.parse_arg(false)?;
+                            self.expect_punct(Punct::FatArrow)?;
+                            let value = self.parse_arg(false)?;
+                            kvp.push((key, value));
+                            if !self.consume_punct(Punct::Comma)? {
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(punct) = punct {
+                        self.consume_punct(punct)?;
+                    };
+                    let node = Node::new_hash(kvp, loc);
+                    arglist.args.push(node);
+                    return Ok(arglist);
+                }
+                match &node.kind {
+                    NodeKind::Ident(id, ..) | NodeKind::LocalVar(0, id) => {
+                        if self.consume_punct_no_term(Punct::Colon)? {
+                            // keyword args
+                            arglist
+                                .kw_args
+                                .push((id.to_string(), self.parse_arg(false)?));
+                        } else {
+                            // positional args
+                            arglist.args.push(node);
+                        }
+                    }
+                    _ => {
+                        arglist.args.push(node);
+                    }
+                }
+            }
+            if !self.consume_punct(Punct::Comma)? {
+                break;
+            } else {
+                let loc = self.prev_loc();
+                if arglist.block.is_some() {
+                    return Err(error_unexpected(loc, "unexpected ','."));
+                };
+            }
+        }
+        if let Some(punct) = punct {
+            self.consume_punct(punct)?;
+        };
+        Ok(arglist)
+    }
+
+    /// Parse block.
+    ///     do |x| stmt end
+    ///     { |x| stmt }
+    pub(super) fn parse_block(&mut self) -> Result<Option<Box<Node>>, LexerErr> {
+        let old_suppress_mul_flag = self.suppress_mul_assign;
+        self.suppress_mul_assign = false;
+        let res = self.parse_block_inner();
+        self.suppress_mul_assign = old_suppress_mul_flag;
+        res
+    }
+
+    fn parse_block_inner(&mut self) -> Result<Option<Box<Node>>, LexerErr> {
+        let do_flag =
+            if !self.suppress_do_block && self.consume_reserved_no_skip_line_term(Reserved::Do)? {
+                true
+            } else if self.consume_punct_no_term(Punct::LBrace)? {
+                false
+            } else {
+                return Ok(None);
+            };
+        // BLOCK: do [`|' [BLOCK_VAR] `|'] COMPSTMT end
+        let loc = self.prev_loc();
+        self.scope.push(LvarScope::new_block(None));
+        self.loop_stack.push(LoopKind::Block);
+
+        let (params, _) = if self.consume_punct(Punct::BitOr)? {
+            (self.parse_formal_params(Punct::BitOr)?, true)
+        } else {
+            self.consume_punct(Punct::LOr)?;
+            (vec![], false)
+        };
+
+        let body = if do_flag {
+            self.parse_begin()?
+        } else {
+            let body = self.parse_comp_stmt()?;
+            self.expect_punct(Punct::RBrace)?;
+            body
+        };
+
+        self.loop_stack.pop().unwrap();
+        let lvar = self.scope.pop().unwrap().lvar;
+        let loc = loc.merge(self.prev_loc());
+        let node = Node::new_lambda(params, body, lvar, loc);
+        Ok(Some(Box::new(node)))
+    }
+
+    fn is_command(&mut self) -> bool {
+        let tok = match self.peek_no_term() {
+            Ok(tok) => tok,
+            _ => return false,
+        };
+        if self.lexer.trailing_space() {
+            match tok.kind {
+                TokenKind::LineTerm => false,
+                TokenKind::Punct(p) => match p {
+                    Punct::LParen | Punct::LBracket | Punct::Scope | Punct::Arrow | Punct::Not => {
+                        true
+                    }
+                    Punct::Colon
+                    | Punct::Plus
+                    | Punct::Minus
+                    | Punct::Mul
+                    | Punct::Div
+                    | Punct::BitAnd
+                    | Punct::Rem
+                    | Punct::Shl => !self.lexer.has_trailing_space(&tok),
+                    _ => false,
+                },
+                TokenKind::Reserved(r) => !matches!(
+                    r,
+                    Reserved::Do
+                        | Reserved::If
+                        | Reserved::Unless
+                        | Reserved::Rescue
+                        | Reserved::While
+                        | Reserved::Until
+                        | Reserved::And
+                        | Reserved::Or
+                        | Reserved::Then
+                        | Reserved::End
+                ),
+                _ => true,
+            }
+        } else {
+            matches!(
+                tok.kind,
+                TokenKind::GlobalVar(_)
+                    | TokenKind::InstanceVar(_)
+                    | TokenKind::StringLit(_)
+                    | TokenKind::FloatLit(_)
+                    | TokenKind::BignumLit(_)
+                    | TokenKind::IntegerLit(_)
+            )
+        }
+    }
+}

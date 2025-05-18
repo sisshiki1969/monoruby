@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 mod error;
 mod lvar_collector;
 mod node;

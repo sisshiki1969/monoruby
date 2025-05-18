@@ -39,7 +39,7 @@ rustyline = "15.0.0"
 paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
-onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
+onigmo-regex = { path = "../../onigmo-regex" }
 ruruby-parse = { path = "../ruruby-parse" }
 monoruby-attr = { path = "../monoruby_attr" }
 num = "0.4.3"

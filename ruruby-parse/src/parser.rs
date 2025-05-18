@@ -7,6 +7,7 @@ mod expression;
 mod flow_control;
 mod lexer;
 mod literals;
+mod primary;
 pub(crate) use lexer::*;
 
 /// $&
@@ -47,6 +48,8 @@ pub struct Parser<'a, OuterContext: LocalsContext> {
     suppress_mul_assign: bool,
     /// this flag suppress parse do-end style block.
     suppress_do_block: bool,
+    /// this flag suppress unparenthesized call. e.g. f 1,2
+    suppress_unparen_call: Vec<bool>,
     /// defined? mode: allow invalid break/next.
     defined_mode: bool,
 }
@@ -96,6 +99,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             suppress_acc_assign: false,
             suppress_mul_assign: false,
             suppress_do_block: false,
+            suppress_unparen_call: vec![],
             defined_mode: false,
         };
         let node = parser.parse_comp_stmt()?;
@@ -437,49 +441,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 }
 
 impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
-    /// Parse block.
-    ///     do |x| stmt end
-    ///     { |x| stmt }
-    fn parse_block(&mut self) -> Result<Option<Box<Node>>, LexerErr> {
-        let old_suppress_mul_flag = self.suppress_mul_assign;
-        self.suppress_mul_assign = false;
-        let do_flag =
-            if !self.suppress_do_block && self.consume_reserved_no_skip_line_term(Reserved::Do)? {
-                true
-            } else if self.consume_punct_no_term(Punct::LBrace)? {
-                false
-            } else {
-                self.suppress_mul_assign = old_suppress_mul_flag;
-                return Ok(None);
-            };
-        // BLOCK: do [`|' [BLOCK_VAR] `|'] COMPSTMT end
-        let loc = self.prev_loc();
-        self.scope.push(LvarScope::new_block(None));
-        self.loop_stack.push(LoopKind::Block);
-
-        let (params, _) = if self.consume_punct(Punct::BitOr)? {
-            (self.parse_formal_params(Punct::BitOr)?, true)
-        } else {
-            self.consume_punct(Punct::LOr)?;
-            (vec![], false)
-        };
-
-        let body = if do_flag {
-            self.parse_begin()?
-        } else {
-            let body = self.parse_comp_stmt()?;
-            self.expect_punct(Punct::RBrace)?;
-            body
-        };
-
-        self.loop_stack.pop().unwrap();
-        let lvar = self.scope.pop().unwrap().lvar;
-        let loc = loc.merge(self.prev_loc());
-        let node = Node::new_lambda(params, body, lvar, loc);
-        self.suppress_mul_assign = old_suppress_mul_flag;
-        Ok(Some(Box::new(node)))
-    }
-
     /// Parse operator which can be defined as a method.
     /// Return IdentId of the operator.
     fn parse_op_definable(&mut self, punct: &Punct) -> Result<&'static str, LexerErr> {
@@ -539,16 +500,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             self.consume_reserved(Reserved::Then)?;
             return Ok(());
         }
-        self.expect_reserved(Reserved::Then)?;
-        Ok(())
+        self.expect_reserved(Reserved::Then)
     }
 
     fn parse_do(&mut self) -> Result<(), LexerErr> {
         if self.consume_term()? {
             return Ok(());
         }
-        self.expect_reserved(Reserved::Do)?;
-        Ok(())
+        self.expect_reserved(Reserved::Do)
     }
 
     /// Parse formal parameters.
@@ -636,7 +595,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 if self.consume_punct(Punct::Assign)? {
                     // Optional param
                     let default = if let Some(Punct::BitOr) = terminator {
-                        self.parse_primary(true)?
+                        let node = self.parse_primary()?;
+                        node
                     } else {
                         self.parse_arg(false)?
                     };

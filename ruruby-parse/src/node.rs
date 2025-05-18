@@ -848,13 +848,4 @@ impl Node {
             None
         }
     }
-
-    pub(crate) fn as_method_name(&self) -> Option<String> {
-        match &self.kind {
-            NodeKind::Const { name: id, .. } | NodeKind::Ident(id) | NodeKind::LocalVar(0, id) => {
-                Some(id.clone())
-            }
-            _ => None,
-        }
-    }
 }
