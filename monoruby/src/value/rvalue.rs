@@ -444,7 +444,7 @@ impl RValue {
                 ObjTy::RANGE => self.range_debug(store),
                 ObjTy::PROC => self.proc_tos(),
                 ObjTy::HASH => self.as_hashmap().debug(store),
-                ObjTy::REGEXP => self.regexp_tos(),
+                ObjTy::REGEXP => self.as_regex().tos(),
                 ObjTy::IO => self.as_io().to_string(),
                 ObjTy::EXCEPTION => self.as_exception().msg().to_string(),
                 ObjTy::METHOD => self.as_method().debug(store),
@@ -486,7 +486,7 @@ impl RValue {
                 let msg = self.as_exception().msg();
                 format!("#<{class_name}: {msg}>")
             }
-            ObjTy::REGEXP => self.regexp_inspect(),
+            ObjTy::REGEXP => self.as_regex().inspect(),
             _ => self.to_s(store),
         }
     }
@@ -558,14 +558,6 @@ impl RValue {
 
     fn proc_tos(&self) -> String {
         format!("#<Proc:0x{:016x}>", self.id())
-    }
-
-    fn regexp_tos(&self) -> String {
-        format!("(?-mix:{})", self.as_regex().as_str())
-    }
-
-    fn regexp_inspect(&self) -> String {
-        format!("/{}/", self.as_regex().as_str())
     }
 
     fn range_debug(&self, store: &Store) -> String {

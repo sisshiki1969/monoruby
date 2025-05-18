@@ -996,18 +996,31 @@ impl BytecodeGen {
 
     fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let mut string = String::new();
-        if !option.is_empty() {
-            string += &format!("(?{option})");
-        }
+        let option = onigmo_regex::ONIG_OPTION_NONE
+            | if option.contains('i') {
+                onigmo_regex::ONIG_OPTION_IGNORECASE
+            } else {
+                0
+            }
+            | if option.contains('x') {
+                onigmo_regex::ONIG_OPTION_EXTEND
+            } else {
+                0
+            }
+            | if option.contains('m') {
+                onigmo_regex::ONIG_OPTION_MULTILINE
+            } else {
+                0
+            };
         for node in nodes {
             match &node.kind {
                 NodeKind::String(s) => string += s,
                 _ => unreachable!(),
             }
         }
-        let re = match RegexpInner::new(string) {
+        let re = match RegexpInner::with_option(string, option) {
             Ok(re) => re,
-            Err(err) => return Err(self.syntax_error(err, loc)),
+            Err(err) => return Err(self.syntax_error(err.msg(), loc)),
         };
         Ok(Value::regexp(re))
     }

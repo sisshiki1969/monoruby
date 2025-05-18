@@ -1082,7 +1082,7 @@ impl Value {
         if let Some(re) = self.is_regex() {
             Ok(re.clone())
         } else if let Some(s) = self.is_str() {
-            RegexpInner::from_string(s)
+            RegexpInner::with_option(s, 0)
         } else {
             Err(MonorubyErr::is_not_regexp_nor_string(*self))
         }

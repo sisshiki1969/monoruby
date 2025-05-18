@@ -355,6 +355,12 @@ class Range
   end
 end
 
+class Regexp
+  IGNORECASE = 1
+  EXTENDED = 2
+  MULTILINE = 4
+end
+
 class Module
   def private_constant(*x)
   end

@@ -6,10 +6,16 @@ use super::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Regexp", REGEXP_CLASS, ObjTy::REGEXP);
-    globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
-    globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape, 1);
+    globals.define_builtin_class_funcs_with(
+        REGEXP_CLASS,
+        "new",
+        &["compile"],
+        regexp_new,
+        1,
+        2,
+        false,
+    );
+    globals.define_builtin_class_funcs(REGEXP_CLASS, "escape", &["quote"], regexp_escape, 1);
     globals.define_builtin_class_func_rest(REGEXP_CLASS, "union", regexp_union);
     globals.define_builtin_class_func_with(
         REGEXP_CLASS,
@@ -36,7 +42,18 @@ pub(crate) fn init(globals: &mut Globals) {
 fn regexp_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let string = arg0.expect_string()?;
-    let regexp = RegexpInner::from_string(string)?;
+    let option = if let Some(option) = lfp.try_arg(1) {
+        if let Some(option) = option.try_fixnum() {
+            option as i32 as u32
+        } else if option.as_bool() {
+            onigmo_regex::ONIG_OPTION_IGNORECASE
+        } else {
+            onigmo_regex::ONIG_OPTION_NONE
+        }
+    } else {
+        onigmo_regex::ONIG_OPTION_NONE
+    };
+    let regexp = RegexpInner::with_option(string, option)?;
     let val = Value::regexp(regexp);
     Ok(val)
 }
@@ -73,13 +90,14 @@ fn regexp_union(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
         if let Some(s) = arg.is_str() {
             v.push(RegexpInner::escape(s));
         } else if let Some(re) = arg.is_regex() {
-            v.push(re.as_str().to_string());
+            v.push(re.tos());
         } else {
             return Err(MonorubyErr::no_implicit_conversion(*arg, STRING_CLASS));
         }
     }
+    let s = v.join("|");
 
-    Ok(Value::regexp(RegexpInner::union(&v)?))
+    Ok(Value::regexp(RegexpInner::with_option(s, 0)?))
 }
 
 ///
@@ -187,6 +205,14 @@ fn match_(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 mod tests {
     use crate::tests::*;
     #[test]
+    fn regex() {
+        run_test(r##"/abcde/xmi.to_s"##);
+        run_test(r##"/abcde/xmi.inspect"##);
+        run_test(r##"/abcde/.to_s"##);
+        run_test(r##"/abcde/.inspect"##);
+    }
+
+    #[test]
     fn regexp_last_match() {
         run_test(
             r#"
@@ -237,8 +263,7 @@ mod tests {
 
     #[test]
     fn union() {
-        run_test(r##""?" =~ Regexp.union("a", "?", "b")"##);
-        run_test(r##""ghi" =~ Regexp.union(/abc/, /def/, /ghi/)"##);
+        run_test(r##"Regexp.union(/g/i, "a(b)[c]d", /bbbb/x, /cccc/m).to_s"##);
     }
 
     #[test]

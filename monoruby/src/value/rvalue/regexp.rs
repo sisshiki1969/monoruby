@@ -7,7 +7,7 @@ static HASHMAP_CACHE: LazyLock<RwLock<HashMapCache>> =
     LazyLock::new(|| RwLock::new(HashMapCache::new()));
 
 #[derive(Debug, Default)]
-struct HashMapCache(HashMap<String, Arc<Regex>>);
+struct HashMapCache(HashMap<(String, u32), Arc<Regex>>);
 
 impl HashMapCache {
     fn new() -> Self {
@@ -32,13 +32,23 @@ impl RegexpInner {
         self.0.as_str()
     }
 
-    pub fn union(v: &[String]) -> Result<Self> {
-        let s = v
-            .iter()
-            .map(|re| format!("(?-mix:{})", re))
-            .collect::<Vec<_>>()
-            .join("|");
-        Self::from_string(s)
+    pub fn option(&self) -> u32 {
+        self.0.option()
+    }
+
+    pub fn option_string(&self) -> String {
+        let mut res = String::new();
+        let option = self.option();
+        if option & onigmo_regex::ONIG_OPTION_MULTILINE != 0 {
+            res.push('m');
+        }
+        if option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0 {
+            res.push('i');
+        }
+        if option & onigmo_regex::ONIG_OPTION_EXTEND != 0 {
+            res.push('x');
+        }
+        res
     }
 
     pub fn escape(text: &str) -> String {
@@ -47,34 +57,31 @@ impl RegexpInner {
 
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub fn from_escaped(text: &str) -> Result<Self> {
-        RegexpInner::from_string(Self::escape(text))
+        RegexpInner::with_option(Self::escape(text), 0)
     }
 
-    /// Create `RegexpInfo` from `reg_str`.
-    pub fn from_string(reg_str: impl Into<String>) -> Result<Self> {
+    /// Create `RegexpInfo` from `reg_str` with `option`.
+    pub fn with_option(reg_str: impl Into<String>, option: u32) -> Result<Self> {
         let reg_str: String = reg_str.into();
-        match HASHMAP_CACHE.write().unwrap().0.entry(reg_str.clone()) {
+        match HASHMAP_CACHE
+            .write()
+            .unwrap()
+            .0
+            .entry((reg_str.clone(), option))
+        {
             std::collections::hash_map::Entry::Occupied(entry) => {
                 Ok(RegexpInner(entry.get().clone()))
             }
-            std::collections::hash_map::Entry::Vacant(entry) => match Regex::new(&reg_str) {
-                Ok(regexp) => {
-                    let regex = Arc::new(regexp);
-                    entry.insert(regex.clone());
-                    Ok(RegexpInner(regex))
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                match Regex::new_with_option(&reg_str, option) {
+                    Ok(regexp) => {
+                        let regex = Arc::new(regexp);
+                        entry.insert(regex.clone());
+                        Ok(RegexpInner(regex))
+                    }
+                    Err(err) => Err(MonorubyErr::regexerr(err)),
                 }
-                Err(err) => Err(MonorubyErr::regexerr(err)),
-            },
-        }
-    }
-
-    pub fn new(reg_str: String) -> std::result::Result<Self, String> {
-        match Regex::new(&reg_str) {
-            Ok(regexp) => {
-                let regex = Arc::new(regexp);
-                Ok(RegexpInner(regex))
             }
-            Err(err) => Err(err.to_string()),
         }
     }
 
@@ -119,6 +126,28 @@ impl RegexpInner {
             None => Ok(None),
             Some(captures) => Ok(captures.get(0).map(|m| m.range())),
         }
+    }
+
+    pub fn tos(&self) -> String {
+        let option = self.option();
+        let m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
+        let i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
+        let x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+        format!(
+            "(?{}{}{}{}{}{}{}:{})",
+            if m { "m" } else { "" },
+            if i { "i" } else { "" },
+            if x { "x" } else { "" },
+            if m && i && x { "" } else { "-" },
+            if !m { "m" } else { "" },
+            if !i { "i" } else { "" },
+            if !x { "x" } else { "" },
+            self.as_str()
+        )
+    }
+
+    pub fn inspect(&self) -> String {
+        format!("/{}/{}", self.as_str(), self.option_string())
     }
 }
 
