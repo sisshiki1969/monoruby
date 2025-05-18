@@ -42,3 +42,57 @@ fn lambda() {
             "#,
     );
 }
+
+#[test]
+fn regexp0() {
+    run_test(
+        r##"
+        place = "東京都"
+        /#{place}/.match?("Go to 東京都")
+        "##,
+    );
+    run_test(
+        r##"
+        number = "(\\d+)"
+        operator = "(\\+|-|\\*|/)"
+        /#{number}#{operator}#{number}/.match?("43+291") 
+        "##,
+    );
+}
+
+#[test]
+fn regexp_char_class() {
+    run_test(
+        r##"
+    r = /[a-w&&[^c-g]e]/ # ([a-w] かつ ([^c-g] もしくは e)) つまり [abeh-w] と同じ
+    [
+        /[a-z[0-9]]/.match?("y"), # => #<MatchData "y">
+        /[a-z[0-9]]/.match?("["), # => nil
+        r.match?("b"), # => #<MatchData "b">
+        r.match?("c"), # => nil
+        r.match?("e"), # => #<MatchData "e">
+        r.match?("g"), # => nil
+        r.match?("h"), # => #<MatchData "h">
+        r.match?("w"), # => #<MatchData "w">
+        r.match?("z"), # => nil
+    ]
+        "##,
+    );
+}
+
+#[test]
+fn regexp_free_format() {
+    run_test(
+        r##"
+    float_pat = /\A
+      \d+ # 整数部
+      (\. # 小数点
+        \d+ # 小数部
+      )?  # 小数点 + 小数部 はなくともよい
+    \z/x
+    float_pat.match?("3.14")
+        "##,
+    );
+    run_test(r##"/x y/x.match?("x y")"##);
+    run_test(r##"/x\ y/x.match?("x y")"##);
+}

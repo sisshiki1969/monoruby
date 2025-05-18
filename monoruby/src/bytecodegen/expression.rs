@@ -711,7 +711,7 @@ impl BytecodeGen {
                 self.gen_defined(node)?;
             }
             NodeKind::Splat(..) => {
-                return Err(MonorubyErr::unsupported_lhs(&expr, self.sourceinfo.clone()));
+                return Err(self.unsupported_lhs(&expr));
             }
             NodeKind::DiscardLhs => unreachable!(),
         }
@@ -790,11 +790,7 @@ impl BytecodeGen {
         let mut mrhs_len = mrhs.len();
         let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
         if mlhs_len != mrhs_len && mrhs_len != 1 {
-            return Err(MonorubyErr::unsupported_feature(
-                "mlhs_len != mrhs_len",
-                loc,
-                self.sourceinfo.clone(),
-            ));
+            return Err(self.unsupported_feature("mlhs_len != mrhs_len", loc));
         };
 
         let temp = self.temp;
@@ -946,10 +942,14 @@ impl BytecodeGen {
         Ok(())
     }
 
-    fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, op: String, loc: Loc) -> Result<()> {
-        let len = nodes.len() + 1;
-        let arg = self.push();
-        self.emit_literal(arg.into(), Value::string(format!("(?{op})")));
+    fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, option: String, loc: Loc) -> Result<()> {
+        let mut len = nodes.len();
+        let arg = self.sp();
+        if !option.is_empty() {
+            let r = self.push().into();
+            self.emit_literal(r, Value::string(format!("(?{option})")));
+            len += 1;
+        }
         for expr in nodes {
             self.push_expr(expr)?;
         }
@@ -996,13 +996,15 @@ impl BytecodeGen {
 
     fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let mut string = String::new();
+        if !option.is_empty() {
+            string += &format!("(?{option})");
+        }
         for node in nodes {
             match &node.kind {
                 NodeKind::String(s) => string += s,
                 _ => unreachable!(),
             }
         }
-        let string = format!("(?{}){}", option, string);
         let re = match RegexpInner::new(string) {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err, loc)),

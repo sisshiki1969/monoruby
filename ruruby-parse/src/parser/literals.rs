@@ -104,8 +104,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
                 'r' => {
                     let ary = vec![Node::new_string(content.into(), loc)];
-                    let (op, free_format) = self.lexer.check_postfix();
-                    Ok(Node::new_regexp(ary, op, free_format, tok.loc))
+                    let op = self.lexer.check_postfix();
+                    Ok(Node::new_regexp(ary, op, tok.loc))
                 }
                 _ => Err(error_unexpected(loc, "Unsupported % notation.")),
             }
@@ -254,15 +254,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let start_loc = self.prev_loc();
         let tok = self.lexer.get_regexp()?;
         let mut nodes = match tok.kind {
-            TokenKind::Regex {
-                body: s,
-                postfix: op,
-                free_format,
-            } => {
+            TokenKind::Regex { body, postfix } => {
                 return Ok(Node::new_regexp(
-                    vec![Node::new_string(s.into(), tok.loc)],
-                    op,
-                    free_format,
+                    vec![Node::new_string(body.into(), tok.loc)],
+                    postfix,
                     tok.loc,
                 ));
             }
@@ -274,18 +269,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let tok = self.lexer.get_regexp()?;
             let loc = tok.loc();
             match tok.kind {
-                TokenKind::Regex {
-                    body: s,
-                    postfix: op,
-                    free_format,
-                } => {
-                    nodes.push(Node::new_string(s.into(), loc));
-                    return Ok(Node::new_regexp(
-                        nodes,
-                        op,
-                        free_format,
-                        start_loc.merge(loc),
-                    ));
+                TokenKind::Regex { body, postfix } => {
+                    nodes.push(Node::new_string(body.into(), loc));
+                    return Ok(Node::new_regexp(nodes, postfix, start_loc.merge(loc)));
                 }
                 TokenKind::OpenRegex(s) => {
                     nodes.push(Node::new_string(s.into(), loc));

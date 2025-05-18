@@ -51,11 +51,7 @@ enum VarKind {
 #[derive(Debug, Clone, PartialEq)]
 enum InterpolateState {
     Finished(RubyString),
-    FinishedRegex {
-        body: String,
-        postfix: String,
-        free_format: bool,
-    },
+    FinishedRegex { body: String, postfix: String },
     NewInterpolation(RubyString, usize), // (string, paren_level)
 }
 
@@ -182,11 +178,9 @@ impl<'a> Lexer<'a> {
     /// Get token as a regular expression.
     pub(crate) fn get_regexp(&mut self) -> Result<Token, LexerErr> {
         match self.read_regexp_sub()? {
-            InterpolateState::FinishedRegex {
-                body,
-                postfix,
-                free_format,
-            } => Ok(self.new_regexlit(body, postfix, free_format)),
+            InterpolateState::FinishedRegex { body, postfix } => {
+                Ok(self.new_regexlit(body, postfix))
+            }
             InterpolateState::NewInterpolation(s, _) => Ok(self.new_open_reg(s.into_string()?)),
             _ => unreachable!(),
         }
@@ -961,20 +955,19 @@ impl<'a> Lexer<'a> {
     }
 
     /// Convert postfix of regular expression.
-    pub(crate) fn check_postfix(&mut self) -> (String, bool) {
-        let mut s = "m".to_string();
-        let mut free_format = false;
+    pub(crate) fn check_postfix(&mut self) -> String {
+        let mut s = "".to_string();
         loop {
             if self.consume('i') {
                 // ignore case
                 s.push('i');
             } else if self.consume('m') {
                 // match "." for newline
-                s.push('s');
+                s.push('m');
             } else if self.consume('x') {
                 // free format mode
-                //s.push('x');
-                free_format = true;
+                s.push('x');
+                //free_format = true;
             } else if self.consume('o') {
                 // expand "#{}" only once
                 //s.push('o');
@@ -986,7 +979,7 @@ impl<'a> Lexer<'a> {
                 break;
             };
         }
-        (s, free_format)
+        s
     }
 
     /// Scan as regular expression.
@@ -996,12 +989,8 @@ impl<'a> Lexer<'a> {
         loop {
             match self.get()? {
                 '/' => {
-                    let (postfix, free_format) = self.check_postfix();
-                    return Ok(InterpolateState::FinishedRegex {
-                        body,
-                        postfix,
-                        free_format,
-                    });
+                    let postfix = self.check_postfix();
+                    return Ok(InterpolateState::FinishedRegex { body, postfix });
                 }
                 '[' => {
                     char_class += 1;
@@ -1021,7 +1010,7 @@ impl<'a> Lexer<'a> {
                         'f' => body += "\\f",
                         'n' => body += "\\n",
                         'r' => body += "\\r",
-                        's' => body += "[[:space:]]",
+                        's' => body += "\\s",
                         't' => body += "\\t",
                         'v' => body += "\\v",
                         'x' => {
@@ -1477,12 +1466,11 @@ impl<'a> Lexer<'a> {
         Annot::new(TokenKind::StringLit(string.into()), self.cur_loc())
     }
 
-    fn new_regexlit(&self, string: impl Into<String>, op: String, free_format: bool) -> Token {
+    fn new_regexlit(&self, string: impl Into<String>, op: String) -> Token {
         Annot::new(
             TokenKind::Regex {
                 body: string.into(),
                 postfix: op,
-                free_format,
             },
             self.cur_loc(),
         )

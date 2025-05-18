@@ -189,7 +189,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         // クラスパス : "::" 定数識別子
         //      ｜ 定数識別子
         //      ｜ 一次式 [行終端子禁止] "::" 定数識別子
-        let mut node = self.parse_primary(true)?;
+        let mut node = self.parse_primary()?;
         loop {
             node = if self.consume_punct(Punct::Dot)? {
                 self.parse_primary_method(node, false)?

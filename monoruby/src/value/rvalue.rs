@@ -237,7 +237,11 @@ impl ObjKind {
         }
     }
 
-    fn exception(class_name: String, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
+    fn exception(
+        class_name: String,
+        msg: String,
+        trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
+    ) -> Self {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
                 class_name,
@@ -482,6 +486,7 @@ impl RValue {
                 let msg = self.as_exception().msg();
                 format!("#<{class_name}: {msg}>")
             }
+            ObjTy::REGEXP => self.regexp_inspect(),
             _ => self.to_s(store),
         }
     }
@@ -556,7 +561,11 @@ impl RValue {
     }
 
     fn regexp_tos(&self) -> String {
-        format!("(?:{})", self.as_regex().as_str())
+        format!("(?-mix:{})", self.as_regex().as_str())
+    }
+
+    fn regexp_inspect(&self) -> String {
+        format!("/{}/", self.as_regex().as_str())
     }
 
     fn range_debug(&self, store: &Store) -> String {
@@ -1169,7 +1178,7 @@ impl RValue {
     pub(super) fn new_exception(
         kind: String,
         msg: String,
-        trace: Vec<(Loc, SourceInfoRef)>,
+        trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
         class_id: ClassId,
     ) -> Self {
         RValue {
@@ -1575,7 +1584,7 @@ impl Header {
 pub struct ExceptionInner {
     class_name: String,
     msg: String,
-    trace: Vec<(Loc, SourceInfoRef)>,
+    trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
 impl ExceptionInner {
@@ -1602,7 +1611,7 @@ impl ExceptionInner {
         &self.msg
     }
 
-    pub fn trace(&self) -> Vec<(Loc, SourceInfoRef)> {
+    pub fn trace(&self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {
         self.trace.clone()
     }
 

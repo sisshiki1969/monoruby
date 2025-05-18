@@ -34,11 +34,12 @@ emit-cfg = ["dump-bc"]
 dump-require = []
 
 [dependencies]
-clap = { version = "4.5.35", features = ["derive"] }
+clap = { version = "4.5.38", features = ["derive"] }
 rustyline = "15.0.0"
 paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
+onigmo-regex = { path = "../../onigmo-regex" }
 ruruby-parse = { path = "../ruruby-parse" }
 monoruby-attr = { path = "../monoruby_attr" }
 num = "0.4.3"
@@ -54,7 +55,6 @@ hex = "0.4.3"
 rand = "0.9.0"
 indexmap = "2.9.0"
 regex = "1.11.1"
-fancy-regex = "0.14.0"
 libc = "0.2.171"
 getrandom = "0.3.2"
 rand_mt = { version = "5.0.0", features = ["rand-traits"] }

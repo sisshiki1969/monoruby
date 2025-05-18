@@ -131,19 +131,20 @@ fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/backtrace.html]
 #[monoruby_builtin]
-fn backtrace(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let v = self_
         .is_exception()
         .unwrap()
         .trace()
         .into_iter()
-        .map(|(loc, source)| {
-            Value::string(format!(
-                "{}:{}",
-                source.short_file_name(),
-                source.get_line(&loc)
-            ))
+        .map(|(source_loc, fid)| {
+            let s = if let Some((loc, source)) = source_loc {
+                globals.store.location(fid, source, loc)
+            } else {
+                globals.store.internal_location(fid.unwrap())
+            };
+            Value::string(s)
         })
         .collect();
     Ok(Value::array_from_vec(v))

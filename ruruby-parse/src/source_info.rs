@@ -86,7 +86,11 @@ impl SourceInfo {
 
     /// Get short_file name.
     pub fn short_file_name(&self) -> Cow<'_, str> {
-        self.path.file_name().unwrap().to_string_lossy()
+        if let Some(name) = self.path.file_name() {
+            name.to_string_lossy()
+        } else {
+            Cow::Borrowed("<internal>")
+        }
     }
 
     /// Show the location of *loc* in source text.

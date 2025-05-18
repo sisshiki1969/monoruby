@@ -415,6 +415,7 @@ class Thread
     @keys ||= {}
     @keys[key] = value
   end
+
   class Mutex
     def synchronize
       yield
@@ -424,7 +425,29 @@ class Thread
       false
     end
   end
+
+  class Backtrace
+    class Location
+      def initialize(frame)
+        @frame = frame
+      end
+
+      def path
+        @frame
+      end
+    end
+  end
 end
+
+class Exception
+  def backtrace_locations
+    backtrace.map do |frame|
+      Thread::Backtrace::Location.new(frame)
+    end
+  end
+end
+
+Mutex = Thread::Mutex
 
 class Marshal
   MAJOR_VERSION = 3
