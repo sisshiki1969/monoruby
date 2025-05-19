@@ -1172,25 +1172,27 @@ impl<'a> Lexer<'a> {
         } else {
             TermMode::Normal
         };
-        let (parse_mode, no_term) = if self.consume('\'') {
-            (ParseMode::Single, false)
+        let (parse_mode, term_ch) = if self.consume('\'') {
+            (ParseMode::Single, Some('\''))
         } else if self.consume('\"') {
-            (ParseMode::Double, false)
+            (ParseMode::Double, Some('\"'))
         } else if self.consume('`') {
-            (ParseMode::Command, false)
+            (ParseMode::Command, Some('`'))
         } else {
-            (ParseMode::Double, true)
+            (ParseMode::Double, None)
         };
-        let delimiter = self.consume_ident();
+        let delimiter = if let Some(delimiter) = term_ch {
+            self.consume_until(delimiter)
+        } else {
+            self.consume_ident()
+        };
         if delimiter.is_empty() {
             return Err(self.error_unexpected(self.pos));
         }
-        let term_ch = match parse_mode {
-            ParseMode::Single => '\'',
-            ParseMode::Double => '\"',
-            ParseMode::Command => '`',
-        };
-        if !no_term && !self.consume(term_ch) {
+
+        if let Some(term) = term_ch
+            && !self.consume(term)
+        {
             return Err(Self::error_parse(
                 "Unterminated here document identifier.",
                 self.pos,
@@ -1268,8 +1270,17 @@ impl<'a> Lexer<'a> {
     /// Consume the next char, if the char is equal to the given one.
     /// Return true if the char was consumed.
     pub(super) fn consume(&mut self, expect: char) -> bool {
+        self.consume_if(|ch| ch == expect)
+    }
+
+    /// Consume the next char, if the char meets predicate `p`.
+    /// Return true if the char was consumed.
+    pub(super) fn consume_if<F>(&mut self, pred: F) -> bool
+    where
+        F: Fn(char) -> bool,
+    {
         match self.peek() {
-            Some(ch) if ch == expect => {
+            Some(ch) if pred(ch) => {
                 self.pos += ch.len_utf8();
                 true
             }
@@ -1289,6 +1300,14 @@ impl<'a> Lexer<'a> {
                 _ => break,
             };
         }
+        start..self.pos
+    }
+
+    /// Consume continuous ascii_alphanumeric or underscore characters.
+    /// Return consumed string.
+    fn consume_until(&mut self, delimiter: char) -> Range<usize> {
+        let start = self.pos;
+        while self.consume_if(|ch| ch != delimiter) {}
         start..self.pos
     }
 
