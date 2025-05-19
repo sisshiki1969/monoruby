@@ -206,25 +206,27 @@ impl<'a> Lexer<'a> {
     fn read_token(&mut self) -> Result<Token, LexerErr> {
         loop {
             self.token_start_pos = self.pos;
-            if let Some(tok) = self.skip_whitespace() {
-                if self.code[self.pos..].starts_with("=begin") {
-                    self.goto_eol();
-                    if !self.consume('\n') {
-                        return Err(Lexer::error_eof(self.pos));
-                    }
-                    while !self.code[self.pos..].starts_with("=end") {
-                        self.goto_eol();
-                        if !self.consume('\n') {
-                            return Err(Lexer::error_eof(self.pos));
-                        }
-                    }
+            let tok = self.skip_whitespace();
+            if self.code[self.pos..].starts_with("=begin") {
+                self.goto_eol();
+                if !self.consume('\n') {
+                    return Err(Lexer::error_eof(self.pos));
+                }
+                while !self.code[self.pos..].starts_with("=end") {
                     self.goto_eol();
                     if !self.consume('\n') {
                         return Err(Lexer::error_eof(self.pos));
                     }
                 }
+                self.goto_eol();
+                if !self.consume('\n') {
+                    return Err(Lexer::error_eof(self.pos));
+                }
+            }
+            if let Some(tok) = tok {
                 return Ok(tok);
-            };
+            }
+
             self.token_start_pos = self.pos;
             let pos = self.pos;
             let ch = match self.get() {
@@ -463,7 +465,12 @@ impl<'a> Lexer<'a> {
                 let pos = self.pos;
                 match self.get() {
                     Ok(ch) => {
-                        if ch.is_alphanumeric() || ch == '_' || ch == '&' || ch == '\'' {
+                        if ch.is_alphanumeric()
+                            || ch == '_'
+                            || ch == '&'
+                            || ch == '\''
+                            || !ch.is_ascii()
+                        {
                         } else {
                             return Err(self.error_unexpected(pos));
                         }
@@ -751,8 +758,8 @@ impl<'a> Lexer<'a> {
 
     /// Read binary number.
     fn read_bin_number(&mut self) -> Result<Token, LexerErr> {
-        let mut val = match self.peek() {
-            Some(ch @ '0'..='1') => ch as u64 - '0' as u64,
+        let mut val: u128 = match self.peek() {
+            Some(ch @ '0'..='1') => ch as u128 - '0' as u128,
             Some(_) => {
                 return Err(self.error_unexpected(self.pos));
             }
@@ -761,7 +768,7 @@ impl<'a> Lexer<'a> {
         self.get()?;
         loop {
             match self.peek() {
-                Some(ch @ '0'..='1') => val = val * 2 + (ch as u64 - '0' as u64),
+                Some(ch @ '0'..='1') => val = val * 2 + (ch as u128 - '0' as u128),
                 Some('_') => {}
                 _ => break,
             }

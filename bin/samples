@@ -5,7 +5,8 @@ curl -s "$API_URL" | \
   jq -r '.tree[] | select(.path | endswith(".rb")) | .path' | \
   while read -r file; do
     echo "Downloading: $file"
-    curl -s -o "samples/ $file" "https://raw.githubusercontent.com/ruby/ruby/master/$file"
+    mkdir -p "samples/$(dirname "$file")"
+    curl -s -o "samples/$file" "https://raw.githubusercontent.com/ruby/ruby/master/$file"
   done
 
  

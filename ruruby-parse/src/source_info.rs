@@ -13,6 +13,10 @@ impl Loc {
 }
 
 /// This struct holds infomation of a certain line in the code.
+///
+/// `end` is a position of the line end ('\n') or the end of the code (`code.len()`).
+///
+/// `top..end` is guaranteed to be a valid UTF-8 boundary of the code.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Line {
     /// line number. (the first line is 1)
@@ -100,46 +104,62 @@ impl SourceInfo {
 
     /// Return a string represents the location of `loc` in the source code using '^^^'.
     pub fn get_location(&self, loc: &Loc) -> String {
+        let mut p = loc.0;
+        while p < loc.1 + 1 {
+            p += self.code[p..].chars().next().unwrap_or('\n').len_utf8();
+        }
+        let loc = Loc(loc.0, p);
         if self.code.is_empty() {
             return "(internal)".to_string();
         }
         let code = self.code.clone() + " ";
         let mut res_string = String::new();
-        let lines = self.get_lines(loc);
-        let mut found = false;
+        let lines = self.get_lines(&loc);
         let term = console::Term::stdout();
         let term_width = term.size().1 as usize;
-        for line in &lines {
-            if !found {
-                res_string += &format!("{}:{}\n", self.file_name(), line.line_no);
-                found = true;
-            };
-
-            let start = line.top;
-            let mut end = line.end;
-            if self.get_next_char(end) == Some('\n') && end > 0 {
-                end -= 1
+        if let Some(line) = lines.first() {
+            res_string += &format!("{}:{}\n", self.file_name(), line.line_no);
+            for line in &lines {
+                let start = line.top;
+                let end = line.end;
+                let mut lead = if loc.0 <= line.top {
+                    0
+                } else {
+                    loc.0 - line.top
+                };
+                let offset = lead / term_width * term_width;
+                let offset = if lead == 0 {
+                    0
+                } else {
+                    let mut len = 0;
+                    for c in code[start..loc.0].chars() {
+                        len += c.len_utf8();
+                        if len >= offset {
+                            break;
+                        }
+                    }
+                    len
+                };
+                lead -= offset;
+                let range_start = std::cmp::max(loc.0, line.top);
+                let range_end = std::cmp::min(loc.1, line.end);
+                let length = if range_start == range_end {
+                    1
+                } else {
+                    range_end - range_start
+                };
+                res_string += &code[(start + offset)..end];
+                res_string += "\n";
+                res_string += &" ".repeat(console::measure_text_width(
+                    &code[(start + offset)..(start + offset + lead)],
+                ));
+                res_string += &"^".repeat(console::measure_text_width(
+                    &code[(start + offset + lead)..(start + offset + lead + length)],
+                ));
+                res_string += "\n";
             }
-            let mut lead = if loc.0 <= line.top {
-                0
-            } else {
-                console::measure_text_width(&code[start..loc.0])
-            };
-            let offset = lead / term_width * term_width;
-            lead -= offset;
-            let range_start = std::cmp::max(loc.0, line.top);
-            let range_end = std::cmp::min(loc.1, line.end);
-            let term_end = start + (range_end - start) / term_width * term_width + term_width - 1;
-            let length = console::measure_text_width(&code[range_start..=range_end]);
-            res_string += &code[(start + offset)..=std::cmp::min(end, term_end)];
-            res_string += "\n";
-            res_string += &" ".repeat(lead);
-            res_string += &"^".repeat(length);
-            res_string += "\n";
-        }
-
-        if !found {
-            res_string += "NOT FOUND\n";
+        } else {
+            res_string += &format!("NOT FOUND: {:?} {}\n", loc, code.len());
             let line = match lines.last() {
                 Some(line) => (line.line_no + 1, line.end + 1, loc.1),
                 None => (1, 0, loc.1),
@@ -184,7 +204,7 @@ impl SourceInfo {
                 if loc.0 == loc.1 {
                     line.top <= loc.1 && line.end >= loc.0
                 } else {
-                    line.top < loc.1 && line.end > loc.0
+                    line.top < loc.1 && line.end >= loc.0
                 }
             })
             .collect();

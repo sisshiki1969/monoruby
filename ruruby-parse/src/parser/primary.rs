@@ -93,7 +93,12 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     },
                     TokenKind::BignumLit(num) => Ok(Node::new_bignum(-num, loc)),
                     TokenKind::FloatLit(num) => Ok(Node::new_float(-num, loc)),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(error_unexpected(
+                            loc,
+                            format!("Unexpected token: {:?}", tok.kind),
+                        ))
+                    }
                 },
                 Punct::LParen => {
                     let old = self.suppress_mul_assign;
@@ -348,7 +353,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     return Ok(arglist);
                 }
                 match &node.kind {
-                    NodeKind::Ident(id, ..) | NodeKind::LocalVar(0, id) => {
+                    NodeKind::Ident(id, ..) | NodeKind::LocalVar(_, id) => {
                         if self.consume_punct_no_term(Punct::Colon)? {
                             // keyword args
                             arglist

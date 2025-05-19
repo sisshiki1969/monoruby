@@ -122,4 +122,51 @@ mod tests {
         );
         parse_and_output(code);
     }
+
+    #[ignore]
+    #[test]
+    fn samples() {
+        fn read_dir<P: AsRef<Path>>(
+            path: P,
+            files: &mut Vec<std::path::PathBuf>,
+        ) -> std::io::Result<()> {
+            for entry in std::fs::read_dir(path)?.filter_map(|entry| entry.ok()) {
+                if entry.file_type()?.is_file() && entry.path().extension() == Some("rb".as_ref()) {
+                    files.push(entry.path());
+                } else if entry.file_type().unwrap().is_dir() {
+                    read_dir(entry.path(), files)?;
+                }
+            }
+            Ok(())
+        }
+
+        let mut total: usize = 0;
+        let mut read: usize = 0;
+        let mut accepted: usize = 0;
+        let mut files = vec![];
+        read_dir("../.samples", &mut files).unwrap();
+        for f in files {
+            total += 1;
+            let f = f.canonicalize().unwrap().to_string_lossy().to_string();
+            let code = match std::fs::read_to_string(f.clone()) {
+                Ok(code) => code,
+                Err(err) => {
+                    println!("{}: {err}", f);
+                    continue;
+                }
+            };
+            read += 1;
+            match ruruby_parse::Parser::parse_program(code, f.clone()) {
+                Ok(_) => {
+                    accepted += 1;
+                }
+                Err(err) => {
+                    println!("                                                                                                        ");
+                    println!("{:?}", err.kind);
+                    println!("{}", err.source_info.get_location(&err.loc));
+                }
+            };
+        }
+        println!("total:{total} read:{read} accepted:{accepted}");
+    }
 }
