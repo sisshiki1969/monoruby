@@ -124,15 +124,23 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             let loc = self.prev_loc();
             return Err(error_unexpected(loc, "Unexpectd <<."));
         }
-        let (mode, start, end) = self.lexer.read_heredocument()?;
+        let (mode, indent, start, end) = self.lexer.read_heredocument()?;
         let node = match mode {
             ParseMode::Single => Node::new_string(
-                self.lexer.code[start..end].to_string().into(),
+                if indent == 0 {
+                    self.lexer.code[start..end].to_string().into()
+                } else {
+                    let v: Vec<&str> = self.lexer.code[start..end]
+                        .split('\n')
+                        .map(|s| if s.is_empty() { &s[0..] } else { &s[indent..] })
+                        .collect();
+                    v.join("\n").into()
+                },
                 Loc(start, end),
             ),
             ParseMode::Double => {
                 let mut parser = self.new_with_range(start, end);
-                let res = parser.here_double();
+                let res = parser.here_double(indent);
                 res?
             }
             ParseMode::Command => {
@@ -144,13 +152,19 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(node)
     }
 
-    fn here_double(&mut self) -> Result<Node, LexerErr> {
+    fn here_double(&mut self, indent: usize) -> Result<Node, LexerErr> {
         let tok = self.lexer.read_string_literal_double(None, None, 0)?;
         let loc = tok.loc();
         let node = match tok.kind {
-            TokenKind::StringLit(s) => Node::new_string(s, loc),
+            TokenKind::StringLit(s) => Node::new_string(
+                match s {
+                    RubyString::Utf8(s) => RubyString::Utf8(s[indent..].into()),
+                    RubyString::Bytes(s) => RubyString::Bytes(s[indent..].into()),
+                },
+                loc,
+            ),
             TokenKind::OpenString(s, term, level) => {
-                self.parse_interporated_string_literal(s.into(), term, level)?
+                self.parse_interporated_string_literal(s[indent..].to_string().into(), term, level)?
             }
             _ => unreachable!(),
         };

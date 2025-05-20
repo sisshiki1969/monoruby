@@ -1156,7 +1156,9 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    pub(crate) fn read_heredocument(&mut self) -> Result<(ParseMode, usize, usize), LexerErr> {
+    pub(crate) fn read_heredocument(
+        &mut self,
+    ) -> Result<(ParseMode, usize, usize, usize), LexerErr> {
         #[derive(Clone, PartialEq)]
         enum TermMode {
             Normal,
@@ -1205,7 +1207,8 @@ impl<'a> Lexer<'a> {
             self.pos = self.heredoc_pos;
         }
         let heredoc_start = self.pos;
-        let mut heredoc_end = self.pos;
+        let mut heredoc_end = 0;
+        let mut content_indent = 0;
         loop {
             let start = self.pos;
             self.goto_eol();
@@ -1229,13 +1232,21 @@ impl<'a> Lexer<'a> {
                     self.pos,
                 ));
             };
+
+            if term_mode == TermMode::Squiggly {
+                let indent = self.code[start..]
+                    .chars()
+                    .take_while(|c| *c == ' ' || *c == '\t')
+                    .count();
+                if content_indent > indent || content_indent == 0 {
+                    content_indent = indent;
+                }
+            }
             heredoc_end = end + 1;
-            //res += line;
-            //res.push('\n');
         }
         self.heredoc_pos = self.pos;
         self.restore_state(save);
-        Ok((parse_mode, heredoc_start, heredoc_end))
+        Ok((parse_mode, content_indent, heredoc_start, heredoc_end))
     }
 }
 

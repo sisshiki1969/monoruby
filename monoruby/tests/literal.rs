@@ -2,6 +2,76 @@ extern crate monoruby;
 use monoruby::tests::*;
 
 #[test]
+fn heredoc_default() {
+    run_test(
+        r##"
+        <<EOF
+        Hello, world!
+EOF
+        "##,
+    );
+    run_test(
+        r##"
+        <<-EOF
+        Hello, world!
+        EOF
+        "##,
+    );
+    /*run_test(
+            r##"
+            <<~EOF
+            Hello, world 1!
+        Hello, world 2!
+    EOF
+            "##,
+        );*/
+}
+
+#[test]
+fn heredoc_single() {
+    run_test(
+        r##"
+        <<'EOF'
+        Hello, world!
+EOF
+        "##,
+    );
+    run_test(
+        r##"
+        <<-'EOF'
+        Hello, world!
+        EOF
+        "##,
+    );
+    run_test(
+        r##"
+        <<~'EOF'
+        Hello, world 1!
+    Hello, world 2!
+EOF
+        "##,
+    );
+}
+
+#[test]
+fn heredoc_double() {
+    run_test(
+        r##"
+        <<"EOF"
+        Hello, world!
+EOF
+        "##,
+    );
+    run_test(
+        r##"
+        <<-"EOF"
+        Hello, world!
+        EOF
+        "##,
+    );
+}
+
+#[test]
 fn imaginary() {
     run_test(r#"5i"#);
     run_test(r#"4+5i"#);
