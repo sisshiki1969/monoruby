@@ -1239,7 +1239,7 @@ impl<'a> Lexer<'a> {
                     .take_while(|c| *c == ' ' || *c == '\t')
                     .count();
                 if content_indent > indent || content_indent == 0 {
-                    content_indent = indent;
+                    content_indent = dbg!(indent);
                 }
             }
             heredoc_end = end + 1;

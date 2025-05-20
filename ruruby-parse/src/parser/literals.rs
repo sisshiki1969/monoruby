@@ -153,21 +153,47 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     }
 
     fn here_double(&mut self, indent: usize) -> Result<Node, LexerErr> {
+        fn remove_indent(s: &mut String, idx: usize, indent: usize) {
+            let len = s.len();
+            for span in s
+                .char_indices()
+                .filter_map(|(i, c)| {
+                    if c == '\n' && i + 1 != len && &s[i + 1..].chars().next() != &Some('\n') {
+                        Some(i + 1..i + 1 + indent)
+                    } else {
+                        None
+                    }
+                })
+                .rev()
+                .collect::<Vec<_>>()
+            {
+                s.drain(span);
+            }
+            if idx == 0 {
+                s.drain(0..indent);
+            }
+        }
+
         let tok = self.lexer.read_string_literal_double(None, None, 0)?;
         let loc = tok.loc();
-        let node = match tok.kind {
-            TokenKind::StringLit(s) => Node::new_string(
-                match s {
-                    RubyString::Utf8(s) => RubyString::Utf8(s[indent..].into()),
-                    RubyString::Bytes(s) => RubyString::Bytes(s[indent..].into()),
-                },
-                loc,
-            ),
+        let mut node = match tok.kind {
+            TokenKind::StringLit(s) => Node::new_string(s, loc),
             TokenKind::OpenString(s, term, level) => {
-                self.parse_interporated_string_literal(s[indent..].to_string().into(), term, level)?
+                self.parse_interporated_string_literal(s.into(), term, level)?
             }
             _ => unreachable!(),
         };
+        if indent != 0 {
+            if let NodeKind::InterporatedString(nodes) = &mut node.kind {
+                for (idx, node) in nodes.iter_mut().enumerate() {
+                    if let NodeKind::String(s) = &mut node.kind {
+                        remove_indent(s, idx, indent);
+                    }
+                }
+            } else if let NodeKind::String(s) = &mut node.kind {
+                remove_indent(s, 0, indent);
+            }
+        }
         Ok(node)
     }
 

@@ -17,14 +17,14 @@ EOF
         EOF
         "##,
     );
-    /*run_test(
-            r##"
+    run_test(
+        r##"
             <<~EOF
             Hello, world 1!
         Hello, world 2!
-    EOF
+EOF
             "##,
-        );*/
+    );
 }
 
 #[test]
@@ -51,6 +51,16 @@ EOF
 EOF
         "##,
     );
+    run_test(
+        r##"
+        <<~'EOF'
+        Hello, world 1!
+
+
+    Hello, world 2!
+EOF
+        "##,
+    );
 }
 
 #[test]
@@ -67,6 +77,18 @@ EOF
         <<-"EOF"
         Hello, world!
         EOF
+        "##,
+    );
+    run_test(
+        r##"
+        a = 77
+        <<~"EOF"
+        Hello, world 1!
+
+
+            #{a * 2}
+    Hello, world 2!
+            EOF
         "##,
     );
 }
