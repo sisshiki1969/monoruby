@@ -1238,7 +1238,7 @@ impl<'a> Lexer<'a> {
                     .chars()
                     .take_while(|c| *c == ' ' || *c == '\t')
                     .count();
-                if content_indent > indent || content_indent == 0 {
+                if start + indent != end && (content_indent > indent || content_indent == 0) {
                     content_indent = dbg!(indent);
                 }
             }

@@ -84,10 +84,25 @@ EOF
         a = 77
         <<~"EOF"
         Hello, world 1!
-
+   
 
             #{a * 2}
     Hello, world 2!
+            EOF
+        "##,
+    );
+    run_test(
+        r##"
+        a = 77
+        <<~"EOF"
+        Hello, world 1!
+   
+
+            #{a * 2}
+    Hello, world 2!
+      
+
+
             EOF
         "##,
     );

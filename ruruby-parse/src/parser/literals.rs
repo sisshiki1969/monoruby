@@ -140,7 +140,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             ),
             ParseMode::Double => {
                 let mut parser = self.new_with_range(start, end);
-                let res = parser.here_double(indent);
+                let res = parser.here_double(indent != 0);
                 res?
             }
             ParseMode::Command => {
@@ -152,26 +152,47 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(node)
     }
 
-    fn here_double(&mut self, indent: usize) -> Result<Node, LexerErr> {
-        fn remove_indent(s: &mut String, idx: usize, indent: usize) {
-            let len = s.len();
-            for span in s
+    fn here_double(&mut self, squiggy: bool) -> Result<Node, LexerErr> {
+        fn count_space(s: &str, start: usize) -> (usize, usize, bool) {
+            let indent = s[start..]
+                .chars()
+                .take_while(|c| [' ', '\t'].contains(c))
+                .count();
+            match s[start + indent..].chars().next() {
+                Some('\n') => (start, indent, false),
+                _ => (start, indent, true),
+            }
+        }
+
+        fn calc_indent(
+            s: &str,
+            is_head: bool,
+            min_indent: &mut usize,
+        ) -> Vec<(usize, usize, bool)> {
+            let len = dbg!(&s).len();
+            let mut v = s
                 .char_indices()
                 .filter_map(|(i, c)| {
                     if c == '\n' && i + 1 != len && &s[i + 1..].chars().next() != &Some('\n') {
-                        Some(i + 1..i + 1 + indent)
+                        Some(count_space(s, i + 1))
                     } else {
                         None
                     }
                 })
                 .rev()
-                .collect::<Vec<_>>()
-            {
-                s.drain(span);
+                .collect::<Vec<_>>();
+            if is_head {
+                v.push(count_space(s, 0));
             }
-            if idx == 0 {
-                s.drain(0..indent);
+            let indent = dbg!(&v)
+                .iter()
+                .flat_map(|(_, indent, live)| if *live { Some(*indent) } else { None })
+                .min()
+                .unwrap_or(usize::MAX);
+            if indent < *min_indent {
+                *min_indent = indent;
             }
+            v
         }
 
         let tok = self.lexer.read_string_literal_double(None, None, 0)?;
@@ -183,17 +204,40 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             }
             _ => unreachable!(),
         };
-        if indent != 0 {
+        if squiggy {
+            let mut min_indent = usize::MAX;
             if let NodeKind::InterporatedString(nodes) = &mut node.kind {
+                let mut v = vec![];
+                for (idx, node) in nodes.iter().enumerate() {
+                    if let NodeKind::String(s) = &node.kind {
+                        v.push(calc_indent(s, idx == 0, &mut min_indent));
+                    } else {
+                        v.push(vec![]);
+                    }
+                }
                 for (idx, node) in nodes.iter_mut().enumerate() {
                     if let NodeKind::String(s) = &mut node.kind {
-                        remove_indent(s, idx, indent);
+                        for (i, indent, _) in &v[idx] {
+                            if min_indent < *indent {
+                                s.drain(*i..*i + min_indent);
+                            } else {
+                                s.drain(*i..*i + *indent);
+                            }
+                        }
                     }
                 }
             } else if let NodeKind::String(s) = &mut node.kind {
-                remove_indent(s, 0, indent);
+                for (i, indent, _) in calc_indent(s, true, &mut min_indent) {
+                    if min_indent < indent {
+                        s.drain(i..i + min_indent);
+                    } else {
+                        s.drain(i..i + indent);
+                    }
+                }
             }
         }
+        // "     Hello, world 1!\n\n\n         154\n Hello, world 2!\n"
+        // "    Hello, world 1!\n\n\n        154\nHello, world 2!\n"
         Ok(node)
     }
 
