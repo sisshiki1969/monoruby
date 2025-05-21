@@ -80,27 +80,48 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     }
 
     pub(super) fn parse_percent_notation(&mut self) -> Result<Node, LexerErr> {
+        fn escape_space<F>(content: String, loc: Loc, f: F) -> Vec<Node>
+        where
+            F: Fn(String, Loc) -> Node,
+        {
+            let mut v = vec![];
+            let mut elem = String::new();
+            let mut escape = false;
+            for c in content.chars() {
+                if escape {
+                    escape = false;
+                    if c != ' ' {
+                        elem.push('\\');
+                    }
+                    elem.push(c);
+                } else if c == '\\' {
+                    escape = true;
+                } else if c == ' ' || c == '\n' {
+                    if !elem.is_empty() {
+                        v.push(f(elem, loc));
+                        elem = String::new();
+                    }
+                } else {
+                    elem.push(c);
+                }
+            }
+            if !elem.is_empty() {
+                v.push(f(elem, loc));
+            }
+            v
+        }
+
         let tok = self.lexer.get_percent_notation()?;
         let loc = tok.loc;
         if let TokenKind::PercentNotation(kind, content) = tok.kind {
             match kind {
-                // TODO: backslash-space must be valid in %w and %i.
-                // e.g. "foo\ bar" => "foo bar"
                 'w' => {
-                    let ary = content
-                        .split([' ', '\n'])
-                        .filter(|x| x != &"")
-                        .map(|x| Node::new_string(x.to_string().into(), loc))
-                        .collect();
-                    Ok(Node::new_array(ary, tok.loc))
+                    let v = escape_space(content, loc, |s, loc| Node::new_string(s.into(), loc));
+                    Ok(Node::new_array(v, tok.loc))
                 }
                 'i' => {
-                    let ary = content
-                        .split([' ', '\n'])
-                        .filter(|x| x != &"")
-                        .map(|x| Node::new_symbol(x.to_owned(), loc))
-                        .collect();
-                    Ok(Node::new_array(ary, tok.loc))
+                    let v = escape_space(content, loc, |s, loc| Node::new_symbol(s, loc));
+                    Ok(Node::new_array(v, tok.loc))
                 }
                 'r' => {
                     let ary = vec![Node::new_string(content.into(), loc)];
@@ -236,8 +257,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 }
             }
         }
-        // "     Hello, world 1!\n\n\n         154\n Hello, world 2!\n"
-        // "    Hello, world 1!\n\n\n        154\nHello, world 2!\n"
         Ok(node)
     }
 

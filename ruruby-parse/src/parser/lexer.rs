@@ -866,7 +866,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Read string literal '..' or %q{..}
+    /// Read string literal '..' or %q{..}, %r{..}, ..
     fn read_string_literal_single(
         &mut self,
         open: Option<char>,

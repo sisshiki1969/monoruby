@@ -109,6 +109,36 @@ EOF
 }
 
 #[test]
+fn percent_w() {
+    run_test(r##"%w(abc def ghi)"##);
+    run_test(
+        r##"%w(abc   def 
+    
+    ghi)"##,
+    );
+    run_test(r##"%w(abc\ def \g\\hi)"##);
+    run_test(
+        r##"%w(abc\ de
+    f \g\\h\ni)"##,
+    );
+}
+
+#[test]
+fn percent_i() {
+    run_test(r##"%i(abc def ghi)"##);
+    run_test(
+        r##"%i(abc   def 
+    
+    ghi)"##,
+    );
+    run_test(r##"%i(abc\ def \g\\hi)"##);
+    run_test(
+        r##"%i(abc\ de
+    f \g\\h\ni)"##,
+    );
+}
+
+#[test]
 fn imaginary() {
     run_test(r#"5i"#);
     run_test(r#"4+5i"#);
