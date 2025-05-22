@@ -146,6 +146,14 @@ ghi)"##,
         r##"%W(abc\ de
     f \g\\h\ni)"##,
     );
+    run_test(r##"%w(abc #{5*5}def#{4*4} ghi)"##);
+    run_test(r##"%w(abc def#{5*5}#{4*4} ghi)"##);
+    run_test(r##"%w(abc def#{5*5} #{4*4} ghi)"##);
+    run_test(r##"%w(abc def #{5*5} #{4*4} ghi)"##);
+    run_test(
+        r##"%w(abc def #{5*5}
+#{4*4} ghi)"##,
+    );
 }
 
 #[test]

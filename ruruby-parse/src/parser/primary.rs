@@ -79,10 +79,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Ok(Node::new_command(content))
             }
             TokenKind::OpenString(s, term, level) => {
-                self.parse_interporated_string_literal(s.into(), term, level)
+                self.parse_interporation(s.into(), term, level)
             }
             TokenKind::OpenCommand(s, term, level) => {
-                let content = self.parse_interporated_string_literal(s.into(), term, level)?;
+                let content = self.parse_interporation(s.into(), term, level)?;
                 Ok(Node::new_command(content))
             }
             TokenKind::Punct(punct) => match punct {

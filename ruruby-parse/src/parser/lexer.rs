@@ -809,22 +809,22 @@ impl<'a> Lexer<'a> {
         open: Option<char>,
         term: Option<char>,
         level: usize,
-    ) -> Result<Token, LexerErr> {
+    ) -> Result<Vec<Token>, LexerErr> {
         match self.read_interpolate_array(open, term, level)? {
             InterpolateStateArray::Finished(s) => {
-                Ok(self.new_array(s.into_iter().map(|s| self.new_stringlit(s)).collect()))
+                Ok(s.into_iter().map(|s| self.new_stringlit(s)).collect())
             }
             InterpolateStateArray::NewInterpolation(mut s, level) => match s.len() {
-                0 => Ok(self.new_array(vec![self.new_open_string(String::new(), term, level)])),
+                0 => Ok(vec![self.new_open_string(String::new(), term, level)]),
                 1 => {
                     let s = s.pop().unwrap();
-                    Ok(self.new_array(vec![self.new_open_string(s.into_string()?, term, level)]))
+                    Ok(vec![self.new_open_string(s.into_string()?, term, level)])
                 }
                 _ => {
                     let last = s.pop().unwrap();
                     let mut tokens: Vec<_> = s.into_iter().map(|s| self.new_stringlit(s)).collect();
                     tokens.push(self.new_open_string(last.into_string()?, term, level));
-                    Ok(self.new_array(tokens))
+                    Ok(tokens)
                 }
             },
         }
@@ -916,9 +916,7 @@ impl<'a> Lexer<'a> {
                 Ok(c) => c,
                 Err(err) => {
                     if term.is_none() {
-                        if !elem.is_empty() {
-                            v.push(elem);
-                        }
+                        v.push(elem);
                         return Ok(InterpolateStateArray::Finished(v));
                     } else {
                         return Err(err);
@@ -932,9 +930,7 @@ impl<'a> Lexer<'a> {
                 }
                 c if Some(c) == term => {
                     if level == 0 {
-                        if !elem.is_empty() {
-                            v.push(elem);
-                        }
+                        v.push(elem);
                         return Ok(InterpolateStateArray::Finished(v));
                     } else {
                         elem.push_char(c);
@@ -953,26 +949,20 @@ impl<'a> Lexer<'a> {
                 '#' => match self.peek() {
                     // string interpolation
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
-                        if !elem.is_empty() {
-                            v.push(elem);
-                        }
+                        v.push(elem);
                         return Ok(InterpolateStateArray::NewInterpolation(v, level));
                     }
                     _ => elem.push_char('#'),
                 },
                 '\n' => {
-                    if !elem.is_empty() {
-                        v.push(elem);
-                    }
+                    v.push(elem);
                     elem = RubyString::new();
                     if self.heredoc_pos > self.pos {
                         self.pos = self.heredoc_pos;
                     }
                 }
                 ' ' => {
-                    if !elem.is_empty() {
-                        v.push(elem);
-                    }
+                    v.push(elem);
                     elem = RubyString::new();
                 }
                 c => elem.push_char(c),
@@ -1219,7 +1209,10 @@ impl<'a> Lexer<'a> {
                 Ok(self.new_stringlit(s))
             }
             'Q' => Ok(self.read_string_literal_double(open, Some(term), 0)?),
-            'W' => Ok(self.read_string_literal_double_array(open, Some(term), 0)?),
+            'W' => {
+                let tokens = self.read_string_literal_double_array(open, Some(term), 0)?;
+                Ok(self.new_array(tokens))
+            }
             kind if ['w', 'r', 'i'].contains(&kind) => {
                 let s = self.read_string_literal_single(open, term, kind == 'r')?;
                 Ok(self.new_percent(s))

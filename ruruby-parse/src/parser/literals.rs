@@ -23,7 +23,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 TokenKind::OpenString(next_s, delimiter, level) => {
                     self.get()?;
                     s += next_s.as_str();
-                    return self.parse_interporated_string_literal(s, delimiter, level);
+                    return self.parse_interporation(s, delimiter, level);
                 }
                 _ => break,
             }
@@ -31,7 +31,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(Node::new_string(s, loc))
     }
 
-    pub(super) fn parse_interporated_string_literal(
+    pub(super) fn parse_interporation(
         &mut self,
         s: RubyString,
         delimiter: Option<char>,
@@ -77,6 +77,51 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 _ => unreachable!("{:?}", tok),
             }
         }
+    }
+
+    pub(super) fn parse_interporation_array(
+        &mut self,
+        s: RubyString,
+        v: &mut Vec<Node>,
+        delimiter: Option<char>,
+        level: usize,
+    ) -> Result<(), LexerErr> {
+        let start_loc = self.prev_loc();
+        let mut nodes = vec![Node::new_string(s, start_loc)];
+        loop {
+            self.parse_template(&mut nodes)?;
+            let tokens = self
+                .lexer
+                .read_string_literal_double_array(None, delimiter, level)?;
+            //let mut loc = tok.loc();
+            let mut cont_flag = false;
+            for tok in tokens {
+                let loc = tok.loc();
+                match tok.kind {
+                    TokenKind::StringLit(name) => {
+                        nodes.push(Node::new_string(name, loc));
+                        v.push(Node::new_interporated_string(
+                            std::mem::take(&mut nodes),
+                            start_loc.merge(self.prev_loc()),
+                        ));
+                        nodes.clear();
+                    }
+                    TokenKind::OpenString(s, _, _) => {
+                        cont_flag = true;
+                        nodes.push(Node::new_string(s.into(), loc));
+                    }
+                    _ => unreachable!("{:?}", tok),
+                }
+            }
+            if !cont_flag {
+                break;
+            }
+        }
+        v.push(Node::new_interporated_string(
+            nodes,
+            start_loc.merge(self.prev_loc()),
+        ));
+        Ok(())
     }
 
     /// Parse % notation.
@@ -133,7 +178,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             'Q' => match tok.kind {
                 TokenKind::StringLit(s) => Ok(Node::new_string(s, loc)),
                 TokenKind::OpenString(s, term, level) => {
-                    self.parse_interporated_string_literal(s.into(), term, level)
+                    self.parse_interporation(s.into(), term, level)
                 }
                 _ => unreachable!(),
             },
@@ -143,9 +188,22 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     for tok in tokens {
                         match tok.kind {
                             TokenKind::StringLit(s) => v.push(Node::new_string(s, loc)),
+                            TokenKind::OpenString(s, term, level) => {
+                                self.parse_interporation_array(s.into(), &mut v, term, level)?;
+                            }
                             _ => unreachable!(),
                         }
                     }
+                    let v = v
+                        .into_iter()
+                        .filter(|n| {
+                            if let NodeKind::String(s) = &n.kind {
+                                !s.is_empty()
+                            } else {
+                                true
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     Ok(Node::new_array(v, tok.loc))
                 }
                 _ => unreachable!(),
@@ -260,7 +318,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let mut node = match tok.kind {
             TokenKind::StringLit(s) => Node::new_string(s, loc),
             TokenKind::OpenString(s, term, level) => {
-                self.parse_interporated_string_literal(s.into(), term, level)?
+                self.parse_interporation(s.into(), term, level)?
             }
             _ => unreachable!(),
         };
@@ -308,7 +366,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Node::new_command(content)
             }
             TokenKind::OpenString(s, term, level) => {
-                let content = self.parse_interporated_string_literal(s.into(), term, level)?;
+                let content = self.parse_interporation(s.into(), term, level)?;
                 Node::new_command(content)
             }
             _ => unreachable!(),
@@ -381,7 +439,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let symbol_loc = self.prev_loc();
         let id = match token.kind {
             TokenKind::OpenString(s, term, level) => {
-                let node = self.parse_interporated_string_literal(s.into(), term, level)?;
+                let node = self.parse_interporation(s.into(), term, level)?;
                 let method = "to_sym".to_string();
                 let loc = symbol_loc.merge(node.loc());
                 return Ok(Node::new_mcall_noarg(node, method, false, loc));
