@@ -89,6 +89,13 @@ impl RubyString {
         RubyString::Utf8(String::new())
     }
 
+    fn is_empty(&self) -> bool {
+        match self {
+            RubyString::Bytes(bytes) => bytes.is_empty(),
+            RubyString::Utf8(string) => string.is_empty(),
+        }
+    }
+
     fn into_string(self) -> Result<String, LexerErr> {
         match self {
             RubyString::Bytes(bytes) => {

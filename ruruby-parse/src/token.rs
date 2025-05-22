@@ -57,8 +57,9 @@ pub(crate) enum TokenKind {
     OpenString(String, Option<char>, usize), // (content, delimiter, paren_level)
     OpenRegex(String),
     OpenCommand(String, Option<char>, usize),
-    PercentNotation(char, String),
+    PercentNotation(String),
     LineTerm,
+    Array(Vec<Token>),
 }
 
 impl std::default::Default for TokenKind {
@@ -265,8 +266,8 @@ impl Token {
         Annot::new(TokenKind::OpenRegex(s.into()), loc)
     }
 
-    pub(crate) fn new_percent(kind: char, content: String, loc: Loc) -> Self {
-        Annot::new(TokenKind::PercentNotation(kind, content), loc)
+    pub(crate) fn new_percent(content: String, loc: Loc) -> Self {
+        Annot::new(TokenKind::PercentNotation(content), loc)
     }
 
     pub(crate) fn new_punct(punct: Punct, loc: Loc) -> Self {

@@ -79,6 +79,11 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         }
     }
 
+    /// Parse % notation.
+    ///
+    /// - 'w' => Array of String
+    /// - 'i' => Array of Symbol
+    /// - 'r' => RegExp
     pub(super) fn parse_percent_notation(&mut self) -> Result<Node, LexerErr> {
         fn escape_space<F>(content: String, loc: Loc, f: F) -> Vec<Node>
         where
@@ -111,33 +116,67 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             v
         }
 
-        let tok = self.lexer.get_percent_notation()?;
+        let (kind, open, term) = self.lexer.get_percent_notation()?;
+
+        let tok = self.lexer.percent_notation_first_token(kind, open, term)?;
+
         let loc = tok.loc;
-        if let TokenKind::PercentNotation(kind, content) = tok.kind {
-            match kind {
-                'w' => {
+
+        return match kind {
+            'q' => {
+                if let TokenKind::StringLit(s) = tok.kind {
+                    Ok(Node::new_string(s, loc))
+                } else {
+                    unreachable!()
+                }
+            }
+            'Q' => match tok.kind {
+                TokenKind::StringLit(s) => Ok(Node::new_string(s, loc)),
+                TokenKind::OpenString(s, term, level) => {
+                    self.parse_interporated_string_literal(s.into(), term, level)
+                }
+                _ => unreachable!(),
+            },
+            'W' => match tok.kind {
+                TokenKind::Array(tokens) => {
+                    let mut v = vec![];
+                    for tok in tokens {
+                        match tok.kind {
+                            TokenKind::StringLit(s) => v.push(Node::new_string(s, loc)),
+                            _ => unreachable!(),
+                        }
+                    }
+                    Ok(Node::new_array(v, tok.loc))
+                }
+                _ => unreachable!(),
+            },
+            'w' => {
+                if let TokenKind::PercentNotation(content) = tok.kind {
                     let v = escape_space(content, loc, |s, loc| Node::new_string(s.into(), loc));
                     Ok(Node::new_array(v, tok.loc))
+                } else {
+                    unreachable!()
                 }
-                'i' => {
+            }
+            'i' => {
+                if let TokenKind::PercentNotation(content) = tok.kind {
                     let v = escape_space(content, loc, |s, loc| Node::new_symbol(s, loc));
                     Ok(Node::new_array(v, tok.loc))
+                } else {
+                    unreachable!()
                 }
-                'r' => {
+            }
+            'r' => {
+                if let TokenKind::PercentNotation(content) = tok.kind {
                     let ary = vec![Node::new_string(content.into(), loc)];
                     let op = self.lexer.check_postfix();
                     Ok(Node::new_regexp(ary, op, tok.loc))
+                } else {
+                    unreachable!()
                 }
-                _ => Err(error_unexpected(loc, "Unsupported % notation.")),
             }
-        } else if let TokenKind::StringLit(s) = tok.kind {
-            Ok(Node::new_string(s, loc))
-        } else if let TokenKind::OpenString(s, term, level) = tok.kind {
-            let node = self.parse_interporated_string_literal(s.into(), term, level)?;
-            Ok(node)
-        } else {
-            unreachable!("parse_percent_notation(): {:?}", tok.kind);
-        }
+            _ => Err(error_unexpected(loc, "Unsupported % notation.")),
+        };
     }
 
     pub(super) fn parse_heredocument(&mut self) -> Result<Node, LexerErr> {

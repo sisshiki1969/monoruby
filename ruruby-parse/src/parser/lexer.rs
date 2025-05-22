@@ -55,6 +55,12 @@ enum InterpolateState {
     NewInterpolation(RubyString, usize), // (string, paren_level)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum InterpolateStateArray {
+    Finished(Vec<RubyString>),
+    NewInterpolation(Vec<RubyString>, usize), // (string, paren_level)
+}
+
 impl<'a> Lexer<'a> {
     pub(crate) fn new(code: &'a str) -> Self {
         Lexer {
@@ -778,6 +784,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// Read string literal ("..", %Q{..}, %{..})
+    ///
+    /// This function returns StringLit or OpenString.
     pub(crate) fn read_string_literal_double(
         &mut self,
         open: Option<char>,
@@ -790,6 +798,35 @@ impl<'a> Lexer<'a> {
                 Ok(self.new_open_string(s.into_string()?, term, level))
             }
             _ => unreachable!(),
+        }
+    }
+
+    /// Read string literal ("..", %W{..})
+    ///
+    /// This function returns StringLit or OpenString.
+    pub(crate) fn read_string_literal_double_array(
+        &mut self,
+        open: Option<char>,
+        term: Option<char>,
+        level: usize,
+    ) -> Result<Token, LexerErr> {
+        match self.read_interpolate_array(open, term, level)? {
+            InterpolateStateArray::Finished(s) => {
+                Ok(self.new_array(s.into_iter().map(|s| self.new_stringlit(s)).collect()))
+            }
+            InterpolateStateArray::NewInterpolation(mut s, level) => match s.len() {
+                0 => Ok(self.new_array(vec![self.new_open_string(String::new(), term, level)])),
+                1 => {
+                    let s = s.pop().unwrap();
+                    Ok(self.new_array(vec![self.new_open_string(s.into_string()?, term, level)]))
+                }
+                _ => {
+                    let last = s.pop().unwrap();
+                    let mut tokens: Vec<_> = s.into_iter().map(|s| self.new_stringlit(s)).collect();
+                    tokens.push(self.new_open_string(last.into_string()?, term, level));
+                    Ok(self.new_array(tokens))
+                }
+            },
         }
     }
 
@@ -862,6 +899,83 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 c => s.push_char(c),
+            }
+        }
+    }
+
+    fn read_interpolate_array(
+        &mut self,
+        open: Option<char>,
+        term: Option<char>,
+        mut level: usize,
+    ) -> Result<InterpolateStateArray, LexerErr> {
+        let mut v = vec![];
+        let mut elem = RubyString::new();
+        loop {
+            let ch = match self.get() {
+                Ok(c) => c,
+                Err(err) => {
+                    if term.is_none() {
+                        if !elem.is_empty() {
+                            v.push(elem);
+                        }
+                        return Ok(InterpolateStateArray::Finished(v));
+                    } else {
+                        return Err(err);
+                    }
+                }
+            };
+            match ch {
+                c if open == Some(c) => {
+                    elem.push_char(c);
+                    level += 1;
+                }
+                c if Some(c) == term => {
+                    if level == 0 {
+                        if !elem.is_empty() {
+                            v.push(elem);
+                        }
+                        return Ok(InterpolateStateArray::Finished(v));
+                    } else {
+                        elem.push_char(c);
+                        level -= 1;
+                    }
+                }
+                '\\' => {
+                    // continuation line
+                    if self.consume_newline() {
+                        elem.push_char('\n');
+                        continue;
+                    };
+
+                    self.read_escaped_char(&mut elem)?;
+                }
+                '#' => match self.peek() {
+                    // string interpolation
+                    Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
+                        if !elem.is_empty() {
+                            v.push(elem);
+                        }
+                        return Ok(InterpolateStateArray::NewInterpolation(v, level));
+                    }
+                    _ => elem.push_char('#'),
+                },
+                '\n' => {
+                    if !elem.is_empty() {
+                        v.push(elem);
+                    }
+                    elem = RubyString::new();
+                    if self.heredoc_pos > self.pos {
+                        self.pos = self.heredoc_pos;
+                    }
+                }
+                ' ' => {
+                    if !elem.is_empty() {
+                        v.push(elem);
+                    }
+                    elem = RubyString::new();
+                }
+                c => elem.push_char(c),
             }
         }
     }
@@ -1060,7 +1174,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub(crate) fn get_percent_notation(&mut self) -> Result<Token, LexerErr> {
+    /// - 'q' => StringLit
+    /// - 'Q' => StringLit or OpenString
+    /// - 'r' | 'w' | 'i' => PercentNotation
+    pub(crate) fn get_percent_notation(&mut self) -> Result<(char, Option<char>, char), LexerErr> {
         let pos = self.pos;
         let c = self.get()?;
         let (kind, delimiter) = match c {
@@ -1070,9 +1187,9 @@ impl<'a> Lexer<'a> {
                 if delimiter.is_ascii_alphanumeric() {
                     return Err(self.error_unexpected(pos));
                 }
-                (Some(c), delimiter)
+                (c, delimiter)
             }
-            delimiter if !c.is_ascii_alphanumeric() => (None, delimiter),
+            delimiter if !c.is_ascii_alphanumeric() => ('Q', delimiter),
             _ => return Err(self.error_unexpected(pos)),
         };
         let (open, term) = match delimiter {
@@ -1081,28 +1198,33 @@ impl<'a> Lexer<'a> {
             '[' => (Some('['), ']'),
             '<' => (Some('<'), '>'),
             ' ' | '\n' => match kind {
-                Some('i') | Some('I') | Some('w') | Some('W') => {
-                    return Err(self.error_unexpected(self.pos - 1))
-                }
+                'i' | 'I' | 'w' | 'W' => return Err(self.error_unexpected(self.pos - 1)),
                 _ => (None, delimiter),
             },
             ch => (None, ch),
         };
 
+        Ok((kind, open, term))
+    }
+
+    pub(crate) fn percent_notation_first_token(
+        &mut self,
+        kind: char,
+        open: Option<char>,
+        term: char,
+    ) -> Result<Token, LexerErr> {
         match kind {
-            Some('q') => {
+            'q' => {
                 let s = self.read_string_literal_single(open, term, false)?;
                 Ok(self.new_stringlit(s))
             }
-            Some('Q') | None => Ok(self.read_string_literal_double(open, Some(term), 0)?),
-            Some('r') => {
-                let s = self.read_string_literal_single(open, term, true)?;
-                Ok(self.new_percent('r', s))
+            'Q' => Ok(self.read_string_literal_double(open, Some(term), 0)?),
+            'W' => Ok(self.read_string_literal_double_array(open, Some(term), 0)?),
+            kind if ['w', 'r', 'i'].contains(&kind) => {
+                let s = self.read_string_literal_single(open, term, kind == 'r')?;
+                Ok(self.new_percent(s))
             }
-            Some(kind) => {
-                let s = self.read_string_literal_single(open, term, false)?;
-                Ok(self.new_percent(kind, s))
-            }
+            _ => return Err(self.error_unexpected(self.pos)),
         }
     }
 
@@ -1536,8 +1658,8 @@ impl<'a> Lexer<'a> {
         Token::new_open_command(s, delimiter, level, self.cur_loc())
     }
 
-    fn new_percent(&self, kind: char, content: String) -> Token {
-        Token::new_percent(kind, content, self.cur_loc())
+    fn new_percent(&self, content: String) -> Token {
+        Token::new_percent(content, self.cur_loc())
     }
 
     fn new_line_term(&self) -> Token {
@@ -1546,6 +1668,10 @@ impl<'a> Lexer<'a> {
 
     fn new_eof(&self) -> Token {
         Annot::new(TokenKind::Eof, Loc(self.pos, self.pos))
+    }
+
+    fn new_array(&self, tokens: Vec<Token>) -> Token {
+        Annot::new(TokenKind::Array(tokens), Loc(self.pos, self.pos))
     }
 }
 

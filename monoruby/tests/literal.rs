@@ -123,6 +123,31 @@ fn percent_w() {
     );
 }
 
+#[ignore]
+#[test]
+fn percent_w_() {
+    run_test(r##"%W(abc def ghi)"##);
+    run_test(
+        r##"%W(abc   def 
+    
+    ghi)"##,
+    );
+    run_test(
+        r##"%W(abc\ def\ 
+    
+    ghi)"##,
+    );
+    run_test(
+        r##"%W(abc\ def\ 
+ghi)"##,
+    );
+    run_test(r##"%W(abc\ def \g\\hi)"##);
+    run_test(
+        r##"%W(abc\ de
+    f \g\\h\ni)"##,
+    );
+}
+
 #[test]
 fn percent_i() {
     run_test(r##"%i(abc def ghi)"##);
