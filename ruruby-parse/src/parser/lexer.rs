@@ -48,17 +48,23 @@ enum VarKind {
     ClassVar,
     GlobalVar,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 enum InterpolateState {
     Finished(RubyString),
-    FinishedRegex { body: String, postfix: String },
-    NewInterpolation(RubyString, usize), // (string, paren_level)
+    Interpolation(RubyString, usize), // (string, paren_level)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RegexInterpolateState {
+    Finished { body: String, postfix: String },
+    Interpolation(RubyString, usize), // (string, paren_level)
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum InterpolateStateArray {
     Finished(Vec<RubyString>),
-    NewInterpolation(Vec<RubyString>, usize), // (string, paren_level)
+    Interpolation(Vec<RubyString>, usize), // (string, paren_level)
 }
 
 impl<'a> Lexer<'a> {
@@ -184,11 +190,10 @@ impl<'a> Lexer<'a> {
     /// Get token as a regular expression.
     pub(crate) fn get_regexp(&mut self) -> Result<Token, LexerErr> {
         match self.read_regexp_sub()? {
-            InterpolateState::FinishedRegex { body, postfix } => {
+            RegexInterpolateState::Finished { body, postfix } => {
                 Ok(self.new_regexlit(body, postfix))
             }
-            InterpolateState::NewInterpolation(s, _) => Ok(self.new_open_reg(s.into_string()?)),
-            _ => unreachable!(),
+            RegexInterpolateState::Interpolation(s, _) => Ok(self.new_open_reg(s.into_string()?)),
         }
     }
 
@@ -794,10 +799,9 @@ impl<'a> Lexer<'a> {
     ) -> Result<Token, LexerErr> {
         match self.read_interpolate(open, term, level)? {
             InterpolateState::Finished(s) => Ok(self.new_stringlit(s)),
-            InterpolateState::NewInterpolation(s, level) => {
+            InterpolateState::Interpolation(s, level) => {
                 Ok(self.new_open_string(s.into_string()?, term, level))
             }
-            _ => unreachable!(),
         }
     }
 
@@ -814,7 +818,7 @@ impl<'a> Lexer<'a> {
             InterpolateStateArray::Finished(s) => {
                 Ok(s.into_iter().map(|s| self.new_stringlit(s)).collect())
             }
-            InterpolateStateArray::NewInterpolation(mut s, level) => match s.len() {
+            InterpolateStateArray::Interpolation(mut s, level) => match s.len() {
                 0 => Ok(vec![self.new_open_string(String::new(), term, level)]),
                 1 => {
                     let s = s.pop().unwrap();
@@ -839,10 +843,9 @@ impl<'a> Lexer<'a> {
     ) -> Result<Token, LexerErr> {
         match self.read_interpolate(open, term, level)? {
             InterpolateState::Finished(s) => self.new_commandlit(s),
-            InterpolateState::NewInterpolation(s, level) => {
+            InterpolateState::Interpolation(s, level) => {
                 Ok(self.new_open_command(s.into_string()?, term, level))
             }
-            _ => unreachable!(),
         }
     }
 
@@ -888,7 +891,7 @@ impl<'a> Lexer<'a> {
                 '#' => match self.peek() {
                     // string interpolation
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
-                        return Ok(InterpolateState::NewInterpolation(s, level))
+                        return Ok(InterpolateState::Interpolation(s, level))
                     }
                     _ => s.push_char('#'),
                 },
@@ -950,7 +953,7 @@ impl<'a> Lexer<'a> {
                     // string interpolation
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
                         v.push(elem);
-                        return Ok(InterpolateStateArray::NewInterpolation(v, level));
+                        return Ok(InterpolateStateArray::Interpolation(v, level));
                     }
                     _ => elem.push_char('#'),
                 },
@@ -1094,14 +1097,14 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scan as regular expression.
-    fn read_regexp_sub(&mut self) -> Result<InterpolateState, LexerErr> {
+    fn read_regexp_sub(&mut self) -> Result<RegexInterpolateState, LexerErr> {
         let mut body = "".to_string();
         let mut char_class = 0;
         loop {
             match self.get()? {
                 '/' => {
                     let postfix = self.check_postfix();
-                    return Ok(InterpolateState::FinishedRegex { body, postfix });
+                    return Ok(RegexInterpolateState::Finished { body, postfix });
                 }
                 '[' => {
                     char_class += 1;
@@ -1155,7 +1158,7 @@ impl<'a> Lexer<'a> {
                 }
                 '#' => match self.peek() {
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
-                        return Ok(InterpolateState::NewInterpolation(body.into(), 0))
+                        return Ok(RegexInterpolateState::Interpolation(body.into(), 0))
                     }
                     _ => body.push('#'),
                 },
@@ -1278,7 +1281,6 @@ impl<'a> Lexer<'a> {
         enum TermMode {
             Normal,
             AllowIndent,
-            // TODO currently, not supported.
             Squiggly,
         }
 
@@ -1315,6 +1317,7 @@ impl<'a> Lexer<'a> {
                 self.pos,
             ));
         }
+        //eprintln!("{}", &self.code[delimiter.clone()]);
         let save = self.save_state();
         self.goto_eol();
         self.get()?;
@@ -1322,7 +1325,7 @@ impl<'a> Lexer<'a> {
             self.pos = self.heredoc_pos;
         }
         let heredoc_start = self.pos;
-        let mut heredoc_end = 0;
+        let mut heredoc_end = self.pos + 1;
         let mut content_indent = 0;
         loop {
             let start = self.pos;
@@ -1354,13 +1357,14 @@ impl<'a> Lexer<'a> {
                     .take_while(|c| *c == ' ' || *c == '\t')
                     .count();
                 if start + indent != end && (content_indent > indent || content_indent == 0) {
-                    content_indent = dbg!(indent);
+                    content_indent = indent;
                 }
             }
             heredoc_end = end + 1;
         }
         self.heredoc_pos = self.pos;
         self.restore_state(save);
+        //eprintln!("{}", &self.code[heredoc_start..heredoc_end]);
         Ok((parse_mode, content_indent, heredoc_start, heredoc_end))
     }
 }

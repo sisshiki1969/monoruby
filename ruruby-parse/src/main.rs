@@ -148,6 +148,7 @@ mod tests {
         for f in files {
             total += 1;
             let f = f.canonicalize().unwrap().to_string_lossy().to_string();
+            //eprintln!("{f}");
             let code = match std::fs::read_to_string(f.clone()) {
                 Ok(code) => code,
                 Err(err) => {

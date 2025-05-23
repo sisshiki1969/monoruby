@@ -287,7 +287,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             is_head: bool,
             min_indent: &mut usize,
         ) -> Vec<(usize, usize, bool)> {
-            let len = dbg!(&s).len();
+            let len = s.len();
             let mut v = s
                 .char_indices()
                 .filter_map(|(i, c)| {
@@ -302,7 +302,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             if is_head {
                 v.push(count_space(s, 0));
             }
-            let indent = dbg!(&v)
+            let indent = v
                 .iter()
                 .flat_map(|(_, indent, live)| if *live { Some(*indent) } else { None })
                 .min()
