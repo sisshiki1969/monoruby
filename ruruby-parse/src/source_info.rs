@@ -104,15 +104,19 @@ impl SourceInfo {
 
     /// Return a string represents the location of `loc` in the source code using '^^^'.
     pub fn get_location(&self, loc: &Loc) -> String {
+        let code = self.code.clone() + " ";
         let mut p = loc.0;
         while p < loc.1 + 1 {
-            p += self.code[p..].chars().next().unwrap_or('\n').len_utf8();
+            p += code[p..].chars().next().unwrap_or('\n').len_utf8();
         }
-        let loc = Loc(loc.0, p);
+        let loc = if code.len() <= loc.0 {
+            Loc(code.len() - 1, code.len())
+        } else {
+            Loc(loc.0, p)
+        };
         if self.code.is_empty() {
             return "(internal)".to_string();
         }
-        let code = self.code.clone() + " ";
         let mut res_string = String::new();
         let lines = self.get_lines(&loc);
         let term = console::Term::stdout();
@@ -188,7 +192,7 @@ impl SourceInfo {
 
     fn get_lines(&self, loc: &Loc) -> Vec<Line> {
         let mut line_top = 0;
-        //let code = self.code.clone() + " ";
+        let mut line_max = 1;
         let code_len = self.code.len();
         let mut lines: Vec<_> = self
             .code
@@ -198,6 +202,7 @@ impl SourceInfo {
             .map(|(idx, pos)| {
                 let top = line_top;
                 line_top = pos + 1;
+                line_max = idx + 1;
                 Line::new(idx + 1, top, pos)
             })
             .filter(|line| {
@@ -208,8 +213,8 @@ impl SourceInfo {
                 }
             })
             .collect();
-        if line_top < code_len && code_len > loc.0 && line_top < loc.1 {
-            lines.push(Line::new(lines.len() + 1, line_top, code_len));
+        if line_top <= code_len && code_len >= loc.0 && line_top < loc.1 {
+            lines.push(Line::new(line_max + 1, line_top, code_len));
         }
         lines
     }

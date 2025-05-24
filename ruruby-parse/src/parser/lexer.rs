@@ -526,7 +526,10 @@ impl<'a> Lexer<'a> {
             _ => {}
         };
         let tok = self.current_slice();
-        if let Some(reserved) = check_reserved(tok) {
+        if let Some(reserved) = check_reserved(tok)
+        //&& self.peek() != Some('.')
+        //&& self.peek() != Some(':')
+        {
             return Ok(self.new_reserved(reserved));
         };
 
