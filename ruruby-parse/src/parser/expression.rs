@@ -551,7 +551,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 if let TokenKind::Const(_) = self.peek()?.kind {
                     let loc = node.loc;
                     let name = self.expect_const()?;
-                    if let Some(arglist) = self.parse_arguments_paren(true)? {
+                    if let Some(arglist) = self.parse_arguments(true)? {
                         // Foo::Bar()
                         Node::new_mcall(node, name, arglist, false, self.prev_loc())
                     } else if let NodeKind::Const {
