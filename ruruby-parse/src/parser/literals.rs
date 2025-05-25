@@ -20,10 +20,10 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     self.get()?;
                     s += &next_s;
                 }
-                TokenKind::OpenString(next_s, delimiter, level) => {
+                TokenKind::OpenString(next_s, term, level) => {
                     self.get()?;
                     s += next_s.as_str();
-                    return self.parse_interporation(s, delimiter, level);
+                    return self.parse_interporation(s, None, term, level);
                 }
                 _ => break,
             }
@@ -34,16 +34,15 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     pub(super) fn parse_interporation(
         &mut self,
         s: RubyString,
-        delimiter: Option<char>,
-        level: usize,
+        open: Option<char>,
+        term: Option<char>,
+        mut level: usize,
     ) -> Result<Node, LexerErr> {
         let start_loc = self.prev_loc();
         let mut nodes = vec![Node::new_string(s, start_loc)];
         loop {
             self.parse_template(&mut nodes)?;
-            let tok = self
-                .lexer
-                .read_string_literal_double(None, delimiter, level)?;
+            let tok = self.lexer.read_string_literal_double(open, term, level)?;
             let mut loc = tok.loc();
             match tok.kind {
                 TokenKind::StringLit(mut name) => {
@@ -54,7 +53,8 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                                 name += &next_s;
                                 loc = loc.merge(t.loc);
                             }
-                            TokenKind::OpenString(next_s, _, _) => {
+                            TokenKind::OpenString(next_s, _, new_level) => {
+                                level = new_level;
                                 let t = self.get()?;
                                 name += next_s.as_str();
                                 loc = loc.merge(t.loc);
@@ -178,7 +178,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             'Q' => match tok.kind {
                 TokenKind::StringLit(s) => Ok(Node::new_string(s, loc)),
                 TokenKind::OpenString(s, term, level) => {
-                    self.parse_interporation(s.into(), term, level)
+                    self.parse_interporation(s.into(), open, term, level)
                 }
                 _ => unreachable!(),
             },
@@ -318,7 +318,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let mut node = match tok.kind {
             TokenKind::StringLit(s) => Node::new_string(s, loc),
             TokenKind::OpenString(s, term, level) => {
-                self.parse_interporation(s.into(), term, level)?
+                self.parse_interporation(s.into(), None, term, level)?
             }
             _ => unreachable!(),
         };
@@ -366,7 +366,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 Node::new_command(content)
             }
             TokenKind::OpenString(s, term, level) => {
-                let content = self.parse_interporation(s.into(), term, level)?;
+                let content = self.parse_interporation(s.into(), None, term, level)?;
                 Node::new_command(content)
             }
             _ => unreachable!(),
@@ -414,7 +414,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         let symbol_loc = self.prev_loc();
         let id = match token.kind {
             TokenKind::OpenString(s, term, level) => {
-                let node = self.parse_interporation(s.into(), term, level)?;
+                let node = self.parse_interporation(s.into(), None, term, level)?;
                 let method = "to_sym".to_string();
                 let loc = symbol_loc.merge(node.loc());
                 return Ok(Node::new_mcall_noarg(node, method, false, loc));
