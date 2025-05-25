@@ -1421,6 +1421,17 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    pub(super) fn consume_space(&mut self) {
+        loop {
+            match self.peek() {
+                Some(ch) if matches!(ch, '\t' | ' ') => {
+                    self.pos += ch.len_utf8();
+                }
+                _ => return,
+            }
+        }
+    }
+
     /// Consume continuous ascii_alphanumeric or underscore characters.
     /// Return consumed string.
     fn consume_ident(&mut self) -> Range<usize> {

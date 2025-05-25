@@ -11,55 +11,60 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         // 変数参照 : 定数識別子 | 大域変数識別子 | クラス変数識別子 | インスタンス変数識別子 | 局所変数識別子 | 擬似変数
         // メソッド定義名 : メソッド名 ｜ ( 定数識別子 | 局所変数識別子 ) "="
         let def_loc = self.prev_loc();
+        self.lexer.consume_space();
         let (singleton, name) = {
-            let tok = self.get()?;
-            let loc = tok.loc;
-            match tok.kind {
-                TokenKind::GlobalVar(name) => {
-                    self.consume_punct_no_term(Punct::Dot)?;
-                    (
-                        Some(Node::new_global_var(name, loc)),
-                        self.read_method_name(true)?.0,
-                    )
-                }
-                TokenKind::InstanceVar(name) => {
-                    self.consume_punct_no_term(Punct::Dot)?;
-                    (
-                        Some(Node::new_instance_var(name, loc)),
-                        self.read_method_name(true)?.0,
-                    )
-                }
-                TokenKind::Reserved(r) => (None, self.read_method_ext(r.as_str().to_string())?),
-                TokenKind::Ident(s) => {
-                    if s.as_str() == "self" {
+            if self.consume_char('`') {
+                (None, "`".to_string())
+            } else {
+                let tok = self.get()?;
+                let loc = tok.loc;
+                match tok.kind {
+                    TokenKind::GlobalVar(name) => {
                         self.consume_punct_no_term(Punct::Dot)?;
-                        (Some(Node::new_self(loc)), self.read_method_name(true)?.0)
-                    } else if self.consume_punct_no_term(Punct::Dot)?
-                        || self.consume_punct_no_term(Punct::Scope)?
-                    {
                         (
-                            Some(Node::new_lvar(s, 0, loc)),
+                            Some(Node::new_global_var(name, loc)),
                             self.read_method_name(true)?.0,
                         )
-                    } else {
-                        (None, self.read_method_ext(s)?)
                     }
-                }
-                TokenKind::NumberedParam(i, _) => return Err(error_numbered_param(loc, i)),
-                TokenKind::Const(s) => {
-                    if self.consume_punct_no_term(Punct::Dot)?
-                        || self.consume_punct_no_term(Punct::Scope)?
-                    {
+                    TokenKind::InstanceVar(name) => {
+                        self.consume_punct_no_term(Punct::Dot)?;
                         (
-                            Some(Node::new_const(s, false, None, vec![], loc)),
+                            Some(Node::new_instance_var(name, loc)),
                             self.read_method_name(true)?.0,
                         )
-                    } else {
-                        (None, self.read_method_ext(s)?)
                     }
+                    TokenKind::Reserved(r) => (None, self.read_method_ext(r.as_str().to_string())?),
+                    TokenKind::Ident(s) => {
+                        if s.as_str() == "self" {
+                            self.consume_punct_no_term(Punct::Dot)?;
+                            (Some(Node::new_self(loc)), self.read_method_name(true)?.0)
+                        } else if self.consume_punct_no_term(Punct::Dot)?
+                            || self.consume_punct_no_term(Punct::Scope)?
+                        {
+                            (
+                                Some(Node::new_lvar(s, 0, loc)),
+                                self.read_method_name(true)?.0,
+                            )
+                        } else {
+                            (None, self.read_method_ext(s)?)
+                        }
+                    }
+                    TokenKind::NumberedParam(i, _) => return Err(error_numbered_param(loc, i)),
+                    TokenKind::Const(s) => {
+                        if self.consume_punct_no_term(Punct::Dot)?
+                            || self.consume_punct_no_term(Punct::Scope)?
+                        {
+                            (
+                                Some(Node::new_const(s, false, None, vec![], loc)),
+                                self.read_method_name(true)?.0,
+                            )
+                        } else {
+                            (None, self.read_method_ext(s)?)
+                        }
+                    }
+                    TokenKind::Punct(p) => (None, self.parse_op_definable(&p)?.to_string()),
+                    _ => return Err(error_unexpected(loc, "Invalid method name.")),
                 }
-                TokenKind::Punct(p) => (None, self.parse_op_definable(&p)?.to_string()),
-                _ => return Err(error_unexpected(loc, "Invalid method name.")),
             }
         };
 
