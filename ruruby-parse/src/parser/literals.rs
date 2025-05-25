@@ -374,44 +374,19 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(node)
     }
 
-    pub(super) fn parse_hash_literal(
-        &mut self,
-        no_brace: bool,
-        first: Option<(Node, Node)>,
-    ) -> Result<Node, LexerErr> {
-        fn is_symbol_key(node: &Node) -> Option<String> {
-            let s = match &node.kind {
-                NodeKind::Ident(s) => s,
-                NodeKind::LocalVar(_, s) => s,
-                NodeKind::Const {
-                    toplevel: false,
-                    parent: None,
-                    prefix,
-                    name,
-                } if prefix.is_empty() => name,
-                NodeKind::String(s) => s,
-                _ => return None,
-            };
-            Some(s.clone())
-        }
+    pub(super) fn parse_hash_literal(&mut self, no_brace: bool) -> Result<Node, LexerErr> {
         let mut kvp = vec![];
-        if let Some((k, v)) = first {
-            kvp.push((k, v));
-        }
         let loc = self.prev_loc();
         loop {
             if !no_brace && self.consume_punct(Punct::RBrace)? {
                 return Ok(Node::new_hash(kvp, loc.merge(self.prev_loc())));
             }
             let mut key = self.parse_arg(false)?;
-            let mut symbol_key_flag = false;
-            if let Some(sym) = is_symbol_key(&key) {
-                if self.consume_punct(Punct::Colon)? {
-                    key = Node::new_symbol(sym, key.loc());
-                    symbol_key_flag = true;
-                }
-            }
-            if !symbol_key_flag {
+            if let Some(sym) = key.is_symbol_key()
+                && self.consume_punct(Punct::Colon)?
+            {
+                key = Node::new_symbol(sym, key.loc());
+            } else {
                 self.expect_punct(Punct::FatArrow)?;
             }
             let value = self.parse_arg(false)?;

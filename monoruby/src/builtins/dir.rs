@@ -209,7 +209,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
-                return Err(MonorubyErr::runtimeerr(dbg!(err).to_string()));
+                return Err(MonorubyErr::runtimeerr(err.to_string()));
             }
         }
         let path = Value::string(path);

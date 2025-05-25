@@ -132,7 +132,7 @@ impl SourceInfo {
                     loc.0 - line.top
                 };
                 let offset = lead / term_width * term_width;
-                let offset = if lead == 0 {
+                let offset = if offset == 0 {
                     0
                 } else {
                     let mut len = 0;

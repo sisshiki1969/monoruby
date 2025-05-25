@@ -114,7 +114,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     let loc = loc.merge(self.prev_loc());
                     Ok(Node::new_array(nodes, loc))
                 }
-                Punct::LBrace => self.parse_hash_literal(false, None),
+                Punct::LBrace => self.parse_hash_literal(false),
                 Punct::Colon => self.parse_symbol(),
                 Punct::Arrow => self.parse_lambda_literal(),
                 Punct::Scope => {

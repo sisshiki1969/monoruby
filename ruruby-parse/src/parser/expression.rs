@@ -227,16 +227,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             self.defined_mode = false;
             return Ok(Node::new_defined(node));
         }
+        let save = self.save_state();
         let arg = self.parse_arg_assign()?;
         if allow_braceless_hash {
-            if self.consume_punct(Punct::FatArrow)? {
-                let value = self.parse_arg(false)?;
-                if self.consume_punct(Punct::Comma)? {
-                    return self.parse_hash_literal(true, Some((arg, value)));
-                } else {
-                    let loc = arg.loc().merge(value.loc());
-                    return Ok(Node::new_hash(vec![(arg, value)], loc));
-                }
+            if self.consume_punct(Punct::FatArrow)?
+                || (arg.is_symbol_key().is_some() && self.consume_punct(Punct::Colon)?)
+            {
+                self.restore_state(save);
+                return self.parse_hash_literal(true);
             }
         }
         Ok(arg)

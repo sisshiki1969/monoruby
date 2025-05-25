@@ -369,6 +369,22 @@ impl Node {
         )
     }
 
+    pub(crate) fn is_symbol_key(&self) -> Option<String> {
+        let s = match &self.kind {
+            NodeKind::Ident(s) => s,
+            NodeKind::LocalVar(_, s) => s,
+            NodeKind::Const {
+                toplevel: false,
+                parent: None,
+                prefix,
+                name,
+            } if prefix.is_empty() => name,
+            NodeKind::String(s) => s,
+            _ => return None,
+        };
+        Some(s.clone())
+    }
+
     pub fn new_nil(loc: Loc) -> Self {
         Node::new(NodeKind::Nil, loc)
     }
