@@ -22,6 +22,8 @@ jobs:
           toolchain: nightly
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo install cargo-nextest
+      - run: cargo nextest run --retries 1
 
       - name: Install ImageMagick
         run: sudo apt-get install imagemagick
