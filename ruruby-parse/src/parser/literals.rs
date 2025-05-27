@@ -224,15 +224,33 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     unreachable!()
                 }
             }
-            'r' => {
-                if let TokenKind::PercentNotation(content) = tok.kind {
-                    let ary = vec![Node::new_string(content.into(), loc)];
-                    let op = self.lexer.check_postfix();
-                    Ok(Node::new_regexp(ary, op, tok.loc))
-                } else {
-                    unreachable!()
+            'r' => match tok.kind {
+                TokenKind::Regex { body, postfix } => Ok(Node::new_regexp(
+                    vec![Node::new_string(body.into(), loc)],
+                    postfix,
+                    loc,
+                )),
+                TokenKind::OpenRegex(s) => {
+                    let start_loc = loc;
+                    let mut nodes = vec![Node::new_string(s.into(), loc)];
+                    loop {
+                        self.parse_template(&mut nodes)?;
+                        let tok = self.lexer.get_regexp(term)?;
+                        let loc = tok.loc();
+                        match tok.kind {
+                            TokenKind::Regex { body, postfix } => {
+                                nodes.push(Node::new_string(body.into(), loc));
+                                return Ok(Node::new_regexp(nodes, postfix, start_loc.merge(loc)));
+                            }
+                            TokenKind::OpenRegex(s) => {
+                                nodes.push(Node::new_string(s.into(), loc));
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-            }
+                _ => unreachable!(),
+            },
             _ => Err(error_unexpected(loc, "Unsupported % notation.")),
         };
     }
@@ -425,9 +443,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         Ok(Node::new_symbol(id, loc.merge(self.prev_loc())))
     }
 
-    pub(super) fn parse_regexp(&mut self) -> Result<Node, LexerErr> {
+    pub(super) fn parse_regexp(&mut self, term: char) -> Result<Node, LexerErr> {
         let start_loc = self.prev_loc();
-        let tok = self.lexer.get_regexp()?;
+        let tok = self.lexer.get_regexp(term)?;
         let mut nodes = match tok.kind {
             TokenKind::Regex { body, postfix } => {
                 return Ok(Node::new_regexp(
@@ -441,7 +459,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         };
         loop {
             self.parse_template(&mut nodes)?;
-            let tok = self.lexer.get_regexp()?;
+            let tok = self.lexer.get_regexp(term)?;
             let loc = tok.loc();
             match tok.kind {
                 TokenKind::Regex { body, postfix } => {

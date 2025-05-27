@@ -121,7 +121,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     let name = self.expect_const()?;
                     Ok(Node::new_const(name, true, None, vec![], loc))
                 }
-                Punct::Div => self.parse_regexp(),
+                Punct::Div => self.parse_regexp('/'),
                 Punct::Rem => self.parse_percent_notation(),
                 Punct::Question => self.parse_char_literal(),
                 Punct::Shl => self.parse_heredocument(),

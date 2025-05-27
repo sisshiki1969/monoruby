@@ -188,8 +188,10 @@ impl<'a> Lexer<'a> {
     }
 
     /// Get token as a regular expression.
-    pub(crate) fn get_regexp(&mut self) -> Result<Token, LexerErr> {
-        match self.read_regexp_sub()? {
+    ///
+    /// return TokenKind::Regex or TokenKind::OpenRegex.
+    pub(crate) fn get_regexp(&mut self, term: char) -> Result<Token, LexerErr> {
+        match self.read_regexp_sub(term)? {
             RegexInterpolateState::Finished { body, postfix } => {
                 Ok(self.new_regexlit(body, postfix))
             }
@@ -1100,12 +1102,12 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scan as regular expression.
-    fn read_regexp_sub(&mut self) -> Result<RegexInterpolateState, LexerErr> {
+    fn read_regexp_sub(&mut self, term: char) -> Result<RegexInterpolateState, LexerErr> {
         let mut body = "".to_string();
         let mut char_class = 0;
         loop {
             match self.get()? {
-                '/' => {
+                ch if ch == term && char_class == 0 => {
                     let postfix = self.check_postfix();
                     return Ok(RegexInterpolateState::Finished { body, postfix });
                 }
@@ -1219,7 +1221,8 @@ impl<'a> Lexer<'a> {
                 let tokens = self.read_string_literal_double_array(open, Some(term), 0)?;
                 Ok(self.new_array(tokens))
             }
-            kind if ['w', 'r', 'i'].contains(&kind) => {
+            'r' => self.get_regexp(term),
+            kind if ['w', 'i'].contains(&kind) => {
                 let s = self.read_string_literal_single(open, term, kind == 'r')?;
                 Ok(self.new_percent(s))
             }
