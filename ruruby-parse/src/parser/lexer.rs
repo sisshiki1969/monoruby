@@ -90,7 +90,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn error_unexpected(&self, pos: usize) -> LexerErr {
+    pub(crate) fn error_unexpected(&self, pos: usize) -> LexerErr {
         let loc = Loc(pos, pos);
         LexerErr(
             ParseErrKind::SyntaxError(format!(
@@ -116,6 +116,10 @@ impl<'a> Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    pub(crate) fn current_pos(&self) -> usize {
+        self.pos
+    }
+
     fn current_slice(&self) -> &str {
         &self.code[self.token_start_pos..self.pos]
     }
@@ -967,7 +971,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Read string literal '..' or %q{..}, %r{..}, ..
-    fn read_string_literal_single(
+    pub(crate) fn read_string_literal_single(
         &mut self,
         open: Option<char>,
         term: char,
@@ -1247,31 +1251,6 @@ impl<'a> Lexer<'a> {
         };
 
         Ok((kind, open, term))
-    }
-
-    pub(crate) fn percent_notation_first_token(
-        &mut self,
-        kind: char,
-        open: Option<char>,
-        term: char,
-    ) -> Result<Token, LexerErr> {
-        match kind {
-            'q' => {
-                let s = self.read_string_literal_single(open, term, false)?;
-                Ok(self.new_stringlit(s))
-            }
-            'Q' => Ok(self.read_string_literal_double(open, Some(term), 0)?),
-            'W' => {
-                let tokens = self.read_string_literal_double_array(open, Some(term), 0)?;
-                Ok(self.new_array(tokens))
-            }
-            'r' => self.get_regexp(term, vec![]),
-            kind if ['w', 'i'].contains(&kind) => {
-                let s = self.read_string_literal_single(open, term, kind == 'r')?;
-                Ok(self.new_percent(s))
-            }
-            _ => return Err(self.error_unexpected(self.pos)),
-        }
     }
 
     fn read_escaped_char(&mut self, buf: &mut RubyString) -> Result<(), LexerErr> {
@@ -1716,20 +1695,12 @@ impl<'a> Lexer<'a> {
         Token::new_open_command(s, delimiter, level, self.cur_loc())
     }
 
-    fn new_percent(&self, content: String) -> Token {
-        Token::new_percent(content, self.cur_loc())
-    }
-
     fn new_line_term(&self) -> Token {
         Annot::new(TokenKind::LineTerm, self.cur_loc())
     }
 
     fn new_eof(&self) -> Token {
         Annot::new(TokenKind::Eof, Loc(self.pos, self.pos))
-    }
-
-    fn new_array(&self, tokens: Vec<Token>) -> Token {
-        Annot::new(TokenKind::Array(tokens), Loc(self.pos, self.pos))
     }
 }
 

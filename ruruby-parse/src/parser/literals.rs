@@ -161,99 +161,104 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             v
         }
 
+        let kind_pos = self.lexer.current_pos();
         let (kind, open, term) = self.lexer.get_percent_notation()?;
 
-        let tok = self.lexer.percent_notation_first_token(kind, open, term)?;
-
-        let loc = tok.loc;
-
-        return match kind {
+        let start = self.lexer.current_pos();
+        match kind {
             'q' => {
-                if let TokenKind::StringLit(s) = tok.kind {
-                    Ok(Node::new_string(s, loc))
-                } else {
-                    unreachable!()
+                let s = self.lexer.read_string_literal_single(open, term, false)?;
+                Ok(Node::new_string(
+                    s.into(),
+                    Loc(start, self.lexer.current_pos()),
+                ))
+            }
+            'Q' => {
+                let tok = self.lexer.read_string_literal_double(open, Some(term), 0)?;
+                let loc = tok.loc;
+                match tok.kind {
+                    TokenKind::StringLit(s) => Ok(Node::new_string(s, loc)),
+                    TokenKind::OpenString(s, term, level) => {
+                        self.parse_interporation(s.into(), open, term, level)
+                    }
+                    _ => unreachable!(),
                 }
             }
-            'Q' => match tok.kind {
-                TokenKind::StringLit(s) => Ok(Node::new_string(s, loc)),
-                TokenKind::OpenString(s, term, level) => {
-                    self.parse_interporation(s.into(), open, term, level)
-                }
-                _ => unreachable!(),
-            },
-            'W' => match tok.kind {
-                TokenKind::Array(tokens) => {
-                    let mut v = vec![];
-                    for tok in tokens {
-                        match tok.kind {
-                            TokenKind::StringLit(s) => v.push(Node::new_string(s, loc)),
-                            TokenKind::OpenString(s, term, level) => {
-                                self.parse_interporation_array(s.into(), &mut v, term, level)?;
-                            }
-                            _ => unreachable!(),
+            'W' => {
+                let tokens = self
+                    .lexer
+                    .read_string_literal_double_array(open, Some(term), 0)?;
+                let loc = Loc(start, self.lexer.current_pos());
+                let mut nodes = vec![];
+                for tok in tokens {
+                    let loc = tok.loc;
+                    match tok.kind {
+                        TokenKind::StringLit(s) => nodes.push(Node::new_string(s, loc)),
+                        TokenKind::OpenString(s, term, level) => {
+                            self.parse_interporation_array(s.into(), &mut nodes, term, level)?;
                         }
+                        _ => unreachable!(),
                     }
-                    let v = v
-                        .into_iter()
-                        .filter(|n| {
-                            if let NodeKind::String(s) = &n.kind {
-                                !s.is_empty()
-                            } else {
-                                true
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    Ok(Node::new_array(v, tok.loc))
                 }
-                _ => unreachable!(),
-            },
+                let v = nodes
+                    .into_iter()
+                    .filter(|n| {
+                        if let NodeKind::String(s) = &n.kind {
+                            !s.is_empty()
+                        } else {
+                            true
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Node::new_array(v, loc))
+            }
             'w' => {
-                if let TokenKind::PercentNotation(content) = tok.kind {
-                    let v = escape_space(content, loc, |s, loc| Node::new_string(s.into(), loc));
-                    Ok(Node::new_array(v, tok.loc))
-                } else {
-                    unreachable!()
-                }
+                let s = self
+                    .lexer
+                    .read_string_literal_single(open, term, kind == 'r')?;
+                let loc = Loc(start, self.lexer.current_pos());
+                let v = escape_space(s, loc, |s, loc| Node::new_string(s.into(), loc));
+                Ok(Node::new_array(v, loc))
             }
-            'i' => {
-                if let TokenKind::PercentNotation(content) = tok.kind {
-                    let v = escape_space(content, loc, |s, loc| Node::new_symbol(s, loc));
-                    Ok(Node::new_array(v, tok.loc))
-                } else {
-                    unreachable!()
-                }
-            }
-            'r' => match tok.kind {
-                TokenKind::Regex { body, postfix } => Ok(Node::new_regexp(
-                    vec![Node::new_string(body.into(), loc)],
-                    postfix,
-                    loc,
-                )),
-                TokenKind::OpenRegex(s, mut char_class) => {
-                    let start_loc = loc;
-                    let mut nodes = vec![Node::new_string(s.into(), loc)];
-                    loop {
-                        self.parse_template(&mut nodes)?;
-                        let tok = self.lexer.get_regexp(term, char_class)?;
-                        let loc = tok.loc();
-                        match tok.kind {
-                            TokenKind::Regex { body, postfix } => {
-                                nodes.push(Node::new_string(body.into(), loc));
-                                return Ok(Node::new_regexp(nodes, postfix, start_loc.merge(loc)));
+            'r' => {
+                let mut nodes = vec![];
+                let mut char_class = vec![];
+                loop {
+                    let tok = self.lexer.get_regexp(term, char_class)?;
+                    let loc = tok.loc();
+                    match tok.kind {
+                        TokenKind::Regex { body, postfix } => {
+                            if !body.is_empty() {
+                                nodes.push(Node::new_string(body.into(), loc))
                             }
-                            TokenKind::OpenRegex(s, char_class_new) => {
-                                nodes.push(Node::new_string(s.into(), loc));
-                                char_class = char_class_new;
-                            }
-                            _ => unreachable!(),
+                            let loc = Loc(start, self.lexer.current_pos());
+                            return Ok(Node::new_regexp(nodes, postfix, loc));
                         }
+                        TokenKind::OpenRegex(s, char_class_new) => {
+                            if !s.is_empty() {
+                                nodes.push(Node::new_string(s.into(), loc));
+                            }
+                            char_class = char_class_new;
+                            self.parse_template(&mut nodes)?;
+                        }
+                        _ => unreachable!(),
                     }
                 }
-                _ => unreachable!(),
-            },
-            _ => Err(error_unexpected(loc, "Unsupported % notation.")),
-        };
+            }
+
+            'i' => {
+                let s = self
+                    .lexer
+                    .read_string_literal_single(open, term, kind == 'r')?;
+                let loc = Loc(start, self.lexer.current_pos());
+                let v = escape_space(s, loc, |s, loc| Node::new_symbol(s, loc));
+                Ok(Node::new_array(v, loc))
+            }
+            _ => Err(error_unexpected(
+                Loc(kind_pos, kind_pos),
+                "Unsupported % notation.",
+            )),
+        }
     }
 
     pub(super) fn parse_heredocument(&mut self) -> Result<Node, LexerErr> {
@@ -446,22 +451,9 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     pub(super) fn parse_regexp(&mut self, term: char) -> Result<Node, LexerErr> {
         let start_loc = self.prev_loc();
-        let tok = self.lexer.get_regexp(term, vec![])?;
-        let (mut nodes, mut char_class) = match tok.kind {
-            TokenKind::Regex { body, postfix } => {
-                return Ok(Node::new_regexp(
-                    vec![Node::new_string(body.into(), tok.loc)],
-                    postfix,
-                    tok.loc,
-                ));
-            }
-            TokenKind::OpenRegex(s, char_class) => {
-                (vec![Node::new_string(s.into(), tok.loc)], char_class)
-            }
-            _ => unreachable!(),
-        };
+        let mut nodes = vec![];
+        let mut char_class = vec![];
         loop {
-            self.parse_template(&mut nodes)?;
             let tok = self.lexer.get_regexp(term, char_class)?;
             let loc = tok.loc();
             match tok.kind {
@@ -472,6 +464,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 TokenKind::OpenRegex(s, char_class_new) => {
                     nodes.push(Node::new_string(s.into(), loc));
                     char_class = char_class_new;
+                    self.parse_template(&mut nodes)?;
                 }
                 _ => unreachable!(),
             }
