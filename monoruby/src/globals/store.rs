@@ -242,12 +242,12 @@ impl Store {
         if let Some(func_id) = func_id {
             format!(
                 "{}:{}:in '{}'",
-                source.short_file_name(),
+                source.file_name(),
                 source.get_line(&loc),
                 self.func_description(func_id)
             )
         } else {
-            format!("{}:{}", source.short_file_name(), source.get_line(&loc))
+            format!("{}:{}", source.file_name(), source.get_line(&loc))
         }
     }
 

@@ -27,6 +27,7 @@ pub(crate) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
     globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
+    globals.define_builtin_func(REGEXP_CLASS, "source", source, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
 }
 
@@ -171,6 +172,17 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
             n => Some(n as usize),
         }
     }
+}
+
+///
+/// ### Regexp#source
+/// - source -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/source.html]
+#[monoruby_builtin]
+fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    Ok(Value::string_from_str(self_.is_regex().unwrap().as_str()))
 }
 
 ///

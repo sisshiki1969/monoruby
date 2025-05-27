@@ -58,7 +58,7 @@ enum InterpolateState {
 #[derive(Debug, Clone, PartialEq)]
 enum RegexInterpolateState {
     Finished { body: String, postfix: String },
-    Interpolation(RubyString, usize), // (string, paren_level)
+    Interpolation(RubyString, Vec<ParenKind>), // (string, char_level)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,18 +184,6 @@ impl<'a> Lexer<'a> {
         {
             Some(ch) => ch.is_ascii_whitespace(),
             _ => false,
-        }
-    }
-
-    /// Get token as a regular expression.
-    ///
-    /// return TokenKind::Regex or TokenKind::OpenRegex.
-    pub(crate) fn get_regexp(&mut self, term: char) -> Result<Token, LexerErr> {
-        match self.read_regexp_sub(term)? {
-            RegexInterpolateState::Finished { body, postfix } => {
-                Ok(self.new_regexlit(body, postfix))
-            }
-            RegexInterpolateState::Interpolation(s, _) => Ok(self.new_open_reg(s.into_string()?)),
         }
     }
 
@@ -1101,30 +1089,83 @@ impl<'a> Lexer<'a> {
         s
     }
 
+    /// Get token as a regular expression.
+    ///
+    /// return TokenKind::Regex or TokenKind::OpenRegex.
+    pub(crate) fn get_regexp(
+        &mut self,
+        term: char,
+        char_class: Vec<ParenKind>,
+    ) -> Result<Token, LexerErr> {
+        match self.read_regexp_sub(term, char_class)? {
+            RegexInterpolateState::Finished { body, postfix } => {
+                Ok(self.new_regexlit(body, postfix))
+            }
+            RegexInterpolateState::Interpolation(s, char_class) => {
+                Ok(self.new_open_reg(s.into_string()?, char_class))
+            }
+        }
+    }
+
     /// Scan as regular expression.
-    fn read_regexp_sub(&mut self, term: char) -> Result<RegexInterpolateState, LexerErr> {
+    fn read_regexp_sub(
+        &mut self,
+        term: char,
+        mut char_class: Vec<ParenKind>,
+    ) -> Result<RegexInterpolateState, LexerErr> {
         let mut body = "".to_string();
-        let mut char_class = 0;
+        //let mut char_class = 0;
         loop {
             match self.get()? {
-                ch if ch == term && char_class == 0 => {
+                ch if ch == term && char_class.is_empty() => {
                     let postfix = self.check_postfix();
                     return Ok(RegexInterpolateState::Finished { body, postfix });
                 }
                 '[' => {
-                    char_class += 1;
+                    char_class.push(ParenKind::Bracket);
                     body.push('[');
                 }
                 ']' => {
-                    char_class -= 1;
-                    body.push(']');
+                    if let Some(ParenKind::Bracket) = char_class.pop() {
+                        body.push(']');
+                    } else {
+                        return Err(self.error_unexpected(self.pos - 1));
+                    };
+                }
+                '(' if char_class.last() != Some(&ParenKind::Bracket) => {
+                    char_class.push(ParenKind::Paren);
+                    body.push('(');
+                }
+                ')' if char_class.last() != Some(&ParenKind::Bracket) => {
+                    if let Some(ParenKind::Paren) = char_class.pop() {
+                        body.push(')');
+                    } else {
+                        return Err(self.error_unexpected(self.pos - 1));
+                    };
+                }
+                '{' if char_class.last() != Some(&ParenKind::Bracket) => {
+                    char_class.push(ParenKind::Brace);
+                    body.push('{');
+                }
+                '}' if char_class.last() != Some(&ParenKind::Bracket) => {
+                    if let Some(ParenKind::Brace) = char_class.pop() {
+                        body.push('}');
+                    } else {
+                        return Err(self.error_unexpected(self.pos - 1));
+                    };
                 }
                 '\\' => {
                     let ch = self.get()?;
                     match ch {
                         'a' => body += "\\a",
                         // '\b' is valid only in the inner of character class. Otherwise, shoud be treated as "\x08".
-                        'b' => body += if char_class == 0 { "\\b" } else { "\\x08" },
+                        'b' => {
+                            body += if char_class.last() != Some(&ParenKind::Bracket) {
+                                "\\b"
+                            } else {
+                                "\\x08"
+                            }
+                        }
                         'e' => body += "\\x1b",
                         'f' => body += "\\f",
                         'n' => body += "\\n",
@@ -1163,7 +1204,10 @@ impl<'a> Lexer<'a> {
                 }
                 '#' => match self.peek() {
                     Some(ch) if ch == '{' || ch == '$' || ch == '@' => {
-                        return Ok(RegexInterpolateState::Interpolation(body.into(), 0))
+                        return Ok(RegexInterpolateState::Interpolation(
+                            body.into(),
+                            char_class,
+                        ))
                     }
                     _ => body.push('#'),
                 },
@@ -1221,7 +1265,7 @@ impl<'a> Lexer<'a> {
                 let tokens = self.read_string_literal_double_array(open, Some(term), 0)?;
                 Ok(self.new_array(tokens))
             }
-            'r' => self.get_regexp(term),
+            'r' => self.get_regexp(term, vec![]),
             kind if ['w', 'i'].contains(&kind) => {
                 let s = self.read_string_literal_single(open, term, kind == 'r')?;
                 Ok(self.new_percent(s))
@@ -1664,8 +1708,8 @@ impl<'a> Lexer<'a> {
         Token::new_open_string(s, delimiter, level, self.cur_loc())
     }
 
-    fn new_open_reg(&self, s: String) -> Token {
-        Token::new_open_reg(s, self.cur_loc())
+    fn new_open_reg(&self, s: String, char_class: Vec<ParenKind>) -> Token {
+        Token::new_open_reg(s, char_class, self.cur_loc())
     }
 
     fn new_open_command(&self, s: String, delimiter: Option<char>, level: usize) -> Token {

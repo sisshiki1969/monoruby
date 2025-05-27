@@ -30,6 +30,13 @@ impl<T: PartialEq + Default> Annot<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+enum ParenKind {
+    Bracket,
+    Paren,
+    Brace,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum RubyString {
     Bytes(Vec<u8>),
     Utf8(String),
