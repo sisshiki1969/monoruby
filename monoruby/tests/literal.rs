@@ -109,6 +109,28 @@ EOF
 }
 
 #[test]
+fn symbol_interpolation() {
+    run_test(r##":"abc#{50*50}def""##);
+}
+
+#[test]
+fn percent_q() {
+    run_test(r##"%q(abcdefghi)"##);
+}
+
+#[test]
+fn percent_q_() {
+    run_test(r##"%Q(())"##);
+    run_test(r##"%Q[[]]"##);
+    run_test(r##"%Q{{}}"##);
+    run_test(r##"%Q(abcdefghi)"##);
+    run_test(r##"%Q(ab#{100*200}c#@a)"##);
+    run_test(r##"class C; @@a = :Gquux; $res = %Q(ab#{100*200}c#@@a); end; $res"##);
+    run_test(r##"%Q(ab#{100*200}c#$a)"##);
+    run_test(r##"%Q(ab#{100*200}c#$1)"##);
+}
+
+#[test]
 fn percent_w() {
     run_test(r##"%w(abc def ghi)"##);
     run_test(
@@ -146,14 +168,22 @@ ghi)"##,
         r##"%W(abc\ de
     f \g\\h\ni)"##,
     );
-    run_test(r##"%w(abc #{5*5}def#{4*4} ghi)"##);
-    run_test(r##"%w(abc def#{5*5}#{4*4} ghi)"##);
-    run_test(r##"%w(abc def#{5*5} #{4*4} ghi)"##);
-    run_test(r##"%w(abc def #{5*5} #{4*4} ghi)"##);
+    run_test(r##"%W(abc #{5*5}def#{4*4} ghi)"##);
+    run_test(r##"%W(abc def#{5*5}#{4*4} ghi)"##);
+    run_test(r##"%W(abc def#{5*5} #{4*4} ghi)"##);
+    run_test(r##"%W(abc def #{5*5} #{4*4} ghi)"##);
     run_test(
-        r##"%w(abc def #{5*5}
+        r##"%W(abc def #{5*5}
 #{4*4} ghi)"##,
     );
+}
+
+#[test]
+fn percent_r() {
+    run_test(r##"%r(abcdefghi).to_s"##);
+    run_test(r##"%r(abc[d-f[g-i]]).to_s"##);
+    run_test(r##"%r[abc[d-f[g-i]]].to_s"##);
+    run_test(r##"%r[a#{100}bc[d-f#{500}[g-i]]#{20*50}].to_s"##);
 }
 
 #[test]

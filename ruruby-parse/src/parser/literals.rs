@@ -205,6 +205,14 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                     .filter(|n| {
                         if let NodeKind::String(s) = &n.kind {
                             !s.is_empty()
+                        } else if let NodeKind::InterporatedString(nodes) = &n.kind {
+                            nodes.iter().any(|n| {
+                                if let NodeKind::String(s) = &n.kind {
+                                    !s.is_empty()
+                                } else {
+                                    true
+                                }
+                            })
                         } else {
                             true
                         }
