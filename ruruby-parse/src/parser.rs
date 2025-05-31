@@ -285,7 +285,23 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// Return RubyError if it was EOF.
     fn get(&mut self) -> Result<Token, LexerErr> {
         loop {
-            let tok = self.lexer.get_token()?;
+            let tok = self.lexer.get_token(false)?;
+            if tok.is_eof() {
+                return Err(error_eof(tok.loc()));
+            }
+            if !tok.is_line_term() {
+                self.prev_loc = tok.loc;
+                return Ok(tok);
+            }
+        }
+    }
+
+    /// Get next token (skipping line terminators).
+    /// Do not allow assignment operators.
+    /// Return RubyError if it was EOF.
+    fn get_primary(&mut self) -> Result<Token, LexerErr> {
+        loop {
+            let tok = self.lexer.get_token(true)?;
             if tok.is_eof() {
                 return Err(error_eof(tok.loc()));
             }
@@ -298,7 +314,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     /// Get next token (no skipping line terminators).
     fn get_no_skip_line_term(&mut self) -> Result<Token, LexerErr> {
-        let tok = self.lexer.get_token()?;
+        let tok = self.lexer.get_token(false)?;
         self.prev_loc = tok.loc;
         Ok(tok)
     }

@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
         false,
         &["encoding", "capacity"],
     );
+    globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
@@ -148,6 +149,20 @@ fn string_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Va
         None => "".to_string(),
     };
     Ok(Value::string(s))
+}
+
+///
+/// ### String.try_convert
+///
+/// - try_convert(obj) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/s/try_convert.html]
+#[monoruby_builtin]
+fn string_try_convert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    match lfp.arg(0).coerce_to_rstring(vm, globals) {
+        Ok(rstring) => Ok(rstring.into()),
+        Err(_) => Ok(Value::nil()),
+    }
 }
 
 ///
@@ -2344,6 +2359,12 @@ mod tests {
     fn string_new() {
         run_test(r##"String.new"##);
         run_test(r##"String.new("Ruby")"##);
+    }
+
+    #[test]
+    fn string_try_convert() {
+        run_test(r##"String.try_convert("str")"##);
+        run_test(r##"String.try_convert(/re/)"##);
     }
 
     #[test]

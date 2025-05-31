@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "to_h", to_h, 0);
     globals.define_builtin_func(ARRAY_CLASS, "hash", hash, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "-", sub, 1);
@@ -384,6 +385,57 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
+}
+
+///
+/// ### Array#to_h
+///
+/// - to_h -> Hash
+/// - to_h {|elem| .. } -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/to_h.html]
+#[monoruby_builtin]
+fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
+        let self_ = lfp.self_val().as_array();
+        let block = match lfp.block() {
+            Some(bh) => Some(vm.get_block_data(globals, bh)?),
+            None => None,
+        };
+        for (i, elem) in self_.iter().enumerate() {
+            let elem = if let Some(p) = &block {
+                vm.invoke_block(globals, p, &[*elem])?
+            } else {
+                *elem
+            };
+            let elem = match elem.try_array_ty() {
+                Some(a) => a,
+                None => {
+                    return Err(MonorubyErr::typeerr(
+                        format!(
+                            "wrong element type {} at {i} (expected array)",
+                            elem.get_real_class_name(&globals.store)
+                        ),
+                        TypeErrKind::Other,
+                    ))
+                }
+            };
+            if elem.len() != 2 {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "wrong array length at {i} (expected 2, was {})",
+                    elem.len()
+                )));
+            }
+            vm.temp_hash_insert(elem[0], elem[1]);
+        }
+        Ok(())
+    }
+
+    vm.temp_push(Value::hash(indexmap::IndexMap::default()));
+    let err = inner(vm, globals, lfp);
+    let res = vm.temp_pop();
+    err?;
+    Ok(res)
 }
 
 ///
@@ -2110,6 +2162,20 @@ mod tests {
         run_test_no_result_check("[].hash");
         run_test_error("Array.new(-5)");
         run_test_error("Array.new(:r, 42)");
+    }
+
+    #[test]
+    fn to_a() {
+        run_test(r##"[].to_a"##);
+        run_test(r##"[1,2,3].to_a"##);
+    }
+
+    #[test]
+    fn to_h() {
+        run_test(r##"[[:foo, :bar], [1, 2]].to_h"##);
+        run_test(r##"["foo", "bar"].to_h {|s| [s.ord, s]}"##);
+        run_test_error(r##"[[:foo, :bar], 3].to_h"##);
+        run_test_error(r##"[[:foo, :bar], [1,2,3]].to_h"##);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use super::*;
 
 impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     pub(super) fn parse_primary(&mut self) -> Result<Node, LexerErr> {
-        let tok = self.get()?;
+        let tok = self.get_primary()?;
         let loc = tok.loc();
         match tok.kind {
             TokenKind::Ident(name) => {

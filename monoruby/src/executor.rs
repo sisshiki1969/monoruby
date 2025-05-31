@@ -165,6 +165,10 @@ impl Executor {
         self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
 
+    pub fn temp_hash_insert(&mut self, k: Value, v: Value) {
+        self.temp_stack.last_mut().unwrap().as_hash().insert(k, v);
+    }
+
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
         self.temp_stack
             .last_mut()

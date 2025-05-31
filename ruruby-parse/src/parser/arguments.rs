@@ -180,7 +180,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         };
         if self.lexer.trailing_space() {
             match tok.kind {
-                TokenKind::LineTerm => false,
+                TokenKind::LineTerm | TokenKind::Eof => false,
                 TokenKind::Punct(p) => match p {
                     Punct::LParen | Punct::LBracket | Punct::Scope | Punct::Arrow | Punct::Not => {
                         true

@@ -128,10 +128,10 @@ impl<'a> Lexer<'a> {
         self.code[0..=pos].chars().filter(|ch| *ch == '\n').count() + 1
     }
 
-    pub(crate) fn get_token(&mut self) -> Result<Token, LexerErr> {
+    pub(crate) fn get_token(&mut self, is_primary: bool) -> Result<Token, LexerErr> {
         self.buf = None;
         self.buf_skip_lt = None;
-        let tok = self.read_token()?;
+        let tok = self.read_token(is_primary)?;
         Ok(tok)
     }
 
@@ -140,7 +140,7 @@ impl<'a> Lexer<'a> {
             return Ok(tok.clone());
         };
         let save = self.save_state();
-        let tok = self.read_token()?;
+        let tok = self.read_token(false)?;
         self.restore_state(save);
         self.buf = Some(tok.clone());
         Ok(tok)
@@ -153,7 +153,7 @@ impl<'a> Lexer<'a> {
         let save = self.save_state();
         let mut tok;
         loop {
-            tok = self.read_token()?;
+            tok = self.read_token(false)?;
             if tok.is_eof() || !tok.is_line_term() {
                 break;
             }
@@ -208,7 +208,7 @@ impl<'a> Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     /// Read token.
-    fn read_token(&mut self) -> Result<Token, LexerErr> {
+    fn read_token(&mut self, is_primary: bool) -> Result<Token, LexerErr> {
         loop {
             self.token_start_pos = self.pos;
             let tok = self.skip_whitespace();
@@ -262,7 +262,7 @@ impl<'a> Lexer<'a> {
                     }
                     ',' => return Ok(self.new_punct(Punct::Comma)),
                     '+' => {
-                        if self.consume('=') {
+                        if !is_primary && self.consume('=') {
                             return Ok(self.new_punct(Punct::AssignOp(BinOp::Add)));
                         } else {
                             return Ok(self.new_punct(Punct::Plus));
@@ -271,14 +271,14 @@ impl<'a> Lexer<'a> {
                     '-' => {
                         if self.consume('>') {
                             return Ok(self.new_punct(Punct::Arrow));
-                        } else if self.consume('=') {
+                        } else if !is_primary && self.consume('=') {
                             return Ok(self.new_punct(Punct::AssignOp(BinOp::Sub)));
                         } else {
                             return Ok(self.new_punct(Punct::Minus));
                         }
                     }
                     '*' => {
-                        if self.consume('=') {
+                        if !is_primary && self.consume('=') {
                             return Ok(self.new_punct(Punct::AssignOp(BinOp::Mul)));
                         } else if self.consume('*') {
                             return Ok(self.new_punct(Punct::DMul));
@@ -287,14 +287,14 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     '%' => {
-                        if self.consume('=') {
+                        if !is_primary && self.consume('=') {
                             return Ok(self.new_punct(Punct::AssignOp(BinOp::Rem)));
                         } else {
                             return Ok(self.new_punct(Punct::Rem));
                         }
                     }
                     '/' => {
-                        if self.consume('=') {
+                        if !is_primary && self.consume('=') {
                             return Ok(self.new_punct(Punct::AssignOp(BinOp::Div)));
                         } else {
                             return Ok(self.new_punct(Punct::Div));
@@ -1709,7 +1709,7 @@ impl<'a> Lexer<'a> {
     pub(crate) fn tokenize(&mut self) -> Result<LexerResult, LexerErr> {
         let mut tokens = vec![];
         loop {
-            match self.get_token() {
+            match self.get_token(false) {
                 Ok(res) => {
                     if res.is_eof() {
                         tokens.push(res);
