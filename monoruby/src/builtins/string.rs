@@ -72,6 +72,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "upcase!", upcase_, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase", downcase, 0);
     globals.define_builtin_func(STRING_CLASS, "downcase!", downcase_, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
@@ -1884,6 +1885,167 @@ fn downcase_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Val
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Tr {
+    elems: Vec<TrElement>,
+    exclude: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrElement {
+    Char(char),
+    Range(char, char),
+}
+
+impl Tr {
+    fn from_str(s: &str) -> Result<Tr> {
+        let mut elems = Vec::new();
+        let mut chars = s.chars().peekable();
+        let exclude = if let Some('^') = chars.peek() {
+            assert_eq!('^', chars.next().unwrap());
+            true
+        } else {
+            false
+        };
+        while let Some(c) = chars.next() {
+            if let Some('-') = chars.peek() {
+                assert_eq!('-', chars.next().unwrap());
+                if let Some(end) = chars.next() {
+                    if c as u32 > end as u32 {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "Invalid range \"{c}-{end}\" in string transliteration",
+                        )));
+                    }
+                    elems.push(TrElement::Range(c, end));
+                } else {
+                    elems.push(TrElement::Char(c));
+                    elems.push(TrElement::Char('-'));
+                }
+            } else {
+                elems.push(TrElement::Char(c));
+            }
+        }
+        Ok(Tr { elems, exclude })
+    }
+
+    fn check(&self, c: char) -> bool {
+        for elem in &self.elems {
+            match elem {
+                TrElement::Char(ch) => {
+                    if *ch == c {
+                        return !self.exclude;
+                    }
+                }
+                TrElement::Range(start, end) => {
+                    if *start <= c && c <= *end {
+                        return !self.exclude;
+                    }
+                }
+            }
+        }
+        self.exclude
+    }
+}
+
+#[test]
+fn tr_test() {
+    assert_eq!(
+        Tr::from_str("abc-def").unwrap(),
+        Tr {
+            elems: vec![
+                TrElement::Char('a'),
+                TrElement::Char('b'),
+                TrElement::Range('c', 'd'),
+                TrElement::Char('e'),
+                TrElement::Char('f')
+            ],
+            exclude: false
+        }
+    );
+
+    assert_eq!(
+        Tr::from_str("-def").unwrap(),
+        Tr {
+            elems: vec![
+                TrElement::Char('-'),
+                TrElement::Char('d'),
+                TrElement::Char('e'),
+                TrElement::Char('f')
+            ],
+            exclude: false
+        }
+    );
+
+    assert_eq!(
+        Tr::from_str("^-def").unwrap(),
+        Tr {
+            elems: vec![
+                TrElement::Char('-'),
+                TrElement::Char('d'),
+                TrElement::Char('e'),
+                TrElement::Char('f')
+            ],
+            exclude: true
+        }
+    );
+
+    assert_eq!(
+        Tr::from_str("--def").unwrap(),
+        Tr {
+            elems: vec![
+                TrElement::Range('-', 'd'),
+                TrElement::Char('e'),
+                TrElement::Char('f')
+            ],
+            exclude: false
+        }
+    );
+
+    let res = Tr::from_str("a-z");
+    assert_eq!(
+        res.unwrap(),
+        Tr {
+            elems: vec![TrElement::Range('a', 'z')],
+            exclude: false
+        }
+    );
+
+    let res = Tr::from_str("^a-z");
+    assert_eq!(
+        res.unwrap(),
+        Tr {
+            elems: vec![TrElement::Range('a', 'z')],
+            exclude: true
+        }
+    );
+}
+
+///
+/// ### String#delete
+///
+/// - delete(*strs) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
+#[monoruby_builtin]
+fn delete(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut res = lfp.self_val().as_str().to_string();
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let pred = args
+        .iter()
+        .map(|arg| arg.expect_str())
+        .flat_map(|arg| arg.map(|arg| Tr::from_str(arg)))
+        .collect::<Result<Vec<Tr>>>()?;
+
+    res.retain(|c| !pred.iter().all(|tr| tr.check(c)));
+
+    Ok(Value::string(res))
+}
+
 ///
 /// ### String#tr
 ///
@@ -2398,6 +2560,26 @@ mod tests {
         s.sub!(/def1/, "!!")
         "##,
         );
+    }
+
+    #[test]
+    fn delete() {
+        run_test(r##""abcdefg".delete("b")"##);
+        run_test(r##""abcdefg".delete("b", "c")"##);
+        run_test(r##""abcdefg".delete("b", "c", "d")"##);
+        run_test(r##""abcdefg".delete("b", "c", "d", "e")"##);
+        run_test(r##""abcdefg".delete("b", "c", "d", "e", "f")"##);
+        run_test(r##""abcdefg".delete("b", "c", "d", "e", "f", "g")"##);
+        run_test(r##""abcdefg".delete("bcd")"##);
+        run_test(r##""abcdefg".delete("bcd", "efg")"##);
+        run_test(r##""123456789".delete("2378")"##);
+        run_test(r##""123456789".delete("2-8", "^4-6")"##);
+        run_test(r##""12345-6789".delete("-8")"##);
+        run_test(r##""12345-6789".delete("8-")"##);
+        run_test(r##""12345-6789".delete("--")"##);
+        run_test(r##""12345-6789".delete("---")"##);
+        run_test_error(r##""abcd".delete"##);
+        run_test_error(r##""abcd".delete("d-a")"##);
     }
 
     #[test]
