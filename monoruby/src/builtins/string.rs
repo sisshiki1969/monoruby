@@ -1908,7 +1908,13 @@ impl Tr {
             false
         };
         while let Some(c) = chars.next() {
-            if let Some('-') = chars.peek() {
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    elems.push(TrElement::Char(next));
+                } else {
+                    elems.push(TrElement::Char(c));
+                }
+            } else if let Some('-') = chars.peek() {
                 assert_eq!('-', chars.next().unwrap());
                 if let Some(end) = chars.next() {
                     if c as u32 > end as u32 {
@@ -2016,6 +2022,19 @@ fn tr_test() {
         Tr {
             elems: vec![TrElement::Range('a', 'z')],
             exclude: true
+        }
+    );
+    let res = Tr::from_str("a\\-z\\");
+    assert_eq!(
+        res.unwrap(),
+        Tr {
+            elems: vec![
+                TrElement::Char('a'),
+                TrElement::Char('-'),
+                TrElement::Char('z'),
+                TrElement::Char('\\'),
+            ],
+            exclude: false
         }
     );
 }
@@ -2578,6 +2597,10 @@ mod tests {
         run_test(r##""12345-6789".delete("8-")"##);
         run_test(r##""12345-6789".delete("--")"##);
         run_test(r##""12345-6789".delete("---")"##);
+        run_test(r##""345678-\\".delete("3\-6")"##);
+        run_test(r##""345678-\\".delete("3\\\-6")"##);
+        run_test(r##""345678-\\".delete("3\\-6")"##);
+        run_test(r##""345678-\\".delete("3\\")"##);
         run_test_error(r##""abcd".delete"##);
         run_test_error(r##""abcd".delete("d-a")"##);
     }
