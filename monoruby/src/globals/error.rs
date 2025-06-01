@@ -8,7 +8,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
     kind: MonorubyErrKind,
-    msg: String,
+    message: String,
     trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
@@ -26,7 +26,7 @@ impl MonorubyErr {
     pub fn new(kind: MonorubyErrKind, msg: impl ToString) -> Self {
         MonorubyErr {
             kind,
-            msg: msg.to_string(),
+            message: msg.to_string(),
             trace: vec![],
         }
     }
@@ -35,7 +35,11 @@ impl MonorubyErr {
         let kind = ex.kind().clone();
         let msg = ex.msg().to_string();
         let trace = ex.trace();
-        MonorubyErr { kind, msg, trace }
+        MonorubyErr {
+            kind,
+            message: msg,
+            trace,
+        }
     }
 
     fn new_with_loc(
@@ -48,7 +52,7 @@ impl MonorubyErr {
         let func_id = func_id.into();
         MonorubyErr {
             kind,
-            msg,
+            message: msg,
             trace: vec![(Some((loc, sourceinfo)), func_id)],
         }
     }
@@ -57,12 +61,12 @@ impl MonorubyErr {
         &self.kind
     }
 
-    pub fn msg(&self) -> &str {
-        &self.msg
+    pub fn message(&self) -> &str {
+        &self.message
     }
 
     pub fn set_msg(&mut self, msg: String) {
-        self.msg = msg;
+        self.message = msg;
     }
 
     pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
@@ -85,9 +89,9 @@ impl MonorubyErr {
                 source.show_loc(loc);
                 loc_flag = true;
             } else if let Some(func_id) = func_id {
-                eprintln!("{}: {}", store.internal_location(*func_id), self.msg);
+                eprintln!("{}: {}", store.internal_location(*func_id), self.message);
             } else {
-                eprintln!("<internal>: {}", self.msg);
+                eprintln!("<internal>: {}", self.message);
             }
         } else {
             eprintln!("location not defined.");
@@ -111,17 +115,13 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
-        format!("{} ({})", self.show(store), self.get_class_name())
+        format!("{} ({})", self.message, self.class_name(store))
     }
 
-    pub fn show(&self, store: &Store) -> String {
-        format!("{}{}", self.msg, self.kind.show(store),)
-    }
-
-    pub fn get_class_name(&self) -> &str {
+    pub fn class_name(&self, store: &Store) -> String {
         match &self.kind {
             MonorubyErrKind::Exception => "Exception",
-            MonorubyErrKind::NotMethod(_) => "NoMethodError",
+            MonorubyErrKind::NotMethod => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
@@ -129,7 +129,7 @@ impl MonorubyErr {
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",
             MonorubyErrKind::Range => "RangeError",
-            MonorubyErrKind::Type(_) => "TypeError",
+            MonorubyErrKind::Type => "TypeError",
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
             MonorubyErrKind::Load(_) => "LoadError",
@@ -140,8 +140,10 @@ impl MonorubyErr {
             MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::SystemExit(..) => "SystemExit",
+            MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
             MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
+        .to_string()
     }
 }
 
@@ -162,7 +164,7 @@ impl MonorubyErr {
     }
 
     pub fn is_unexpected_eof(&self) -> bool {
-        self.kind == MonorubyErrKind::Syntax && self.msg == "unexpected end-of-file."
+        self.kind == MonorubyErrKind::Syntax && self.message == "unexpected end-of-file."
     }
 }
 
@@ -248,24 +250,38 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn method_not_found(name: IdentId, obj: Value) -> MonorubyErr {
+    pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFound { name, obj }),
-            "",
+            MonorubyErrKind::NotMethod,
+            format!(
+                "undefined method `{name}' for {}",
+                obj.get_real_class_name(store)
+            ),
         )
     }
 
-    pub(crate) fn method_not_found_for_class(name: IdentId, class: ClassId) -> MonorubyErr {
+    pub(crate) fn method_not_found_for_class(
+        store: &Store,
+        name: IdentId,
+        class: ClassId,
+    ) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(NoMethodErrKind::MethodNotFoundForClass { name, class }),
-            "",
+            MonorubyErrKind::NotMethod,
+            format!(
+                "undefined method `{name}' for {}",
+                store.get_class_name(class)
+            ),
         )
     }
 
-    pub(crate) fn private_method_called(name: IdentId, obj: Value) -> MonorubyErr {
+    pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(NoMethodErrKind::PrivateMethodCalled { name, obj }),
-            "",
+            MonorubyErrKind::NotMethod,
+            format!(
+                "private method `{name}' called for {}:{}",
+                obj.inspect(store),
+                obj.get_real_class_name(store)
+            ),
         )
     }
 
@@ -345,8 +361,8 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn typeerr(msg: impl ToString, kind: TypeErrKind) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Type(kind), msg)
+    pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Type, msg)
     }
 
     pub(crate) fn no_implicit_conversion(
@@ -354,21 +370,15 @@ impl MonorubyErr {
         val: Value,
         target_class: ClassId,
     ) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!(
-                "no implicit conversion of {} into {}",
-                val.get_real_class_name(store),
-                store.get_class_name(target_class)
-            ),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into {}",
+            val.get_real_class_name(store),
+            store.get_class_name(target_class)
+        ))
     }
 
     pub(crate) fn is_not_class_nor_module(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!("{name} is not a class nor a module"),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!("{name} is not a class nor a module"))
     }
 
     /*pub(crate) fn is_not_class_nor_module_rescue() -> MonorubyErr {
@@ -376,47 +386,35 @@ impl MonorubyErr {
     }*/
 
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a class"), TypeErrKind::Other)
+        MonorubyErr::typeerr(format!("{name} is not a class"))
     }
 
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!("superclass mismatch for class {name}"),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!("superclass mismatch for class {name}"))
     }
 
     ///
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
     pub(crate) fn is_not_symbol_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!("{} is not a symbol nor a string", val.to_s(store)),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!("{} is not a symbol nor a string", val.to_s(store)))
     }
 
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
     pub(crate) fn is_not_regexp_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!("{} is not a regexp nor a string", val.to_s(store)),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.to_s(store)))
     }
 
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
     pub(crate) fn cant_convert_into_float(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!(
-                "can't convert {} into Float",
-                val.get_real_class_name(store)
-            ),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!(
+            "can't convert {} into Float",
+            val.get_real_class_name(store)
+        ))
     }
 
     ///
@@ -428,13 +426,21 @@ impl MonorubyErr {
         val: Value,
         msg: &'static str,
     ) -> MonorubyErr {
-        MonorubyErr::typeerr(
-            format!(
-                "{op}: {} can't be coerced into {msg}",
-                val.get_real_class_name(store)
-            ),
-            TypeErrKind::Other,
-        )
+        MonorubyErr::typeerr(format!(
+            "{op}: {} can't be coerced into {msg}",
+            val.get_real_class_name(store)
+        ))
+    }
+
+    pub(crate) fn wrong_argument_type(
+        store: &Store,
+        val: Value,
+        expected: &'static str,
+    ) -> MonorubyErr {
+        MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected {expected})",
+            val.get_real_class_name(store),
+        ))
     }
 
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
@@ -526,7 +532,7 @@ impl MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     MethodReturn(Value, Lfp),
-    NotMethod(NoMethodErrKind),
+    NotMethod,
     Arguments,
     Syntax,
     Unimplemented,
@@ -534,7 +540,7 @@ pub enum MonorubyErrKind {
     DivideByZero,
     LocalJump,
     Range,
-    Type(TypeErrKind),
+    Type,
     Index,
     Frozen,
     Load(PathBuf),
@@ -546,64 +552,7 @@ pub enum MonorubyErrKind {
     StopIteration,
     Exception,
     SystemExit(u8),
-}
-
-impl MonorubyErrKind {
-    pub fn show(&self, store: &Store) -> String {
-        match self {
-            MonorubyErrKind::Type(kind) => kind.show(store),
-            MonorubyErrKind::NotMethod(kind) => kind.show(store),
-            _ => String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NoMethodErrKind {
-    MethodNotFound { name: IdentId, obj: Value },
-    MethodNotFoundForClass { name: IdentId, class: ClassId },
-    PrivateMethodCalled { name: IdentId, obj: Value },
-}
-
-impl NoMethodErrKind {
-    pub fn show(&self, store: &Store) -> String {
-        match self {
-            NoMethodErrKind::MethodNotFound { name, obj } => format!(
-                "undefined method `{name}' for {}",
-                //obj.inspect(store),
-                obj.get_real_class_name(store)
-            ),
-            NoMethodErrKind::MethodNotFoundForClass { name, class } => format!(
-                "undefined method `{name}' for {}",
-                store.get_class_name(*class)
-            ),
-            NoMethodErrKind::PrivateMethodCalled { name, obj } => format!(
-                "private method `{name}' called for {}:{}",
-                obj.inspect(store),
-                obj.get_real_class_name(store)
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TypeErrKind {
-    WrongArgumentType { val: Value, expected: &'static str },
-    Other,
-}
-
-impl TypeErrKind {
-    pub fn show(&self, store: &Store) -> String {
-        match self {
-            TypeErrKind::WrongArgumentType { val, expected } => {
-                format!(
-                    "wrong argument type {} (expected {expected})",
-                    val.get_real_class_name(store)
-                )
-            }
-            TypeErrKind::Other => "".to_string(),
-        }
-    }
+    Other(ClassId),
 }
 
 #[cfg(test)]

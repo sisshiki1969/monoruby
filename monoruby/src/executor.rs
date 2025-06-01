@@ -380,11 +380,11 @@ impl Executor {
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
 
-        let name = err.get_class_name();
+        let name = err.class_name(globals);
         let class_id = self
-            .get_constant(globals, OBJECT_CLASS, IdentId::get_id(name))
+            .get_constant(globals, OBJECT_CLASS, IdentId::get_id(&name))
             .unwrap()
-            .expect(name)
+            .expect(&name)
             .as_class_id();
 
         if let MonorubyErrKind::Load(path) = &err.kind() {
@@ -938,13 +938,7 @@ impl Executor {
         {
             Ok(ProcData::from_proc(&proc))
         } else {
-            Err(MonorubyErr::typeerr(
-                "",
-                TypeErrKind::WrongArgumentType {
-                    val: bh.0,
-                    expected: "Proc",
-                },
-            ))
+            Err(MonorubyErr::wrong_argument_type(globals, bh.0, "Proc"))
         }
     }
 

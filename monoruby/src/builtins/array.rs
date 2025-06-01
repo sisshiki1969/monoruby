@@ -412,13 +412,10 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             let elem = match elem.try_array_ty() {
                 Some(a) => a,
                 None => {
-                    return Err(MonorubyErr::typeerr(
-                        format!(
-                            "wrong element type {} at {i} (expected array)",
-                            elem.get_real_class_name(&globals.store)
-                        ),
-                        TypeErrKind::Other,
-                    ))
+                    return Err(MonorubyErr::typeerr(format!(
+                        "wrong element type {} at {i} (expected array)",
+                        elem.get_real_class_name(&globals.store)
+                    )))
                 }
             };
             if elem.len() != 2 {

@@ -38,7 +38,7 @@ fn find_super(vm: &mut Executor, globals: &mut Globals) -> Option<FuncId> {
     match globals.store.check_super(self_class, owner, func_name) {
         Some(func_id) => Some(func_id),
         None => {
-            let err = MonorubyErr::method_not_found(func_name, self_val);
+            let err = MonorubyErr::method_not_found(globals, func_name, self_val);
             vm.set_error(err);
             None
         }
@@ -865,10 +865,9 @@ pub(super) extern "C" fn to_a(
         } else {
             let src_class = src.class().get_name(&globals.store);
             let res_class = ary.class().get_name(&globals.store);
-            vm.set_error(MonorubyErr::typeerr(
-                format!("can't convert {src_class} to Array ({src_class}#to_a gives {res_class})"),
-                TypeErrKind::Other,
-            ));
+            vm.set_error(MonorubyErr::typeerr(format!(
+                "can't convert {src_class} to Array ({src_class}#to_a gives {res_class})"
+            )));
             None
         }
     } else {

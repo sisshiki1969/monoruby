@@ -285,14 +285,14 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
     let rhs = match rhs_rv.try_rvalue().unwrap().ty() {
         ObjTy::TIME => rhs_rv.as_time().clone(),
         _ => {
-            return Err(MonorubyErr::method_not_found(IdentId::_SUB, self_));
+            return Err(MonorubyErr::method_not_found(globals, IdentId::_SUB, self_));
         }
     };
     let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;

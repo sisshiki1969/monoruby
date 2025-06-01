@@ -252,8 +252,8 @@ impl ObjKind {
     }
 
     fn exception_from(mut err: MonorubyErr, store: &Store) -> Self {
-        let class_name = err.get_class_name().to_string();
-        let msg = err.show(store);
+        let class_name = err.class_name(store);
+        let msg = err.message().to_string();
         Self::exception(class_name, msg, err.take_trace())
     }
 

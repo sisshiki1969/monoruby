@@ -382,12 +382,10 @@ fn define_method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
             globals.add_public_method(class_id, name, func_id);
             return Ok(Value::symbol(name));
         } else {
-            return Err(MonorubyErr::typeerr(
-                "",
-                TypeErrKind::WrongArgumentType {
-                    val: method,
-                    expected: "Proc/Method/UnboundMethod",
-                },
+            return Err(MonorubyErr::wrong_argument_type(
+                globals,
+                method,
+                "Proc/Method/UnboundMethod",
             ));
         }
     } else if let Some(bh) = lfp.block() {

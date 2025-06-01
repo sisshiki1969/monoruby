@@ -314,10 +314,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else if let Some(message) = lfp.arg(0).is_rstring() {
         return Err(MonorubyErr::runtimeerr(message.to_str()?));
     }
-    Err(MonorubyErr::typeerr(
-        "exception class/object expected",
-        TypeErrKind::Other,
-    ))
+    Err(MonorubyErr::typeerr("exception class/object expected"))
 }
 
 ///
@@ -635,7 +632,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let binding = if let Some(b) = Binding::try_new(bind) {
             b
         } else {
-            return Err(MonorubyErr::typeerr("Binding expected", TypeErrKind::Other));
+            return Err(MonorubyErr::typeerr("Binding expected"));
         };
         globals.compile_script_binding(expr, "(eval)", binding)?;
         vm.invoke_binding(globals, binding.binding().unwrap())

@@ -1020,7 +1020,7 @@ impl BytecodeGen {
         }
         let re = match RegexpInner::with_option(string, option) {
             Ok(re) => re,
-            Err(err) => return Err(self.syntax_error(err.msg(), loc)),
+            Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
         Ok(Value::regexp(re))
     }

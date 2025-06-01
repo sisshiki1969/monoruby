@@ -867,7 +867,7 @@ impl Globals {
                 match entry.visibility {
                     Visibility::Private => {
                         if !is_func_call {
-                            return Err(MonorubyErr::private_method_called(func_name, recv));
+                            return Err(MonorubyErr::private_method_called(self, func_name, recv));
                         }
                     }
                     Visibility::Protected => {
@@ -880,10 +880,10 @@ impl Globals {
                 }
                 match entry.func_id() {
                     Some(func_id) => Ok(func_id),
-                    None => Err(MonorubyErr::method_not_found(func_name, recv)),
+                    None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
                 }
             }
-            None => Err(MonorubyErr::method_not_found(func_name, recv)),
+            None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
         }
     }
 
@@ -929,7 +929,9 @@ impl Globals {
     ) -> Result<MethodTableEntry> {
         match self.check_method_for_class(class, func_name) {
             Some(entry) => Ok(entry),
-            None => Err(MonorubyErr::method_not_found_for_class(func_name, class)),
+            None => Err(MonorubyErr::method_not_found_for_class(
+                self, func_name, class,
+            )),
         }
     }
 
