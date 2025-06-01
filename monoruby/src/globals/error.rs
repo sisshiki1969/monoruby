@@ -33,8 +33,8 @@ impl MonorubyErr {
 
     pub fn new_from_exception(ex: &ExceptionInner) -> Self {
         let kind = ex.kind().clone();
-        let msg = ex.msg().to_string();
-        let trace = ex.trace();
+        let msg = ex.message().to_string();
+        let trace = ex.trace().to_vec();
         MonorubyErr {
             kind,
             message: msg,
@@ -80,18 +80,18 @@ impl MonorubyErr {
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
         let mut loc_flag = false;
         if let Some((source_loc, func_id)) = self.trace.first() {
+            let error_message = self.get_error_message(store);
             if let Some((loc, source)) = source_loc {
                 eprintln!(
-                    "{}: {}",
-                    store.location(func_id.clone(), source.clone(), *loc),
-                    self.get_error_message(store)
+                    "{}: {error_message}",
+                    store.location(func_id.clone(), source, *loc),
                 );
                 source.show_loc(loc);
                 loc_flag = true;
             } else if let Some(func_id) = func_id {
-                eprintln!("{}: {}", store.internal_location(*func_id), self.message);
+                eprintln!("{}: {error_message}", store.internal_location(*func_id),);
             } else {
-                eprintln!("<internal>: {}", self.message);
+                eprintln!("<internal>: {error_message}");
             }
         } else {
             eprintln!("location not defined.");
@@ -101,7 +101,7 @@ impl MonorubyErr {
                 if let Some((loc, source)) = source_loc {
                     eprintln!(
                         "        from: {}",
-                        store.location(func_id.clone(), source.clone(), *loc)
+                        store.location(func_id.clone(), source, *loc)
                     );
                     if !loc_flag {
                         source.show_loc(loc);

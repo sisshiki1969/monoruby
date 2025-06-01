@@ -238,7 +238,8 @@ impl Store {
         }
     }
 
-    pub fn location(&self, func_id: Option<FuncId>, source: SourceInfoRef, loc: Loc) -> String {
+    pub fn location(&self, func_id: Option<FuncId>, source: &SourceInfoRef, loc: Loc) -> String {
+        let source = source.clone();
         if let Some(func_id) = func_id {
             format!(
                 "{}:{}:in '{}'",

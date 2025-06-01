@@ -245,7 +245,7 @@ impl ObjKind {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
                 class_name,
-                msg,
+                message: msg,
                 trace,
             })),
         }
@@ -446,7 +446,7 @@ impl RValue {
                 ObjTy::HASH => self.as_hashmap().debug(store),
                 ObjTy::REGEXP => self.as_regex().tos(),
                 ObjTy::IO => self.as_io().to_string(),
-                ObjTy::EXCEPTION => self.as_exception().msg().to_string(),
+                ObjTy::EXCEPTION => self.as_exception().message().to_string(),
                 ObjTy::METHOD => self.as_method().debug(store),
                 ObjTy::FIBER => self.fiber_debug(store),
                 ObjTy::ENUMERATOR => self.enumerator_debug(store),
@@ -483,7 +483,7 @@ impl RValue {
             ObjTy::OBJECT => self.object_inspect(store),
             ObjTy::EXCEPTION => {
                 let class_name = store.get_class_name(self.class());
-                let msg = self.as_exception().msg();
+                let msg = self.as_exception().message();
                 format!("#<{class_name}: {msg}>")
             }
             ObjTy::REGEXP => self.as_regex().inspect(),
@@ -1575,7 +1575,7 @@ impl Header {
 #[derive(Debug, Clone)]
 pub struct ExceptionInner {
     class_name: String,
-    msg: String,
+    message: String,
     trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
@@ -1584,8 +1584,8 @@ impl ExceptionInner {
         self.class_name = class_name;
     }
 
-    pub fn set_msg(&mut self, msg: String) {
-        self.msg = msg;
+    pub fn set_message(&mut self, msg: String) {
+        self.message = msg;
     }
 
     pub fn kind(&self) -> MonorubyErrKind {
@@ -1599,16 +1599,29 @@ impl ExceptionInner {
         MonorubyErrKind::Runtime
     }
 
-    pub fn msg(&self) -> &str {
-        &self.msg
+    pub fn message(&self) -> &str {
+        &self.message
     }
 
-    pub fn trace(&self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {
-        self.trace.clone()
+    pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
+        &self.trace
+    }
+
+    pub fn trace_location(&self, store: &Store) -> Vec<String> {
+        self.trace
+            .iter()
+            .map(|(source_loc, fid)| {
+                if let Some((loc, source)) = source_loc {
+                    store.location(fid.clone(), source, *loc)
+                } else {
+                    store.internal_location(fid.unwrap())
+                }
+            })
+            .collect()
     }
 
     pub fn get_error_message(&self) -> String {
-        format!("{} ({:?})", self.msg, self.class_name)
+        format!("{} ({:?})", self.message, self.class_name)
     }
 }
 

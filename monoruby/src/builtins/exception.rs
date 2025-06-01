@@ -105,7 +105,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
         globals.store.get_class_name(class_id)
     };
     let class_name = class_id.get_name(&globals.store);
-    self_.is_exception_mut().unwrap().set_msg(msg);
+    self_.is_exception_mut().unwrap().set_message(msg);
     self_.is_exception_mut().unwrap().set_class_name(class_name);
     Ok(Value::nil())
 }
@@ -136,16 +136,9 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let v = self_
         .is_exception()
         .unwrap()
-        .trace()
+        .trace_location(globals)
         .into_iter()
-        .map(|(source_loc, fid)| {
-            let s = if let Some((loc, source)) = source_loc {
-                globals.store.location(fid, source, loc)
-            } else {
-                globals.store.internal_location(fid.unwrap())
-            };
-            Value::string(s)
-        })
+        .map(|s| Value::string(s))
         .collect();
     Ok(Value::array_from_vec(v))
 }
