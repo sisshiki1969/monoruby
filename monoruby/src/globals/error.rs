@@ -145,6 +145,33 @@ impl MonorubyErr {
         }
         .to_string()
     }
+
+    pub fn class_id(&self) -> ClassId {
+        match &self.kind {
+            MonorubyErrKind::Exception => EXCEPTION_CLASS,
+            MonorubyErrKind::NotMethod => NO_METHOD_ERROR_CLASS,
+            MonorubyErrKind::Arguments => ARGUMENTS_ERROR_CLASS,
+            MonorubyErrKind::Syntax => SYNTAX_ERROR_CLASS,
+            MonorubyErrKind::Unimplemented => UNIMPLEMENTED_ERROR_CLASS,
+            MonorubyErrKind::Name => NAME_ERROR_CLASS,
+            MonorubyErrKind::DivideByZero => ZERO_DIVISION_ERROR_CLASS,
+            MonorubyErrKind::LocalJump => LOCAL_JUMP_ERROR_CLASS,
+            MonorubyErrKind::Range => RANGE_ERROR_CLASS,
+            MonorubyErrKind::Type => TYPE_ERROR_CLASS,
+            MonorubyErrKind::Index => INDEX_ERROR_CLASS,
+            MonorubyErrKind::Frozen => FROZEN_ERROR_CLASS,
+            MonorubyErrKind::Load(_) => LOAD_ERROR_CLASS,
+            MonorubyErrKind::Internal => INTERNAL_ERROR_CLASS,
+            MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
+            MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
+            MonorubyErrKind::Key => KEY_ERROR_CLASS,
+            MonorubyErrKind::Fiber => FIBER_ERROR_CLASS,
+            MonorubyErrKind::StopIteration => STOP_ITERATION_CLASS,
+            MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
+            MonorubyErrKind::Other(class_id) => *class_id,
+            MonorubyErrKind::MethodReturn(..) => unreachable!(),
+        }
+    }
 }
 
 // Parser level errors.
@@ -531,7 +558,7 @@ impl MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    MethodReturn(Value, Lfp),
+    Exception,
     NotMethod,
     Arguments,
     Syntax,
@@ -550,9 +577,37 @@ pub enum MonorubyErrKind {
     Key,
     Fiber,
     StopIteration,
-    Exception,
     SystemExit(u8),
     Other(ClassId),
+    MethodReturn(Value, Lfp),
+}
+
+impl MonorubyErrKind {
+    pub fn from_class_id(class_id: ClassId) -> Self {
+        match class_id {
+            EXCEPTION_CLASS => MonorubyErrKind::Exception,
+            NO_METHOD_ERROR_CLASS => MonorubyErrKind::NotMethod,
+            ARGUMENTS_ERROR_CLASS => MonorubyErrKind::Arguments,
+            SYNTAX_ERROR_CLASS => MonorubyErrKind::Syntax,
+            UNIMPLEMENTED_ERROR_CLASS => MonorubyErrKind::Unimplemented,
+            NAME_ERROR_CLASS => MonorubyErrKind::Name,
+            ZERO_DIVISION_ERROR_CLASS => MonorubyErrKind::DivideByZero,
+            LOCAL_JUMP_ERROR_CLASS => MonorubyErrKind::LocalJump,
+            RANGE_ERROR_CLASS => MonorubyErrKind::Range,
+            TYPE_ERROR_CLASS => MonorubyErrKind::Type,
+            INDEX_ERROR_CLASS => MonorubyErrKind::Index,
+            FROZEN_ERROR_CLASS => MonorubyErrKind::Frozen,
+            LOAD_ERROR_CLASS => MonorubyErrKind::Load(PathBuf::new()),
+            INTERNAL_ERROR_CLASS => MonorubyErrKind::Internal,
+            REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
+            RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,
+            KEY_ERROR_CLASS => MonorubyErrKind::Key,
+            FIBER_ERROR_CLASS => MonorubyErrKind::Fiber,
+            STOP_ITERATION_CLASS => MonorubyErrKind::StopIteration,
+            SYSTEM_EXIT_ERROR_CLASS => MonorubyErrKind::SystemExit(0),
+            _ => MonorubyErrKind::Other(class_id),
+        }
+    }
 }
 
 #[cfg(test)]

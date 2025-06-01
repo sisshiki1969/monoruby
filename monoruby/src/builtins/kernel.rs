@@ -303,7 +303,9 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
-        if klass.is_exception() {
+        if klass.id() == STOP_ITERATION_CLASS {
+            return Err(MonorubyErr::stopiterationerr("".to_string()));
+        } else if klass.is_exception() {
             let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             if let Some(arg1) = lfp.try_arg(1) {

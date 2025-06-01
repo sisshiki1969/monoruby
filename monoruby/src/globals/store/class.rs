@@ -24,7 +24,7 @@ pub const HASH_CLASS: ClassId = ClassId::new(15);
 pub const REGEXP_CLASS: ClassId = ClassId::new(16);
 pub const MODULE_CLASS: ClassId = ClassId::new(17);
 pub const IO_CLASS: ClassId = ClassId::new(18);
-pub const EXCEPTION_CLASS: ClassId = ClassId::new(19);
+pub const FILE_CLASS: ClassId = ClassId::new(19);
 pub const STRUCT_CLASS: ClassId = ClassId::new(20);
 pub const METHOD_CLASS: ClassId = ClassId::new(21);
 pub const FIBER_CLASS: ClassId = ClassId::new(22);
@@ -34,7 +34,27 @@ pub const COMPLEX_CLASS: ClassId = ClassId::new(25);
 pub const NUMERIC_CLASS: ClassId = ClassId::new(26);
 pub const BINDING_CLASS: ClassId = ClassId::new(27);
 pub const UMETHOD_CLASS: ClassId = ClassId::new(28);
-pub const FILE_CLASS: ClassId = ClassId::new(29);
+
+pub const EXCEPTION_CLASS: ClassId = ClassId::new(29);
+pub const NO_METHOD_ERROR_CLASS: ClassId = ClassId::new(30);
+pub const ARGUMENTS_ERROR_CLASS: ClassId = ClassId::new(31);
+pub const SYNTAX_ERROR_CLASS: ClassId = ClassId::new(32);
+pub const UNIMPLEMENTED_ERROR_CLASS: ClassId = ClassId::new(33);
+pub const NAME_ERROR_CLASS: ClassId = ClassId::new(34);
+pub const ZERO_DIVISION_ERROR_CLASS: ClassId = ClassId::new(35);
+pub const LOCAL_JUMP_ERROR_CLASS: ClassId = ClassId::new(36);
+pub const RANGE_ERROR_CLASS: ClassId = ClassId::new(37);
+pub const TYPE_ERROR_CLASS: ClassId = ClassId::new(38);
+pub const INDEX_ERROR_CLASS: ClassId = ClassId::new(39);
+pub const FROZEN_ERROR_CLASS: ClassId = ClassId::new(40);
+pub const LOAD_ERROR_CLASS: ClassId = ClassId::new(41);
+pub const INTERNAL_ERROR_CLASS: ClassId = ClassId::new(42);
+pub const REGEX_ERROR_CLASS: ClassId = ClassId::new(43);
+pub const RUNTIME_ERROR_CLASS: ClassId = ClassId::new(44);
+pub const KEY_ERROR_CLASS: ClassId = ClassId::new(45);
+pub const FIBER_ERROR_CLASS: ClassId = ClassId::new(46);
+pub const STOP_ITERATION_CLASS: ClassId = ClassId::new(47);
+pub const SYSTEM_EXIT_ERROR_CLASS: ClassId = ClassId::new(48);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -61,7 +81,7 @@ impl std::fmt::Debug for ClassId {
             16 => write!(f, "REGEXP"),
             17 => write!(f, "MODULE"),
             18 => write!(f, "IO"),
-            19 => write!(f, "EXCEPTION"),
+            19 => write!(f, "FILE"),
             20 => write!(f, "STRUCT"),
             21 => write!(f, "METHOD"),
             22 => write!(f, "FIBER"),
@@ -71,7 +91,26 @@ impl std::fmt::Debug for ClassId {
             26 => write!(f, "NUMERIC"),
             27 => write!(f, "BINDING"),
             28 => write!(f, "UMETHOD"),
-            29 => write!(f, "FILE"),
+            29 => write!(f, "EXCEPTION"),
+            30 => write!(f, "NO_METHOD_ERROR"),
+            31 => write!(f, "ARGUMENTS_ERROR"),
+            32 => write!(f, "SYNTAX_ERROR"),
+            33 => write!(f, "UNIMPLEMENTED_ERROR"),
+            34 => write!(f, "NAME_ERROR"),
+            35 => write!(f, "ZERO_DIVISION_ERROR"),
+            36 => write!(f, "LOCAL_JUMP_ERROR"),
+            37 => write!(f, "RANGE_ERROR"),
+            38 => write!(f, "TYPE_ERROR"),
+            39 => write!(f, "INDEX_ERROR"),
+            40 => write!(f, "FROZEN_ERROR"),
+            41 => write!(f, "LOAD_ERROR"),
+            42 => write!(f, "INTERNAL_ERROR"),
+            43 => write!(f, "REGEX_ERROR"),
+            44 => write!(f, "RUNTIME_ERROR"),
+            45 => write!(f, "KEY_ERROR"),
+            46 => write!(f, "FIBER_ERROR"),
+            47 => write!(f, "STOP_ITERATION"),
+            48 => write!(f, "SYSTEM_EXIT_ERROR"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -682,6 +721,18 @@ impl ClassInfoTable {
             false,
             instance_ty.into(),
         )
+    }
+
+    pub(crate) fn define_builtin_exception_class(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        superclass: impl Into<Option<Module>>,
+    ) -> Module {
+        let m =
+            self.define_builtin_class(name, class_id, superclass, OBJECT_CLASS, ObjTy::EXCEPTION);
+        self.get_metaclass(class_id);
+        m
     }
 
     pub(crate) fn define_builtin_class_under_obj(

@@ -447,16 +447,15 @@ impl Value {
     }
 
     pub fn new_exception(
-        kind: String,
         msg: String,
         trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
         class_id: ClassId,
     ) -> Self {
-        RValue::new_exception(kind, msg, trace, class_id).pack()
+        RValue::new_exception(msg, trace, class_id).pack()
     }
 
-    pub fn new_exception_from_err(store: &Store, err: MonorubyErr, class_id: ClassId) -> Self {
-        RValue::new_exception_from_err(store, err, class_id).pack()
+    pub fn new_exception_from_err(store: &Store, err: MonorubyErr) -> Self {
+        RValue::new_exception_from_err(store, err).pack()
     }
 
     pub fn new_time(time: TimeInner) -> Self {

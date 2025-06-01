@@ -379,24 +379,16 @@ impl Executor {
 
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
-
-        let name = err.class_name(globals);
-        let class_id = self
-            .get_constant(globals, OBJECT_CLASS, IdentId::get_id(&name))
-            .unwrap()
-            .expect(&name)
-            .as_class_id();
-
         if let MonorubyErrKind::Load(path) = &err.kind() {
             let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
-            let v = Value::new_exception_from_err(&globals.store, err, class_id);
+            let v = Value::new_exception_from_err(&globals.store, err);
             globals
                 .store
                 .set_ivar(v, IdentId::get_id("/path"), path)
                 .unwrap();
             v
         } else {
-            Value::new_exception_from_err(&globals.store, err, class_id)
+            Value::new_exception_from_err(&globals.store, err)
         }
     }
 

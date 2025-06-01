@@ -238,13 +238,13 @@ impl ObjKind {
     }
 
     fn exception(
-        class_name: String,
+        class_name: MonorubyErrKind,
         msg: String,
         trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
     ) -> Self {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                class_name,
+                kind: class_name,
                 message: msg,
                 trace,
             })),
@@ -252,9 +252,8 @@ impl ObjKind {
     }
 
     fn exception_from(mut err: MonorubyErr, store: &Store) -> Self {
-        let class_name = err.class_name(store);
         let msg = err.message().to_string();
-        Self::exception(class_name, msg, err.take_trace())
+        Self::exception(err.kind().clone(), msg, err.take_trace())
     }
 
     fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
@@ -1168,11 +1167,11 @@ impl RValue {
     }
 
     pub(super) fn new_exception(
-        kind: String,
         msg: String,
         trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
         class_id: ClassId,
     ) -> Self {
+        let kind = MonorubyErrKind::from_class_id(class_id);
         RValue {
             header: Header::new(class_id, ObjTy::EXCEPTION),
             kind: ObjKind::exception(kind, msg, trace),
@@ -1180,11 +1179,8 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_exception_from_err(
-        store: &Store,
-        err: MonorubyErr,
-        class_id: ClassId,
-    ) -> Self {
+    pub(super) fn new_exception_from_err(store: &Store, err: MonorubyErr) -> Self {
+        let class_id = err.class_id();
         RValue {
             header: Header::new(class_id, ObjTy::EXCEPTION),
             kind: ObjKind::exception_from(err, store),
@@ -1574,14 +1570,14 @@ impl Header {
 
 #[derive(Debug, Clone)]
 pub struct ExceptionInner {
-    class_name: String,
+    kind: MonorubyErrKind,
     message: String,
     trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
 impl ExceptionInner {
-    pub fn set_class_name(&mut self, class_name: String) {
-        self.class_name = class_name;
+    pub fn set_class_name(&mut self, class_name: MonorubyErrKind) {
+        self.kind = class_name;
     }
 
     pub fn set_message(&mut self, msg: String) {
@@ -1589,14 +1585,7 @@ impl ExceptionInner {
     }
 
     pub fn kind(&self) -> MonorubyErrKind {
-        if self.class_name == "StopIteration" {
-            return MonorubyErrKind::StopIteration;
-        } else if self.class_name == "LoadError" {
-            return MonorubyErrKind::Load(std::path::PathBuf::new());
-        } else if self.class_name == "ArgumentError" {
-            return MonorubyErrKind::Arguments;
-        }
-        MonorubyErrKind::Runtime
+        self.kind.clone()
     }
 
     pub fn message(&self) -> &str {
@@ -1621,7 +1610,7 @@ impl ExceptionInner {
     }
 
     pub fn get_error_message(&self) -> String {
-        format!("{} ({:?})", self.message, self.class_name)
+        format!("{} ({:?})", self.message, self.kind)
     }
 }
 
