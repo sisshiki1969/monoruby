@@ -299,7 +299,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
-            err.set_msg(arg1.expect_string()?);
+            err.set_msg(arg1.expect_string(globals)?);
         }
         return Err(err);
     } else if let Some(klass) = lfp.arg(0).is_class() {
@@ -307,7 +307,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &[], None)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             if let Some(arg1) = lfp.try_arg(1) {
-                err.set_msg(arg1.expect_string()?);
+                err.set_msg(arg1.expect_string(globals)?);
             }
             return Err(err);
         }
@@ -367,7 +367,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let level = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_i64()? as usize + 1
+        arg0.coerce_to_i64(globals)? as usize + 1
     } else {
         2
     };
@@ -438,13 +438,13 @@ fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
 #[monoruby_builtin]
-fn rand(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(range) = arg0.is_range() {
             let start = range.start;
             let end = range.end;
-            let start = start.expect_integer()?;
-            let end = end.expect_integer()?;
+            let start = start.expect_integer(globals)?;
+            let end = end.expect_integer(globals)?;
             if start > end {
                 return Ok(Value::nil());
             }
@@ -452,7 +452,7 @@ fn rand(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
             ));
         }
-        arg0.coerce_to_i64()?
+        arg0.coerce_to_i64(globals)?
     } else {
         0i64
     };
@@ -490,7 +490,11 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
         },
         _ => {}
     };
-    Err(MonorubyErr::no_implicit_conversion(arg0, INTEGER_CLASS))
+    Err(MonorubyErr::no_implicit_conversion(
+        globals,
+        arg0,
+        INTEGER_CLASS,
+    ))
 }
 
 ///
@@ -500,7 +504,7 @@ fn kernel_integer(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Float.html]
 #[monoruby_builtin]
-fn kernel_float(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_float(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::float(num as f64)),
@@ -518,7 +522,11 @@ fn kernel_float(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> 
         }
         _ => {}
     };
-    Err(MonorubyErr::no_implicit_conversion(arg0, FLOAT_CLASS))
+    Err(MonorubyErr::no_implicit_conversion(
+        globals,
+        arg0,
+        FLOAT_CLASS,
+    ))
 }
 
 ///
@@ -571,7 +579,7 @@ fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let feature = lfp.arg(0).expect_string()?;
+    let feature = lfp.arg(0).expect_string(globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
@@ -587,7 +595,7 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).expect_string()?);
+    let feature = std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
@@ -602,7 +610,7 @@ fn require_relative(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload.html]
 #[monoruby_builtin]
 fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let const_name = lfp.arg(0).expect_symbol_or_string()?;
+    let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
     globals
         .store
@@ -619,7 +627,7 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let expr = lfp.arg(0).expect_string()?;
+    let expr = lfp.arg(0).expect_string(globals)?;
     let cfp = vm.cfp();
     if let Some(bind) = lfp.try_arg(1)
         && !bind.is_nil()
@@ -671,13 +679,13 @@ fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
-fn system(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn system(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
     let (program, mut args) = prepare_command_arg(arg0.as_str());
     if let Some(arg1) = lfp.try_arg(1) {
         for v in arg1.as_array().iter() {
-            args.push(v.expect_string()?);
+            args.push(v.expect_string(globals)?);
         }
     }
     Ok(match Command::new(program).args(&args).status() {
@@ -713,10 +721,10 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
 #[monoruby_builtin]
-fn sleep(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let now = std::time::Instant::now();
     if let Some(sec) = lfp.try_arg(0) {
-        let sec = sec.coerce_to_f64()?;
+        let sec = sec.coerce_to_f64(globals)?;
         std::thread::sleep(std::time::Duration::from_secs_f64(sec));
     } else {
         loop {
@@ -735,12 +743,16 @@ fn sleep(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
 #[monoruby_builtin]
-fn abort(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         match arg0.is_str() {
             Some(s) => eprintln!("{}", s),
             None => {
-                return Err(MonorubyErr::no_implicit_conversion(arg0, STRING_CLASS));
+                return Err(MonorubyErr::no_implicit_conversion(
+                    globals,
+                    arg0,
+                    STRING_CLASS,
+                ));
             }
         }
     }
@@ -824,7 +836,7 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = lfp.arg(0);
     let flags = if let Some(arg1) = lfp.try_arg(1) {
-        match i32::try_from(arg1.expect_integer()?) {
+        match i32::try_from(arg1.expect_integer(globals)?) {
             Ok(f) => f,
             Err(_) => return Err(MonorubyErr::argumenterr("Illegale flag value.")),
         }
@@ -873,14 +885,14 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiddle=3a=3aHandle/s/=5b=5d.html]
 #[monoruby_builtin]
-fn dlsym(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn dlsym(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     // see: https://github.com/ruby/fiddle/blob/2b3747e919df5d044c835cbbb27ebf9e27df74f9/ext/fiddle/handle.c#L136
     let arg0 = if lfp.arg(0).is_nil() {
         0
     } else {
-        lfp.arg(0).expect_integer()?
+        lfp.arg(0).expect_integer(globals)?
     };
-    let arg1 = lfp.arg(1).expect_string()?;
+    let arg1 = lfp.arg(1).expect_string(globals)?;
     let name = std::ffi::CString::new(arg1).unwrap();
     let handle = unsafe { libc::dlsym(arg0 as _, name.as_ptr()) };
     Ok(Value::integer(handle as usize as i64))
@@ -892,8 +904,8 @@ fn dlsym(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - call(ptr, args) -> Integer
 ///
 #[monoruby_builtin]
-fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    fn conv(arg: Value, ty: u32) -> Result<u64> {
+fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn conv(store: &Store, arg: Value, ty: u32) -> Result<u64> {
         // VOID = 0
         // VOIDP = 1
         // CHAR = 2
@@ -903,15 +915,15 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         match ty {
             0 => Ok(0u64),
             1 => Ok(arg.as_rstring_inner().as_ptr() as u64),
-            2 => Ok(arg.expect_integer()? as i8 as u8 as u64),
-            4 => Ok(arg.expect_integer()? as i32 as u32 as u64),
+            2 => Ok(arg.expect_integer(store)? as i8 as u8 as u64),
+            4 => Ok(arg.expect_integer(store)? as i32 as u32 as u64),
             _ => Err(MonorubyErr::runtimeerr("not supported")),
         }
     }
-    let ptr = lfp.arg(0).expect_integer()? as usize;
-    let args = lfp.arg(1).expect_array()?;
-    let args_type = lfp.arg(2).expect_array()?;
-    let ret_type = lfp.arg(3).expect_integer()?;
+    let ptr = lfp.arg(0).expect_integer(globals)? as usize;
+    let args = lfp.arg(1).expect_array(globals)?;
+    let args_type = lfp.arg(2).expect_array(globals)?;
+    let ret_type = lfp.arg(3).expect_integer(globals)?;
     let res = match args.len() {
         0 => {
             let f: extern "C" fn() -> u64 = unsafe { transmute(ptr) };
@@ -919,37 +931,97 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         1 => {
             let f: extern "C" fn(u64) -> u64 = unsafe { transmute(ptr) };
-            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
+            let a0 = conv(
+                globals,
+                args[0],
+                args_type[0].expect_integer(globals)? as u32,
+            )?;
             f(a0)
         }
         2 => {
             let f: extern "C" fn(u64, u64) -> u64 = unsafe { transmute(ptr) };
-            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
-            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
+            let a0 = conv(
+                globals,
+                args[0],
+                args_type[0].expect_integer(globals)? as u32,
+            )?;
+            let a1 = conv(
+                globals,
+                args[1],
+                args_type[1].expect_integer(globals)? as u32,
+            )?;
             f(a0, a1)
         }
         3 => {
             let f: extern "C" fn(u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
-            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
-            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
-            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
+            let a0 = conv(
+                globals,
+                args[0],
+                args_type[0].expect_integer(globals)? as u32,
+            )?;
+            let a1 = conv(
+                globals,
+                args[1],
+                args_type[1].expect_integer(globals)? as u32,
+            )?;
+            let a2 = conv(
+                globals,
+                args[2],
+                args_type[2].expect_integer(globals)? as u32,
+            )?;
             f(a0, a1, a2)
         }
         4 => {
             let f: extern "C" fn(u64, u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
-            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
-            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
-            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
-            let a3 = conv(args[3], args_type[3].expect_integer()? as u32)?;
+            let a0 = conv(
+                globals,
+                args[0],
+                args_type[0].expect_integer(globals)? as u32,
+            )?;
+            let a1 = conv(
+                globals,
+                args[1],
+                args_type[1].expect_integer(globals)? as u32,
+            )?;
+            let a2 = conv(
+                globals,
+                args[2],
+                args_type[2].expect_integer(globals)? as u32,
+            )?;
+            let a3 = conv(
+                globals,
+                args[3],
+                args_type[3].expect_integer(globals)? as u32,
+            )?;
             f(a0, a1, a2, a3)
         }
         5 => {
             let f: extern "C" fn(u64, u64, u64, u64, u64) -> u64 = unsafe { transmute(ptr) };
-            let a0 = conv(args[0], args_type[0].expect_integer()? as u32)?;
-            let a1 = conv(args[1], args_type[1].expect_integer()? as u32)?;
-            let a2 = conv(args[2], args_type[2].expect_integer()? as u32)?;
-            let a3 = conv(args[3], args_type[3].expect_integer()? as u32)?;
-            let a4 = conv(args[4], args_type[4].expect_integer()? as u32)?;
+            let a0 = conv(
+                globals,
+                args[0],
+                args_type[0].expect_integer(globals)? as u32,
+            )?;
+            let a1 = conv(
+                globals,
+                args[1],
+                args_type[1].expect_integer(globals)? as u32,
+            )?;
+            let a2 = conv(
+                globals,
+                args[2],
+                args_type[2].expect_integer(globals)? as u32,
+            )?;
+            let a3 = conv(
+                globals,
+                args[3],
+                args_type[3].expect_integer(globals)? as u32,
+            )?;
+            let a4 = conv(
+                globals,
+                args[4],
+                args_type[4].expect_integer(globals)? as u32,
+            )?;
             f(a0, a1, a2, a3, a4)
         }
         x => {
@@ -981,8 +1053,8 @@ fn dlcall(_vm: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - malloc(size, clear) -> Integer
 ///
 #[monoruby_builtin]
-fn malloc(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let size = lfp.arg(0).expect_integer()? as usize;
+fn malloc(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let size = lfp.arg(0).expect_integer(globals)? as usize;
     let clear = if let Some(clear) = lfp.try_arg(1) {
         clear.as_bool()
     } else {
@@ -1009,10 +1081,10 @@ fn malloc(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - memcpyv(dst, value, size)
 ///
 #[monoruby_builtin]
-fn memcpyv(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let dest = lfp.arg(0).expect_integer()? as *mut u8;
-    let value = lfp.arg(1).expect_integer()?;
-    let n = lfp.arg(2).expect_integer()? as usize;
+fn memcpyv(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let dest = lfp.arg(0).expect_integer(globals)? as *mut u8;
+    let value = lfp.arg(1).expect_integer(globals)?;
+    let n = lfp.arg(2).expect_integer(globals)? as usize;
     unsafe { libc::memcpy(dest as _, &value as *const i64 as _, n) };
     Ok(lfp.arg(0))
 }
@@ -1023,9 +1095,9 @@ fn memcpyv(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - read_memory(ptr, length)
 ///
 #[monoruby_builtin]
-fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let ptr = lfp.arg(0).expect_integer()? as *mut u8;
-    let len = lfp.arg(1).expect_integer()? as usize;
+fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let ptr = lfp.arg(0).expect_integer(globals)? as *mut u8;
+    let len = lfp.arg(1).expect_integer(globals)? as usize;
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     let ary = Value::bytes_from_slice(slice);
     Ok(ary)
@@ -1035,9 +1107,9 @@ fn read_memory(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - ____max(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn max(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64()?;
-    let f2 = lfp.arg(1).coerce_to_f64()?;
+fn max(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
     Ok(Value::float(f64::max(f1, f2)))
 }
 
@@ -1045,9 +1117,9 @@ fn max(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - ____min(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
-fn min(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64()?;
-    let f2 = lfp.arg(1).coerce_to_f64()?;
+fn min(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let f1 = lfp.arg(0).coerce_to_f64(globals)?;
+    let f2 = lfp.arg(1).coerce_to_f64(globals)?;
     Ok(Value::float(f64::min(f1, f2)))
 }
 

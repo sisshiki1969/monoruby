@@ -199,9 +199,9 @@ fn floor(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/round.html]
 #[monoruby_builtin]
-fn round(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn round(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.expect_integer()?
+        d.expect_integer(globals)?
     } else {
         0
     };

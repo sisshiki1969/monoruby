@@ -100,7 +100,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
     let msg = if let Some(msg) = lfp.try_arg(0) {
-        msg.expect_string()?
+        msg.expect_string(globals)?
     } else {
         globals.store.get_class_name(class_id)
     };
@@ -176,9 +176,9 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let name = class_id.get_name(&globals.store);
     let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
-        let status = arg0.expect_integer()?;
+        let status = arg0.expect_integer(globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
-            (status, arg1.expect_string()?)
+            (status, arg1.expect_string(globals)?)
         } else {
             (status, name.clone())
         }

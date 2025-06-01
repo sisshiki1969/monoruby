@@ -45,7 +45,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let members = ArrayInner::from_iter(args.iter().skip(start_idx).cloned());
 
     for arg in members.iter() {
-        let name = arg.expect_symbol_or_string()?;
+        let name = arg.expect_symbol_or_string(globals)?;
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }

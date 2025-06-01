@@ -92,7 +92,7 @@ fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         IdentId::FLOAT_SECOND
     };
     let mut tp = TimeSpec::default();
-    let clk_id = lfp.arg(0).coerce_to_i64()? as i32;
+    let clk_id = lfp.arg(0).coerce_to_i64(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
     Ok(match unit {
         IdentId::FLOAT_SECOND => Value::float(tp.nanosec().to_f64().unwrap() / 1_000_000_000.0),

@@ -453,7 +453,7 @@ pub(crate) extern "C" fn bitnot_value(
     Some(v)
 }
 
-pub(crate) fn integer_index1(base: Value, index: Value) -> Result<Value> {
+pub(crate) fn integer_index1(store: &Store, base: Value, index: Value) -> Result<Value> {
     // we must support Integer#[Range].
     match (base.unpack(), index.unpack()) {
         (RV::Fixnum(base), RV::Fixnum(index)) => {
@@ -467,7 +467,11 @@ pub(crate) fn integer_index1(base: Value, index: Value) -> Result<Value> {
             Ok(Value::integer(val))
         }
         (RV::Fixnum(_), RV::BigInt(_)) => Ok(Value::integer(0)),
-        (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(index, INTEGER_CLASS)),
+        (RV::Fixnum(_), _) => Err(MonorubyErr::no_implicit_conversion(
+            store,
+            index,
+            INTEGER_CLASS,
+        )),
         (RV::BigInt(base), RV::Fixnum(index)) => {
             if index < 0 {
                 Ok(Value::integer(0))
@@ -477,7 +481,11 @@ pub(crate) fn integer_index1(base: Value, index: Value) -> Result<Value> {
             }
         }
         (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::integer(0)),
-        (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(index, INTEGER_CLASS)),
+        (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
+            store,
+            index,
+            INTEGER_CLASS,
+        )),
         _ => unreachable!(),
     }
 }

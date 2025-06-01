@@ -63,20 +63,20 @@ enum PathComponent {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/=5b=5d.html]
 #[monoruby_builtin]
-fn glob(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn glob(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let pat_val = lfp.arg(0);
     let base = if let Some(base) = lfp.try_arg(2) {
         if base.is_nil() {
             None
         } else {
-            Some(base.expect_string()?)
+            Some(base.expect_string(globals)?)
         }
     } else {
         None
     };
     let mut pattern = pat_val
-        .expect_str()?
+        .expect_str(globals)?
         .split(std::path::MAIN_SEPARATOR_STR)
         .peekable();
     let path = if pattern.peek() == Some(&"") {

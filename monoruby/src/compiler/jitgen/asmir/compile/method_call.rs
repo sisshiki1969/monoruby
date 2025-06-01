@@ -591,10 +591,11 @@ impl std::fmt::Debug for CacheEntry {
 struct Cache([CacheEntry; CACHE_SIZE]);
 
 extern "C" fn expect_string(
-    vm: &mut Executor, // rdi
-    v: Value,          // rcx
+    vm: &mut Executor,     // rdi
+    globals: &mut Globals, // rsi
+    v: Value,              // rdx
 ) -> Option<IdentId> {
-    v.expect_symbol_or_string()
+    v.expect_symbol_or_string(globals)
         .map_err(|err| vm.set_error(err))
         .ok()
 }
@@ -901,7 +902,8 @@ impl Codegen {
             jmp  exit;
         not_symbol:
             movq rdi, rbx;
-            movq rsi, rcx;
+            movq rsi, r12;
+            movq rdx, rcx;
             movq rax, (expect_string);
             call rax;
             movl rax, rax;

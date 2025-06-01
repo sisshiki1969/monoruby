@@ -45,7 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn file_write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.arg(0);
-    let name = self_.expect_str()?;
+    let name = self_.expect_str(globals)?;
     let mut file = match File::create(name) {
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
@@ -105,12 +105,12 @@ fn file_read(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let filename = string_to_path(lfp.arg(0), globals)?;
     let length = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_i64()?)
+        Some(arg1.coerce_to_i64(globals)?)
     } else {
         None
     };
     let offset = if let Some(arg2) = lfp.try_arg(2) {
-        Some(arg2.coerce_to_i64()?)
+        Some(arg2.coerce_to_i64(globals)?)
     } else {
         None
     };
@@ -151,19 +151,19 @@ fn binread(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
-fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    fn flatten(path: &mut String, val: Value) -> Result<()> {
+fn join(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    fn flatten(globals: &Globals, path: &mut String, val: Value) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
                 for v in ainfo.iter().cloned() {
-                    flatten(path, v)?;
+                    flatten(globals, path, v)?;
                 }
             }
             None => {
                 if !path.is_empty() && !path.ends_with('/') {
                     path.push('/');
                 }
-                let s = val.expect_str()?;
+                let s = val.expect_str(globals)?;
                 path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
                     &s[1..]
                 } else if path.is_empty() && s.is_empty() {
@@ -177,7 +177,7 @@ fn join(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     }
     let mut path = String::new();
     for v in lfp.arg(0).as_array().iter().cloned() {
-        flatten(&mut path, v)?;
+        flatten(globals, &mut path, v)?;
     }
     Ok(Value::string(path))
 }
@@ -249,7 +249,7 @@ fn dirname(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn basename(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
     let suffix = if let Some(arg1) = lfp.try_arg(1) {
-        let s = arg1.expect_str()?;
+        let s = arg1.expect_str(globals)?;
         if s.is_empty() {
             None
         } else {
@@ -361,9 +361,9 @@ fn path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
 #[monoruby_builtin]
-fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn realpath(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
-        let path = std::path::PathBuf::from(arg1.expect_string()?);
+        let path = std::path::PathBuf::from(arg1.expect_string(globals)?);
         match path.canonicalize() {
             Ok(path) => path,
             Err(err) => {
@@ -382,7 +382,7 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
             }
         }
     };
-    pathname.push(std::path::PathBuf::from(lfp.arg(0).expect_string()?));
+    pathname.push(std::path::PathBuf::from(lfp.arg(0).expect_string(globals)?));
     match pathname.canonicalize() {
         Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
         Err(err) => Err(MonorubyErr::argumenterr(format!(
@@ -403,7 +403,7 @@ fn realpath(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mode = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.expect_string()?
+        arg1.expect_string(globals)?
     } else {
         "r".to_string()
     };
@@ -442,12 +442,12 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write.html]
 #[monoruby_builtin]
-fn write(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn write(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let data = lfp.arg(0).as_array();
     let mut self_ = lfp.self_val();
     let mut count = 0i64;
     for s in data.iter() {
-        let s = s.expect_bytes()?;
+        let s = s.expect_bytes(globals)?;
         count += s.len() as i64;
         self_.as_io_inner_mut().write(s)?;
     }
@@ -501,8 +501,8 @@ fn string_to_canonicalized_path(
 }
 
 /// Convert `file` to PathBuf.
-fn string_to_path(file: Value, _globals: &mut Globals) -> Result<std::path::PathBuf> {
-    let file = file.expect_string()?;
+fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathBuf> {
+    let file = file.expect_string(globals)?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {

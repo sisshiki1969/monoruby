@@ -787,7 +787,11 @@ impl Value {
                 return Ok(ary);
             }
         }
-        Err(MonorubyErr::no_implicit_conversion(*self, ARRAY_CLASS))
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            *self,
+            ARRAY_CLASS,
+        ))
     }
 
     pub(crate) fn as_rstring_inner(&self) -> &RStringInner {
@@ -807,7 +811,7 @@ impl Value {
     /// - if `self` is a Float, return it as i64.
     /// - if `self` is a Bignum, return RangeError.
     ///
-    pub fn coerce_to_i64(&self) -> Result<i64> {
+    pub fn coerce_to_i64(&self, store: &Store) -> Result<i64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i),
             RV::Float(f) => {
@@ -820,7 +824,11 @@ impl Value {
             RV::BigInt(_) => Err(MonorubyErr::rangeerr(
                 "bignum too big to convert into `long'",
             )),
-            _ => Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS)),
+            _ => Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                INTEGER_CLASS,
+            )),
         }
     }
 
@@ -830,7 +838,7 @@ impl Value {
     /// - if `self` is a Fixnum or a Bignum, convert it to f64.
     /// - if `self` is a Float, return it as f64.
     ///
-    pub fn coerce_to_f64(&self) -> Result<f64> {
+    pub fn coerce_to_f64(&self, store: &Store) -> Result<f64> {
         match self.unpack() {
             RV::Fixnum(i) => Ok(i as f64),
             RV::Float(f) => Ok(f),
@@ -841,7 +849,11 @@ impl Value {
                     Err(MonorubyErr::cant_convert_into_float(*self))
                 }
             }
-            _ => Err(MonorubyErr::no_implicit_conversion(*self, FLOAT_CLASS)),
+            _ => Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                FLOAT_CLASS,
+            )),
         }
     }
 
@@ -1024,33 +1036,41 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_symbol_or_string(&self) -> Result<IdentId> {
+    pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
         if let Some(sym) = self.try_symbol() {
             Ok(sym)
         } else if let Some(s) = self.is_str() {
             Ok(IdentId::get_id(s))
         } else {
-            Err(MonorubyErr::is_not_symbol_nor_string(*self))
+            Err(MonorubyErr::is_not_symbol_nor_string(store, *self))
         }
     }
 
-    pub(crate) fn expect_bytes(&self) -> Result<&[u8]> {
+    pub(crate) fn expect_bytes(&self, store: &Store) -> Result<&[u8]> {
         if let Some(s) = self.is_rstring_inner() {
             Ok(&s)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                STRING_CLASS,
+            ))
         }
     }
 
-    pub(crate) fn expect_string(&self) -> Result<String> {
-        self.expect_str().map(|s| s.to_string())
+    pub(crate) fn expect_string(&self, store: &Store) -> Result<String> {
+        self.expect_str(store).map(|s| s.to_string())
     }
 
-    pub(crate) fn expect_str(&self) -> Result<&str> {
+    pub(crate) fn expect_str(&self, store: &Store) -> Result<&str> {
         if let Some(s) = self.is_rstring_inner() {
             s.check_utf8()
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                STRING_CLASS,
+            ))
         }
     }
 
@@ -1067,7 +1087,11 @@ impl Value {
                 return Ok(s);
             }
         }
-        Err(MonorubyErr::no_implicit_conversion(*self, STRING_CLASS))
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            *self,
+            STRING_CLASS,
+        ))
     }
 
     pub(crate) fn coerce_to_string(
@@ -1088,27 +1112,35 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_integer(&self) -> Result<i64> {
+    pub(crate) fn expect_integer(&self, store: &Store) -> Result<i64> {
         if let RV::Fixnum(i) = self.unpack() {
             Ok(i)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, INTEGER_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                INTEGER_CLASS,
+            ))
         }
     }
 
-    pub(crate) fn expect_array(&self) -> Result<Array> {
+    pub(crate) fn expect_array(&self, store: &Store) -> Result<Array> {
         if let Some(ary) = self.try_array_ty() {
             Ok(ary)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(*self, ARRAY_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(
+                store,
+                *self,
+                ARRAY_CLASS,
+            ))
         }
     }
 
-    pub(crate) fn expect_hash(self) -> Result<Hashmap> {
+    pub(crate) fn expect_hash(self, store: &Store) -> Result<Hashmap> {
         if let Some(h) = self.is_hash() {
             Ok(h)
         } else {
-            Err(MonorubyErr::no_implicit_conversion(self, HASH_CLASS))
+            Err(MonorubyErr::no_implicit_conversion(store, self, HASH_CLASS))
         }
     }
 

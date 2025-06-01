@@ -118,10 +118,10 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let cur = lfp.self_val().expect_integer()?;
-    let limit = lfp.arg(0).coerce_to_i64()?;
+    let cur = lfp.self_val().expect_integer(globals)?;
+    let limit = lfp.arg(0).coerce_to_i64(globals)?;
     let step = if let Some(arg1) = lfp.try_arg(1) {
-        let step = arg1.coerce_to_i64()?;
+        let step = arg1.coerce_to_i64(globals)?;
         if step == 0 {
             return Err(MonorubyErr::argumenterr("Step can not be 0."));
         }
@@ -156,8 +156,8 @@ fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let cur = lfp.self_val().expect_integer()?;
-    let limit = lfp.arg(0).coerce_to_i64()?;
+    let cur = lfp.self_val().expect_integer(globals)?;
+    let limit = lfp.arg(0).coerce_to_i64(globals)?;
     if cur > limit {
         return Ok(lfp.self_val());
     }
@@ -187,8 +187,8 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
         Some(block) => block,
     };
-    let cur = lfp.self_val().expect_integer()?;
-    let limit = lfp.arg(0).coerce_to_i64()?;
+    let cur = lfp.self_val().expect_integer(globals)?;
+    let limit = lfp.arg(0).coerce_to_i64(globals)?;
     if cur < limit {
         return Ok(lfp.self_val());
     }
@@ -272,7 +272,7 @@ macro_rules! binop {
     ($op:ident) => {
         paste! {
             #[monoruby_builtin]
-            fn $op(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+            fn $op(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
                 let lhs = lfp.self_val();
                 let rhs = lfp.arg(0);
                 match (lhs.unpack(), rhs.unpack()) {
@@ -281,7 +281,7 @@ macro_rules! binop {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Ok(Value::bigint(lhs.$op(BigInt::from(rhs)))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Ok(Value::bigint(lhs.$op(rhs))),
                     _ => {
-                        lfp.arg(0).coerce_to_i64()?;
+                        lfp.arg(0).coerce_to_i64(globals)?;
                         unreachable!();
                     }
                 }
@@ -465,9 +465,9 @@ fn integer_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
-    op::integer_index1(self_val, lfp.arg(0))
+    op::integer_index1(globals, self_val, lfp.arg(0))
 }
 
 ///

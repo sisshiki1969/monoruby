@@ -107,7 +107,7 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn printf(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let format_str = lfp.arg(0).expect_string()?;
+    let format_str = lfp.arg(0).expect_string(globals)?;
     let args = lfp.arg(1).as_array();
 
     let buf = globals.format_by_args(&format_str, &args)?;
@@ -187,13 +187,13 @@ fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
 #[monoruby_builtin]
-fn read(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn read(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let length = match lfp.try_arg(0) {
         Some(v) => {
             if v.is_nil() {
                 None
             } else {
-                let length = v.expect_integer()?;
+                let length = v.expect_integer(globals)?;
                 if length < 0 {
                     return Err(MonorubyErr::argumenterr("negative length"));
                 }

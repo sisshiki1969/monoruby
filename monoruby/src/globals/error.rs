@@ -349,8 +349,19 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type(kind), msg)
     }
 
-    pub(crate) fn no_implicit_conversion(val: Value, target_class: ClassId) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::NoImpricitConversion { val, target_class })
+    pub(crate) fn no_implicit_conversion(
+        store: &Store,
+        val: Value,
+        target_class: ClassId,
+    ) -> MonorubyErr {
+        MonorubyErr::typeerr(
+            format!(
+                "no implicit conversion of {} into {}",
+                val.get_real_class_name(store),
+                store.get_class_name(target_class)
+            ),
+            TypeErrKind::Other,
+        )
     }
 
     pub(crate) fn is_not_class_nor_module(name: String) -> MonorubyErr {
@@ -378,8 +389,11 @@ impl MonorubyErr {
     ///
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
-    pub(crate) fn is_not_symbol_nor_string(val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::NotSymbolNorString { val })
+    pub(crate) fn is_not_symbol_nor_string(store: &Store, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr(
+            format!("{} is not a symbol nor a string", val.to_s(store)),
+            TypeErrKind::Other,
+        )
     }
 
     ///
@@ -554,13 +568,6 @@ impl NoMethodErrKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrKind {
-    NoImpricitConversion {
-        val: Value,
-        target_class: ClassId,
-    },
-    NotSymbolNorString {
-        val: Value,
-    },
     NotRegexpNorString {
         val: Value,
     },
@@ -582,14 +589,6 @@ pub enum TypeErrKind {
 impl TypeErrKind {
     pub fn show(&self, store: &Store) -> String {
         match self {
-            TypeErrKind::NoImpricitConversion { val, target_class } => format!(
-                "no implicit conversion of {} into {}",
-                val.get_real_class_name(store),
-                store.get_class_name(*target_class)
-            ),
-            TypeErrKind::NotSymbolNorString { val } => {
-                format!("{} is not a symbol nor a string", val.to_s(store))
-            }
             TypeErrKind::NotRegexpNorString { val } => {
                 format!("{} is not a regexp nor a string", val.to_s(store))
             }

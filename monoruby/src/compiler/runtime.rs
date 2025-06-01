@@ -255,7 +255,7 @@ fn concatenate_string_inner(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += vm.invoke_tos(globals, v).expect_str().unwrap();
+        res += vm.invoke_tos(globals, v).expect_str(globals).unwrap();
     }
     Ok(Value::string(res))
 }
@@ -488,7 +488,7 @@ pub(super) extern "C" fn get_index(
     class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
-            return match base.as_array().get_elem1(index) {
+            return match base.as_array().get_elem1(globals, index) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);
@@ -506,7 +506,7 @@ pub(super) extern "C" fn get_index(
             }
         }
         INTEGER_CLASS => {
-            return match op::integer_index1(base, index) {
+            return match op::integer_index1(globals, base, index) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);

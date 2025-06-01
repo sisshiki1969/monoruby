@@ -177,16 +177,16 @@ pub(crate) fn unpack(packed: &[u8], template: &str) -> Result<Value> {
     Ok(Value::array_from_vec(ary))
 }
 
-pub(crate) fn pack(ary: &[Value], template: &str) -> Result<Value> {
+pub(crate) fn pack(store: &Store, ary: &[Value], template: &str) -> Result<Value> {
     let mut packed = Vec::new();
     let template = parse_template(template);
     let mut iter = ary.iter();
 
     macro_rules! pack {
-        ($size: expr, $type: ident, $endless: expr, $big_endian: expr) => {
+        ($store:expr, $size: expr, $type: ident, $endless: expr, $big_endian: expr) => {
             if $endless {
                 while let Some(value) = iter.next() {
-                    let i = value.coerce_to_i64()?;
+                    let i = value.coerce_to_i64($store)?;
                     let bytes = if $big_endian {
                         $type::to_be_bytes(i as $type)
                     } else {
@@ -196,7 +196,7 @@ pub(crate) fn pack(ary: &[Value], template: &str) -> Result<Value> {
                 }
             } else {
                 if let Some(value) = iter.next() {
-                    let i = value.coerce_to_i64()?;
+                    let i = value.coerce_to_i64($store)?;
                     let bytes = if $big_endian {
                         $type::to_be_bytes(i as $type)
                     } else {
@@ -212,16 +212,16 @@ pub(crate) fn pack(ary: &[Value], template: &str) -> Result<Value> {
 
     for template in template {
         match template.template {
-            Template::I64 => pack!(8, i64, template.endless, false),
-            Template::U64 => pack!(8, u64, template.endless, false),
-            Template::I32 => pack!(4, i32, template.endless, false),
-            Template::U32 => pack!(4, u32, template.endless, false),
-            Template::U32BigEndian => pack!(4, u32, template.endless, true),
-            Template::I16 => pack!(2, i16, template.endless, false),
-            Template::U16 => pack!(2, u16, template.endless, false),
-            Template::U16BigEndian => pack!(2, u16, template.endless, true),
-            Template::I8 => pack!(1, i8, template.endless, false),
-            Template::U8 => pack!(1, u8, template.endless, false),
+            Template::I64 => pack!(store, 8, i64, template.endless, false),
+            Template::U64 => pack!(store, 8, u64, template.endless, false),
+            Template::I32 => pack!(store, 4, i32, template.endless, false),
+            Template::U32 => pack!(store, 4, u32, template.endless, false),
+            Template::U32BigEndian => pack!(store, 4, u32, template.endless, true),
+            Template::I16 => pack!(store, 2, i16, template.endless, false),
+            Template::U16 => pack!(store, 2, u16, template.endless, false),
+            Template::U16BigEndian => pack!(store, 2, u16, template.endless, true),
+            Template::I8 => pack!(store, 1, i8, template.endless, false),
+            Template::U8 => pack!(store, 1, u8, template.endless, false),
             Template::Null => {
                 packed.push(0);
             }

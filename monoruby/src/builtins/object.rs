@@ -131,7 +131,7 @@ pub(crate) fn send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
     if ary.len() < 1 {
         return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
     }
-    let method = ary[0].expect_symbol_or_string()?;
+    let method = ary[0].expect_symbol_or_string(globals)?;
     vm.invoke_method_inner(globals, method, lfp.self_val(), &ary[1..], lfp.block())
 }
 
@@ -224,13 +224,16 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
-fn to_enum(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
     let args = lfp.arg(0).as_array();
     let (method, args) = if args.is_empty() {
         (IdentId::EACH, vec![])
     } else {
-        (args[0].expect_symbol_or_string()?, args[1..].to_vec())
+        (
+            args[0].expect_symbol_or_string(globals)?,
+            args[1..].to_vec(),
+        )
     };
     vm.generate_enumerator(method, lfp.self_val(), args)
 }
@@ -277,7 +280,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
 fn respond_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string()?;
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let include_all = if let Some(arg1) = lfp.try_arg(1) {
         arg1.as_bool()
     } else {
@@ -381,7 +384,7 @@ fn instance_of(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 #[monoruby_builtin]
 fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string()?;
+    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let entry = globals.find_method_entry_for_class(receiver.class(), method_name)?;
     Ok(Value::new_method(
         receiver,
@@ -419,11 +422,11 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         let data = vm.get_block_data(globals, bh)?;
         vm.invoke_block_with_self(globals, &data, self_val, &[self_val])
     } else if let Some(arg0) = lfp.try_arg(0) {
-        let expr = arg0.expect_string()?;
+        let expr = arg0.expect_string(globals)?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
         let path = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.expect_string()?
+            arg1.expect_string(globals)?
         } else {
             "(eval)".into()
         };
@@ -494,7 +497,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     let id = match lfp.arg(0).unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id(s.check_utf8()?),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(lfp.arg(0))),
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
     };
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -508,7 +511,7 @@ fn iv_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
 fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string()?;
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -522,7 +525,7 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
 fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string()?;
+    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)

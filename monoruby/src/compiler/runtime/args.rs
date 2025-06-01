@@ -13,7 +13,7 @@ pub(crate) fn jit_hash_splat_kw_rest(
     let callee_func_id = meta.func_id();
     let callee = &globals.store[callee_func_id];
     let caller = &globals.store[callid];
-    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(globals, callee, caller, callee_lfp, caller_lfp)
 }
 
 ///
@@ -31,9 +31,9 @@ pub(crate) fn set_frame_arguments(
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
 
-    positional(caller, callee, callee_lfp, caller_lfp)?;
+    positional(globals, caller, callee, callee_lfp, caller_lfp)?;
     if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
+        handle_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
@@ -53,7 +53,7 @@ pub(crate) fn set_frame_arguments_simple(
 
     positional_simple(callee, src, pos_num, callee_lfp)?;
     if !callee.no_keyword() {
-        handle_keyword(callee, caller, callee_lfp, caller_lfp)?;
+        handle_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
     }
 
     Ok(())
@@ -109,7 +109,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let caller = &globals.store[caller];
     let callee_fid = meta.func_id();
     let callee = &globals.store[callee_fid];
-    match positional(caller, callee, callee_lfp, caller_lfp) {
+    match positional(globals, caller, callee, callee_lfp, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
             err.push_internal_trace(meta.func_id());
@@ -150,6 +150,7 @@ fn check_single_arg_expand(
 /// Set positional arguments.
 ///
 fn positional(
+    store: &Store,
     caller: &CallSiteInfo,
     callee: &FuncInfo,
     callee_lfp: Lfp,
@@ -172,7 +173,7 @@ fn positional(
             .iter()
             .map(|pos| caller_lfp.register(*pos).unwrap())
         {
-            for (k, v) in v.expect_hash()?.iter() {
+            for (k, v) in v.expect_hash(store)?.iter() {
                 h.insert(HashKey(k), v);
             }
         }
@@ -389,13 +390,14 @@ fn positional_send_splat(callee: &FuncInfo, src: *const Value, callee_lfp: Lfp) 
 /// Handle keyword arguments.
 ///
 fn handle_keyword(
+    store: &Store,
     callee: &FuncInfo,
     caller: &CallSiteInfo,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
     ordinary_keyword(callee, caller, callee_lfp, caller_lfp)?;
-    hash_splat_and_kw_rest(callee, caller, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(store, callee, caller, callee_lfp, caller_lfp)
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
@@ -450,6 +452,7 @@ fn ordinary_keyword(
 /// Handle hash splat arguments and a keyword rest parameter.
 ///
 fn hash_splat_and_kw_rest(
+    store: &Store,
     callee: &FuncInfo,
     caller: &CallSiteInfo,
     mut callee_lfp: Lfp,
@@ -470,7 +473,7 @@ fn hash_splat_and_kw_rest(
     {
         let mut used = 0;
         for (id, param_name) in callee.kw_names().iter().enumerate() {
-            let h = h.expect_hash()?;
+            let h = h.expect_hash(store)?;
             unsafe {
                 let sym = Value::symbol(*param_name);
                 if let Some(v) = h.get(sym) {

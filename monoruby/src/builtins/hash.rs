@@ -568,7 +568,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let p = vm.get_block_data(globals, bh)?;
     vm.temp_push(h);
     let mut res = Hashmap::new(h);
-    for (k, v) in lfp.self_val().expect_hash()?.iter() {
+    for (k, v) in lfp.self_val().expect_hash(globals)?.iter() {
         if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
             res.remove(k);
         }
@@ -622,11 +622,11 @@ fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
-fn merge(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
-    let mut h = lfp.self_val().dup().expect_hash()?;
+    let mut h = lfp.self_val().dup().expect_hash(globals)?;
     for arg in lfp.arg(0).as_array().iter() {
-        let other = arg.expect_hash()?;
+        let other = arg.expect_hash(globals)?;
         for (k, v) in other.iter() {
             h.insert(k, v);
         }
@@ -650,7 +650,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash()?;
+            let other = arg.expect_hash(globals)?;
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k) {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -662,7 +662,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     } else {
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash()?;
+            let other = arg.expect_hash(globals)?;
             for (k, v) in other.iter() {
                 h.insert(k, v);
             }
@@ -692,10 +692,14 @@ fn compare_by_identity(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
 #[monoruby_builtin]
-fn env_index(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn env_index(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let key = lfp.arg(0);
     if key.is_str().is_none() {
-        return Err(MonorubyErr::no_implicit_conversion(key, STRING_CLASS));
+        return Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            key,
+            STRING_CLASS,
+        ));
     }
     let val = lfp
         .self_val()

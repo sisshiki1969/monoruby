@@ -55,6 +55,7 @@ fn urandom(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
         size.round() as i64
     } else {
         return Err(MonorubyErr::no_implicit_conversion(
+            globals,
             lfp.arg(0),
             INTEGER_CLASS,
         ));

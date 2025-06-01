@@ -950,7 +950,7 @@ impl Executor {
 
     pub fn to_s(&mut self, globals: &mut Globals, receiver: Value) -> Result<String> {
         self.invoke_method_inner(globals, IdentId::TO_S, receiver, &[], None)?
-            .expect_string()
+            .expect_string(globals)
     }
 
     pub(crate) fn define_class(

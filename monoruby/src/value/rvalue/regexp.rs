@@ -164,15 +164,14 @@ impl RegexpInner {
         if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(s)?;
             re.replace_once(vm, given, replace)
-                .map(|(s, c)| (s, c.is_some()))
         } else if let Some(re) = re_val.is_regex() {
             re.replace_once(vm, given, replace)
-                .map(|(s, c)| (s, c.is_some()))
         } else {
-            Err(MonorubyErr::argumenterr(
+            return Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
-            ))
+            ));
         }
+        .map(|(s, c)| (s, c.is_some()))
     }
 
     pub(crate) fn replace_one_block(

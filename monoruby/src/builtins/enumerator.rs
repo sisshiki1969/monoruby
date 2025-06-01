@@ -154,6 +154,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             RV::Float(f) => Value::integer(f as i64),
             _ => {
                 return Err(MonorubyErr::no_implicit_conversion(
+                    globals,
                     lfp.arg(0),
                     INTEGER_CLASS,
                 ))
