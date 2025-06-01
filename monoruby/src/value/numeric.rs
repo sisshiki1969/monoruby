@@ -92,14 +92,13 @@ impl std::convert::From<RealKind> for Real {
     }
 }
 
-impl std::convert::TryFrom<Value> for Real {
-    type Error = MonorubyErr;
-    fn try_from(value: Value) -> Result<Self> {
+impl Real {
+    pub fn try_from(store: &Store, value: Value) -> Result<Self> {
         match value.unpack() {
             RV::Fixnum(i) => Ok(Real(Value::integer(i))),
             RV::BigInt(b) => Ok(Real(Value::bigint(b.clone()))),
             RV::Float(f) => Ok(Real(Value::float(f))),
-            _ => Err(MonorubyErr::cant_convert_into_float(value)),
+            _ => Err(MonorubyErr::cant_convert_into_float(store, value)),
         }
     }
 }
@@ -268,14 +267,13 @@ impl std::convert::From<Real> for RealKind {
     }
 }
 
-impl std::convert::TryFrom<Value> for RealKind {
-    type Error = MonorubyErr;
-    fn try_from(value: Value) -> Result<Self> {
+impl RealKind {
+    pub fn try_from(store: &Store, value: Value) -> Result<Self> {
         match value.unpack() {
             RV::Fixnum(i) => Ok(RealKind::Integer(i)),
             RV::BigInt(b) => Ok(RealKind::BigInt(b.clone())),
             RV::Float(f) => Ok(RealKind::Float(f)),
-            _ => Err(MonorubyErr::cant_convert_into_float(value)),
+            _ => Err(MonorubyErr::cant_convert_into_float(store, value)),
         }
     }
 }

@@ -846,7 +846,7 @@ impl Value {
                 if let Some(f) = b.to_f64() {
                     Ok(f)
                 } else {
-                    Err(MonorubyErr::cant_convert_into_float(*self))
+                    Err(MonorubyErr::cant_convert_into_float(store, *self))
                 }
             }
             _ => Err(MonorubyErr::no_implicit_conversion(
@@ -1102,13 +1102,13 @@ impl Value {
         Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
     }
 
-    pub(crate) fn expect_regexp_or_string(&self) -> Result<RegexpInner> {
+    pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<RegexpInner> {
         if let Some(re) = self.is_regex() {
             Ok(re.clone())
         } else if let Some(s) = self.is_str() {
             RegexpInner::with_option(s, 0)
         } else {
-            Err(MonorubyErr::is_not_regexp_nor_string(*self))
+            Err(MonorubyErr::is_not_regexp_nor_string(store, *self))
         }
     }
 
@@ -1356,7 +1356,7 @@ impl Value {
             NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast(lhs, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
-                    Value::complex(Real::try_from(lhs).unwrap(), im.clone())
+                    Value::complex(Real::try_from(globals, lhs).unwrap(), im.clone())
                 } else {
                     unreachable!()
                 }
@@ -1364,7 +1364,10 @@ impl Value {
             NodeKind::BinOp(ruruby_parse::BinOp::Sub, box lhs, box rhs) => {
                 let lhs = Self::from_ast(lhs, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
-                    Value::complex(Real::try_from(lhs).unwrap(), -Real::from(im.clone()))
+                    Value::complex(
+                        Real::try_from(globals, lhs).unwrap(),
+                        -Real::from(im.clone()),
+                    )
                 } else {
                     unreachable!()
                 }

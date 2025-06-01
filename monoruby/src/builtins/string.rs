@@ -371,7 +371,7 @@ fn rem(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_val = lfp.self_val();
     let given = self_val.expect_str(globals)?;
-    let regex = &lfp.arg(0).expect_regexp_or_string()?;
+    let regex = &lfp.arg(0).expect_regexp_or_string(globals)?;
     let res = match regex.find_one(vm, given)? {
         Some(r) => Value::integer(r.start as i64),
         None => Value::nil(),
@@ -931,7 +931,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
             None => Ok(Value::array_from_iter(iter)),
         }
     } else {
-        Err(MonorubyErr::is_not_regexp_nor_string(lfp.arg(0)))
+        Err(MonorubyErr::is_not_regexp_nor_string(globals, lfp.arg(0)))
     }
 }
 
@@ -1389,7 +1389,7 @@ fn string_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
-    let re = lfp.arg(0).expect_regexp_or_string()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
 
     RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)
 }
@@ -1412,7 +1412,7 @@ fn string_match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
     };
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
-    let re = lfp.arg(0).expect_regexp_or_string()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
 
     let res = RegexpInner::match_one(vm, globals, &re, given, lfp.block(), pos)?;
     Ok(Value::bool(!res.is_nil()))
@@ -1433,7 +1433,7 @@ fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
     };
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).expect_regexp_or_string()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
 
     let char_pos = match given.conv_char_index(char_pos)? {
         Some(pos) => pos,
@@ -1462,7 +1462,7 @@ fn string_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 fn string_rindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).expect_regexp_or_string()?;
+    let re = lfp.arg(0).expect_regexp_or_string(globals)?;
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_i64(globals)?
     } else {

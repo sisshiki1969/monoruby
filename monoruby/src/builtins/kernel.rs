@@ -537,10 +537,10 @@ fn kernel_float(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Complex.html]
 #[monoruby_builtin]
-fn kernel_complex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let r = Real::try_from(lfp.arg(0))?;
+fn kernel_complex(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let r = Real::try_from(globals, lfp.arg(0))?;
     let i = if let Some(i) = lfp.try_arg(1) {
-        Real::try_from(i)?
+        Real::try_from(globals, i)?
     } else {
         Real::zero()
     };

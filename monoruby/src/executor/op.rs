@@ -33,7 +33,7 @@ macro_rules! cmp_values {
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                     (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Integer");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
                         vm.set_error(err);
                         return None;
                     }
@@ -42,7 +42,7 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Float");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Float");
                         vm.set_error(err);
                         return None;
                     }

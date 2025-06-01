@@ -399,22 +399,42 @@ impl MonorubyErr {
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
-    pub(crate) fn is_not_regexp_nor_string(val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::NotRegexpNorString { val })
+    pub(crate) fn is_not_regexp_nor_string(store: &Store, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr(
+            format!("{} is not a regexp nor a string", val.to_s(store)),
+            TypeErrKind::Other,
+        )
     }
 
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
-    pub(crate) fn cant_convert_into_float(val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::CantConverFloat { val })
+    pub(crate) fn cant_convert_into_float(store: &Store, val: Value) -> MonorubyErr {
+        MonorubyErr::typeerr(
+            format!(
+                "can't convert {} into Float",
+                val.get_real_class_name(store)
+            ),
+            TypeErrKind::Other,
+        )
     }
 
     ///
     /// Set TypeError with message "{op}: *class of val* can't be coerced into {`msg`}".
     ///
-    pub(crate) fn cant_coerced_into(op: IdentId, val: Value, msg: &'static str) -> MonorubyErr {
-        MonorubyErr::typeerr("", TypeErrKind::CantCoerced { op, val, msg })
+    pub(crate) fn cant_coerced_into(
+        store: &Store,
+        op: IdentId,
+        val: Value,
+        msg: &'static str,
+    ) -> MonorubyErr {
+        MonorubyErr::typeerr(
+            format!(
+                "{op}: {} can't be coerced into {msg}",
+                val.get_real_class_name(store)
+            ),
+            TypeErrKind::Other,
+        )
     }
 
     pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
@@ -568,42 +588,13 @@ impl NoMethodErrKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeErrKind {
-    NotRegexpNorString {
-        val: Value,
-    },
-    CantConverFloat {
-        val: Value,
-    },
-    CantCoerced {
-        op: IdentId,
-        val: Value,
-        msg: &'static str,
-    },
-    WrongArgumentType {
-        val: Value,
-        expected: &'static str,
-    },
+    WrongArgumentType { val: Value, expected: &'static str },
     Other,
 }
 
 impl TypeErrKind {
     pub fn show(&self, store: &Store) -> String {
         match self {
-            TypeErrKind::NotRegexpNorString { val } => {
-                format!("{} is not a regexp nor a string", val.to_s(store))
-            }
-            TypeErrKind::CantConverFloat { val } => {
-                format!(
-                    "can't convert {} into Float",
-                    val.get_real_class_name(store)
-                )
-            }
-            TypeErrKind::CantCoerced { op, val, msg } => {
-                format!(
-                    "{op}: {} can't be coerced into {msg}",
-                    val.get_real_class_name(store)
-                )
-            }
             TypeErrKind::WrongArgumentType { val, expected } => {
                 format!(
                     "wrong argument type {} (expected {expected})",

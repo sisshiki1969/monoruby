@@ -36,7 +36,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Integer");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
                         vm.set_error(err);
                         return None;
                     }
@@ -49,7 +49,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Float(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Float");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Float");
                         vm.set_error(err);
                         return None;
                     }
@@ -69,7 +69,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Complex(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Complex");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Complex");
                         vm.set_error(err);
                         return None;
                     }
@@ -178,7 +178,7 @@ pub(crate) extern "C" fn pow_values(
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_POW, rhs, "Integer");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_POW, rhs, "Integer");
             vm.set_error(err);
             return None;
         }
@@ -193,7 +193,7 @@ pub(crate) extern "C" fn pow_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_POW, rhs, "Float");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_POW, rhs, "Float");
             vm.set_error(err);
             return None;
         }
@@ -258,7 +258,7 @@ pub(crate) extern "C" fn div_values(
             Value::complex_from(lhs.div(rhs))
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Integer");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Integer");
             vm.set_error(err);
             return None;
         }
@@ -275,7 +275,7 @@ pub(crate) extern "C" fn div_values(
             Value::complex_from(lhs.div(rhs))
         }
         (RV::Float(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Float");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Float");
             vm.set_error(err);
             return None;
         }
@@ -307,7 +307,7 @@ pub(crate) extern "C" fn div_values(
             Value::complex_from(lhs.div(rhs))
         }
         (RV::Complex(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_DIV, rhs, "Complex");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_DIV, rhs, "Complex");
             vm.set_error(err);
             return None;
         }
@@ -333,7 +333,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
-                        let err = MonorubyErr::cant_coerced_into($op_str, rhs, "Integer");
+                        let err = MonorubyErr::cant_coerced_into(globals, $op_str, rhs, "Integer");
                         vm.set_error(err);
                         return None;
                     }
@@ -379,7 +379,7 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_SHR, rhs, "Integer");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_SHR, rhs, "Integer");
             vm.set_error(err);
             return None;
         }
@@ -412,7 +412,7 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            let err = MonorubyErr::cant_coerced_into(IdentId::_SHL, rhs, "Integer");
+            let err = MonorubyErr::cant_coerced_into(globals, IdentId::_SHL, rhs, "Integer");
             vm.set_error(err);
             return None;
         }

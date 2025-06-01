@@ -55,7 +55,7 @@ binop!(add, sub, mul, div, rem, pow);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
 #[monoruby_builtin]
-fn divmod(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let (div, modulo) = match (lfp.self_val().unpack(), lfp.arg(0).unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             let div = if rhs.is_negative() {
@@ -95,7 +95,7 @@ fn divmod(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
             let modulo = lhs - rhs * div;
             (Value::integer(div as i64), Value::float(modulo))
         }
-        _ => return Err(MonorubyErr::cant_convert_into_float(lfp.arg(0))),
+        _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),
     };
     Ok(Value::array2(div, modulo))
 }
