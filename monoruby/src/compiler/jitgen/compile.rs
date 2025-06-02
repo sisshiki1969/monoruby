@@ -537,8 +537,13 @@ impl JitContext {
                     } else if let Some(fid) =
                         self.jit_check_method(store, base_class, IdentId::_INDEX)
                     {
-                        return self
-                            .compile_index_call(bbctx, ir, store, fid, base_class, base, idx, dst);
+                        let info = BinOpInfo {
+                            dst: Some(dst),
+                            mode: OpMode::RR(base, idx),
+                            lhs_class: base_class,
+                            rhs_class: idx_class,
+                        };
+                        return self.compile_binop_call(bbctx, ir, store, fid, info);
                     }
                 }
                 return CompileResult::Recompile;

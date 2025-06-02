@@ -52,7 +52,7 @@ impl JitContext {
         self.call(bbctx, ir, store, callsite, func_id, recv_class)
     }
 
-    pub(super) fn compile_index_call(
+    /*pub(super) fn compile_index_call(
         &mut self,
         bbctx: &mut BBContext,
         ir: &mut AsmIr,
@@ -89,7 +89,7 @@ impl JitContext {
         }
 
         self.call(bbctx, ir, store, &callsite, func_id, recv_class)
-    }
+    }*/
 
     pub(super) fn compile_binop_call(
         &mut self,
