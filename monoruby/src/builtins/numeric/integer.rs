@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
-    globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
+    //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, Box::new(integer_tof), 0);
@@ -44,7 +44,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
 }
 
-///
+/*///
 /// ### Integer#times
 ///
 /// - times {|n| ... } -> self
@@ -61,7 +61,7 @@ fn times(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
 
     Ok(lfp.self_val())
-}
+}*/
 
 struct PosStep {
     cur: i64,
@@ -101,7 +101,7 @@ impl Iterator for NegStep {
     }
 }
 
-///
+/*///
 /// ### Integer#step
 ///
 /// - step(limit, step = 1) {|n| ... } -> self
@@ -138,7 +138,7 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         vm.invoke_block_iter1(globals, bh, iter)?;
     }
     Ok(lfp.self_val())
-}
+}*/
 
 ///
 /// ### Integer#upto

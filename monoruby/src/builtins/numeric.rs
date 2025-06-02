@@ -51,7 +51,7 @@ binop!(add, sub, mul, div, rem, pow);
 ///
 /// ### Float#divmod
 ///
-/// - Float#divmod
+/// - divmod(other) -> [Numeric]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
 #[monoruby_builtin]
@@ -132,4 +132,58 @@ unop!(neg, bitnot);
 #[monoruby_builtin]
 fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     Ok(lfp.self_val())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::run_test;
+
+    #[test]
+    fn divmod() {
+        run_test("(11).divmod(3)");
+        run_test("(11).divmod(-3)");
+        run_test("(11).divmod(-3)");
+        run_test("(-11).divmod(3)");
+
+        run_test("(11).divmod(3.5)");
+        run_test("(11).divmod(-3.5)");
+        run_test("(11).divmod(-3.5)");
+        run_test("(-11).divmod(3.5)");
+
+        run_test("(11.5).divmod(3)");
+        run_test("(11.5).divmod(-3)");
+        run_test("(11.5).divmod(-3)");
+        run_test("(-11.5).divmod(3)");
+
+        run_test("(11.5).divmod(3.5)");
+        run_test("(11.5).divmod(-3.5)");
+        run_test("(11.5).divmod(-3.5)");
+        run_test("(-11.5).divmod(3.5)");
+    }
+
+    #[test]
+    fn bitnot() {
+        run_test("~1");
+        run_test("~0");
+        run_test("~(-1)");
+        run_test("~(-2)");
+        run_test("~(0x12345678)");
+        run_test("~(0x123456789abcdef0)");
+    }
+
+    #[test]
+    fn neg() {
+        run_test("-1");
+        run_test("-0");
+        run_test("-(0x12345678)");
+        run_test("-(0x123456789abcdef0)");
+    }
+
+    #[test]
+    fn pos() {
+        run_test("+1");
+        run_test("+0");
+        run_test("+(0x12345678)");
+        run_test("+(0x123456789abcdef0)");
+    }
 }

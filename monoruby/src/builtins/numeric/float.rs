@@ -318,14 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn divmod() {
-        run_test("(11.5).divmod(3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(11.5).divmod(-3.5)");
-        run_test("(-11.5).divmod(3.5)");
-    }
-
-    #[test]
     fn finite() {
         run_test("(1/0.0).finite?");
         run_test("(-1/0.0).finite?");

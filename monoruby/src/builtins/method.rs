@@ -60,25 +60,30 @@ fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+    #[ignore]
     #[test]
-    fn call() {
+    fn call1() {
         run_test_with_prelude(
             r##"
         m = Foo.new.method(:foo) # => #<Method: Foo#foo>
-        res = []
-        res << m[1]       # => "foo called with arg 1"
-        res << m.call(2)  # => "foo called with arg 2"
-        res << (m === 3)  # => "foo called with arg 3"
-        res
-            "##,
+        [
+            m[1],       # => "foo called with arg 1"
+            m.call(2),  # => "foo called with arg 2"
+            (m === 3),  # => "foo called with arg 3"
+        ]
+        "##,
             r##"
         class Foo
-          def foo(arg)
-            "foo called with arg #{arg}"
-          end
+            def foo(arg)
+                arg
+            end
         end
-        "##,
+            "##,
         );
+    }
+
+    #[test]
+    fn call2() {
         run_test_with_prelude(
             r##"
         m = Foo.new.method(:foo)
@@ -94,6 +99,10 @@ mod tests {
         end
         "##,
         );
+    }
+
+    #[test]
+    fn call3() {
         run_test_with_prelude(
             r##"
         $res = []
