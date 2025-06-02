@@ -7,26 +7,16 @@ use super::*;
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
-    kind: MonorubyErrKind,
-    message: String,
-    trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
+    pub kind: MonorubyErrKind,
+    pub message: String,
+    pub trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
 }
 
 impl MonorubyErr {
-    pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
-        self.trace.push((Some((loc, sourceinfo)), Some(fid)));
-    }
-
-    pub fn push_internal_trace(&mut self, fid: FuncId) {
-        self.trace.push((None, Some(fid)));
-    }
-}
-
-impl MonorubyErr {
-    pub fn new(kind: MonorubyErrKind, msg: impl ToString) -> Self {
+    pub fn new(kind: MonorubyErrKind, messageg: impl ToString) -> Self {
         MonorubyErr {
             kind,
-            message: msg.to_string(),
+            message: messageg.to_string(),
             trace: vec![],
         }
     }
@@ -71,6 +61,14 @@ impl MonorubyErr {
 
     pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
         &self.trace
+    }
+
+    pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
+        self.trace.push((Some((loc, sourceinfo)), Some(fid)));
+    }
+
+    pub fn push_internal_trace(&mut self, fid: FuncId) {
+        self.trace.push((None, Some(fid)));
     }
 
     pub fn take_trace(&mut self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {

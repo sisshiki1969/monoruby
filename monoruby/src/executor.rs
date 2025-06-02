@@ -381,14 +381,14 @@ impl Executor {
         let err = self.take_error();
         if let MonorubyErrKind::Load(path) = &err.kind() {
             let path = Value::string_from_str(path.as_os_str().to_str().unwrap());
-            let v = Value::new_exception_from_err(&globals.store, err);
+            let v = Value::new_exception(err);
             globals
                 .store
                 .set_ivar(v, IdentId::get_id("/path"), path)
                 .unwrap();
             v
         } else {
-            Value::new_exception_from_err(&globals.store, err)
+            Value::new_exception(err)
         }
     }
 

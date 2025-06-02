@@ -237,23 +237,10 @@ impl ObjKind {
         }
     }
 
-    fn exception(
-        class_name: MonorubyErrKind,
-        msg: String,
-        trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
-    ) -> Self {
+    fn exception(err: MonorubyErr) -> Self {
         Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner {
-                kind: class_name,
-                message: msg,
-                trace,
-            })),
+            exception: ManuallyDrop::new(Box::new(ExceptionInner(err))),
         }
-    }
-
-    fn exception_from(mut err: MonorubyErr, store: &Store) -> Self {
-        let msg = err.message().to_string();
-        Self::exception(err.kind().clone(), msg, err.take_trace())
     }
 
     fn hash_from(map: IndexMap<HashKey, Value>) -> Self {
@@ -1166,24 +1153,11 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_exception(
-        msg: String,
-        trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
-        class_id: ClassId,
-    ) -> Self {
-        let kind = MonorubyErrKind::from_class_id(class_id);
-        RValue {
-            header: Header::new(class_id, ObjTy::EXCEPTION),
-            kind: ObjKind::exception(kind, msg, trace),
-            var_table: None,
-        }
-    }
-
-    pub(super) fn new_exception_from_err(store: &Store, err: MonorubyErr) -> Self {
+    pub(super) fn new_exception(err: MonorubyErr) -> Self {
         let class_id = err.class_id();
         RValue {
             header: Header::new(class_id, ObjTy::EXCEPTION),
-            kind: ObjKind::exception_from(err, store),
+            kind: ObjKind::exception(err),
             var_table: None,
         }
     }
@@ -1569,15 +1543,29 @@ impl Header {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExceptionInner {
-    kind: MonorubyErrKind,
-    message: String,
-    trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
+pub struct ExceptionInner(MonorubyErr);
+
+impl std::ops::Deref for ExceptionInner {
+    type Target = MonorubyErr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ExceptionInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl ExceptionInner {
-    pub fn set_class_name(&mut self, class_name: MonorubyErrKind) {
-        self.kind = class_name;
+    pub fn new(err: MonorubyErr) -> Self {
+        ExceptionInner(err)
+    }
+
+    pub fn set_kind(&mut self, kind: MonorubyErrKind) {
+        self.kind = kind;
     }
 
     pub fn set_message(&mut self, msg: String) {

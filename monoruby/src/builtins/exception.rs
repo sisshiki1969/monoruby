@@ -94,7 +94,7 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     } else {
         globals.store.get_class_name(class_id)
     };
-    let obj = Value::new_exception(message, vec![], class_id);
+    let obj = Value::new_exception_from(message, class_id);
 
     /*vm.invoke_method_if_exists(
         globals,
@@ -195,7 +195,7 @@ fn system_exit_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     } else {
         (0, name.clone())
     };
-    let mut ex = Value::new_exception(msg, vec![], class_id);
+    let mut ex = Value::new_exception_from(msg, class_id);
     ex.set_instance_var(&mut globals.store, "@status", Value::integer(status))?;
 
     Ok(ex)

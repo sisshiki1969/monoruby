@@ -6,7 +6,7 @@ use crate::{
     builtins::TimeInner,
 };
 use num::{BigInt, FromPrimitive};
-use ruruby_parse::{Loc, Node, NodeKind, SourceInfoRef};
+use ruruby_parse::{Node, NodeKind};
 
 pub mod numeric;
 pub mod rvalue;
@@ -446,16 +446,15 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
-    pub fn new_exception(
-        msg: String,
-        trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
-        class_id: ClassId,
-    ) -> Self {
-        RValue::new_exception(msg, trace, class_id).pack()
+    pub fn new_exception(err: MonorubyErr) -> Self {
+        RValue::new_exception(err).pack()
     }
 
-    pub fn new_exception_from_err(store: &Store, err: MonorubyErr) -> Self {
-        RValue::new_exception_from_err(store, err).pack()
+    pub fn new_exception_from(message: String, class_id: ClassId) -> Self {
+        Value::new_exception(MonorubyErr::new(
+            MonorubyErrKind::from_class_id(class_id),
+            message,
+        ))
     }
 
     pub fn new_time(time: TimeInner) -> Self {
@@ -875,14 +874,6 @@ impl Value {
         let rv = self.try_rvalue()?;
         match rv.ty() {
             ObjTy::EXCEPTION => Some(rv.as_exception()),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn is_exception_mut(&mut self) -> Option<&mut ExceptionInner> {
-        let rv = self.try_rvalue_mut()?;
-        match rv.ty() {
-            ObjTy::EXCEPTION => Some(rv.as_exception_mut()),
             _ => None,
         }
     }
