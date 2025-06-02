@@ -20,10 +20,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo install cargo-nextest
-      - run: cargo nextest run --retries 1
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+      - run: cargo llvm-cov nextest --lcov --output-path lcov.info
 
       - name: Install ImageMagick
         run: sudo apt-get install imagemagick
@@ -32,8 +31,6 @@ jobs:
       - name: Test
         run: bin/test
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --features deopt --features profile --features perf --features emit-cfg --features emit-asm --features emit-bc --workspace --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

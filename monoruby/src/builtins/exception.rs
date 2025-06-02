@@ -214,7 +214,17 @@ mod tests {
         );
         run_test_error(
             r##"
+            raise StopIteration "woo"
+        "##,
+        );
+        run_test_error(
+            r##"
             raise StopIteration.new
+        "##,
+        );
+        run_test_error(
+            r##"
+            raise StopIteration.new "woo"
         "##,
         );
     }

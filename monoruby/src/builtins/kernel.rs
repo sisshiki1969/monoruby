@@ -72,8 +72,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
 
-    globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
-    globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
 
     klass
 }
@@ -718,7 +718,7 @@ fn command(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value
 /// - sleep -> Integer
 /// - sleep(sec) -> Integer
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/sleep.html]
 #[monoruby_builtin]
 fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let now = std::time::Instant::now();
@@ -740,7 +740,7 @@ fn sleep(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// - abort -> ()
 /// - abort(message) -> ()
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
 fn abort(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
@@ -1102,7 +1102,7 @@ fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     Ok(ary)
 }
 
-///
+/*///
 /// - ____max(f1:Float, f2:Float) -> Float
 ///
 #[monoruby_builtin]
@@ -1178,7 +1178,7 @@ fn inline_min(
         });
     }
     true
-}
+}*/
 
 #[cfg(test)]
 mod tests {
@@ -1259,6 +1259,13 @@ mod tests {
         run_test(r#"Float(' -0.7e-10')"#);
         run_test_error(r#"Float(' -0.7 5')"#);
         run_test_error(r#"Float(' -0.7e-10z')"#);
+        run_test_error(r#"Float(:Ruby)"#);
+    }
+
+    #[test]
+    fn complex() {
+        run_test(r#"Complex(30)"#);
+        run_test(r#"Complex(30, 4.5)"#);
     }
 
     #[test]
@@ -1289,11 +1296,19 @@ mod tests {
     #[test]
     fn kernel() {
         run_test_no_result_check("sleep 1");
-        //run_test_error("abort 1");
-        //run_test_no_result_check("exit");
-        //run_test_no_result_check("exit 0");
+        run_test("system 'ls'");
+        run_test("system 'ls', '-a'");
+        run_test_error("abort 1");
+        run_test_no_result_check("exit");
+        run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
         run_test_no_result_check("caller(1)");
+        run_test_no_result_check("caller()");
+        run_test_no_result_check("rand");
+        run_test_no_result_check("rand(0)");
+        run_test_no_result_check("rand(100)");
+        run_test_no_result_check("rand(0..100)");
+        run_test_no_result_check("rand(100..0)");
     }
 
     #[test]
