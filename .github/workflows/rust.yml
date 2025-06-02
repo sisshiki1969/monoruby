@@ -20,10 +20,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo install cargo-nextest
-      - run: cargo nextest run --retries 1
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
+      - run: cargo llvm-cov nextest
 
       - name: Install ImageMagick
         run: sudo apt-get install imagemagick
