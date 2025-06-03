@@ -334,7 +334,7 @@ impl ArrayInner {
     pub(crate) fn get_elem1(&self, store: &Store, idx: Value) -> Result<Value> {
         if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
-            let i_start = match range.start.coerce_to_i64(store)? {
+            let i_start = match range.start().coerce_to_i64(store)? {
                 i if i < 0 => len + i,
                 i => i,
             };
@@ -344,7 +344,7 @@ impl ArrayInner {
                 _ => i_start as usize,
             };
 
-            let i_end = range.end.coerce_to_i64(store)?;
+            let i_end = range.end().coerce_to_i64(store)?;
             let end = if i_end >= 0 {
                 let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
                 if self.len() < end {

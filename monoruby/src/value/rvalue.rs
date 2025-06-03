@@ -8,6 +8,7 @@ pub use array::*;
 pub use binding::*;
 pub use complex::ComplexInner;
 pub use enumerator::*;
+pub use exception::ExceptionInner;
 pub use fiber::*;
 pub use hash::*;
 pub use io::IoInner;
@@ -15,6 +16,7 @@ pub use ivar_table::*;
 pub use method::*;
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
+pub use range::RangeInner;
 pub use regexp::RegexpInner;
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
@@ -23,6 +25,7 @@ mod array;
 mod binding;
 mod complex;
 mod enumerator;
+mod exception;
 mod fiber;
 mod hash;
 mod io;
@@ -30,6 +33,7 @@ mod ivar_table;
 mod method;
 mod module;
 mod proc;
+mod range;
 mod regexp;
 mod string;
 
@@ -229,17 +233,13 @@ impl ObjKind {
 
     fn range(start: Value, end: Value, exclude_end: bool) -> Self {
         Self {
-            range: ManuallyDrop::new(RangeInner {
-                start,
-                end,
-                exclude_end: u32::from(exclude_end),
-            }),
+            range: ManuallyDrop::new(RangeInner::new(start, end, exclude_end)),
         }
     }
 
     fn exception(err: MonorubyErr) -> Self {
         Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner(err))),
+            exception: ManuallyDrop::new(Box::new(ExceptionInner::new(err))),
         }
     }
 
@@ -550,9 +550,9 @@ impl RValue {
         let range = self.as_range();
         format!(
             "{}{}{}",
-            range.start.debug(store),
+            range.start().debug(store),
             if range.exclude_end() { "..." } else { ".." },
-            range.end.debug(store),
+            range.end().debug(store),
         )
     }
 
@@ -560,9 +560,9 @@ impl RValue {
         let range = self.as_range();
         format!(
             "{}{}{}",
-            range.start.inspect(store),
+            range.start().inspect(store),
             if range.exclude_end() { "..." } else { ".." },
-            range.end.inspect(store),
+            range.end().inspect(store),
         )
     }
 }
@@ -840,9 +840,9 @@ impl RValue {
                     ObjTy::RANGE => {
                         let lhs = self.as_range();
                         ObjKind::range(
-                            lhs.start.deep_copy(),
-                            lhs.end.deep_copy(),
-                            lhs.exclude_end != 0,
+                            lhs.start().deep_copy(),
+                            lhs.end().deep_copy(),
+                            lhs.exclude_end(),
                         )
                     }
                     ObjTy::HASH => {
@@ -1539,92 +1539,5 @@ impl Header {
 
     fn change_class(&mut self, class: ClassId) {
         self.meta.class = Some(class);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExceptionInner(MonorubyErr);
-
-impl std::ops::Deref for ExceptionInner {
-    type Target = MonorubyErr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for ExceptionInner {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl ExceptionInner {
-    pub fn new(err: MonorubyErr) -> Self {
-        ExceptionInner(err)
-    }
-
-    pub fn set_kind(&mut self, kind: MonorubyErrKind) {
-        self.kind = kind;
-    }
-
-    pub fn set_message(&mut self, msg: String) {
-        self.message = msg;
-    }
-
-    pub fn kind(&self) -> MonorubyErrKind {
-        self.kind.clone()
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
-        &self.trace
-    }
-
-    pub fn trace_location(&self, store: &Store) -> Vec<String> {
-        self.trace
-            .iter()
-            .map(|(source_loc, fid)| {
-                if let Some((loc, source)) = source_loc {
-                    store.location(fid.clone(), source, *loc)
-                } else {
-                    store.internal_location(fid.unwrap())
-                }
-            })
-            .collect()
-    }
-
-    pub fn get_error_message(&self) -> String {
-        format!("{} ({:?})", self.message, self.kind)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Hash)]
-#[repr(C)]
-pub struct RangeInner {
-    pub start: Value,
-    pub end: Value,
-    pub exclude_end: u32,
-}
-
-impl GC<RValue> for RangeInner {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
-        self.start.mark(alloc);
-        self.end.mark(alloc);
-    }
-}
-
-impl RangeInner {
-    pub(crate) fn eql(&self, other: &Self) -> bool {
-        self.start.eql(&other.start)
-            && self.end.eql(&other.end)
-            && self.exclude_end() == other.exclude_end()
-    }
-
-    pub fn exclude_end(&self) -> bool {
-        self.exclude_end != 0
     }
 }

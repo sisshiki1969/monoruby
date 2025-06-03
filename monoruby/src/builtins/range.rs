@@ -38,7 +38,7 @@ fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
 #[monoruby_builtin]
 fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(lfp.self_val().as_range().start)
+    Ok(lfp.self_val().as_range().start())
 }
 
 ///
@@ -49,7 +49,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
 #[monoruby_builtin]
 fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    Ok(lfp.self_val().as_range().end)
+    Ok(lfp.self_val().as_range().end())
 }
 
 /// Range#exclude_end?
@@ -73,9 +73,9 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.expect_integer(globals)?;
-        let mut end = range.end.expect_integer(globals)?;
+    if range.start().is_fixnum() && range.end().is_fixnum() {
+        let start = range.start().expect_integer(globals)?;
+        let mut end = range.end().expect_integer(globals)?;
         if !range.exclude_end() {
             end += 1
         }
@@ -130,7 +130,8 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
-    let RangeInner { start, end, .. } = self_.as_range();
+    let start = self_.as_range().start();
+    let end = self_.as_range().end();
     let exclude_end = self_.as_range().exclude_end();
     let b = match (start.unpack(), end.unpack()) {
         (RV::Fixnum(start), RV::Fixnum(end)) => match lfp.arg(0).unpack() {
@@ -177,9 +178,9 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let self_ = lfp.self_val();
         let range = self_.as_range();
-        if range.start.is_fixnum() && range.end.is_fixnum() {
-            let start = range.start.expect_integer(globals)?;
-            let mut end = range.end.expect_integer(globals)?;
+        if range.start().is_fixnum() && range.end().is_fixnum() {
+            let start = range.start().expect_integer(globals)?;
+            let mut end = range.end().expect_integer(globals)?;
             if !range.exclude_end() {
                 end += 1
             }
@@ -214,9 +215,9 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.expect_integer(globals)?;
-        let mut end = range.end.expect_integer(globals)?;
+    if range.start().is_fixnum() && range.end().is_fixnum() {
+        let start = range.start().expect_integer(globals)?;
+        let mut end = range.end().expect_integer(globals)?;
         if !range.exclude_end() {
             end += 1
         }
@@ -245,9 +246,9 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if range.start.is_fixnum() && range.end.is_fixnum() {
-        let start = range.start.expect_integer(globals)?;
-        let mut end = range.end.expect_integer(globals)?;
+    if range.start().is_fixnum() && range.end().is_fixnum() {
+        let start = range.start().expect_integer(globals)?;
+        let mut end = range.end().expect_integer(globals)?;
         if !range.exclude_end() {
             end += 1
         }
@@ -274,8 +275,8 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
-    if let Some(start) = range.start.try_fixnum()
-        && let Some(mut end) = range.end.try_fixnum()
+    if let Some(start) = range.start().try_fixnum()
+        && let Some(mut end) = range.end().try_fixnum()
     {
         if !range.exclude_end() {
             end += 1
@@ -283,8 +284,8 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 
         let vec = (start..end).map(Value::fixnum).collect();
         Ok(Value::array_from_vec(vec))
-    } else if let Some(start) = range.start.is_str()
-        && let Some(end) = range.end.is_str()
+    } else if let Some(start) = range.start().is_str()
+        && let Some(end) = range.end().is_str()
     {
         let mut start = start.to_string();
         let mut v = vec![];

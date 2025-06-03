@@ -774,8 +774,8 @@ fn index_assign(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_checked(globals, range.start)?;
-            let end = ary.get_array_index_checked(globals, range.end)?;
+            let start = ary.get_array_index_checked(globals, range.start())?;
+            let end = ary.get_array_index_checked(globals, range.end())?;
             let len = if range.exclude_end() {
                 end.checked_sub(start)
             } else {
@@ -1838,11 +1838,11 @@ fn slice_(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let len = len as usize;
         Ok(slice_inner(ary, start, len))
     } else if let Some(range) = lfp.arg(0).is_range() {
-        let start = match ary.get_array_index(range.start.coerce_to_i64(globals)?) {
+        let start = match ary.get_array_index(range.start().coerce_to_i64(globals)?) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        let end = match ary.get_array_index(range.end.coerce_to_i64(globals)?) {
+        let end = match ary.get_array_index(range.end().coerce_to_i64(globals)?) {
             Some(i) => i,
             None => return Ok(Value::array_empty()),
         };

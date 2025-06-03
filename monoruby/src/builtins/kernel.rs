@@ -440,8 +440,8 @@ fn instance_ty(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
 fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(range) = arg0.is_range() {
-            let start = range.start;
-            let end = range.end;
+            let start = range.start();
+            let end = range.end();
             let start = start.expect_integer(globals)?;
             let end = end.expect_integer(globals)?;
             if start > end {

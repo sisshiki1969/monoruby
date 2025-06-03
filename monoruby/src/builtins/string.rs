@@ -449,8 +449,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
         let (start, end) = (
-            info.start.expect_integer(globals)?,
-            info.end.expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().expect_integer(globals)?,
+            info.end().expect_integer(globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
@@ -979,8 +979,8 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     } else if let Some(info) = lfp.arg(0).is_range() {
         let len = lhs.chars().count();
         let (start, end) = (
-            info.start.expect_integer(globals)?,
-            info.end.expect_integer(globals)? - info.exclude_end() as i64,
+            info.start().expect_integer(globals)?,
+            info.end().expect_integer(globals)? - info.exclude_end() as i64,
         );
         let (start, len) = match (
             conv_index(start, len),
