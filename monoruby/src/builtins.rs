@@ -12,6 +12,7 @@ mod hash;
 mod io;
 mod kernel;
 mod main_object;
+mod match_data;
 mod math;
 mod method;
 mod module;
@@ -70,6 +71,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     symbol::init(globals);
     binding::init(globals);
     dir::init(globals);
+    match_data::init(globals);
     main_object::init(globals);
     globals
         .include_module(globals.object_class(), kernel)

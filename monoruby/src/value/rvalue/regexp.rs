@@ -3,7 +3,7 @@ use onigmo_regex::{Captures, FindCaptures, Regex};
 use std::sync::Arc;
 use std::sync::{LazyLock, RwLock};
 
-static HASHMAP_CACHE: LazyLock<RwLock<HashMapCache>> =
+static REGEX_CACHE: LazyLock<RwLock<HashMapCache>> =
     LazyLock::new(|| RwLock::new(HashMapCache::new()));
 
 #[derive(Debug, Default)]
@@ -63,7 +63,7 @@ impl RegexpInner {
     /// Create `RegexpInfo` from `reg_str` with `option`.
     pub fn with_option(reg_str: impl Into<String>, option: u32) -> Result<Self> {
         let reg_str: String = reg_str.into();
-        match HASHMAP_CACHE
+        match REGEX_CACHE
             .write()
             .unwrap()
             .0

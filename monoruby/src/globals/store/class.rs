@@ -56,6 +56,8 @@ pub const FIBER_ERROR_CLASS: ClassId = ClassId::new(46);
 pub const STOP_ITERATION_CLASS: ClassId = ClassId::new(47);
 pub const SYSTEM_EXIT_ERROR_CLASS: ClassId = ClassId::new(48);
 
+pub const MATCHDATA_CLASS: ClassId = ClassId::new(49);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -91,6 +93,7 @@ impl std::fmt::Debug for ClassId {
             26 => write!(f, "NUMERIC"),
             27 => write!(f, "BINDING"),
             28 => write!(f, "UMETHOD"),
+
             29 => write!(f, "EXCEPTION"),
             30 => write!(f, "NO_METHOD_ERROR"),
             31 => write!(f, "ARGUMENTS_ERROR"),
@@ -111,6 +114,8 @@ impl std::fmt::Debug for ClassId {
             46 => write!(f, "FIBER_ERROR"),
             47 => write!(f, "STOP_ITERATION"),
             48 => write!(f, "SYSTEM_EXIT_ERROR"),
+
+            49 => write!(f, "MATCHDATA"),
             n => write!(f, "ClassId({n})"),
         }
     }

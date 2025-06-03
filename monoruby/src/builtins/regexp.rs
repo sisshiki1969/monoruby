@@ -29,6 +29,7 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
     globals.define_builtin_func(REGEXP_CLASS, "source", source, 0);
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
+    globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
 }
 
 // Class methods
@@ -217,6 +218,40 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     ))
 }
 
+///
+/// ### Regexp#match
+///
+/// - match(str, pos = 0) -> MatchData | nil
+/// - [NOT SUPPORTED] match(str, pos = 0) {|m| ... } -> object | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
+#[monoruby_builtin]
+fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let heystack_val = lfp.arg(0);
+    let heystack = heystack_val.expect_str(globals)?;
+    let char_pos = if let Some(pos) = lfp.try_arg(1) {
+        match conv_index(pos.expect_integer(globals)?, heystack.chars().count()) {
+            Some(pos) => pos,
+            None => return Ok(Value::bool(false)),
+        }
+    } else {
+        0
+    };
+    let byte_pos = match heystack.char_indices().nth(char_pos) {
+        Some((pos, _)) => pos,
+        None => 0, //return Ok(Value::bool(false)),
+    };
+    Ok(
+        if let Some(captures) = regex.captures_from_pos(heystack, byte_pos, vm)? {
+            Value::new_matchdata(captures, heystack, self_)
+        } else {
+            Value::nil()
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -369,5 +404,11 @@ mod tests {
         /\A#{SEPARATOR_PAT}?\z/.match?("")
         "#,
         );
+    }
+
+    #[test]
+    fn r#match() {
+        run_test(r##"/(.).(.)/.match("foobar", 3).captures"##);
+        run_test(r##"/(.).(.)/.match("foobar", -3).captures"##);
     }
 }

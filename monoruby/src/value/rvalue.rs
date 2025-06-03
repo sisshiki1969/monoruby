@@ -1,5 +1,6 @@
 use super::*;
 use num::BigInt;
+use onigmo_regex::Captures;
 use ruruby_parse::Loc;
 use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
@@ -13,6 +14,7 @@ pub use fiber::*;
 pub use hash::*;
 pub use io::IoInner;
 pub use ivar_table::*;
+pub use match_data::MatchDataInner;
 pub use method::*;
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
@@ -30,6 +32,7 @@ mod fiber;
 mod hash;
 mod io;
 mod ivar_table;
+mod match_data;
 mod method;
 mod module;
 mod proc;
@@ -78,6 +81,7 @@ impl std::fmt::Debug for ObjTy {
                 19 => "COMPLEX",
                 20 => "BINDING",
                 21 => "UMETHOD",
+                22 => "MATCHDATA",
                 _ => unreachable!(),
             }
         )
@@ -112,6 +116,7 @@ impl ObjTy {
     pub const COMPLEX: Self = Self(std::num::NonZeroU8::new(19).unwrap());
     pub const BINDING: Self = Self(std::num::NonZeroU8::new(20).unwrap());
     pub const UMETHOD: Self = Self(std::num::NonZeroU8::new(21).unwrap());
+    pub const MATCHDATA: Self = Self(std::num::NonZeroU8::new(22).unwrap());
 }
 
 #[repr(C)]
@@ -137,6 +142,7 @@ pub union ObjKind {
     enumerator: ManuallyDrop<EnumeratorInner>,
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
+    matchdata: ManuallyDrop<MatchDataInner>,
 }
 
 impl ObjKind {
@@ -329,6 +335,12 @@ impl ObjKind {
             binding: ManuallyDrop::new(BindingInner::from(outer_lfp)),
         }
     }
+
+    fn matchdata(captures: Captures, heystack: String, regex: Value) -> Self {
+        Self {
+            matchdata: ManuallyDrop::new(MatchDataInner::from_capture(captures, heystack, regex)),
+        }
+    }
 }
 
 /// Heap-allocated objects.
@@ -380,6 +392,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::COMPLEX => format!("{:?}", self.kind.complex),
                             ObjTy::BINDING => format!("{:?}", self.kind.binding),
                             ObjTy::UMETHOD => format!("{:?}", self.kind.umethod),
+                            ObjTy::MATCHDATA => format!("{:?}", self.kind.matchdata),
                             _ => unreachable!(),
                         }
                     })
@@ -1269,6 +1282,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_match_data(captures: Captures, heystack: &str, regex: Value) -> Self {
+        RValue {
+            header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
+            kind: ObjKind::matchdata(captures, heystack.to_string(), regex),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -1482,6 +1503,10 @@ impl RValue {
 
     pub(super) unsafe fn as_binding_mut(&mut self) -> &mut BindingInner {
         &mut self.kind.binding
+    }
+
+    pub(super) unsafe fn as_match_data(&self) -> &MatchDataInner {
+        &self.kind.matchdata
     }
 }
 

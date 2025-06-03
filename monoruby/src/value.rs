@@ -1,4 +1,5 @@
 use num::ToPrimitive;
+use onigmo_regex::Captures;
 
 use super::*;
 use crate::{
@@ -492,6 +493,10 @@ impl Value {
 
     pub(crate) fn new_binding(outer_lfp: Lfp) -> Self {
         RValue::new_binding(outer_lfp).pack()
+    }
+
+    pub(crate) fn new_matchdata(captures: Captures, heystack: &str, regex: Value) -> Self {
+        RValue::new_match_data(captures, heystack, regex).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {
@@ -1258,6 +1263,11 @@ impl Value {
     pub fn as_binding_inner_mut(&mut self) -> &mut BindingInner {
         assert_eq!(ObjTy::BINDING, self.rvalue().ty());
         unsafe { self.rvalue_mut().as_binding_mut() }
+    }
+
+    pub fn as_match_data(&self) -> &MatchDataInner {
+        assert_eq!(ObjTy::MATCHDATA, self.rvalue().ty());
+        unsafe { self.rvalue().as_match_data() }
     }
 }
 
