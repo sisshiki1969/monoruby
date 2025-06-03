@@ -1,5 +1,3 @@
-#![feature(result_flattening)]
-
 use std::fs::File;
 use std::io::Read;
 

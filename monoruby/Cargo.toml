@@ -34,8 +34,8 @@ emit-cfg = ["dump-bc"]
 dump-require = []
 
 [dependencies]
-clap = { version = "4.5.38", features = ["derive"] }
-rustyline = "15.0.0"
+clap = { version = "4.5.39", features = ["derive"] }
+rustyline = "16.0.0"
 paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
@@ -44,19 +44,19 @@ ruruby-parse = { path = "../ruruby-parse" }
 monoruby-attr = { path = "../monoruby_attr" }
 num = "0.4.3"
 fxhash = "0.2.1"
-tempfile = "3.19.1"
+tempfile = "3.20.0"
 dtoa = "1.0.10"
-chrono = "0.4.40"
+chrono = "0.4.41"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
 ] }
 escape_string = "0.1.2"
 hex = "0.4.3"
-rand = "0.9.0"
+rand = "0.9.1"
 indexmap = "2.9.0"
 regex = "1.11.1"
-libc = "0.2.171"
-getrandom = "0.3.2"
+libc = "0.2.172"
+getrandom = "0.3.3"
 rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"

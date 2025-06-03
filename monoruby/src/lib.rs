@@ -3,7 +3,6 @@
 //#![feature(const_option)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
-#![feature(result_flattening)]
 #![feature(let_chains)]
 #![feature(step_trait)]
 #![feature(iter_array_chunks)]
