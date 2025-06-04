@@ -757,12 +757,12 @@ impl Value {
     ///
     pub(crate) fn as_array_inner(&self) -> &ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
-        self.rvalue().as_array()
+        unsafe { self.rvalue().as_array() }
     }
 
     fn as_array_inner_mut(&mut self) -> &mut ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
-        self.rvalue_mut().as_array_mut()
+        unsafe { self.rvalue_mut().as_array_mut() }
     }
 
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
@@ -799,12 +799,12 @@ impl Value {
 
     pub(crate) fn as_rstring_inner(&self) -> &RStringInner {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        self.rvalue().as_rstring()
+        unsafe { self.rvalue().as_rstring() }
     }
 
     pub(crate) fn as_rstring_inner_mut(&mut self) -> &mut RStringInner {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        self.rvalue_mut().as_rstring_mut()
+        unsafe { self.rvalue_mut().as_rstring_mut() }
     }
 
     ///
@@ -877,9 +877,11 @@ impl Value {
 
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjTy::EXCEPTION => Some(rv.as_exception()),
-            _ => None,
+        unsafe {
+            match rv.ty() {
+                ObjTy::EXCEPTION => Some(rv.as_exception()),
+                _ => None,
+            }
         }
     }
 
@@ -896,19 +898,21 @@ impl Value {
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
-        self.rvalue().as_hashmap()
+        unsafe { self.rvalue().as_hashmap() }
     }
 
     pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
-        self.rvalue_mut().as_hashmap_mut()
+        unsafe { self.rvalue_mut().as_hashmap_mut() }
     }
 
     pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
         let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjTy::REGEXP => Some(rv.as_regex()),
-            _ => None,
+        unsafe {
+            match rv.ty() {
+                ObjTy::REGEXP => Some(rv.as_regex()),
+                _ => None,
+            }
         }
     }
 
@@ -963,9 +967,11 @@ impl Value {
 
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         if let Some(rvalue) = self.try_rvalue() {
-            match rvalue.ty() {
-                ObjTy::RANGE => Some(self.rvalue().as_range()),
-                _ => None,
+            unsafe {
+                match rvalue.ty() {
+                    ObjTy::RANGE => Some(self.rvalue().as_range()),
+                    _ => None,
+                }
             }
         } else {
             None
@@ -1141,9 +1147,11 @@ impl Value {
 
     pub(crate) fn try_bytes(&self) -> Option<&RStringInner> {
         if let Some(rv) = self.try_rvalue() {
-            match rv.ty() {
-                ObjTy::STRING => Some(rv.as_rstring()),
-                _ => None,
+            unsafe {
+                match rv.ty() {
+                    ObjTy::STRING => Some(rv.as_rstring()),
+                    _ => None,
+                }
             }
         } else {
             None
@@ -1152,9 +1160,11 @@ impl Value {
 
     pub(crate) fn is_rstring_inner(&self) -> Option<&RStringInner> {
         let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjTy::STRING => Some(rv.as_rstring()),
-            _ => None,
+        unsafe {
+            match rv.ty() {
+                ObjTy::STRING => Some(rv.as_rstring()),
+                _ => None,
+            }
         }
     }
 
@@ -1168,51 +1178,53 @@ impl Value {
 
     pub(crate) fn as_str(&self) -> &str {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        self.rvalue().as_str()
+        unsafe { self.rvalue().as_str() }
     }
 
     pub(crate) fn is_str(&self) -> Option<&str> {
         let rv = self.try_rvalue()?;
-        match rv.ty() {
-            ObjTy::STRING => Some(rv.as_str()),
-            _ => None,
+        unsafe {
+            match rv.ty() {
+                ObjTy::STRING => Some(rv.as_str()),
+                _ => None,
+            }
         }
     }
 
     pub(crate) fn replace_string(&mut self, replace: String) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        *self.rvalue_mut().as_rstring_mut() = RStringInner::from_string(replace);
+        unsafe { *self.rvalue_mut().as_rstring_mut() = RStringInner::from_string(replace) };
     }
 
     pub(crate) fn replace_str(&mut self, replace: &str) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
-        *self.rvalue_mut().as_rstring_mut() = RStringInner::from_str(replace);
+        unsafe { *self.rvalue_mut().as_rstring_mut() = RStringInner::from_str(replace) };
     }
 
     pub(crate) fn as_range(&self) -> &RangeInner {
         assert_eq!(ObjTy::RANGE, self.rvalue().ty());
-        self.rvalue().as_range()
+        unsafe { self.rvalue().as_range() }
     }
 
     #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
-        self.rvalue().as_io()
+        unsafe { self.rvalue().as_io() }
     }
 
     pub(crate) fn as_io_inner_mut(&mut self) -> &mut IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
-        self.rvalue_mut().as_io_mut()
+        unsafe { self.rvalue_mut().as_io_mut() }
     }
 
     pub(crate) fn as_proc_inner(&self) -> &ProcInner {
         assert_eq!(ObjTy::PROC, self.rvalue().ty());
-        self.rvalue().as_proc()
+        unsafe { self.rvalue().as_proc() }
     }
 
     pub(crate) fn as_proc_inner_mut(&mut self) -> &mut ProcInner {
         assert_eq!(ObjTy::PROC, self.rvalue().ty());
-        self.rvalue_mut().as_proc_mut()
+        unsafe { self.rvalue_mut().as_proc_mut() }
     }
 
     pub fn as_method(&self) -> &MethodInner {

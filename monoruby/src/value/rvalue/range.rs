@@ -41,4 +41,22 @@ impl RangeInner {
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }
+
+    pub(super) fn debug(&self, store: &Store) -> String {
+        format!(
+            "{}{}{}",
+            self.start.debug(store),
+            if self.exclude_end() { "..." } else { ".." },
+            self.end.debug(store),
+        )
+    }
+
+    pub(super) fn to_s(&self, store: &Store) -> String {
+        format!(
+            "{}{}{}",
+            self.start.inspect(store),
+            if self.exclude_end() { "..." } else { ".." },
+            self.end.inspect(store),
+        )
+    }
 }

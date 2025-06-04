@@ -440,7 +440,7 @@ impl RValue {
                 ObjTy::TIME => self.as_time().to_string(),
                 ObjTy::ARRAY => self.as_array().debug(store),
                 ObjTy::OBJECT => self.object_debug(store),
-                ObjTy::RANGE => self.range_debug(store),
+                ObjTy::RANGE => self.as_range().debug(store),
                 ObjTy::PROC => self.proc_tos(),
                 ObjTy::HASH => self.as_hashmap().debug(store),
                 ObjTy::REGEXP => self.as_regex().tos(),
@@ -453,6 +453,7 @@ impl RValue {
                 ObjTy::COMPLEX => self.as_complex().debug(store),
                 ObjTy::BINDING => self.object_debug(store),
                 ObjTy::UMETHOD => self.as_umethod().debug(store),
+                ObjTy::MATCHDATA => self.as_match_data().inspect(),
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -464,7 +465,7 @@ impl RValue {
                 ObjTy::CLASS | ObjTy::MODULE => store.get_class_name(self.as_class_id()),
                 ObjTy::ARRAY => self.as_array().to_s(store),
                 ObjTy::OBJECT => self.object_tos(store),
-                ObjTy::RANGE => self.range_tos(store),
+                ObjTy::RANGE => self.as_range().to_s(store),
                 ObjTy::PROC => self.proc_tos(),
                 ObjTy::HASH => self.as_hashmap().to_s(store),
                 ObjTy::METHOD => self.as_method().to_s(store),
@@ -472,21 +473,25 @@ impl RValue {
                 ObjTy::GENERATOR => self.object_tos(store),
                 ObjTy::BINDING => self.object_tos(store),
                 ObjTy::UMETHOD => self.as_umethod().to_s(store),
+                ObjTy::MATCHDATA => self.as_match_data().to_s(),
                 _ => self.debug(store),
             }
         }
     }
 
     pub(crate) fn inspect(&self, store: &Store) -> String {
-        match self.ty() {
-            ObjTy::OBJECT => self.object_inspect(store),
-            ObjTy::EXCEPTION => {
-                let class_name = store.get_class_name(self.class());
-                let msg = self.as_exception().message();
-                format!("#<{class_name}: {msg}>")
+        unsafe {
+            match self.ty() {
+                ObjTy::OBJECT => self.object_inspect(store),
+                ObjTy::EXCEPTION => {
+                    let class_name = store.get_class_name(self.class());
+                    let msg = self.as_exception().message();
+                    format!("#<{class_name}: {msg}>")
+                }
+                ObjTy::REGEXP => self.as_regex().inspect(),
+                ObjTy::MATCHDATA => self.as_match_data().inspect(),
+                _ => self.to_s(store),
             }
-            ObjTy::REGEXP => self.as_regex().inspect(),
-            _ => self.to_s(store),
         }
     }
 
@@ -557,26 +562,6 @@ impl RValue {
 
     fn proc_tos(&self) -> String {
         format!("#<Proc:0x{:016x}>", self.id())
-    }
-
-    fn range_debug(&self, store: &Store) -> String {
-        let range = self.as_range();
-        format!(
-            "{}{}{}",
-            range.start().debug(store),
-            if range.exclude_end() { "..." } else { ".." },
-            range.end().debug(store),
-        )
-    }
-
-    fn range_tos(&self, store: &Store) -> String {
-        let range = self.as_range();
-        format!(
-            "{}{}{}",
-            range.start().inspect(store),
-            if range.exclude_end() { "..." } else { ".." },
-            range.end().inspect(store),
-        )
     }
 }
 
@@ -1369,7 +1354,7 @@ impl RValue {
         &mut self.kind.class
     }
 
-    pub(super) unsafe fn as_class_id(&self) -> ClassId {
+    unsafe fn as_class_id(&self) -> ClassId {
         self.as_module().id()
     }
 
@@ -1385,72 +1370,64 @@ impl RValue {
         &self.kind.complex
     }
 
-    /*pub(super) unsafe fn as_complex_mut(&mut self) -> &mut ComplexInner {
-        &mut self.kind.complex
-    }*/
-
-    pub(super) fn as_rstring(&self) -> &RStringInner {
-        unsafe { &self.kind.string }
+    pub(super) unsafe fn as_rstring(&self) -> &RStringInner {
+        &self.kind.string
     }
 
-    pub(super) fn as_rstring_mut(&mut self) -> &mut RStringInner {
-        unsafe { &mut self.kind.string }
+    pub(super) unsafe fn as_rstring_mut(&mut self) -> &mut RStringInner {
+        &mut self.kind.string
     }
 
-    pub(super) fn as_str(&self) -> &str {
-        unsafe { self.kind.string.check_utf8().unwrap() }
+    pub(super) unsafe fn as_str(&self) -> &str {
+        self.kind.string.check_utf8().unwrap()
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
         unsafe { &mut *self.kind.bytes }
     }*/
 
-    pub(crate) fn as_array(&self) -> &ArrayInner {
-        unsafe { &self.kind.array }
+    pub(crate) unsafe fn as_array(&self) -> &ArrayInner {
+        &self.kind.array
     }
 
-    pub(super) fn as_array_mut(&mut self) -> &mut ArrayInner {
-        unsafe { &mut self.kind.array }
+    pub(super) unsafe fn as_array_mut(&mut self) -> &mut ArrayInner {
+        &mut self.kind.array
     }
 
-    pub(super) fn as_range(&self) -> &RangeInner {
-        unsafe { &self.kind.range }
+    pub(super) unsafe fn as_range(&self) -> &RangeInner {
+        &self.kind.range
     }
 
-    pub fn as_exception(&self) -> &ExceptionInner {
-        unsafe { &self.kind.exception }
+    pub(super) unsafe fn as_exception(&self) -> &ExceptionInner {
+        &self.kind.exception
     }
 
-    pub fn as_exception_mut(&mut self) -> &mut ExceptionInner {
-        unsafe { &mut self.kind.exception }
+    pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {
+        &self.kind.hash
     }
 
-    pub(crate) fn as_hashmap(&self) -> &HashmapInner {
-        unsafe { &self.kind.hash }
+    pub(super) unsafe fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
+        &mut self.kind.hash
     }
 
-    pub(super) fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
-        unsafe { &mut self.kind.hash }
+    pub(super) unsafe fn as_regex(&self) -> &RegexpInner {
+        &self.kind.regexp
     }
 
-    pub(super) fn as_regex(&self) -> &RegexpInner {
-        unsafe { &self.kind.regexp }
+    pub(super) unsafe fn as_io(&self) -> &IoInner {
+        &self.kind.io
     }
 
-    pub(crate) fn as_io(&self) -> &IoInner {
-        unsafe { &self.kind.io }
+    pub(super) unsafe fn as_io_mut(&mut self) -> &mut IoInner {
+        &mut self.kind.io
     }
 
-    pub(super) fn as_io_mut(&mut self) -> &mut IoInner {
-        unsafe { &mut self.kind.io }
+    pub(super) unsafe fn as_proc(&self) -> &ProcInner {
+        &self.kind.proc
     }
 
-    pub(super) fn as_proc(&self) -> &ProcInner {
-        unsafe { &self.kind.proc }
-    }
-
-    pub(super) fn as_proc_mut(&mut self) -> &mut ProcInner {
-        unsafe { &mut self.kind.proc }
+    pub(super) unsafe fn as_proc_mut(&mut self) -> &mut ProcInner {
+        &mut self.kind.proc
     }
 
     pub(super) fn as_time(&self) -> &TimeInner {

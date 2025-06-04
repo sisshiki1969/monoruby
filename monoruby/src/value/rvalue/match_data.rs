@@ -62,4 +62,21 @@ impl MatchDataInner {
             .iter()
             .map(|m| m.map(|(start, end)| &self.heystack[start..end]))
     }
+
+    pub fn to_s(&self) -> String {
+        self.at(0).unwrap().to_string()
+    }
+
+    pub fn inspect(&self) -> String {
+        let mut s = format!("#<MatchData \"{}\"", self.at(0).unwrap());
+        for i in 1..self.len() {
+            if let Some(capture) = self.at(i) {
+                s.push_str(&format!(" {i}:\"{}\"", capture));
+            } else {
+                s.push_str(&format!(" {i}:nil"));
+            }
+        }
+        s.push_str(">");
+        s
+    }
 }

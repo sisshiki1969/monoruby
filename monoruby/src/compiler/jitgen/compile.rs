@@ -537,9 +537,16 @@ impl JitContext {
                     } else if let Some(fid) =
                         self.jit_check_method(store, base_class, IdentId::_INDEX)
                     {
+                        let mode = if let Some(idx) = bbctx.is_fixnum_literal(idx)
+                            && let Some(idx) = i16::try_from(idx).ok()
+                        {
+                            OpMode::RI(base, idx)
+                        } else {
+                            OpMode::RR(base, idx)
+                        };
                         let info = BinOpInfo {
                             dst: Some(dst),
-                            mode: OpMode::RR(base, idx),
+                            mode,
                             lhs_class: base_class,
                             rhs_class: idx_class,
                         };
