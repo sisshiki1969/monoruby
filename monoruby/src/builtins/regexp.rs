@@ -227,8 +227,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
 fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let regex = self_.is_regex().unwrap();
+    let regex = lfp.self_val().as_regexp();
     let heystack_val = lfp.arg(0);
     let heystack = heystack_val.expect_str(globals)?;
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
@@ -245,7 +244,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     };
     Ok(
         if let Some(captures) = regex.captures_from_pos(heystack, byte_pos, vm)? {
-            Value::new_matchdata(captures, heystack, self_)
+            Value::new_matchdata(captures, heystack, regex)
         } else {
             Value::nil()
         },

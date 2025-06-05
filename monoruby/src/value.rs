@@ -495,7 +495,7 @@ impl Value {
         RValue::new_binding(outer_lfp).pack()
     }
 
-    pub(crate) fn new_matchdata(captures: Captures, heystack: &str, regex: Value) -> Self {
+    pub(crate) fn new_matchdata(captures: Captures, heystack: &str, regex: Regexp) -> Self {
         RValue::new_match_data(captures, heystack, regex).pack()
     }
 
@@ -655,6 +655,16 @@ impl Value {
     pub fn try_fixnum(&self) -> Option<i64> {
         if self.is_fixnum() {
             Some((self.0.get() as i64) >> 1)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn try_symbol_or_string(&self) -> Option<IdentId> {
+        if let Some(sym) = self.try_symbol() {
+            Some(sym)
+        } else if let Some(s) = self.is_str() {
+            Some(IdentId::get_id(s))
         } else {
             None
         }
@@ -906,14 +916,26 @@ impl Value {
         unsafe { self.rvalue_mut().as_hashmap_mut() }
     }
 
-    pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
+    pub(crate) fn as_regexp_inner(&self) -> &RegexpInner {
+        assert_eq!(ObjTy::REGEXP, self.rvalue().ty());
+        unsafe { self.rvalue().as_regex() }
+    }
+
+    pub(crate) fn as_regexp_inner_mut(&mut self) -> &mut RegexpInner {
+        assert_eq!(ObjTy::REGEXP, self.rvalue().ty());
+        unsafe { self.rvalue_mut().as_regex_mut() }
+    }
+
+    pub(crate) fn is_regex(&self) -> Option<Regexp> {
         let rv = self.try_rvalue()?;
-        unsafe {
-            match rv.ty() {
-                ObjTy::REGEXP => Some(rv.as_regex()),
-                _ => None,
-            }
+        match rv.ty() {
+            ObjTy::REGEXP => Some(Regexp::new_unchecked(*self)),
+            _ => None,
         }
+    }
+
+    pub(crate) fn as_regexp(self) -> Regexp {
+        self.is_regex().unwrap()
     }
 
     pub(crate) fn is_class_or_module(&self) -> Option<Module> {
@@ -1028,23 +1050,15 @@ impl Value {
     }
 
     pub(crate) fn expect_module(&self, globals: &Globals) -> Result<Module> {
-        match self.is_module() {
-            Some(module) => Ok(module),
-            None => {
-                let name = self.to_s(&globals.store);
-                Err(MonorubyErr::is_not_class(name))
-            }
-        }
+        self.is_module().ok_or_else(|| {
+            let name = self.to_s(&globals.store);
+            MonorubyErr::is_not_class(name)
+        })
     }
 
     pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
-        if let Some(sym) = self.try_symbol() {
-            Ok(sym)
-        } else if let Some(s) = self.is_str() {
-            Ok(IdentId::get_id(s))
-        } else {
-            Err(MonorubyErr::is_not_symbol_nor_string(store, *self))
-        }
+        self.try_symbol_or_string()
+            .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
     }
 
     pub(crate) fn expect_bytes(&self, store: &Store) -> Result<&[u8]> {
@@ -1103,11 +1117,13 @@ impl Value {
         Ok(self.coerce_to_rstring(vm, globals)?.to_str()?.to_string())
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<RegexpInner> {
+    pub(crate) fn expect_regexp_or_string(&self, store: &Store) -> Result<Regexp> {
         if let Some(re) = self.is_regex() {
-            Ok(re.clone())
+            Ok(re)
         } else if let Some(s) = self.is_str() {
-            RegexpInner::with_option(s, 0)
+            Ok(Regexp::new_unchecked(Value::regexp(
+                RegexpInner::with_option(s, 0)?,
+            )))
         } else {
             Err(MonorubyErr::is_not_regexp_nor_string(store, *self))
         }

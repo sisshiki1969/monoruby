@@ -3,17 +3,19 @@ use onigmo_regex::{Captures, FindCaptures, Regex};
 use std::sync::Arc;
 use std::sync::{LazyLock, RwLock};
 
-static REGEX_CACHE: LazyLock<RwLock<HashMapCache>> =
-    LazyLock::new(|| RwLock::new(HashMapCache::new()));
+static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(|| RwLock::new(RegexCache::new()));
 
 #[derive(Debug, Default)]
-struct HashMapCache(HashMap<(String, u32), Arc<Regex>>);
+struct RegexCache(HashMap<(String, u32), Arc<Regex>>);
 
-impl HashMapCache {
+impl RegexCache {
     fn new() -> Self {
         Self(HashMap::default())
     }
 }
+
+#[monoruby_object]
+pub struct Regexp(Value);
 
 #[derive(Clone, Debug)]
 pub struct RegexpInner(Arc<Regex>);
@@ -83,6 +85,16 @@ impl RegexpInner {
                 }
             }
         }
+    }
+
+    pub fn get_group_members(&self, name: &str) -> Vec<i32> {
+        self.0.get_group_nembers(name)
+    }
+
+    pub fn capture_names(&self) -> Result<Vec<String>> {
+        self.0
+            .capture_names()
+            .map_err(|err| MonorubyErr::regexerr(err.message()))
     }
 
     pub fn captures<'a>(&self, given: &'a str, vm: &mut Executor) -> Result<Option<Captures<'a>>> {
@@ -207,7 +219,7 @@ impl RegexpInner {
             let re = Self::from_escaped(s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, re, given, bh)
+            replace_(vm, globals, &re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
@@ -283,7 +295,7 @@ impl RegexpInner {
             let re = Self::from_escaped(s)?;
             replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, re, given, bh)
+            replace_(vm, globals, &re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",

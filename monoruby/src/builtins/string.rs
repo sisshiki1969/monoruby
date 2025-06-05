@@ -472,7 +472,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         } else {
             0
         };
-        string_match_index(vm, lhs, re, nth)
+        string_match_index(vm, lhs, &re, nth)
     } else {
         Err(MonorubyErr::argumenterr("Bad type for index."))
     }

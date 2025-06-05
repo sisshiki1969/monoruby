@@ -19,7 +19,7 @@ pub use method::*;
 pub use module::{Module, ModuleInner, ModuleType};
 pub use proc::*;
 pub use range::RangeInner;
-pub use regexp::RegexpInner;
+pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{Encoding, RString, RStringInner};
 
@@ -336,7 +336,7 @@ impl ObjKind {
         }
     }
 
-    fn matchdata(captures: Captures, heystack: String, regex: Value) -> Self {
+    fn matchdata(captures: Captures, heystack: String, regex: Regexp) -> Self {
         Self {
             matchdata: ManuallyDrop::new(MatchDataInner::from_capture(captures, heystack, regex)),
         }
@@ -1268,7 +1268,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_match_data(captures: Captures, heystack: &str, regex: Value) -> Self {
+    pub(super) fn new_match_data(captures: Captures, heystack: &str, regex: Regexp) -> Self {
         RValue {
             header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
             kind: ObjKind::matchdata(captures, heystack.to_string(), regex),
@@ -1412,6 +1412,10 @@ impl RValue {
 
     pub(super) unsafe fn as_regex(&self) -> &RegexpInner {
         &self.kind.regexp
+    }
+
+    pub(super) unsafe fn as_regex_mut(&mut self) -> &mut RegexpInner {
+        &mut self.kind.regexp
     }
 
     pub(super) unsafe fn as_io(&self) -> &IoInner {
