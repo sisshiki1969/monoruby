@@ -567,7 +567,11 @@ fn kernel_array(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Va
             .invoke_func(globals, func_id, arg, &[], None)
             .ok_or_else(|| vm.take_error());
     };
-    Ok(Value::array1(arg))
+    if arg.is_nil() {
+        Ok(Value::array_empty())
+    } else {
+        Ok(Value::array1(arg))
+    }
 }
 
 ///
@@ -1272,6 +1276,7 @@ mod tests {
     fn array() {
         run_test(r#"Array([100])"#);
         run_test(r#"Array(100)"#);
+        run_test(r#"Array(nil)"#);
         run_test(r#"Array("100")"#);
         run_test_with_prelude(
             r#"

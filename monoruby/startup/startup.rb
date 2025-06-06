@@ -162,6 +162,19 @@ module Enumerable
       ifnone.call
     end
   end
+
+  def any?
+    if block_given?
+      self.each do |x|
+        return true if yield(x)
+      end
+    else
+      self.each do |x|
+        return true if x
+      end
+    end
+    false
+  end
 end
 
 class Enumerator

@@ -63,6 +63,13 @@ impl SourceInfo {
     }
 
     pub fn get_line(&self, loc: &Loc) -> usize {
+        if loc.0 >= self.code.len() {
+            return self
+                .code
+                .char_indices()
+                .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
+                .count();
+        }
         let mut line_top = 0;
         self.code
             .char_indices()
