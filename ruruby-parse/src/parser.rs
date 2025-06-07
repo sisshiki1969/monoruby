@@ -459,7 +459,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
     /// Return IdentId of the operator.
     fn parse_op_definable(&mut self, punct: &Punct) -> Result<&'static str, LexerErr> {
         // TODO: must support
-        // ^
         // **  ~  ` !  !~
         match punct {
             Punct::Plus => {
@@ -493,6 +492,7 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
             Punct::Ge => Ok(">="),
             Punct::TEq => Ok("==="),
             Punct::Match => Ok("=~"),
+            Punct::BitXor => Ok("^"),
             Punct::LBracket => {
                 if self.consume_punct_no_term(Punct::RBracket)? {
                     if self.consume_punct_no_term(Punct::Assign)? {

@@ -181,6 +181,48 @@ class Enumerator
   include Enumerable
 end
 
+class TrueClass
+  def ^(other)
+    !other
+  end
+
+  def |(other)
+    true
+  end
+
+  def &(other)
+    !!other
+  end
+end
+
+class FalseClass
+  def ^(other)
+    !!other
+  end
+
+  def |(other)
+    !!other
+  end
+
+  def &(other)
+    false
+  end
+end
+
+class NilClass
+  def ^(other)
+    !!other
+  end
+
+  def |(other)
+    !!other
+  end
+
+  def &(other)
+    false
+  end
+end
+
 class Array
   include Enumerable
 

@@ -6,6 +6,7 @@ mod class;
 mod dir;
 pub(crate) mod enumerator;
 mod exception;
+mod false_class;
 mod fiber;
 mod file;
 mod hash;
@@ -16,6 +17,7 @@ mod match_data;
 mod math;
 mod method;
 mod module;
+mod nil_class;
 mod numeric;
 mod object;
 mod proc;
@@ -27,6 +29,7 @@ mod string;
 mod struct_class;
 mod symbol;
 mod time;
+mod true_class;
 
 use crate::compiler::jitgen::BBContext;
 use compiler::jitgen::asmir::*;
@@ -44,9 +47,9 @@ pub use time::TimeInner;
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
-    globals.define_builtin_class_under_obj("NilClass", NIL_CLASS, None);
-    globals.define_builtin_class_under_obj("TrueClass", TRUE_CLASS, None);
-    globals.define_builtin_class_under_obj("FalseClass", FALSE_CLASS, None);
+    true_class::init(globals);
+    false_class::init(globals);
+    nil_class::init(globals);
     module::init(globals);
     class::init(globals);
     let kernel = kernel::init(globals);
