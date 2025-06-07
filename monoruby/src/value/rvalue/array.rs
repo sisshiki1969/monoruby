@@ -34,8 +34,16 @@ impl Array {
         Self(Value::array_empty())
     }
 
+    pub fn new1(v1: Value) -> Self {
+        Self(Value::array1(v1))
+    }
+
     pub fn new2(v1: Value, v2: Value) -> Self {
         Self(Value::array2(v1, v2))
+    }
+
+    pub fn new_from_vec(v: Vec<Value>) -> Self {
+        Self(Value::array_from_vec(v))
     }
 
     ///

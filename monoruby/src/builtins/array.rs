@@ -100,6 +100,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "rotate!", rotate_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "rotate", rotate, 0, 1, false);
+    globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
+
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
@@ -1753,6 +1755,54 @@ fn rotate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
 }
 
 ///
+/// ### Array#product
+///
+/// - product(*lists) -> Array
+/// - product(*lists) { |e| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/product.html]
+#[monoruby_builtin]
+fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let lhs = lfp.self_val().as_array();
+    let mut lists = vec![];
+    for rhs in lfp.arg(0).as_array().into_iter() {
+        lists.push(rhs.expect_array(globals)?);
+    }
+    let v: Vec<Value> = product_inner(lhs, lists)
+        .into_iter()
+        .map(|a| Value::array_from_iter(a.into_iter().cloned()))
+        .collect();
+    if let Some(bh) = lfp.block() {
+        let len = v.len();
+        let ary = Array::new_from_vec(v);
+        vm.temp_push(ary.into());
+        let res = vm.invoke_block_map1(globals, bh, ary.into_iter().cloned(), len);
+        vm.temp_pop();
+        res
+    } else {
+        Ok(Value::array_from_vec(v))
+    }
+}
+
+fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
+    let mut res = vec![];
+    for e1 in lhs.into_iter() {
+        if rhs.is_empty() {
+            res.push(Array::new1(*e1));
+        } else {
+            let mut rhs = rhs.clone();
+            let l = rhs.remove(0);
+            for e2 in product_inner(l, rhs).into_iter() {
+                let mut v = vec![*e1];
+                v.extend(e2.into_iter());
+                res.push(Array::new_from_vec(v));
+            }
+        }
+    }
+    res
+}
+
+///
 /// ### Array#uniq
 ///
 /// - uniq -> Array
@@ -2883,6 +2933,23 @@ mod tests {
         [a, b, a.object_id == b.object_id]
         "#,
         );
+    }
+
+    #[test]
+    fn product() {
+        run_test(r#"[1,2,3].product([4,5])"#);
+        run_test(r#"[1,2].product([1,2])"#);
+        run_test(r#"[1,2].product([3,4],[5,6])"#);
+        run_test(r#"[1,2].product()"#);
+        run_test(r#"[1,2].product([])"#);
+        run_test(
+            r#"
+            a = []
+            [1,2,3].product([4,5]) {|e| a << e} # => [1,2,3]
+            a # => [[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]]
+            "#,
+        );
+        run_test_error(r#"[1,2].product(1,2,3)"#);
     }
 
     #[test]

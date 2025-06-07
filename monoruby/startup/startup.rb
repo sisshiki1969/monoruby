@@ -293,6 +293,20 @@ class Array
     res
   end
   alias collect map
+
+  #def product(*lists)
+  #  if lists.empty?
+  #    return self.map {|x| [x] }
+  #  end
+  #  l = lists.shift
+  #  res = []
+  #  for e1 in self
+  #    for e2 in l.product(*lists)
+  #      res << [e1, *e2]
+  #    end
+  #  end
+  #  res
+  #end
 end
 
 class Hash
