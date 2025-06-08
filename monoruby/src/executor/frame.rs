@@ -60,7 +60,7 @@ impl Cfp {
     /// Get outermost LFP and the depth.
     ///
     pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        self.lfp().outermost_lfp_depth()
+        self.lfp().outermost()
     }
 
     pub(crate) fn block_given(&self) -> bool {
@@ -78,12 +78,12 @@ impl Cfp {
     /// Get *FuncId* of a current method / classdef.
     ///
     pub fn method_func_id(&self) -> FuncId {
-        self.outermost_lfp().meta().func_id()
+        self.outermost_lfp().func_id()
     }
 
     pub fn method_func_id_depth(&self) -> (FuncId, usize) {
         let (lfp, depth) = self.outermost_lfp_depth();
-        (lfp.meta().func_id(), depth)
+        (lfp.func_id(), depth)
     }
 
     ///
@@ -115,7 +115,7 @@ impl Cfp {
         let mut cfp = Some(*self);
         while let Some(inner_cfp) = cfp {
             if !inner_cfp.lfp().meta().is_native() {
-                return inner_cfp.lfp().meta().func_id();
+                return inner_cfp.lfp().func_id();
             }
             cfp = inner_cfp.prev();
         }
@@ -192,6 +192,13 @@ impl Lfp {
     }
 
     ///
+    /// Get the *FuncId* of the current frame.
+    ///
+    pub fn func_id(&self) -> FuncId {
+        self.meta().func_id()
+    }
+
+    ///
     /// Get outer LFP.
     ///
     pub fn outer(self) -> Option<Lfp> {
@@ -199,9 +206,9 @@ impl Lfp {
     }
 
     ///
-    /// Get DFP of an outermost frame of *self*.
+    /// Get the outermost LFP and the depth.
     ///
-    fn outermost(&self) -> (Lfp, usize) {
+    pub(crate) fn outermost(&self) -> (Lfp, usize) {
         let mut lfp = *self;
         let mut depth = 0;
         while let Some(outer) = lfp.outer() {
@@ -209,16 +216,6 @@ impl Lfp {
             depth += 1;
         }
         (lfp, depth)
-    }
-
-    ///
-    /// Get outermost LFP and the depth.
-    ///
-    pub(crate) fn outermost_lfp_depth(&self) -> (Lfp, usize) {
-        match self.outer() {
-            Some(lfp) => lfp.outermost(),
-            None => (*self, 0),
-        }
     }
 
     ///

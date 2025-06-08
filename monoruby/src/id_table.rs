@@ -92,7 +92,7 @@ impl IdentId {
 
     pub const TO_S: IdentId = id!(31);
     pub const TO_PROC: IdentId = id!(32);
-    pub const _METHOD_MISSING: IdentId = id!(33);
+    pub const METHOD_MISSING: IdentId = id!(33);
     pub const EACH: IdentId = id!(34);
     pub const MAP: IdentId = id!(35);
     pub const _ALIAS_METHOD: IdentId = id!(36);
@@ -115,6 +115,7 @@ impl IdentId {
     pub const TO_ARY: IdentId = id!(51);
     pub const TO_A: IdentId = id!(52);
     pub const ALLOCATE: IdentId = id!(53);
+    pub const METHOD_ADDED: IdentId = id!(54);
 }
 
 impl IdentId {
@@ -232,7 +233,7 @@ impl IdentifierTable {
 
         table.set_id("to_s", IdentId::TO_S);
         table.set_id("to_proc", IdentId::TO_PROC);
-        table.set_id("method_missing", IdentId::_METHOD_MISSING);
+        table.set_id("method_missing", IdentId::METHOD_MISSING);
         table.set_id("each", IdentId::EACH);
         table.set_id("map", IdentId::MAP);
         table.set_id("/alias_method", IdentId::_ALIAS_METHOD);
@@ -254,6 +255,7 @@ impl IdentifierTable {
         table.set_id("to_ary", IdentId::TO_ARY);
         table.set_id("to_a", IdentId::TO_A);
         table.set_id("allocate", IdentId::ALLOCATE);
+        table.set_id("method_added", IdentId::METHOD_ADDED);
         table
     }
 

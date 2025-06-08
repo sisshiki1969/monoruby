@@ -390,7 +390,7 @@ pub(super) extern "C" fn vm_handle_arguments(
             Some(Value::nil())
         }
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.meta().func_id());
+            err.push_internal_trace(callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -407,7 +407,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     match set_frame_arguments(globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.meta().func_id());
+            err.push_internal_trace(callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -704,7 +704,13 @@ pub(super) extern "C" fn define_method(
     name: IdentId,
     func: FuncId,
 ) -> Option<Value> {
-    vm.define_method(globals, name, func)
+    match vm.define_method(globals, name, func) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(super) extern "C" fn singleton_define_method(

@@ -558,7 +558,7 @@ fn invoker_arguments_inner(
     args: *const Value,
     upward: bool,
 ) -> Option<Value> {
-    let callee_fid = callee_lfp.meta().func_id();
+    let callee_fid = callee_lfp.func_id();
     let info = &globals.store[callee_fid];
 
     // required + optional + post + rest

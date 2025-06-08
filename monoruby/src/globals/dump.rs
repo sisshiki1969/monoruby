@@ -158,7 +158,7 @@ pub(crate) extern "C" fn log_deoptimize(
     #[cfg(feature = "deopt")] reason: Option<Value>,
 ) {
     use crate::jitgen::trace_ir::*;
-    let func_id = vm.cfp().lfp().meta().func_id();
+    let func_id = vm.cfp().lfp().func_id();
     let func = globals.store.iseq(func_id);
     let bc_pos = func.get_pc_index(Some(pc));
     let trace_ir = func.trace_ir(&globals.store, bc_pos);

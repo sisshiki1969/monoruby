@@ -64,6 +64,22 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         false,
     );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "public_method_defined?",
+        public_method_defined,
+        1,
+        2,
+        false,
+    );
+    globals.define_builtin_func_with(
+        MODULE_CLASS,
+        "protected_method_defined?",
+        protected_method_defined,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func_rest(MODULE_CLASS, "private_class_method", private_class_method);
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
     // private methods
@@ -574,6 +590,17 @@ fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     }
 }
 
+fn check_method_defined(globals: &Globals, lfp: Lfp) -> Result<Option<Visibility>> {
+    let class_id = lfp.self_val().as_class_id();
+    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let inherit = if let Some(arg) = lfp.try_arg(1) {
+        arg.as_bool()
+    } else {
+        true
+    };
+    Ok(globals.method_defined(class_id, func_name, inherit))
+}
+
 ///
 /// ### Module#method_defined?
 ///
@@ -582,19 +609,10 @@ fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
 fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let inherit = if let Some(arg) = lfp.try_arg(1) {
-        arg.as_bool()
-    } else {
-        true
-    };
-    Ok(Value::bool(
-        match globals.method_defined(class_id, func_name, inherit) {
-            Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
-            None => false,
-        },
-    ))
+    Ok(Value::bool(match check_method_defined(globals, lfp)? {
+        Some(v) => matches!(v, Visibility::Public | Visibility::Protected),
+        None => false,
+    }))
 }
 
 ///
@@ -605,15 +623,34 @@ fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private_method_defined=3f.html]
 #[monoruby_builtin]
 fn private_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let inherit = if let Some(arg) = lfp.try_arg(1) {
-        arg.as_bool()
-    } else {
-        true
-    };
     Ok(Value::bool(
-        globals.method_defined(class_id, func_name, inherit) == Some(Visibility::Private),
+        check_method_defined(globals, lfp)? == Some(Visibility::Private),
+    ))
+}
+
+///
+/// ### Module#public_method_defined?
+///
+/// - public_method_defined?(name, inherit=true) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public_method_defined=3f.html]
+#[monoruby_builtin]
+fn public_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(
+        check_method_defined(globals, lfp)? == Some(Visibility::Public),
+    ))
+}
+
+///
+/// ### Module#protected_method_defined?
+///
+/// - protected_method_defined?(name, inherit=true) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected_method_defined=3f.html]
+#[monoruby_builtin]
+fn protected_method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    Ok(Value::bool(
+        check_method_defined(globals, lfp)? == Some(Visibility::Protected),
     ))
 }
 
@@ -1551,36 +1588,42 @@ mod tests {
         run_test_once(
             r##"
         module A
-          def method1()  end
-          def protected_method1()  end
-          protected :protected_method1
+          def method1; end
+          private def private_method1; end
+          protected def protected_method1; end
         end
         class B
-          def method2()  end
-          def private_method2()  end
-          private :private_method2
+          def method2; end
+          private def private_method2; end
+          protected def protected_method2; end
         end
         class C < B
           include A
-          def method3()  end
+          def method3; end
         end
         x = []
-        x << A.method_defined?(:method1)                        #=> true
-        x << A.private_method_defined?(:method1)                #=> false
-        x << C.method_defined?("method1")                       #=> true
-        x << C.private_method_defined?("method1")               #=> false
-        x << C.method_defined?("method2")                       #=> true
-        x << C.method_defined?("method2", true)                 #=> true
-        x << C.method_defined?("method2", false)                #=> false
-        x << C.method_defined?("method3")                       #=> true
-        x << C.method_defined?("protected_method1")             #=> true
-        x << C.method_defined?("method4")                       #=> false
-        x << C.method_defined?("private_method2")               #=> false
-        x << C.private_method_defined?("private_method2")       #=> true
-        x << C.private_method_defined?("private_method2", true) #=> true
-        x << C.private_method_defined?("private_method2", false)#=> false
-        x << B.private_method_defined?("private_method2", true) #=> true
-        x << B.private_method_defined?("private_method2", false)#=> true
+        x << A.method_defined?(:method1)                         #=> true
+        x << A.public_method_defined?(:method1)                  #=> true
+        x << A.private_method_defined?(:method1)                 #=> false
+        x << A.protected_method_defined?(:method1)               #=> false
+        x << C.method_defined?("method1")                        #=> true
+        x << C.public_method_defined?("method1")                 #=> true
+        x << C.private_method_defined?("method1")                #=> false
+        x << C.protected_method_defined?("method1")              #=> false
+        x << C.method_defined?("method2")                        #=> true
+        x << C.method_defined?("method2", true)                  #=> true
+        x << C.method_defined?("method2", false)                 #=> false
+        x << C.method_defined?("method3")                        #=> true
+        x << C.method_defined?("protected_method1")              #=> true
+        x << C.method_defined?("method4")                        #=> false
+        x << C.method_defined?("private_method2")                #=> false
+        x << C.private_method_defined?("private_method2")        #=> true
+        x << C.public_method_defined?("private_method2")         #=> false
+        x << C.protected_method_defined?("private_method2")      #=> false
+        x << C.private_method_defined?("private_method2", true)  #=> true
+        x << C.private_method_defined?("private_method2", false) #=> false
+        x << B.private_method_defined?("private_method2", true)  #=> true
+        x << B.private_method_defined?("private_method2", false) #=> true
         x
         "##,
         )

@@ -56,7 +56,7 @@ impl BindingInner {
     }
 
     pub fn func_id(&self) -> Option<FuncId> {
-        Some(self.binding_lfp?.meta().func_id())
+        Some(self.binding_lfp?.func_id())
     }
 
     pub fn self_val(&self) -> Value {

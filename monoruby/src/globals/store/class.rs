@@ -912,7 +912,7 @@ impl Globals {
     /// If not found, return MethodNotFound error.
     ///
     pub fn find_method(
-        &mut self,
+        &self,
         recv: Value,
         func_name: IdentId,
         is_func_call: bool,
@@ -958,7 +958,7 @@ impl Globals {
     /// Check whether public/protected method *name* is defined for *class_id* or its superclasses.
     ///
     pub(crate) fn method_defined(
-        &mut self,
+        &self,
         class_id: ClassId,
         func_name: IdentId,
         inherit: bool,
@@ -979,7 +979,7 @@ impl Globals {
     /// If not found, return MethodNotFound error.
     ///
     pub(crate) fn find_method_entry_for_class(
-        &mut self,
+        &self,
         class: ClassId,
         func_name: IdentId,
     ) -> Result<MethodTableEntry> {
@@ -1004,7 +1004,7 @@ impl Globals {
     ///
     /// Check whether a method *name* for object *obj* exists.
     ///
-    pub(crate) fn check_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
+    pub(crate) fn check_method(&self, obj: Value, name: IdentId) -> Option<FuncId> {
         let class_id = obj.class();
         self.check_method_for_class(class_id, name)?.func_id()
     }
@@ -1012,7 +1012,7 @@ impl Globals {
     ///
     /// Check whether a public method *name* for object *obj* exists.
     ///
-    pub(crate) fn check_public_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
+    pub(crate) fn check_public_method(&self, obj: Value, name: IdentId) -> Option<FuncId> {
         let class_id = obj.class();
         let entry = self.check_method_for_class(class_id, name)?;
         if entry.visibility == Visibility::Public {
@@ -1026,7 +1026,7 @@ impl Globals {
     /// Check whether a method *name* of class *class_id* exists.
     ///
     pub(crate) fn check_method_for_class(
-        &mut self,
+        &self,
         class_id: ClassId,
         name: IdentId,
     ) -> Option<MethodTableEntry> {

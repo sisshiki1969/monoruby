@@ -1217,7 +1217,7 @@ extern "C" fn set_instance_var_with_cache(
 
 #[cfg(feature = "profile")]
 extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
-    let func_id = vm.cfp().lfp().meta().func_id();
+    let func_id = vm.cfp().lfp().func_id();
     globals.jit_class_guard_failed(func_id, self_val.class());
 }
 

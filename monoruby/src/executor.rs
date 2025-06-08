@@ -581,7 +581,7 @@ impl Executor {
         globals: &mut Globals,
         name: IdentId,
         func: FuncId,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let Cref {
             class_id,
             module_function,
@@ -598,16 +598,21 @@ impl Executor {
             if globals.codegen.bop_redefine_flags() != 0 {
                 self.immediate_eviction(globals);
             }
-            Some(Value::nil())
+            self.invoke_method_if_exists(
+                globals,
+                IdentId::METHOD_ADDED,
+                globals.store[class_id].get_module().into(),
+                &[Value::symbol(name)],
+                None,
+            )?;
+            Ok(Value::nil())
         } else {
-            let err = MonorubyErr::internalerr(format!(
+            runtime::_dump_stacktrace(self, globals);
+            Err(MonorubyErr::internalerr(format!(
                 "define func: {:?} {:016x}",
                 name,
                 (func.get() as u64) + ((name.get() as u64) << 32)
-            ));
-            runtime::_dump_stacktrace(self, globals);
-            self.set_error(err);
-            None
+            )))
         }
     }
 
@@ -1299,7 +1304,7 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
     let patch_point = globals.codegen.jit.label();
     let jit_entry = globals.codegen.jit.label();
     let guard = globals.codegen.jit.label();
-    let func_id = lfp.meta().func_id();
+    let func_id = lfp.func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     let self_class = lfp.self_val().class();
     globals
@@ -1316,7 +1321,7 @@ pub(crate) extern "C" fn exec_jit_compile_patch(
 
 pub(crate) extern "C" fn exec_jit_recompile_method(globals: &mut Globals, lfp: Lfp) {
     let self_class = lfp.self_val().class();
-    let func_id = lfp.meta().func_id();
+    let func_id = lfp.func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     let jit_entry = globals.codegen.jit.label();
 
@@ -1357,7 +1362,7 @@ pub(crate) extern "C" fn exec_jit_partial_recompile(
 fn partial_compile(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, is_recompile: bool) {
     let entry_label = globals.codegen.jit.label();
     let self_class = lfp.self_val().class();
-    let func_id = lfp.meta().func_id();
+    let func_id = lfp.func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     globals.exec_jit_compile(
         iseq_id,

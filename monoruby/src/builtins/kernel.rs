@@ -53,6 +53,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         &["uplevel", "category"],
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
+    globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
@@ -373,7 +374,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     for i in 0..16 {
         let prev_cfp = cfp.prev();
         if i >= level {
-            let func_id = cfp.lfp().meta().func_id();
+            let func_id = cfp.lfp().func_id();
             if let Some(iseq) = globals.store[func_id].is_iseq() {
                 let loc = globals.store[iseq].get_location();
                 let desc = globals.store.func_description(func_id);
@@ -826,6 +827,23 @@ fn warn(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
     let path = globals.current_source_path(vm).parent().unwrap();
     Ok(Value::string(path.to_string_lossy().to_string()))
+}
+
+///
+/// Kernel.#__method__
+///
+/// - __method__ -> Symbol | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
+#[monoruby_builtin]
+fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp) -> Result<Value> {
+    let fid = vm.cfp().prev().unwrap().method_func_id();
+    if !globals.store[fid].is_method() {
+        return Ok(Value::nil());
+    }
+    globals.store[fid]
+        .name()
+        .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
 }
 
 ///
@@ -1314,6 +1332,35 @@ mod tests {
         run_test_no_result_check("rand(100)");
         run_test_no_result_check("rand(0..100)");
         run_test_no_result_check("rand(100..0)");
+    }
+
+    #[test]
+    fn kernel_method__() {
+        run_test(
+            r##"
+        $res = []
+        def foo
+            __method__
+        end
+        alias :bar :foo
+        $res << foo #=> :foo
+        $res << bar #=> :foo
+        $res << __method__ #=> nil
+        $res
+        "##,
+        );
+        run_test(
+            r##"
+        $res = []
+        def foo
+            3.times do
+                $res << __method__
+            end
+        end
+        foo
+        $res
+        "##,
+        );
     }
 
     #[test]

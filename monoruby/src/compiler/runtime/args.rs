@@ -27,7 +27,7 @@ pub(crate) fn set_frame_arguments(
     caller_lfp: Lfp,
     callid: CallSiteId,
 ) -> Result<()> {
-    let callee_fid = callee_lfp.meta().func_id();
+    let callee_fid = callee_lfp.func_id();
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
 
@@ -47,7 +47,7 @@ pub(crate) fn set_frame_arguments_simple(
     src: *const Value,
     pos_num: usize,
 ) -> Result<()> {
-    let callee_fid = callee_lfp.meta().func_id();
+    let callee_fid = callee_lfp.func_id();
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
 
@@ -64,7 +64,7 @@ pub(crate) fn set_frame_arguments_send_splat(
     callee_lfp: Lfp,
     src: *const Value,
 ) -> Result<()> {
-    let callee_fid = callee_lfp.meta().func_id();
+    let callee_fid = callee_lfp.func_id();
     let callee = &globals.store[callee_fid];
 
     positional_send_splat(callee, src, callee_lfp)?;

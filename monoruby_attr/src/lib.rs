@@ -21,7 +21,7 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             match #wrapped(vm, globals, lfp) {
                 Ok(val) => Some(val),
                 Err(mut err) => {
-                    let fid = lfp.meta().func_id();
+                    let fid = lfp.func_id();
                     err.push_internal_trace(fid);
                     vm.set_error(err);
                     None

@@ -175,6 +175,14 @@ module Enumerable
     end
     false
   end
+
+  def to_a(*args)
+    res = []
+    self.each(*args) do |x|
+      res << x
+    end
+    res
+  end
 end
 
 class Enumerator
@@ -333,6 +341,10 @@ class Integer
     self + 1
   end
 
+  def positive?
+    self > 0
+  end
+
   def floor
     self
   end
@@ -393,6 +405,10 @@ class Symbol
       slf.send(self, *args)
     end
   end
+
+  def to_sym
+    self
+  end
 end
 
 class String
@@ -432,6 +448,9 @@ end
 
 class Module
   def private_constant(*x)
+  end
+
+  def method_added(name)
   end
 end
 

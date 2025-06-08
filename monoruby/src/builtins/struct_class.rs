@@ -84,7 +84,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Val
     let members = globals
         .store
         .get_ivar(struct_class, IdentId::get_id("/members"))
-        .unwrap()
+        .ok_or_else(|| MonorubyErr::internalerr("no ivar /members."))?
         .as_array();
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));

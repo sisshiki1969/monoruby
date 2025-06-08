@@ -711,7 +711,9 @@ impl BytecodeGen {
     fn new_function(&self, store: &mut Store, func: Functions, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         match func {
-            Functions::Method { name, info } => store.new_iseq_method(name, info, loc, sourceinfo),
+            Functions::Method { name, info } => {
+                store.new_iseq_method(name, info, loc, sourceinfo, false)
+            }
             Functions::ClassDef { name, info } => store.new_classdef(name, info, loc, sourceinfo),
             Functions::Block {
                 mother,

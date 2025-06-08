@@ -273,6 +273,7 @@ impl Store {
             },
             Loc::default(),
             result.source_info,
+            true,
         )
     }
 
@@ -297,11 +298,12 @@ impl Store {
         info: BlockInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        top_level: bool,
     ) -> Result<FuncId> {
         let (func_id, params) = self.functions.add_iseq_method(info)?;
         let info = ISeqInfo::new_method(func_id, name, params.clone(), loc, sourceinfo);
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params);
+        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params, top_level);
         self.functions.info.push(info);
         Ok(func_id)
     }

@@ -611,10 +611,25 @@ impl alloc::GC<RValue> for FuncKind {
 
 pub const FUNCINFO_DATA: usize = std::mem::offset_of!(FuncInfo, data);
 
+#[derive(Debug, Clone, PartialEq, Default)]
+enum FuncType {
+    /// Top-level.
+    TopLevel,
+    /// Method.
+    #[default]
+    Method,
+    /// Block.
+    Block,
+    /// Class Definition.
+    ClassDef,
+}
+
 #[derive(Debug, Clone, Default)]
 struct FuncExt {
     /// name of this function.
     name: Option<IdentId>,
+    /// type of this function.
+    ty: FuncType,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
     /// parameter information of this function.
@@ -643,6 +658,7 @@ impl FuncInfo {
     fn new(
         name: impl Into<Option<IdentId>>,
         kind: FuncKind,
+        ty: FuncType,
         meta: Meta,
         params: ParamsInfo,
     ) -> Self {
@@ -664,6 +680,7 @@ impl FuncInfo {
             kind,
             ext: Box::new(FuncExt {
                 name,
+                ty,
                 entry: None,
                 params,
                 #[cfg(feature = "perf")]
@@ -677,11 +694,17 @@ impl FuncInfo {
         func_id: FuncId,
         iseq: ISeqId,
         params: ParamsInfo,
+        top_level: bool,
     ) -> Self {
         let name = name.into();
         Self::new(
             name,
             FuncKind::ISeq(iseq),
+            if top_level {
+                FuncType::TopLevel
+            } else {
+                FuncType::Method
+            },
             Meta::vm_method(func_id, 0, false, params.is_simple()),
             params,
         )
@@ -696,6 +719,7 @@ impl FuncInfo {
         Self::new(
             None,
             FuncKind::ISeq(iseq),
+            FuncType::Block,
             Meta::vm_method(func_id, 0, is_block_style, params.is_simple()),
             params,
         )
@@ -705,6 +729,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::ISeq(iseq),
+            FuncType::ClassDef,
             Meta::vm_classdef(func_id, 0),
             ParamsInfo::default(),
         )
@@ -727,6 +752,7 @@ impl FuncInfo {
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
+            FuncType::Method,
             Meta::native(func_id, reg_num, params.is_simple()),
             params,
         )
@@ -743,6 +769,7 @@ impl FuncInfo {
         Self::new(
             IdentId::get_id_from_string(name),
             FuncKind::Proc(proc),
+            FuncType::Method,
             Meta::proc(func_id, reg_num, params.is_simple(), is_block_style),
             params,
         )
@@ -763,6 +790,7 @@ impl FuncInfo {
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
+            FuncType::Method,
             Meta::native(func_id, reg_num, params.is_simple()),
             params,
         )
@@ -783,6 +811,7 @@ impl FuncInfo {
             FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
+            FuncType::Method,
             Meta::native_eval(func_id, reg_num, params.is_simple()),
             params,
         )
@@ -794,6 +823,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::AttrReader { ivar_name },
+            FuncType::Method,
             Meta::native(func_id, reg_num, true),
             params,
         )
@@ -805,6 +835,7 @@ impl FuncInfo {
         Self::new(
             name,
             FuncKind::AttrWriter { ivar_name },
+            FuncType::Method,
             Meta::native(func_id, reg_num, true),
             params,
         )
@@ -816,6 +847,10 @@ impl FuncInfo {
 
     pub(crate) fn name(&self) -> Option<IdentId> {
         self.ext.name
+    }
+
+    pub(crate) fn is_method(&self) -> bool {
+        self.ext.ty == FuncType::Method
     }
 
     pub(crate) fn owner_class(&self) -> Option<ClassId> {

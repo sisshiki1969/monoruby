@@ -16,7 +16,7 @@ fn local_variables(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     let fid = if let Some(fid) = binding.func_id() {
         fid
     } else {
-        binding.outer_lfp().meta().func_id()
+        binding.outer_lfp().func_id()
     };
     let v = globals.store.iseq(fid).local_variables();
     Ok(Value::array_from_vec(v))
