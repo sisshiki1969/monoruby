@@ -171,7 +171,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let rhs_v = lfp.arg(0);
     let lhs = lfp.self_val().as_hash();
-    let rhs = if let Some(rhs) = rhs_v.is_hash() {
+    let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
         rhs
     } else {
         return Ok(Value::bool(false));
@@ -568,7 +568,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let p = vm.get_block_data(globals, bh)?;
     vm.temp_push(h);
     let mut res = Hashmap::new(h);
-    for (k, v) in lfp.self_val().expect_hash(globals)?.iter() {
+    for (k, v) in lfp.self_val().expect_hash_ty(globals)?.iter() {
         if vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
             res.remove(k);
         }
@@ -624,9 +624,9 @@ fn invert(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp) -> Result<Value>
 #[monoruby_builtin]
 fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     lfp.expect_no_block()?;
-    let mut h = lfp.self_val().dup().expect_hash(globals)?;
+    let mut h = lfp.self_val().dup().expect_hash_ty(globals)?;
     for arg in lfp.arg(0).as_array().iter() {
-        let other = arg.expect_hash(globals)?;
+        let other = arg.expect_hash_ty(globals)?;
         for (k, v) in other.iter() {
             h.insert(k, v);
         }
@@ -650,7 +650,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash(globals)?;
+            let other = arg.expect_hash_ty(globals)?;
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k) {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
@@ -662,7 +662,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         }
     } else {
         for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.expect_hash(globals)?;
+            let other = arg.expect_hash_ty(globals)?;
             for (k, v) in other.iter() {
                 h.insert(k, v);
             }

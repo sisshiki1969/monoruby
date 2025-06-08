@@ -49,9 +49,9 @@ impl Array {
     ///
     /// Uniquify `self`.
     ///
-    /// Always returns Some(removed: bool).
+    /// Always returns Ok(removed: bool).
     ///
-    /// If some elements were removed, returns Some(true).
+    /// If some elements were removed, returns Ok(true).
     ///
     pub fn uniq(&mut self) -> Result<bool> {
         let mut h = HashSet::default();

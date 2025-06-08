@@ -168,14 +168,14 @@ impl HashmapInner {
                 let mut result = "".to_string();
                 let mut first = true;
                 for (k, v) in self.iter().take(3) {
-                    let k_inspect = if let Some(h) = k.is_hash()
+                    let k_inspect = if let Some(h) = k.try_hash_ty()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()
                     } else {
                         k.debug(store)
                     };
-                    let v_inspect = if let Some(h) = v.is_hash()
+                    let v_inspect = if let Some(h) = v.try_hash_ty()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()
@@ -205,14 +205,14 @@ impl HashmapInner {
                 let mut result = "".to_string();
                 let mut first = true;
                 for (k, v) in self.iter() {
-                    let k_inspect = if let Some(h) = k.is_hash()
+                    let k_inspect = if let Some(h) = k.try_hash_ty()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()
                     } else {
                         k.inspect(store)
                     };
-                    let v_inspect = if let Some(h) = v.is_hash()
+                    let v_inspect = if let Some(h) = v.try_hash_ty()
                         && h.id() == self.id()
                     {
                         "{...}".to_string()

@@ -924,8 +924,8 @@ fn dlcall(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
         }
     }
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
-    let args = lfp.arg(1).expect_array(globals)?;
-    let args_type = lfp.arg(2).expect_array(globals)?;
+    let args = lfp.arg(1).expect_array_ty(globals)?;
+    let args_type = lfp.arg(2).expect_array_ty(globals)?;
     let ret_type = lfp.arg(3).expect_integer(globals)?;
     let res = match args.len() {
         0 => {

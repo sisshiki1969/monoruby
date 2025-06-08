@@ -895,7 +895,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_hash(self) -> Option<Hashmap> {
+    pub(crate) fn try_hash_ty(self) -> Option<Hashmap> {
         match self.try_rvalue()?.ty() {
             ObjTy::HASH => Some(Hashmap::new(self)),
             _ => None,
@@ -903,7 +903,7 @@ impl Value {
     }
 
     pub(crate) fn as_hash(self) -> Hashmap {
-        self.is_hash().unwrap()
+        self.try_hash_ty().unwrap()
     }
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
@@ -1141,7 +1141,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_array(&self, store: &Store) -> Result<Array> {
+    pub(crate) fn expect_array_ty(&self, store: &Store) -> Result<Array> {
         if let Some(ary) = self.try_array_ty() {
             Ok(ary)
         } else {
@@ -1153,8 +1153,8 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_hash(self, store: &Store) -> Result<Hashmap> {
-        if let Some(h) = self.is_hash() {
+    pub(crate) fn expect_hash_ty(self, store: &Store) -> Result<Hashmap> {
+        if let Some(h) = self.try_hash_ty() {
             Ok(h)
         } else {
             Err(MonorubyErr::no_implicit_conversion(store, self, HASH_CLASS))

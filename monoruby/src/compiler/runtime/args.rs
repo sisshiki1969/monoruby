@@ -173,7 +173,7 @@ fn positional(
             .iter()
             .map(|pos| caller_lfp.register(*pos).unwrap())
         {
-            for (k, v) in v.expect_hash(store)?.iter() {
+            for (k, v) in v.expect_hash_ty(store)?.iter() {
                 h.insert(HashKey(k), v);
             }
         }
@@ -473,7 +473,7 @@ fn hash_splat_and_kw_rest(
     {
         let mut used = 0;
         for (id, param_name) in callee.kw_names().iter().enumerate() {
-            let h = h.expect_hash(store)?;
+            let h = h.expect_hash_ty(store)?;
             unsafe {
                 let sym = Value::symbol(*param_name);
                 if let Some(v) = h.get(sym) {

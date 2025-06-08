@@ -102,6 +102,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "rotate", rotate, 0, 1, false);
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
+    globals.define_builtin_func_rest(ARRAY_CLASS, "union", union);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
@@ -881,7 +882,7 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
     let mut args_ary = vec![];
     for a in lfp.arg(0).as_array().iter() {
-        args_ary.push(a.expect_array(globals)?.to_vec());
+        args_ary.push(a.expect_array_ty(globals)?.to_vec());
     }
     let mut ary = Array::new_empty();
     for (i, val) in self_ary.iter().enumerate() {
@@ -1145,7 +1146,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 #[monoruby_builtin]
 fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let aref = lfp.self_val().expect_array(globals)?;
+    let aref = lfp.self_val().expect_array_ty(globals)?;
     let mut res_true = vec![];
     let mut res_false = vec![];
     let p = vm.get_block_data(globals, bh)?;
@@ -1766,7 +1767,7 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> 
     let lhs = lfp.self_val().as_array();
     let mut lists = vec![];
     for rhs in lfp.arg(0).as_array().into_iter() {
-        lists.push(rhs.expect_array(globals)?);
+        lists.push(rhs.expect_array_ty(globals)?);
     }
     let v: Vec<Value> = product_inner(lhs, lists)
         .into_iter()
@@ -1803,6 +1804,23 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 }
 
 ///
+/// ### Array#union
+///
+/// - union(*other_arrays) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
+#[monoruby_builtin]
+fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut ary = lfp.self_val().dup().as_array();
+    for rhs in lfp.arg(0).as_array().into_iter() {
+        let rhs = rhs.expect_array_ty(globals)?;
+        ary.extend(rhs.into_iter().cloned());
+    }
+    ary.uniq()?;
+    Ok(ary.into())
+}
+
+///
 /// ### Array#uniq
 ///
 /// - uniq -> Array
@@ -1810,7 +1828,7 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
 /// - uniq {|item| ... } -> Array
 /// - uniq! {|item| ... } -> self | nil
 ///
-/// https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut ary = lfp.self_val().dup().as_array();
@@ -2950,6 +2968,14 @@ mod tests {
             "#,
         );
         run_test_error(r#"[1,2].product(1,2,3)"#);
+    }
+
+    #[test]
+    fn union() {
+        run_test(r#"["a", "b", "c"].union([ "c", "d", "a" ])"#);
+        run_test(r#"["a"].union(["e", "b"], ["a", "c", "b"])"#);
+        run_test(r#"["a"].union"#);
+        run_test_error(r#"["a"].union([], 100)"#);
     }
 
     #[test]
