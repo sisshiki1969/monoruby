@@ -608,7 +608,7 @@ impl Executor {
             Ok(Value::nil())
         } else {
             runtime::_dump_stacktrace(self, globals);
-            Err(MonorubyErr::internalerr(format!(
+            Err(MonorubyErr::runtimeerr(format!(
                 "define func: {:?} {:016x}",
                 name,
                 (func.get() as u64) + ((name.get() as u64) << 32)

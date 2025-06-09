@@ -131,7 +131,6 @@ impl MonorubyErr {
             MonorubyErrKind::Index => "IndexError",
             MonorubyErrKind::Frozen => "FrozenError",
             MonorubyErrKind::Load(_) => "LoadError",
-            MonorubyErrKind::Internal => "InternalError",
             MonorubyErrKind::Regex => "RegexpError",
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::Key => "KeyError",
@@ -159,7 +158,6 @@ impl MonorubyErr {
             MonorubyErrKind::Index => INDEX_ERROR_CLASS,
             MonorubyErrKind::Frozen => FROZEN_ERROR_CLASS,
             MonorubyErrKind::Load(_) => LOAD_ERROR_CLASS,
-            MonorubyErrKind::Internal => INTERNAL_ERROR_CLASS,
             MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
             MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
             MonorubyErrKind::Key => KEY_ERROR_CLASS,
@@ -533,10 +531,6 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn internalerr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Internal, msg)
-    }
-
     pub(crate) fn regexerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Regex, msg)
     }
@@ -569,7 +563,6 @@ pub enum MonorubyErrKind {
     Index,
     Frozen,
     Load(PathBuf),
-    Internal,
     Regex,
     Runtime,
     Key,
@@ -596,7 +589,6 @@ impl MonorubyErrKind {
             INDEX_ERROR_CLASS => MonorubyErrKind::Index,
             FROZEN_ERROR_CLASS => MonorubyErrKind::Frozen,
             LOAD_ERROR_CLASS => MonorubyErrKind::Load(PathBuf::new()),
-            INTERNAL_ERROR_CLASS => MonorubyErrKind::Internal,
             REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
             RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,
             KEY_ERROR_CLASS => MonorubyErrKind::Key,

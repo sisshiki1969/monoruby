@@ -3,7 +3,8 @@ use super::*;
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Struct", STRUCT_CLASS, ObjTy::CLASS);
     globals.define_builtin_class_func_rest(STRUCT_CLASS, "new", struct_new);
-    globals.define_builtin_func_rest(STRUCT_CLASS, "initialize", initialize);
+    globals.define_builtin_class_func_rest(STRUCT_CLASS, "initialize", struct_initialize);
+
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
@@ -17,22 +18,41 @@ pub(crate) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
 #[monoruby_builtin]
 fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let self_val = lfp.self_val();
     let args = lfp.arg(0).as_array();
-    let (start_idx, name) = if let Some(arg0) = args.first()
+    let (args, name) = if let Some(arg0) = args.first()
         && let Some(s) = arg0.is_str()
     {
         if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-            (1, Some(IdentId::get_id(s)))
+            (args[1..].to_vec(), Some(IdentId::get_id(s)))
         } else {
             return Err(MonorubyErr::identifier_must_be_constant(s));
         }
     } else {
-        (0, None)
+        (args.to_vec(), None)
     };
 
-    let new_struct = globals.store.define_struct_class(name, self_val.as_class());
-    let class_id = new_struct.id();
+    let new_struct = globals
+        .store
+        .define_struct_class(name, lfp.self_val().as_class())
+        .as_val();
+
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, new_struct, &args, lfp.block())?;
+
+    Ok(new_struct)
+}
+
+///
+/// Struct.[]
+/// - new(*args, keyword_init: nil) -> Class
+/// - new(*args, keyword_init: nil) {|subclass| block } -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Struct/s/=5b=5d.html]
+#[monoruby_builtin]
+fn struct_initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut new_struct = lfp.self_val();
+    let class_id = new_struct.as_class().id();
+    let args = lfp.arg(0).as_array();
+
     globals.define_builtin_class_inline_funcs_rest(
         class_id,
         "new",
@@ -41,8 +61,9 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         Box::new(super::class::gen_class_new_object()),
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
+    globals.define_builtin_func_rest(class_id, "initialize", initialize);
 
-    let members = ArrayInner::from_iter(args.iter().skip(start_idx).cloned());
+    let members = ArrayInner::from_iter(args.iter().cloned());
 
     for arg in members.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
@@ -50,7 +71,6 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }
 
-    let mut new_struct = new_struct.as_val();
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
@@ -59,7 +79,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         vm.invoke_block_with_self(globals, &data, new_struct, &[new_struct])?;
         vm.pop_class_context();
     };
-    Ok(new_struct)
+    Ok(Value::nil())
 }
 
 #[monoruby_builtin]
@@ -80,11 +100,11 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
-    let struct_class = globals.store[self_val.class()].get_module().as_val();
+    let struct_class = self_val.get_class_obj(globals).as_val();
     let members = globals
         .store
         .get_ivar(struct_class, IdentId::get_id("/members"))
-        .ok_or_else(|| MonorubyErr::internalerr("no ivar /members."))?
+        .ok_or_else(|| MonorubyErr::runtimeerr("no ivar /members."))?
         .as_array();
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
@@ -131,7 +151,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
 
 #[monoruby_builtin]
 fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let class_obj = globals.store[lfp.self_val().class()].get_module().as_val();
+    let class_obj = lfp.self_val().get_class_obj(globals).as_val();
     let members = globals
         .store
         .get_ivar(class_obj, IdentId::get_id("/members"))

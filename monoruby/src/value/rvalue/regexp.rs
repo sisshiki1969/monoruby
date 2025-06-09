@@ -116,10 +116,7 @@ impl RegexpInner {
                 }
                 Ok(res)
             }
-            Err(err) => Err(MonorubyErr::internalerr(format!(
-                "Capture failed. {:?}",
-                err
-            ))),
+            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
         }
     }
 
@@ -266,10 +263,7 @@ impl RegexpInner {
 
             vm.clear_capture_special_variables();
             for cap in re.captures_iter(given) {
-                let cap = match cap {
-                    Ok(cap) => cap,
-                    Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
-                };
+                let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
                 let m = cap.get(0).unwrap();
 
                 let matched_str = m.as_str();
@@ -337,10 +331,7 @@ impl RegexpInner {
         let mut last_captures = None;
         vm.clear_capture_special_variables();
         for cap in self.0.captures_iter(given) {
-            let cap = match cap {
-                Ok(cap) => cap,
-                Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
-            };
+            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             match cap.len() {
                 0 => unreachable!(),
                 1 => {
@@ -386,10 +377,7 @@ impl RegexpInner {
         vm.clear_capture_special_variables();
         let mut last_captures = None;
         for cap in self.captures_iter(given) {
-            let cap = match cap {
-                Ok(cap) => cap,
-                Err(err) => return Err(MonorubyErr::internalerr(format!("{err}"))),
-            };
+            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             let m = cap.get(0).unwrap();
             range.push(m.range());
             last_captures = Some(cap);
