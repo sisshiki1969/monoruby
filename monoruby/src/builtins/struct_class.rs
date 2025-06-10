@@ -96,16 +96,33 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     super::class::__new(vm, globals, lfp)
 }
 
+fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {
+    let mut members = None;
+    loop {
+        if let Some(m) = globals
+            .store
+            .get_ivar(class.as_val(), IdentId::get_id("/members"))
+        {
+            members = Some(m);
+            break;
+        } else if let Some(s) = class.superclass()
+            && s.id() != STRUCT_CLASS
+        {
+            class = s;
+        } else {
+            break;
+        }
+    }
+    Ok(members
+        .ok_or_else(|| MonorubyErr::runtimeerr("no ivar /members."))?
+        .as_array())
+}
+
 #[monoruby_builtin]
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let len = lfp.arg(0).as_array().len();
     let self_val = lfp.self_val();
-    let struct_class = self_val.get_class_obj(globals).as_val();
-    let members = globals
-        .store
-        .get_ivar(struct_class, IdentId::get_id("/members"))
-        .ok_or_else(|| MonorubyErr::runtimeerr("no ivar /members."))?
-        .as_array();
+    let members = get_members(globals, self_val.get_class_obj(globals))?;
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
@@ -122,15 +139,11 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value>
     let mut inspect = "#<struct ".to_string();
     let self_val = lfp.self_val();
     let class_id = self_val.class();
-    let struct_class = globals.store[class_id].get_module().as_val();
+    let struct_class = globals.store[class_id].get_module();
     if let Some(name) = globals.store[class_id].get_name() {
         inspect += &format!("{name}");
     };
-    let name = globals
-        .store
-        .get_ivar(struct_class, IdentId::get_id("/members"))
-        .unwrap()
-        .as_array();
+    let name = get_members(globals, struct_class)?;
 
     if name.len() != 0 {
         for x in name.iter() {
@@ -175,6 +188,19 @@ mod tests {
         let code = r#"
         [Customer.new("Dave", "New York").greeting, Customer["Gave", "Hawaii"].greeting]
         "#;
+        run_test_with_prelude(code, prelude);
+    }
+
+    #[test]
+    fn struct_subclass() {
+        let prelude = r##"
+        class S < Struct.new(:name, :address)
+        end
+        "##;
+        let code = r##"
+        s = S.new("Dave", "New York")
+        "#{s.name} #{s.address} #{s} #{s.inspect}"
+        "##;
         run_test_with_prelude(code, prelude);
     }
 
