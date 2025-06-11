@@ -103,6 +103,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
     globals.define_builtin_func_rest(ARRAY_CLASS, "union", union);
+    globals.define_builtin_func(ARRAY_CLASS, "intersect?", intersect_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "uniq", uniq, 0);
     globals.define_builtin_func(ARRAY_CLASS, "uniq!", uniq_, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "slice!", slice_, 1, 2, false);
@@ -1821,6 +1822,23 @@ fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 }
 
 ///
+/// ### Array#intersect?
+///
+/// - intersect?(other) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
+#[monoruby_builtin]
+fn intersect_(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let lhs = lfp.self_val().as_array();
+    for rhs in lfp.arg(0).as_array().iter().cloned() {
+        if lhs.iter().cloned().any(|lhs| HashKey(lhs) == HashKey(rhs)) {
+            return Ok(Value::bool(true));
+        }
+    }
+    Ok(Value::bool(false))
+}
+
+///
 /// ### Array#uniq
 ///
 /// - uniq -> Array
@@ -2968,6 +2986,23 @@ mod tests {
             "#,
         );
         run_test_error(r#"[1,2].product(1,2,3)"#);
+    }
+
+    #[test]
+    fn intersect() {
+        run_test(
+            r#"
+            a = [ "1", "2", "3" ]
+            b = [ "3", "4", "5" ]
+            c = [ "5", "6", "7" ]
+            [
+                a.intersect?(b),  # => true
+                a.intersect?(c)   # => false
+            ]
+        "#,
+        );
+        run_test(r#"["a", "b", "c"].intersect?([ "c", "d", "e" ])"#);
+        run_test(r#"["a", "b", "c"].intersect?([ "d", "e", "f" ])"#);
     }
 
     #[test]
