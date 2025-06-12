@@ -895,6 +895,16 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_exception_mut(&mut self) -> Option<&mut ExceptionInner> {
+        let rv = self.try_rvalue_mut()?;
+        unsafe {
+            match rv.ty() {
+                ObjTy::EXCEPTION => Some(rv.as_exception_mut()),
+                _ => None,
+            }
+        }
+    }
+
     pub(crate) fn try_hash_ty(self) -> Option<Hashmap> {
         match self.try_rvalue()?.ty() {
             ObjTy::HASH => Some(Hashmap::new(self)),

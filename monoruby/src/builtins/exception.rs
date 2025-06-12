@@ -13,8 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
         &["exception"],
         exception_new,
         0,
-        1,
-        false,
+        0,
+        true,
     );
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
@@ -74,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) {
         standarderr,
     );
 
-    //globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
+    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
 }
@@ -87,27 +87,22 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn exception_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
-    let message = if let Some(msg) = lfp.try_arg(0) {
-        msg.expect_string(globals)?
-    } else {
-        globals.store.get_class_name(class_id)
-    };
-    let obj = Value::new_exception_from(message, class_id);
+    let obj = Value::new_exception_from("".to_string(), class_id);
 
-    /*vm.invoke_method_if_exists(
+    vm.invoke_method_if_exists(
         globals,
         IdentId::INITIALIZE,
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
-    )?;*/
+    )?;
 
     Ok(obj)
 }
 
-/*///
+///
 /// ### Exception#initialize
 ///
 /// - new(error_message = nil) -> Exception
@@ -117,16 +112,14 @@ fn exception_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let msg = if let Some(msg) = lfp.try_arg(0) {
+    let message = if let Some(msg) = lfp.try_arg(0) {
         msg.expect_string(globals)?
     } else {
         globals.store.get_class_name(class_id)
     };
-    let class_name = MonorubyErrKind::from_class_id(class_id);
-    self_.is_exception_mut().unwrap().set_message(msg);
-    self_.is_exception_mut().unwrap().set_class_name(class_name);
+    self_.is_exception_mut().unwrap().set_message(message);
     Ok(Value::nil())
-}*/
+}
 
 ///
 /// ### Exception#message
