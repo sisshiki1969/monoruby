@@ -13,10 +13,10 @@ pub struct MonorubyErr {
 }
 
 impl MonorubyErr {
-    pub fn new(kind: MonorubyErrKind, messageg: impl ToString) -> Self {
+    pub fn new(kind: MonorubyErrKind, message: impl ToString) -> Self {
         MonorubyErr {
             kind,
-            message: messageg.to_string(),
+            message: message.to_string(),
             trace: vec![],
         }
     }
