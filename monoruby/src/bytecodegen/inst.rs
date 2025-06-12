@@ -236,6 +236,9 @@ pub(super) enum BytecodeInst {
         new: IdentId,
         old: IdentId,
     },
+    UndefMethod {
+        undef: IdentId,
+    },
     DefinedYield {
         dst: BcReg,
     },

@@ -176,6 +176,17 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
         }
     }
 
+    pub(crate) fn undef_name(&mut self) -> Result<Node, LexerErr> {
+        if self.consume_punct_no_term(Punct::Colon)? {
+            self.parse_symbol()
+        } else {
+            Ok(Node::new_symbol(
+                self.read_method_name(true)?.0,
+                self.prev_loc(),
+            ))
+        }
+    }
+
     // ( )
     // ( ident [, ident]* )
     fn parse_def_params(&mut self) -> Result<Vec<FormalParam>, LexerErr> {

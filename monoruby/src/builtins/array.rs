@@ -1828,7 +1828,7 @@ fn union(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/intersect=3f.html]
 #[monoruby_builtin]
-fn intersect_(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn intersect_(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
     for rhs in lfp.arg(0).as_array().iter().cloned() {
         if lhs.iter().cloned().any(|lhs| HashKey(lhs) == HashKey(rhs)) {

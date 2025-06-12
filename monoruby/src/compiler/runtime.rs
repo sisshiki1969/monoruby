@@ -727,14 +727,24 @@ pub(super) extern "C" fn singleton_define_method(
     globals.add_public_method(class_id, name, func);
 }
 
+pub(super) extern "C" fn undef_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    undef: IdentId,
+) -> Option<Value> {
+    dbg!(undef);
+    Some(Value::nil())
+}
+
 pub(super) extern "C" fn alias_method(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
-    new: IdentId,
     old: IdentId,
-    meta: Meta,
+    new: IdentId,
 ) -> Option<Value> {
+    let lfp = vm.cfp().lfp();
+    let self_val = lfp.self_val();
+    let meta = lfp.meta();
     match if meta.is_class_def() {
         globals.alias_method_for_class(self_val.as_class().id(), new, old)
     } else {

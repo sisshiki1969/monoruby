@@ -734,6 +734,17 @@ impl Codegen {
             } => {
                 self.concat_regexp(arg, len, using_xmm);
             }
+            AsmInst::UndefMethod { undef, using_xmm } => {
+                self.xmm_save(using_xmm);
+                monoasm!( &mut self.jit,
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    movl rdx, (undef.get());
+                    movq rax, (runtime::undef_method);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+            }
             AsmInst::AliasMethod {
                 new,
                 old,
@@ -743,10 +754,8 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rdi, rbx;
                     movq rsi, r12;
-                    movq rdx, [r14 - (LFP_SELF)];
+                    movl rdx, (old.get());
                     movl rcx, (new.get());
-                    movl r8, (old.get());
-                    movq r9, [r14 - (LFP_META)];
                     movq rax, (runtime::alias_method);
                     call rax;
                 );

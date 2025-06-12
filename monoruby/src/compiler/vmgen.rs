@@ -339,7 +339,7 @@ impl Codegen {
 
         self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
-        self.dispatch[172] = self.vm_init();
+        self.dispatch[172] = self.vm_undef_method();
         self.dispatch[173] = self.vm_alias_method();
         self.dispatch[174] = self.vm_hash();
         self.dispatch[175] = toa;
@@ -707,6 +707,30 @@ impl Codegen {
         label
     }
 
+    /// Undef method
+    ///
+    /// ~~~text
+    ///                  -8      -4
+    /// +---+---+---+---++---+---+---+---+
+    /// | undef |   | op||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// undef: a symbol
+    /// ~~~
+    fn vm_undef_method(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [r13 - 16];
+            movq rax, (runtime::undef_method);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.fetch_and_dispatch();
+        label
+    }
+
     /// Alias method
     ///
     /// ~~~text
@@ -721,12 +745,10 @@ impl Codegen {
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         monoasm! { &mut self.jit,
-            movl rcx, [r13 - 8];  // new
-            movl r8, [r13 - 4];  // old
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (LFP_SELF)];
-            movq r9, [r14 - (LFP_META)];
+            movl rdx, [r13 - 4];  // old
+            movl rcx, [r13 - 8];  // new
             movq rax, (runtime::alias_method);
             call rax;
         };

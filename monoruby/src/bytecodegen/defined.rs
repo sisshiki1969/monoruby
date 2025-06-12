@@ -268,6 +268,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Array(..)
         | NodeKind::Lambda(_)
         | NodeKind::AliasMethod(..)
+        | NodeKind::UndefMethod(..)
         | NodeKind::If { .. }
         | NodeKind::While { .. }
         | NodeKind::For { .. }

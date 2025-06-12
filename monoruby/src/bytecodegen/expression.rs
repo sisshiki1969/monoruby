@@ -694,18 +694,31 @@ impl BytecodeGen {
                     }
                     _ => unimplemented!(),
                 };
-                match use_mode {
-                    UseMode2::Ret => {
-                        self.push_nil();
-                        self.emit_ret(None)?;
+                self.push_nil();
+                //match use_mode {
+                //    UseMode2::Ret => {
+                //        self.push_nil();
+                //        self.emit_ret(None)?;
+                //    }
+                //    UseMode2::NotUse => {}
+                //    UseMode2::Push => {
+                //        self.push_nil();
+                //    }
+                //    _ => unreachable!(),
+                //}
+                //return Ok(());
+            }
+            NodeKind::UndefMethod(box undef) => {
+                match undef.kind {
+                    NodeKind::Symbol(undef) => {
+                        let temp = self.temp;
+                        let undef = IdentId::get_id_from_string(undef);
+                        self.temp = temp;
+                        self.emit(BytecodeInst::UndefMethod { undef }, loc);
                     }
-                    UseMode2::NotUse => {}
-                    UseMode2::Push => {
-                        self.push_nil();
-                    }
-                    _ => unreachable!(),
-                }
-                return Ok(());
+                    _ => unimplemented!(),
+                };
+                self.push_nil();
             }
             NodeKind::Defined(box node) => {
                 self.gen_defined(node)?;

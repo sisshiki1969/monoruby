@@ -1786,6 +1786,9 @@ impl Visitor {
                 self.visit(new);
                 self.visit(old);
             }
+            NodeKind::UndefMethod(box undef) => {
+                self.visit(undef);
+            }
             NodeKind::Defined(box node) => {
                 self.visit(node);
             }

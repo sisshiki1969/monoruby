@@ -930,6 +930,10 @@ impl ISeqInfo {
                         }
                     }),
                 },
+                172 => {
+                    let undef = IdentId::from(dec_wl(op1).1);
+                    TraceIr::UndefMethod { undef }
+                }
                 173 => {
                     let (new, old) = op2.get_ident2();
                     TraceIr::AliasMethod { new, old }
