@@ -179,6 +179,18 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Examine if the next char of the token is colon.
+    pub(crate) fn has_trailing_colon(&self, tok: &Token) -> bool {
+        match self
+            .code
+            .get(tok.loc.1 + 1..)
+            .and_then(|s| s.chars().next())
+        {
+            Some(ch) => ch == ':',
+            _ => false,
+        }
+    }
+
     /// Examine if the next char of the token is space.
     pub(crate) fn has_trailing_space(&self, tok: &Token) -> bool {
         match self

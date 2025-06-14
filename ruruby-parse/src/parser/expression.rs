@@ -221,6 +221,15 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
 
     pub(super) fn parse_arg(&mut self, allow_braceless_hash: bool) -> Result<Node, LexerErr> {
         let next = self.peek()?;
+        if matches!(next.kind, TokenKind::Reserved(_)) && self.lexer.has_trailing_colon(&next) {
+            let next = self.get()?;
+            if let TokenKind::Reserved(reserved) = next.kind {
+                let name = reserved.as_str().to_string();
+                return Ok(Node::new_identifier(name, next.loc));
+            } else {
+                unreachable!()
+            }
+        }
         if self.lexer.has_trailing_space(&next) && self.consume_reserved(Reserved::Defined)? {
             self.defined_mode = true;
             let node = self.parse_arg(false)?;

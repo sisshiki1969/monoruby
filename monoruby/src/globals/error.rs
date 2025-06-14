@@ -76,6 +76,26 @@ impl MonorubyErr {
     }
 
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
+        let mut loc_flag = self.show_error_message_and_loc(store);
+        if self.trace.len() > 1 {
+            for (source_loc, func_id) in &self.trace[1..] {
+                if let Some((loc, source)) = source_loc {
+                    eprintln!(
+                        "        from: {}",
+                        store.location(func_id.clone(), source, *loc)
+                    );
+                    if !loc_flag {
+                        source.show_loc(loc);
+                        loc_flag = true;
+                    }
+                } else {
+                    eprintln!("        {}", store.internal_location(func_id.unwrap()))
+                }
+            }
+        }
+    }
+
+    pub fn show_error_message_and_loc(&self, store: &Store) -> bool {
         let mut loc_flag = false;
         if let Some((source_loc, func_id)) = self.trace.first() {
             let error_message = self.get_error_message(store);
@@ -93,23 +113,8 @@ impl MonorubyErr {
             }
         } else {
             eprintln!("location not defined.");
-        }
-        if self.trace.len() > 1 {
-            for (source_loc, func_id) in &self.trace[1..] {
-                if let Some((loc, source)) = source_loc {
-                    eprintln!(
-                        "        from: {}",
-                        store.location(func_id.clone(), source, *loc)
-                    );
-                    if !loc_flag {
-                        source.show_loc(loc);
-                        loc_flag = true;
-                    }
-                } else {
-                    eprintln!("        {}", store.internal_location(func_id.unwrap()))
-                }
-            }
-        }
+        };
+        loc_flag
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
