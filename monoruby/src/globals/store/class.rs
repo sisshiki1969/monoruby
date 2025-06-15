@@ -476,6 +476,8 @@ impl ClassInfoTable {
                         visibility,
                         ..entry.clone()
                     });
+                } else if entry.visibility == Visibility::Undefined {
+                    return None;
                 } else if visi.is_none() {
                     visi = Some(entry.visibility);
                 }
@@ -507,30 +509,35 @@ impl ClassInfoTable {
     ///
     /// Get public and protected method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_method_names(&self, class_id: ClassId) -> impl Iterator<Item = IdentId> + '_ {
-        self[class_id].methods.iter().filter_map(|(name, entry)| {
-            if entry.is_public_protected() {
-                Some(*name)
-            } else {
-                None
-            }
-        })
+    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.is_public_protected() {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     ///
     /// Get private method names in the class of *class_id*.
     ///  
-    pub(crate) fn get_private_method_names(
-        &self,
-        class_id: ClassId,
-    ) -> impl Iterator<Item = IdentId> + '_ {
-        self[class_id].methods.iter().filter_map(|(name, entry)| {
-            if entry.is_private() {
-                Some(*name)
-            } else {
-                None
-            }
-        })
+    pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if entry.is_private() {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     ///
@@ -540,23 +547,22 @@ impl ClassInfoTable {
         &self,
         class_id: ClassId,
         only_singleton: bool,
-    ) -> Vec<IdentId> {
-        let mut names = vec![];
+    ) -> Vec<Value> {
+        let mut names = HashSet::default();
         let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
         loop {
             if !only_singleton || module.is_singleton().is_some() || module.is_iclass() {
-                names.extend(
-                    self[module.id()]
-                        .methods
-                        .iter()
-                        .filter_map(|(name, entry)| {
-                            if entry.is_public_protected() {
-                                Some(*name)
-                            } else {
-                                None
-                            }
-                        }),
-                );
+                for (name, entry) in &self[module.id()].methods {
+                    if matches!(
+                        entry.visibility,
+                        Visibility::Undefined | Visibility::Private
+                    ) {
+                        exclude.insert(*name);
+                    } else if entry.is_public_protected() && !exclude.contains(name) {
+                        names.insert(*name);
+                    }
+                }
             }
             match module.superclass() {
                 Some(superclass) => {
@@ -568,33 +574,35 @@ impl ClassInfoTable {
                 None => break,
             }
         }
-        names
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
     ///
     /// Get public and protected method names in the class of *class_id* and its ancesters.
     ///
-    pub(crate) fn get_private_method_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
-        let mut names = vec![];
+    pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
         loop {
-            names.extend(self[class_id].methods.iter().filter_map(|(name, entry)| {
-                if entry.is_private() {
-                    Some(*name)
-                } else {
-                    None
+            for (name, entry) in &self[module.id()].methods {
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    exclude.insert(*name);
+                } else if entry.is_private() && !exclude.contains(name) {
+                    names.insert(*name);
                 }
-            }));
-            match self.get_module(class_id).superclass_id() {
+            }
+            match module.superclass() {
                 Some(superclass) => {
-                    if superclass == OBJECT_CLASS {
+                    if superclass.id() == OBJECT_CLASS {
                         break;
                     }
-                    class_id = superclass;
+                    module = superclass;
                 }
                 None => break,
             }
         }
-        names
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
     fn generate_class_obj(
@@ -948,10 +956,21 @@ impl Globals {
     ///
     /// This fn increments class version.
     ///
-    pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Option<()> {
+    pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
         self.class_version_inc();
-        self.store.classes[class_id].methods.remove(&func_name)?;
-        Some(())
+        if self.store.classes[class_id]
+            .methods
+            .remove(&func_name)
+            .is_none()
+        {
+            Err(MonorubyErr::nameerr(format!(
+                "method `{}' not defined in {}",
+                func_name,
+                self.store.get_class_name(class_id)
+            )))
+        } else {
+            Ok(())
+        }
     }
 
     ///

@@ -54,7 +54,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
-    globals.define_builtin_func(MODULE_CLASS, "remove_method", remove_method, 1);
+    globals.define_builtin_func_rest(MODULE_CLASS, "remove_method", remove_method);
+    globals.define_builtin_func_rest(MODULE_CLASS, "undef_method", undef_method);
     globals.define_builtin_func_with(MODULE_CLASS, "method_defined?", method_defined, 1, 2, false);
     globals.define_builtin_func_with(
         MODULE_CLASS,
@@ -437,19 +438,11 @@ fn deprecate_constant(_: &mut Executor, _: &mut Globals, lfp: Lfp) -> Result<Val
 fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    if !inherited_too {
-        Ok(Value::array_from_iter(
-            globals.store.get_method_names(class_id).map(Value::symbol),
-        ))
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
     } else {
-        Ok(Value::array_from_iter(
-            globals
-                .store
-                .get_method_names_inherit(class_id, false)
-                .into_iter()
-                .map(Value::symbol),
-        ))
-    }
+        globals.store.get_method_names_inherit(class_id, false)
+    }))
 }
 
 ///
@@ -462,22 +455,11 @@ fn instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resu
 fn private_instance_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    if !inherited_too {
-        Ok(Value::array_from_iter(
-            globals
-                .store
-                .get_private_method_names(class_id)
-                .map(Value::symbol),
-        ))
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_private_method_names(class_id)
     } else {
-        Ok(Value::array_from_iter(
-            globals
-                .store
-                .get_private_method_names_inherit(class_id)
-                .into_iter()
-                .map(Value::symbol),
-        ))
-    }
+        globals.store.get_private_method_names_inherit(class_id)
+    }))
 }
 
 ///
@@ -571,6 +553,23 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 }
 
 ///
+/// ### Module#undef_method
+///
+/// - undef_method(*name) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/undef_method.html]
+#[monoruby_builtin]
+fn undef_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let names = lfp.arg(0).as_array();
+    for name in names.iter().cloned() {
+        let name = name.expect_symbol_or_string(globals)?;
+        globals.undef_method_for_class(class_id, name)?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
 /// ### Module#remove_method
 ///
 /// - remove_method(*name) -> self
@@ -579,15 +578,12 @@ fn instance_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 #[monoruby_builtin]
 fn remove_method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    match globals.remove_method(class_id, func_name) {
-        Some(_) => Ok(lfp.self_val()),
-        None => Err(MonorubyErr::nameerr(format!(
-            "method `{}' not defined in {}",
-            func_name,
-            globals.store.get_class_name(class_id)
-        ))),
+    let names = lfp.arg(0).as_array();
+    for name in names.iter().cloned() {
+        let name = name.expect_symbol_or_string(globals)?;
+        globals.remove_method(class_id, name)?;
     }
+    Ok(lfp.self_val())
 }
 
 fn check_method_defined(globals: &Globals, lfp: Lfp) -> Result<Option<Visibility>> {
@@ -1361,6 +1357,35 @@ mod tests {
     }
 
     #[test]
+    fn undef_method() {
+        run_test_once(
+            r#"
+            class S
+              def f; end
+            end
+            class C < S
+            end
+            C.undef_method(:f)
+            [
+                C.instance_methods - Object.instance_methods,
+                S.instance_methods - Object.instance_methods
+            ]
+            "#,
+        );
+        run_test_error(
+            r##"
+            class S
+              def f; end
+            end
+            class C < S
+            end
+            C.undef_method(:f)
+            C.new.f
+        "##,
+        );
+    }
+
+    #[test]
     fn remove_method() {
         run_test(
             r#"
@@ -1382,7 +1407,7 @@ mod tests {
             C.remove_method(:f)
             "#,
         );
-        run_test_error(
+        run_test(
             r#"
             class S
               def f; end
@@ -1390,7 +1415,7 @@ mod tests {
             class C < S
             end
             S.remove_method(:f)
-            S.new.f
+            S.instance_methods - Object.instance_methods
             "#,
         );
     }

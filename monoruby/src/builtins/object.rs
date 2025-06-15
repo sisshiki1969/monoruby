@@ -444,24 +444,16 @@ fn instance_eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<V
 #[monoruby_builtin]
 fn methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    if !inherited_too {
+    Ok(Value::array_from_vec(if !inherited_too {
         let class_id = match globals.store.has_singleton(lfp.self_val()) {
             Some(module) => module.id(),
             None => return Ok(Value::array_empty()),
         };
-        Ok(Value::array_from_iter(
-            globals.store.get_method_names(class_id).map(Value::symbol),
-        ))
+        globals.store.get_method_names(class_id)
     } else {
         let class_id = lfp.self_val().class();
-        Ok(Value::array_from_iter(
-            globals
-                .store
-                .get_method_names_inherit(class_id, true)
-                .into_iter()
-                .map(Value::symbol),
-        ))
-    }
+        globals.store.get_method_names_inherit(class_id, true)
+    }))
 }
 
 ///
@@ -477,19 +469,11 @@ fn singleton_methods(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
         None => return Ok(Value::array_empty()),
     };
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
-    if !inherited_too {
-        Ok(Value::array_from_iter(
-            globals.store.get_method_names(class_id).map(Value::symbol),
-        ))
+    Ok(Value::array_from_vec(if !inherited_too {
+        globals.store.get_method_names(class_id)
     } else {
-        Ok(Value::array_from_iter(
-            globals
-                .store
-                .get_method_names_inherit(class_id, true)
-                .into_iter()
-                .map(Value::symbol),
-        ))
-    }
+        globals.store.get_method_names_inherit(class_id, true)
+    }))
 }
 
 ///

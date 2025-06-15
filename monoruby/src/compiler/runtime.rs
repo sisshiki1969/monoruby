@@ -53,7 +53,7 @@ pub(super) extern "C" fn enter_classdef<'a>(
 ) -> &'a FuncData {
     let current_func = vm.method_func_id();
     let mut lexical_context = globals.store.iseq(current_func).lexical_context.clone();
-    lexical_context.push(self_value);
+    lexical_context.push(self_value.id());
     globals.store.iseq_mut(func_id).lexical_context = lexical_context;
     globals.get_func_data(func_id)
 }
@@ -732,11 +732,8 @@ pub(super) extern "C" fn undef_method(
     globals: &mut Globals,
     method: IdentId,
 ) -> Option<Value> {
-    let class_id = if let Some(iseq) = globals[vm.cfp().lfp().func_id()].is_iseq() {
-        globals[iseq].lexical_context.last().unwrap().id()
-    } else {
-        unreachable!()
-    };
+    let func_id = vm.cfp().lfp().func_id();
+    let class_id = func_id.lexical_class(globals);
     globals
         .undef_method_for_class(class_id, method)
         .map_or_else(
@@ -754,14 +751,8 @@ pub(super) extern "C" fn alias_method(
     old: IdentId,
     new: IdentId,
 ) -> Option<Value> {
-    let lfp = vm.cfp().lfp();
-    let self_val = lfp.self_val();
-    let meta = lfp.meta();
-    let class_id = if meta.is_class_def() {
-        self_val.as_class().id()
-    } else {
-        self_val.class()
-    };
+    let func_id = vm.cfp().lfp().func_id();
+    let class_id = func_id.lexical_class(globals);
     globals
         .alias_method_for_class(class_id, new, old)
         .map_or_else(

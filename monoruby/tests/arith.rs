@@ -1026,7 +1026,7 @@ fn logical_assign_ops() {
 
 #[test]
 fn test_undef() {
-    run_test(
+    run_test_once(
         r#"
         res = []
         class S
@@ -1049,7 +1049,16 @@ fn test_undef() {
         res << S.instance_methods(false)
         res
         "#,
-    )
+    );
+    run_test_error(
+        r##"
+        def foo
+          "foo"
+        end
+        undef foo
+        foo
+    "##,
+    );
 }
 
 #[test]

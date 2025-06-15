@@ -703,10 +703,9 @@ impl Globals {
         class_id: ClassId,
         method: IdentId,
     ) -> Result<()> {
-        let (_, visibility, _) = self
-            .find_method_for_class(class_id, method)
+        self.find_method_for_class(class_id, method)
             .map_err(|_| MonorubyErr::undefined_method(method, class_id.get_name(&self.store)))?;
-        self.add_empty_method(class_id, method, visibility);
+        self.add_empty_method(class_id, method, Visibility::Undefined);
         Ok(())
     }
 

@@ -38,7 +38,8 @@ impl MethodTableEntry {
     }
 
     pub fn is_public_protected(&self) -> bool {
-        self.func_id.is_some() && self.visibility != Visibility::Private
+        self.func_id.is_some()
+            && matches!(self.visibility, Visibility::Protected | Visibility::Public)
     }
 }
 

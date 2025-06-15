@@ -116,13 +116,8 @@ impl Executor {
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
             return Ok(v);
         }
-        let module = globals
-            .store
-            .iseq(current_func)
-            .lexical_context
-            .last()
-            .cloned()
-            .unwrap_or(globals.store.object_class());
+        let module = current_func.lexical_class(globals);
+        let module = globals[module].get_module();
 
         self.search_constant_superclass_checked(globals, module, name)
     }
@@ -138,10 +133,11 @@ impl Executor {
             .iseq(current_func)
             .lexical_context
             .iter()
-            .rev();
-        for m in stack {
-            if globals.store.get_constant(m.id(), name).is_some() {
-                return self.get_constant(globals, m.id(), name);
+            .rev()
+            .cloned();
+        for module in stack {
+            if globals.store.get_constant(module, name).is_some() {
+                return self.get_constant(globals, module, name);
             }
         }
         Ok(None)
